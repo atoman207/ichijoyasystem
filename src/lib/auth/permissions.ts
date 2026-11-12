@@ -56,8 +56,14 @@ export function canApprove(user: User, approval: Pick<Approval, "storeId" | "req
  */
 export function approverRole(users: Pick<User, "id" | "role" | "storeId" | "active">[], storeId: StoreId, overThreshold: boolean, requesterId: string): "store_manager" | "admin" {
   if (storeId === "hq" || overThreshold) return "admin";
-  const hasManager = users.some((u) => u.active && u.role === "store_manager" && u.storeId === storeId && u.id !== requesterId);
+  // 確認用アカウント (お客様の画面確認用) は、実際の承認先の判定に入れない
+  const hasManager = users.some((u) => u.active && u.role === "store_manager" && u.storeId === storeId && u.id !== requesterId && !isReviewAccount(u));
   return hasManager ? "store_manager" : "admin";
+}
+
+/** 確認用アカウント (確認用リンクのロールボタンでログインするアカウント。src/lib/auth/review.ts) */
+export function isReviewAccount(user: Pick<User, "id">): boolean {
+  return user.id.startsWith("u_review_");
 }
 
 /** 承認者の説明 (監査ログ・メッセージ用) */

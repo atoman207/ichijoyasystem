@@ -161,6 +161,19 @@ scripts/
 | `ANTHROPIC_API_KEY` | 設定すると書類読取 (Claude vision) と AI アシスタントが実際の Claude で動作 |
 | `DATA_BACKEND` / `DATA_FILE_NAME` | `json` で Supabase を使わずローカルファイル (`data/` 配下、省略時 `db.json`) |
 | `SUPABASE_DB_PASSWORD` または `SUPABASE_DB_URL` | SQL の実行スクリプト (`scripts/import/setup-database.mjs`。ichijoya.sql の実行) 専用。アプリ本体では使わない |
+| `REVIEW_ACCESS_KEY` / `REVIEW_LOGIN` | 確認用ログインの鍵 (省略時は secret キーから導出) / `off` で確認用ログインを停止 |
+| `APP_TIME_ZONE` | 日付・時刻の基準 (省略時 `Asia/Tokyo`) |
+
+## Vercel への公開
+
+1. Vercel の Project Settings → Environment Variables に `NEXT_PUBLIC_SUPABASE_URL`・`SUPABASE_SECRET_KEY`・`SESSION_SECRET` を設定します (Production と Preview)。`NEXT_PUBLIC_` の値はビルド時に埋め込まれるため、設定・変更したあとは再デプロイが必要です
+2. 本番 (Production) は `main` ブランチから作られます。関数のリージョンは `vercel.json` で `syd1` (Supabase と同じシドニー) にしています
+3. 公開後、`/api/health` が `"backend":"supabase"`・`"db":"ok"`・`"timeZone":"Asia/Tokyo"` を返すことを確認します。`"db":"not_configured"` のときは環境変数が未設定です (サンプルデータで動いてしまうため 503 を返します)
+4. Vercel のサーバーは UTC で動くため、起動時に日本時間へ設定しています (`src/instrumentation.ts`)。起動直後は全データ (約 6 万行) を読み込むため、関数の実行時間の上限を 60 秒にしています
+
+### 確認用ログイン (お客様の画面確認用)
+
+`/review?key=<鍵>` を開いた端末だけ、ログイン画面にロールのボタン (管理者 / 本部スタッフ / 店長 / 店舗スタッフ) が出て、パスワードなしでログインできます。確認用アカウント (`確認用 管理者` など) が初回に作られ、社員のアカウントは使いません。確認用アカウントは承認先の判定に含めません。リンクを知らない人には通常のログイン画面だけが表示されます。確認期間が終わったら `REVIEW_LOGIN=off` を設定するか、設定 → ユーザーと権限 で確認用アカウントを無効化します。
 
 ## 注意事項
 

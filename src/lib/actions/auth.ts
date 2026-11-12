@@ -6,6 +6,9 @@ import { BACKEND, mutate, resetDb, addAudit, syncDb } from "@/lib/db/store";
 import { clearSessionCookie, getSessionUser, safeNext, setSessionCookie } from "@/lib/auth/session";
 import { canResetData } from "@/lib/auth/permissions";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
+import { hasReviewAccess, REVIEW_ACCOUNTS } from "@/lib/auth/review";
+import type { User } from "@/lib/db/types";
+import crypto from "node:crypto";
 import { fail, requireActionUser, str, withMsg } from "./guards";
 
 export interface LoginState {
@@ -56,6 +59,34 @@ export async function login(_prev: LoginState, formData: FormData): Promise<Logi
     addAudit(d, { userId: user.id, action: "login", entity: "session", entityId: user.id, entityLabel: user.name, summary: "ログイン" });
   });
   redirect(next);
+}
+
+/**
+ * 確認用ログイン: 確認用リンクを開いた端末で、ロールのボタンを押すとパスワードなしでログインする
+ * - 確認用アカウントがなければ作る (パスワードは推測できない値にし、通常のログイン画面からは入れない)
+ * - 管理者が確認用アカウントを無効化すると、そのボタンではログインできない
+ */
+export async function reviewLogin(accountId: string) {
+  const account = REVIEW_ACCOUNTS.find((a) => a.id === accountId);
+  if (!account || !(await hasReviewAccess())) {
+    redirect(`/login?err=${encodeURIComponent("確認用リンクから開いてください。")}`);
+  }
+  await syncDb();
+  let user: User | undefined;
+  await mutate((d) => {
+    let u = d.users.find((x) => x.id === account.id);
+    if (!u) {
+      if (d.users.some((x) => x.email.toLowerCase() === account.email)) fail("/login", "確認用アカウントのログイン ID が、ほかのユーザーと重複しています。");
+      u = { id: account.id, name: account.name, kana: account.kana, email: account.email, passwordHash: hashPassword(crypto.randomBytes(24).toString("base64url")), role: account.role, storeId: account.storeId, title: "確認用アカウント", active: true };
+      d.users.push(u);
+      addAudit(d, { userId: u.id, action: "create", entity: "user", entityId: u.id, entityLabel: u.name, summary: "確認用アカウントを作成" });
+    }
+    if (!u.active) fail("/login", "この確認用アカウントは管理者によって無効化されています。");
+    user = { ...u };
+    addAudit(d, { userId: u.id, action: "login", entity: "session", entityId: u.id, entityLabel: u.name, summary: "確認用リンクからログイン" });
+  });
+  await setSessionCookie(user!);
+  redirect("/");
 }
 
 export async function logout() {

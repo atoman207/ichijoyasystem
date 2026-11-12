@@ -16,6 +16,8 @@ export function proxy(request: NextRequest) {
   // ログイン画面は常に表示できるようにする (ログイン済みかどうかの判定は画面側で署名を検証して行う。
   // 期限切れ・無効な Cookie のままでも /login と / の間でリダイレクトが繰り返されないように)
   if (pathname.startsWith("/login")) return NextResponse.next();
+  // 確認用リンク (鍵の確認は /review の処理で行う)
+  if (pathname === "/review") return NextResponse.next();
 
   if (!hasSession) {
     const url = new URL("/login", request.url);

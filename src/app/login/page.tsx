@@ -3,6 +3,8 @@ import { ChartColumn, ClipboardCheck, Layers, Sparkles } from "lucide-react";
 import { redirect } from "next/navigation";
 import { syncDb } from "@/lib/db/store";
 import { getSessionUser, safeNext } from "@/lib/auth/session";
+import { hasReviewAccess, REVIEW_ACCOUNTS } from "@/lib/auth/review";
+import { reviewLogin } from "@/lib/actions/auth";
 import { ROLE_LABEL } from "@/lib/constants";
 import { LoginForm, PlainLoginForm, type LoginAccount } from "@/components/features/LoginForm";
 import { IchijoyaLogo } from "@/components/brand/Logo";
@@ -17,8 +19,8 @@ const FEATURES = [
   { icon: Sparkles, title: "AI で紙と電話をデータに", desc: "手書き見積・レシートの読取、AI 電話受付、文面作成" },
 ];
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
-  const { next: rawNext } = await searchParams;
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string; err?: string }> }) {
+  const { next: rawNext, err } = await searchParams;
   const next = safeNext(rawNext);
   // ログイン済みならそのまま移動する (期限切れ・無効な Cookie のときはログイン画面を表示)
   if (await getSessionUser()) redirect(next);
@@ -28,6 +30,8 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
     .filter((u) => u.active && u.password)
     .map((u) => ({ id: u.id, name: u.name, email: u.email, password: u.password!, role: u.role, storeId: u.storeId, title: u.title }));
   const demo = accounts.length > 0;
+  // 確認用リンクを開いた端末: ロールのボタンでパスワードなしでログインできる (本番データのとき)
+  const review = !demo && (await hasReviewAccess());
   const stores = db.stores.map((s) => ({ id: s.id, name: s.name, color: s.color }));
   const storeMap = new Map(db.stores.map((s) => [s.id, s.name]));
 
@@ -96,7 +100,34 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
               {demo ? "テスト用: ロールと店舗を選ぶと、メールアドレスとパスワードが自動で入力されます。" : "社員ごとのログイン ID とパスワードを入力してください。"}
             </p>
           </div>
+          {err && (
+            <p role="alert" className="mb-4 rounded-xl border border-critical/30 bg-critical/5 px-4 py-3 text-sm text-critical-ink">
+              {err}
+            </p>
+          )}
+          {review && (
+            <div className="mb-4 rounded-2xl border border-accent/30 bg-accent/5 p-5 shadow-card sm:p-6">
+              <h3 className="text-base font-semibold text-ink">確認用ログイン</h3>
+              <p className="mt-1 text-xs leading-relaxed text-ink-2">
+                ロールを選ぶと、パスワードを入力せずにその権限の画面に入れます。確認用のアカウントで操作するため、社員のアカウントには影響しません。
+              </p>
+              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {REVIEW_ACCOUNTS.map((a) => (
+                  <form key={a.id} action={reviewLogin.bind(null, a.id)}>
+                    <button
+                      type="submit"
+                      className="flex w-full flex-col items-start rounded-xl border border-line bg-panel px-4 py-3 text-left transition hover:border-accent hover:bg-accent/5 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent/25"
+                    >
+                      <span className="text-sm font-semibold text-ink">{a.label}としてログイン</span>
+                      <span className="mt-0.5 text-[11px] leading-snug text-ink-3">{a.desc}</span>
+                    </button>
+                  </form>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="rounded-2xl border border-line/70 bg-panel p-5 shadow-card sm:p-6">
+            {review && <p className="mb-3 text-xs text-ink-3">社員のアカウントでログインする場合は、ログイン ID とパスワードを入力してください。</p>}
             {demo ? <LoginForm accounts={accounts} stores={stores} next={next} /> : <PlainLoginForm next={next} />}
           </div>
 
