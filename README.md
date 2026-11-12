@@ -19,6 +19,7 @@
 - データベースは、テーブル定義 + 移行データの SQL で起動できます (個人情報を含むためリポジトリには入れず、`node scripts/import/generate-data-sql.mjs` で作る)。1 ファイル版 (`supabase/ichijoya.sql`) は `node scripts/import/setup-database.mjs` (データベースのパスワードで接続。psql 不要) か psql で実行します。SQL Editor は 1 回に約 1 MB までなので、SQL Editor では分割版 (`--split` → `supabase/data/`) を使います。手順は [supabase/README.md](supabase/README.md)
 - 設計資料 (要件定義書・業務フロー図・設計書・画面一覧など) は Phase 1 の納品物として別途お渡ししています (リポジトリには含めません)
 - 本番データではログイン画面にテスト用アカウントは表示されません。社員ごとのログイン ID と初期パスワード (`data/import/initial-passwords.csv`、管理者へ直接手渡し) で入り、各自プロフィール画面で変更します
+- 確認用に、下記「テスト用アカウント」の 15 名 (架空・パスワード `demo1234`) を本番データベースにもデモ用アカウントとして登録しています (`node scripts/import/seed-demo-accounts.mjs`。止めるときは `--off`)。ログイン画面で ID とパスワードを入力して入ります
 - ログイン: セッションは 7 日で失効、パスワード変更で他端末のセッションも失効、同じ ID で 10 回失敗すると 15 分ロック。ロール・所属は管理者が 設定 → ユーザーと権限 で変更
 
 | 環境変数 | 内容 |
@@ -40,10 +41,14 @@ DATA_BACKEND=json npm run dev
 データを初期状態に戻すには、管理者でログイン → 設定 → データ管理 → 「サンプルデータを初期化する」
 (または `data/db.json` を削除して再起動)。Supabase に接続しているときは初期化できません。
 
-## テスト用アカウント (ローカルのサンプルデータのみ)
+## テスト用アカウント (デモ用アカウント)
 
-ログイン画面でロール (管理者 / 店長 / 店舗スタッフ / 本部スタッフ) と店舗を選ぶと、
-メールアドレスとパスワードが自動入力されます。パスワードはすべて `demo1234` です。
+パスワードはすべて `demo1234` です。
+
+- ローカルのサンプルデータ: ログイン画面でロール (管理者 / 店長 / 店舗スタッフ / 本部スタッフ) と店舗を選ぶと、メールアドレスとパスワードが自動入力されます
+- 本番データ (Supabase): 同じ 15 名をデモ用アカウントとして登録しています。ログイン画面には表示されないので、ログイン ID (メールアドレス) とパスワードを入力します。
+  権限の範囲は社員と同じで、店長・店舗スタッフは自店舗の顧客・案件、管理者・本部スタッフは全店舗を見られます。役職の先頭に「【デモ用】」が付きます。
+  登録・パスワードの初期化は `node scripts/import/seed-demo-accounts.mjs`、停止は `--off` (手順は [supabase/README.md](supabase/README.md) の「デモ用アカウント」)
 
 | ロール | 氏名 | 所属 | メール |
 | --- | --- | --- | --- |
@@ -146,7 +151,7 @@ supabase/
   data/                    同じ内容の分割版 (SQL Editor 用。各 900 KB 以下。ローカルで生成・コミットしない)
   README.md                テーブル作成・データ登録の手順
 scripts/
-  import/                  SQL の生成・実行とデータの登録 (generate-schema / generate-data-sql / setup-database / load-to-supabase)
+  import/                  SQL の生成・実行とデータの登録 (generate-schema / generate-data-sql / setup-database / load-to-supabase)、デモ用アカウントの登録 (seed-demo-accounts)
   smoke.mjs                ブラウザ疎通テスト (npm run smoke)
 ```
 

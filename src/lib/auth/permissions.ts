@@ -53,12 +53,24 @@ export function canApprove(user: User, approval: Pick<Approval, "storeId" | "req
  * - 本部の案件、または金額が基準以上 → 管理者
  * - 店舗の案件 → 店長。ただし、その店舗に申請者以外の有効な店長がいないとき
  *   (店長のいない店舗・店長本人の申請) は、承認できる人がいないので管理者
+ * - 店長として数えるのは、申請者と同じ種類のアカウントだけ (社員の申請は社員の店長、デモ用アカウントの申請はデモ用の店長)。
+ *   本番データにデモ用アカウントを加えても、社員の申請の承認先は変わらない
  */
-export function approverRole(users: Pick<User, "id" | "role" | "storeId" | "active">[], storeId: StoreId, overThreshold: boolean, requesterId: string): "store_manager" | "admin" {
+export function approverRole(users: Pick<User, "id" | "email" | "role" | "storeId" | "active">[], storeId: StoreId, overThreshold: boolean, requesterId: string): "store_manager" | "admin" {
   if (storeId === "hq" || overThreshold) return "admin";
+  const requester = users.find((u) => u.id === requesterId);
+  const demo = requester ? isDemoAccount(requester) : false;
   // 確認用アカウント (お客様の画面確認用) は、実際の承認先の判定に入れない
-  const hasManager = users.some((u) => u.active && u.role === "store_manager" && u.storeId === storeId && u.id !== requesterId && !isReviewAccount(u));
+  const hasManager = users.some(
+    (u) => u.active && u.role === "store_manager" && u.storeId === storeId && u.id !== requesterId && !isReviewAccount(u) && isDemoAccount(u) === demo,
+  );
   return hasManager ? "store_manager" : "admin";
+}
+
+/** デモ用アカウント (架空の 15 名。ログイン ID が予約ドメイン @ichijoya.example。src/lib/db/master.ts の USERS) */
+export const DEMO_EMAIL_DOMAIN = "@ichijoya.example";
+export function isDemoAccount(user: Pick<User, "email">): boolean {
+  return user.email.toLowerCase().endsWith(DEMO_EMAIL_DOMAIN);
 }
 
 /** 確認用アカウント (確認用リンクのロールボタンでログインするアカウント。src/lib/auth/review.ts) */

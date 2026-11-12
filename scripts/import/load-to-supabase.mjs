@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * 取込データ (data/import/client-data.json) を Supabase に書き込む
- *   node scripts/import/load-to-supabase.mjs [データ=data/import/client-data.json] [--yes]
+ *   node scripts/import/load-to-supabase.mjs [データ=data/import/client-data.json] [--yes] [--no-demo]
  *
  * - 既存の行 (サンプルデータを含む) をすべて削除してから、取込データだけを入れ直す
+ * - デモ用アカウント (架空の 15 名・パスワード demo1234。scripts/import/demo-accounts.mjs) も users に登録する (--no-demo で含めない)
  * - 接続は NEXT_PUBLIC_SUPABASE_URL と SUPABASE_SECRET_KEY (.env.local)
  * - 実行には --yes が必要 (誤って本番データを消さないため)
  */
@@ -12,6 +13,7 @@ import path from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import { META_TABLE, TABLES, snake } from "../../src/lib/db/schema.ts";
 import { loadEnv } from "./env.mjs";
+import { withDemoAccounts } from "./demo-accounts.mjs";
 
 loadEnv();
 const args = process.argv.slice(2);
@@ -25,7 +27,8 @@ const key = process.env.SUPABASE_SECRET_KEY;
 if (!url || !key) throw new Error("NEXT_PUBLIC_SUPABASE_URL と SUPABASE_SECRET_KEY を .env.local に設定してください。");
 const sb = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 
-const db = JSON.parse(fs.readFileSync(FILE, "utf8"));
+const source = JSON.parse(fs.readFileSync(FILE, "utf8"));
+const db = args.includes("--no-demo") ? source : withDemoAccounts(source);
 const toRow = (def, e) => Object.fromEntries(def.columns.map(([f]) => [snake(f), e[f] === undefined ? null : e[f]]));
 const t0 = Date.now();
 const log = (m) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${m}`);

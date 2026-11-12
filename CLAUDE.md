@@ -28,5 +28,6 @@ AI コーディング支援 (Claude Code 等) がこのリポジトリで作業�
 - 書き込みは必ず `await mutate(...)`。読み込みは `requireUser` / `requireActionUser` が `syncDb()` で最新化した後の `getDb()`。認証前に DB を読む画面 (ログイン・API) は `await syncDb()` を使う
 - リポジトリは公開。`client-materials/` (共有資料)・`data/` (移行データ・初期パスワード・サンプル)・`supabase/ichijoya.sql`・`supabase/data/` (データの SQL)・`phase1/`・`docs/`・`scripts/import/extract-client-data.mjs` (社員名を含む) はコミットしない (.gitignore)。社員の実名・ログイン ID をコードに書かない。手順は supabase/README.md
 - `data/db.json` はローカル検証用のサンプルデータ (コミットしない)。初期化は 設定 → データ管理 (JSON のときのみ)、または削除して再起動
+- デモ用アカウント (架空の 15 名 `<名前>@ichijoya.example` / `demo1234`、元は `master.ts` の `USERS`) は Supabase にも登録する: `node scripts/import/seed-demo-accounts.mjs` (`--off` で無効化)。`generate-data-sql.mjs` / `load-to-supabase.mjs` も既定で含める。判定は `permissions.ts` の `isDemoAccount` (承認先の判定でデモ用と社員を混ぜない)
 - 店舗 ID は `koshi` / `chuo` / `nishi` / `tamana` / `hq` 固定。店舗名・住所は公開サイトの会社概要に基づく
 - Claude API を呼ぶコードは `claude-opus-5-5` を既定とし、`betas: ["server-side-fallback-2026-07-01"], fallbacks: "default"` を付ける

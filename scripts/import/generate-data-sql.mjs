@@ -6,6 +6,9 @@
  *   node scripts/import/generate-data-sql.mjs --split         → supabase/data/*.sql   (分割版。SQL Editor 用)
  *
  * オプション: [データ=data/import/client-data.json] [--out=出力先] [--max-kb=900 (分割版の 1 ファイルの大きさ)]
+ *             [--no-demo (デモ用アカウント 15 名を含めない)]
+ *
+ * 移行データに加えて、デモ用アカウント (架空の 15 名・パスワード demo1234。scripts/import/demo-accounts.mjs) を users に登録する。
  *
  * SQL Editor は 1 回に約 1 MB までしか実行できない (Supabase Studio の上限 0.98 MB。超えると
  * "Query is too large to be run via the SQL Editor")。ichijoya.sql (約 31 MB) は psql で実行し、
@@ -26,6 +29,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { META_TABLE, TABLES, snake } from "../../src/lib/db/schema.ts";
 import { buildSchemaSql } from "./schema-sql.mjs";
+import { withDemoAccounts } from "./demo-accounts.mjs";
 
 const args = process.argv.slice(2);
 const opt = (name, def) => args.find((a) => a.startsWith(`--${name}=`))?.split("=")[1] ?? def;
@@ -48,7 +52,10 @@ if (!fs.existsSync(FILE)) {
   console.error(`移行データがありません: ${path.relative(process.cwd(), FILE)}\n先に node scripts/import/extract-client-data.mjs を実行してください。`);
   process.exit(1);
 }
-const db = JSON.parse(fs.readFileSync(FILE, "utf8"));
+const DEMO = !args.includes("--no-demo");
+const source = JSON.parse(fs.readFileSync(FILE, "utf8"));
+const db = DEMO ? withDemoAccounts(source) : source;
+const demoNote = DEMO ? "デモ用アカウント 15 名 (パスワード demo1234) を含む" : "デモ用アカウントは含まない";
 const stamp = new Date().toISOString();
 const total = TABLES.reduce((a, t) => a + (db[t.collection] ?? []).length, 0);
 
@@ -112,7 +119,7 @@ if (!SPLIT) {
     banner([
       "一畳屋 統合業務システム データベース (テーブル定義 + 移行データ) — 1 ファイルで起動",
       `生成: node scripts/import/generate-data-sql.mjs (${stamp})`,
-      `内容: ${TABLES.length + 1} テーブル / ${total.toLocaleString("en-US")} 行 (共有資料から移行したデータ。サンプルデータは含まない)`,
+      `内容: ${TABLES.length + 1} テーブル / ${total.toLocaleString("en-US")} 行 (共有資料から移行したデータ。サンプルデータは含まない。${demoNote})`,
       "",
       "実行方法 (どちらか):",
       "  node scripts/import/setup-database.mjs   (SUPABASE_DB_PASSWORD または SUPABASE_DB_URL を設定。psql 不要)",

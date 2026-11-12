@@ -57,6 +57,21 @@ psql の接続文字列は Supabase の Connect → Session pooler。
 1. [`migrations/20261112000000_initial_schema.sql`](migrations/20261112000000_initial_schema.sql) (テーブル定義だけ・約 40 KB・リポジトリに含まれる) を SQL Editor で実行します
 2. `node scripts/import/load-to-supabase.mjs --yes` (`.env.local` の `NEXT_PUBLIC_SUPABASE_URL` と `SUPABASE_SECRET_KEY` を使用。データベースのパスワードは不要)
 
+## デモ用アカウント (架空の 15 名・パスワード demo1234)
+
+ローカルのサンプルデータと同じ 15 名 (`src/lib/db/master.ts` の `USERS`。ログイン ID は `<名前>@ichijoya.example`) を、本番データベースの `users` にも登録します。A・B・C の方法でデータを入れ直すときは自動で含まれます (含めないときは `generate-data-sql.mjs` / `load-to-supabase.mjs` に `--no-demo`)。データを残したまま追加・戻すときは次を使います。
+
+```bash
+node scripts/import/seed-demo-accounts.mjs          # 登録 (既にあれば更新。パスワードを demo1234 に戻し、有効にする)
+node scripts/import/seed-demo-accounts.mjs --off    # 無効にする (ログインできなくなる。登録した案件・履歴は残る)
+node scripts/import/seed-demo-accounts.mjs --sql    # 同じ内容の SQL を supabase/demo-accounts.sql に書き出す (SQL Editor 用。--off --sql で無効化の SQL)
+```
+
+- `.env.local` の `NEXT_PUBLIC_SUPABASE_URL` と `SUPABASE_SECRET_KEY` を使います。`users` のデモ用アカウント 15 行だけを書き換え、ほかのデータには触れません。実行中のアプリ (Vercel を含む) は再起動なしで反映します
+- パスワードはハッシュだけを保存します (`users.password` 列は制約で空のみ)。役職の先頭に「【デモ用】」が付きます
+- 承認先の判定では、デモ用アカウントの申請にはデモ用の店長、社員の申請には社員の店長だけを数えます。デモ用アカウントを加えても、社員の申請の承認先は変わりません
+- 1 名だけ止めるときは、管理者で 設定 → ユーザーと権限 から無効にします
+
 ## アプリを接続する
 
 `.env.local` (ローカル) または Vercel の Environment Variables に、`NEXT_PUBLIC_SUPABASE_URL` と `SUPABASE_SECRET_KEY` を設定します (`SESSION_SECRET` も推奨)。接続できたかどうかは `/api/health` で確認できます (`"db":"ok"`)。
