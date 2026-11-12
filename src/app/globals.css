@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+/*
+  一畳屋 統合業務システム - デザイントークン
+  ------------------------------------------------------------
+  淡いブルー〜ラベンダーのキャンバスに、白いカードと浮いたヘッダーを重ねる業務 UI。
+  - アクセントは青紫 (インディゴ)。ボタン・選択中のタブ・リンクに使う
+  - カードは枠線を控えめにし、やわらかい影で奥行きを出す
+  - ステータス色はアイコン・ラベルと必ず併用し、色のみに意味を持たせない
+  - チャートの系列色は店舗ごとに固定 (src/lib/db/master.ts)
+*/
+@theme {
+  --font-sans: "Inter", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", "Yu Gothic UI", Meiryo, "Noto Sans JP",
+    "Noto Sans CJK JP", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  --color-canvas: #f3f5fb; /* ページ背景 */
+  --color-panel: #ffffff; /* カード・ヘッダー背景 */
+  --color-subtle: #f4f6fb; /* 行ホバー・薄い帯 */
+  --color-line: #e7eaf3; /* 罫線 */
+  --color-line-strong: #d3d8e6;
+
+  --color-ink: #1d2233; /* 主要テキスト */
+  --color-ink-2: #545b70; /* 補助テキスト */
+  --color-ink-3: #8a91a5; /* ミュートテキスト */
+
+  --color-accent: #4a5ae8; /* 青紫 (インディゴ) */
+  --color-accent-hover: #3b4ad4;
+  --color-accent-soft: #eef0fe;
+  --color-accent-ink: #3340b8;
+  --color-accent-strong: #2a338f; /* ブランド面 (ログイン) */
+
+  /* ステータス色 (アイコン・ラベルと必ず併用し、色のみに意味を持たせない) */
+  --color-good: #12a150;
+  --color-good-soft: #e7f7ee;
+  --color-good-ink: #11743c;
+  --color-warn: #d18a00;
+  --color-warn-soft: #fff6dd;
+  --color-warn-ink: #8a5a00;
+  --color-serious: #e0652f;
+  --color-serious-soft: #fdefe7;
+  --color-serious-ink: #9a3f16;
+  --color-critical: #e04848;
+  --color-critical-soft: #fdecec;
+  --color-critical-ink: #b12c2c;
+  --color-info: #2f7be0;
+  --color-info-soft: #e9f2fd;
+  --color-info-ink: #1c5cab;
+  --color-neutral-soft: #eef0f5;
+
+  --shadow-card: 0 1px 2px rgba(29, 34, 51, 0.04), 0 6px 20px -8px rgba(29, 34, 51, 0.08);
+  --shadow-lift: 0 14px 30px -12px rgba(29, 34, 51, 0.2), 0 2px 6px rgba(29, 34, 51, 0.05);
+  --shadow-pop: 0 22px 50px -16px rgba(29, 34, 51, 0.3), 0 2px 8px rgba(29, 34, 51, 0.06);
+  --shadow-header: 0 1px 2px rgba(29, 34, 51, 0.04), 0 10px 30px -12px rgba(29, 34, 51, 0.14);
+
+  --animate-pop: pop 0.14s ease-out both;
+  --animate-fade: fade 0.2s ease-out both;
+  --animate-drop: drop 0.18s ease-out both;
+
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  @keyframes fade {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes drop {
+    from {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-canvas);
+  background-image:
+    radial-gradient(1100px 560px at 0% -10%, #e6e9fd 0%, rgba(230, 233, 253, 0) 62%),
+    radial-gradient(900px 520px at 100% -5%, #e3f0fd 0%, rgba(227, 240, 253, 0) 58%),
+    radial-gradient(900px 600px at 50% 110%, #eceffd 0%, rgba(236, 239, 253, 0) 60%);
+  background-attachment: fixed;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "palt";
+}
+
+/* 数値列は等幅数字で揃える */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* フォーム共通 (components レイヤーに置き、w-auto などのユーティリティで上書きできるようにする) */
+@layer components {
+  .field {
+    @apply w-full rounded-xl border border-line bg-panel px-3 py-2 text-sm text-ink shadow-xs outline-none transition placeholder:text-ink-3 hover:border-line-strong focus:border-accent focus:ring-4 focus:ring-accent/15 disabled:bg-subtle disabled:text-ink-3 disabled:shadow-none;
+  }
+
+  .label {
+    @apply mb-1 block text-xs font-medium text-ink-2;
+  }
+}
+
+/* ブランド面 (ログイン) に重ねる畳目のパターン */
+.tatami-pattern {
+  background-image:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.06) 0 1px, transparent 1px 7px),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 3px);
+}
+
+/* 細いスクロールバー */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d3d8e6 transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

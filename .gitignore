@@ -1,0 +1,72 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# ------------------------------------------------------------
+# リポジトリは公開 (public)。アプリの実行に必要なものだけをコミットする。
+# お客様のデータ・資料と、納品用の文書はコミットしない
+# ------------------------------------------------------------
+
+# local data files (sample data / copies of the real data)
+/data/
+
+# smoke test screenshots
+.smoke-shots/
+
+# client materials downloaded from Google Drive (confidential, large)
+/client-materials/
+
+# generated data SQL for the Supabase SQL Editor (customer personal data)
+/supabase/ichijoya.sql
+/supabase/data/
+/supabase/.temp/
+
+# client-specific importer (contains employee names and spreadsheet layouts)
+/scripts/import/extract-client-data.mjs
+
+# Phase 1 deliverables (PDF / CSV / document sources) and their builders: delivered separately
+/phase1/
+/scripts/phase1/
+
+# design notes and reference images (not needed to run the app)
+/docs/
+/public/Screenshot*
