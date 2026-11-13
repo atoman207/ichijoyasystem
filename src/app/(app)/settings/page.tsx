@@ -9,6 +9,8 @@ import { fmtDateTime, yen } from "@/lib/format";
 import { APPROVAL_RULES, CATEGORY_LABEL, CHANNEL_LABEL, ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import type { Role, ServiceCategory } from "@/lib/db/types";
 import { Badge, Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select, StoreTag } from "@/components/ui";
+import Link from "@/components/ui/Link";
+import { PermissionTableCard } from "@/components/settings/PermissionTableCard";
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -35,6 +37,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       />
 
       {tab === "users" && (
+        <div className="space-y-4">
         <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-3">
           <Card className="@4xl:col-span-2" padded={false}>
             <div className="overflow-x-auto">
@@ -43,7 +46,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 <tbody>
                   {db.users.map((u) => (
                     <tr key={u.id} className="border-t border-line">
-                      <td className="px-4 py-2"><div className="font-medium">{u.name}</div><div className="text-[11px] text-ink-3">{u.title}</div></td>
+                      <td className="px-4 py-2"><div className="font-medium">{admin ? <Link href={`/settings/users/${u.id}`} className="text-accent hover:underline">{u.name}</Link> : u.name}</div><div className="text-[11px] text-ink-3">{u.title}</div></td>
                       <td className="px-3 py-2 text-xs">{ROLE_LABEL[u.role]}</td>
                       <td className="px-3 py-2"><StoreTag store={db.stores.find((s) => s.id === u.storeId)} short /></td>
                       {admin && <td className="px-3 py-2 font-mono text-[11px] text-ink-2">{u.email}</td>}
@@ -128,6 +131,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               </Card>
             )}
           </div>
+        </div>
+        <PermissionTableCard />
         </div>
       )}
 
@@ -255,7 +260,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             { name: "Web フォーム (ichijoya.co.jp)", status: "本番で接続", ok: false, desc: "お問い合わせフォームの送信を API で受け取り、問い合わせとして自動登録。" },
             { name: "メール (送受信)", status: "本番で接続", ok: false, desc: "見積書・請求書の送付、受信メールの取り込み (SendGrid / Gmail API 等)。" },
             { name: "Chatwork", status: "本番で接続", ok: false, desc: "取引先・協力業者とのやりとりを履歴に集約。" },
-            { name: "Google スプレッドシート", status: "本番で接続", ok: false, desc: "既存シートからの初期データ移行、月次集計の自動書き出し (CSV エクスポートも利用可)。" },
+            { name: "Google スプレッドシート", status: "取込・書き出しに対応", ok: true, desc: "リンクで共有したシートから顧客・問い合わせを取込 (データ入出力の画面)。書き出した CSV はシートでインポート。非公開シートの直接連携はサービスアカウントの準備後。" },
             { name: "会計ソフト (freee / MF 等)", status: "本番で接続", ok: false, desc: "売上・経費・買掛の仕訳データを連携。" },
           ].map((i) => (
             <Card key={i.name}>
@@ -274,6 +279,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             <CardHeader title="データのエクスポート" description="特定サービスに依存せず、いつでもデータを取り出せます" />
             {canExportData(user) ? (
             <div className="flex flex-wrap gap-2">
+              <LinkButton href="/data" size="sm">データ入出力 (CSV の取込・書き出し)</LinkButton>
               <LinkButton href="/api/export?type=db" variant="secondary" size="sm" download>全データ (JSON)</LinkButton>
               <LinkButton href="/api/export?type=customers" variant="secondary" size="sm" download>顧客一覧 (CSV)</LinkButton>
               <LinkButton href="/api/export?type=sales" variant="secondary" size="sm" download>月次売上 (CSV)</LinkButton>

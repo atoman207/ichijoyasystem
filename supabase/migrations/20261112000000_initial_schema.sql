@@ -485,6 +485,30 @@ create table if not exists photo_albums (
 );
 comment on table photo_albums is '現場写真台帳';
 
+-- 添付ファイル (資料・写真。本体は Storage の attachments バケット)
+create table if not exists attachments (
+  id text primary key,
+  parent_type text not null check (parent_type in ('customer','inquiry','quote','order','expense','purchase','document')),
+  parent_id text not null,
+  customer_id text references customers(id) on delete set null,
+  store_id text not null references stores(id),
+  kind text not null check (kind in ('photo','file')),
+  file_name text not null,
+  content_type text not null,
+  size integer not null default 0,
+  storage_key text not null,
+  thumb_key text,
+  width integer,
+  height integer,
+  caption text,
+  taken_at timestamptz,
+  uploaded_by text not null references users(id),
+  uploaded_at timestamptz not null
+);
+comment on table attachments is '添付ファイル (資料・写真。本体は Storage の attachments バケット)';
+create index if not exists attachments_parent_type_parent_id_idx on attachments (parent_type, parent_id);
+create index if not exists attachments_customer_id_idx on attachments (customer_id);
+
 -- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)
 -- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する
 alter table stores add column if not exists code text not null;
@@ -787,6 +811,22 @@ alter table photo_albums add column if not exists store_id text not null referen
 alter table photo_albums add column if not exists photo_count integer not null default 0;
 alter table photo_albums add column if not exists drive_url text;
 alter table photo_albums add column if not exists sample_files text[] not null default '{}';
+alter table attachments add column if not exists parent_type text not null check (parent_type in ('customer','inquiry','quote','order','expense','purchase','document'));
+alter table attachments add column if not exists parent_id text not null;
+alter table attachments add column if not exists customer_id text references customers(id) on delete set null;
+alter table attachments add column if not exists store_id text not null references stores(id);
+alter table attachments add column if not exists kind text not null check (kind in ('photo','file'));
+alter table attachments add column if not exists file_name text not null;
+alter table attachments add column if not exists content_type text not null;
+alter table attachments add column if not exists size integer not null default 0;
+alter table attachments add column if not exists storage_key text not null;
+alter table attachments add column if not exists thumb_key text;
+alter table attachments add column if not exists width integer;
+alter table attachments add column if not exists height integer;
+alter table attachments add column if not exists caption text;
+alter table attachments add column if not exists taken_at timestamptz;
+alter table attachments add column if not exists uploaded_by text not null references users(id);
+alter table attachments add column if not exists uploaded_at timestamptz not null;
 
 -- 行レベルセキュリティ: 有効化のみ (ポリシーなし)。publishable / anon キーからはアクセスできない
 -- アプリが使う secret キー (service_role) には読み書きの権限を明示的に付ける (プロジェクトの既定の権限に頼らない)
@@ -863,6 +903,9 @@ grant select, insert, update, delete on table source_files to service_role;
 alter table photo_albums enable row level security;
 revoke all on table photo_albums from anon, authenticated;
 grant select, insert, update, delete on table photo_albums to service_role;
+alter table attachments enable row level security;
+revoke all on table attachments from anon, authenticated;
+grant select, insert, update, delete on table attachments to service_role;
 
 -- 書き込みのたびにリビジョンを +1 (他のサーバーインスタンスが変更を検知して読み直す)
 create or replace function public.bump_revision() returns bigint

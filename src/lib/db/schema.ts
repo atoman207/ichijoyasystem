@@ -548,6 +548,32 @@ export const TABLES: TableDef[] = [
     ],
     orderBy: ["date", "id"],
   },
+  {
+    collection: "attachments",
+    table: "attachments",
+    label: "添付ファイル (資料・写真。本体は Storage の attachments バケット)",
+    columns: [
+      ["id", "text primary key"],
+      ["parentType", "text not null check (parent_type in ('customer','inquiry','quote','order','expense','purchase','document'))"],
+      ["parentId", "text not null"],
+      ["customerId", "text references customers(id) on delete set null"],
+      ["storeId", "text not null references stores(id)"],
+      ["kind", "text not null check (kind in ('photo','file'))"],
+      ["fileName", "text not null"],
+      ["contentType", "text not null"],
+      ["size", "integer not null default 0"],
+      ["storageKey", "text not null"],
+      ["thumbKey", "text"],
+      ["width", "integer"],
+      ["height", "integer"],
+      ["caption", "text"],
+      ["takenAt", `${ts}`],
+      ["uploadedBy", "text not null references users(id)"],
+      ["uploadedAt", `${ts} not null`],
+    ],
+    orderBy: ["uploaded_at", "id"],
+    indexes: [["parent_type", "parent_id"], ["customer_id"]],
+  },
 ];
 
 /** アプリ全体のメタ情報 (データ形式のバージョンと、インスタンス間の更新検知用のリビジョン) */

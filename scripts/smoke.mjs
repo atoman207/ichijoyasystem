@@ -189,7 +189,7 @@ await visit("/expenses", "36-hq-expenses");
 // ---------------- 管理者 (山田 太郎) ----------------
 await login(/^管理者/);
 await shot("40-admin-dashboard");
-for (const [u, n] of [["/approvals", "41-admin-approvals"], ["/reports?months=6", "42-admin-reports"], ["/audit", "43-admin-audit"], ["/settings?tab=users", "44-admin-settings-users"], ["/settings?tab=products", "45-admin-settings-products"], ["/settings?tab=rules", null], ["/settings?tab=integrations", null], ["/settings?tab=data", null], ["/messages", "46-admin-messages"], ["/customers", "47-admin-customers"], ["/orders", "48-admin-orders"], ["/schedule", "49-admin-schedule"], ["/profile", null], ["/customers?q=%E7%94%B0%E4%B8%AD", null]]) await visit(u, n);
+for (const [u, n] of [["/approvals", "41-admin-approvals"], ["/reports?months=6", "42-admin-reports"], ["/audit", "43-admin-audit"], ["/settings?tab=users", "44-admin-settings-users"], ["/settings?tab=products", "45-admin-settings-products"], ["/settings?tab=rules", null], ["/settings?tab=integrations", null], ["/settings?tab=data", null], ["/settings/users/u06", "44b-admin-user-account"], ["/data", "50-admin-data-io"], ["/messages", "46-admin-messages"], ["/customers", "47-admin-customers"], ["/orders", "48-admin-orders"], ["/schedule", "49-admin-schedule"], ["/profile", null], ["/customers?q=%E7%94%B0%E4%B8%AD", null]]) await visit(u, n);
 // 書類取込 (サンプル読取)
 await visit("/capture?kind=receipt", null);
 await page.getByRole("button", { name: /サンプル画像で読み取りを試す/ }).click();

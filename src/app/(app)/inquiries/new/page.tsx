@@ -4,6 +4,8 @@ import { canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
 import { customerOptions } from "@/lib/db/queries";
 import { createInquiry } from "@/lib/actions/inquiries";
 import { CustomerSearch } from "@/components/features/CustomerSearch";
+import { DuplicateWatcher } from "@/components/features/DuplicateWatcher";
+import { checkCustomerDuplicates } from "@/lib/actions/customers";
 import { CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { Button, Card, Field, Flash, FormActions, Input, LinkButton, Note, PageHeader, Select, Textarea } from "@/components/ui";
 
@@ -19,7 +21,7 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
     <div className="max-w-3xl">
       <Flash err={err} />
       <PageHeader title="問い合わせを登録" back={{ href: "/inquiries", label: "問い合わせ一覧" }} />
-      <Note tone="accent">AI電話受付や Web フォームからの問い合わせは本番環境では自動登録されます。この画面は電話・来店・LINE などを手入力する場合に使います。</Note>
+      <Note tone="accent">電話・来店 (対面)・郵送・LINE などで受けた問い合わせを手入力で登録します。スマートフォン・タブレットからも入力できます。AI 電話受付・Web フォームからの自動登録は、各サービスとの接続後に使えます。</Note>
       <Card className="mt-4">
         {choices.searchable && <CustomerSearch total={choices.total} q={cq} shown={customers.filter((c) => c.id !== customerId).length} keep={{ customerId }} />}
         <form action={createInquiry} className="space-y-5">
@@ -37,6 +39,9 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
             </Field>
             <Field label="連絡先電話番号 (新規の場合)">
               <Input name="contactPhone" placeholder="090-0000-0000" />
+            </Field>
+            <Field label="受付日時" hint="省略すると現在の日時。郵送で届いた日や、後から入力する電話の時刻を指定できます">
+              <Input name="receivedAt" type="datetime-local" />
             </Field>
             <Field label="入口 (どこから来た問い合わせか)" required>
               <Select name="channel" defaultValue="phone">
@@ -63,6 +68,7 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
               </Select>
             </Field>
           </div>
+          <DuplicateWatcher check={checkCustomerDuplicates} requireConfirm={false} fields={{ name: "contactName", phone: "contactPhone" }} hint="既存の顧客の場合は、上の「既存顧客を選択」で選ぶと履歴がつながります" />
           <Field label="問い合わせ内容 (要約)" required>
             <Input name="summary" required placeholder="例: 和室6畳の畳表替え、概算希望" />
           </Field>

@@ -9,6 +9,7 @@ import { decideApproval, cancelApproval } from "@/lib/actions/approvals";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { APPROVAL_STATUS, APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
 import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag } from "@/components/ui";
+import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { caseEvents } from "@/lib/db/schedule";
 import { toDateKey } from "@/lib/format";
@@ -184,6 +185,8 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
             canAdd={!["rejected", "expired"].includes(q.status)}
             description="見積の説明・再採寸などの訪問を担当者つきで登録すると、店舗の共通カレンダーに自動で反映されます。問い合わせ段階の現地調査も表示します"
           />
+
+          <AttachmentsCard db={db} user={user} parent={{ type: "quote", id: q.id }} returnTo={returnTo} description="採寸の写真・手書きの見積書・図面などを登録できます (書類取込で読み取った元の画像もここに表示されます)" />
         </div>
 
         <div className="space-y-4">

@@ -2,13 +2,61 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { addAudit, diffChanges, mutate, newId, nowIso, nextCustomerCode } from "@/lib/db/store";
-import type { Channel, Customer, CustomerType } from "@/lib/db/types";
+import { addAudit, diffChanges, getDb, mutate, newId, nowIso, nextCustomerCode } from "@/lib/db/store";
+import type { Channel, Customer, CustomerType, Database, User } from "@/lib/db/types";
+import { canAccessStore } from "@/lib/auth/permissions";
+import { candidateLabel, findDuplicateCustomers, needsConfirmation, type DuplicateInput, type DuplicateResult } from "@/lib/duplicates";
 import { CHANNEL_LABEL } from "@/lib/constants";
 import { assertStore, choice, fail, requireActionUser, resolveStoreId, safeReturn, str, withMsg } from "./guards";
 
 function parseTags(s: string): string[] {
   return s.split(/[,、\s]+/).map((t) => t.trim()).filter(Boolean);
+}
+
+/** 重複候補の表示用 (他店舗の顧客は、閲覧権限がなければリンクを付けない) */
+export interface DuplicateRow {
+  id: string;
+  code: string;
+  name: string;
+  storeName: string;
+  area?: string;
+  reasons: string[];
+  level: "high" | "check" | "name";
+  href?: string;
+}
+export interface DuplicateReport {
+  rows: DuplicateRow[];
+  /** 確認のうえで登録する必要があるか */
+  blocking: boolean;
+  sameNameTotal: number;
+}
+
+function toReport(db: Database, user: User, r: DuplicateResult): DuplicateReport {
+  const store = (id: string) => db.stores.find((s) => s.id === id)?.name ?? id;
+  const row = (level: DuplicateRow["level"]) => (m: DuplicateResult["high"][number]): DuplicateRow => ({
+    id: m.id,
+    code: m.code,
+    name: m.name,
+    storeName: store(m.storeId),
+    area: m.area,
+    reasons: m.reasons,
+    level,
+    href: canAccessStore(user, m.storeId) ? `/customers/${m.id}` : undefined,
+  });
+  return { rows: [...r.high.map(row("high")), ...r.check.map(row("check")), ...r.sameName.map(row("name"))], blocking: needsConfirmation(r), sameNameTotal: r.sameNameTotal };
+}
+
+function duplicateInput(formData: FormData): DuplicateInput {
+  return { name: str(formData, "name"), kana: str(formData, "kana"), phone: str(formData, "phone"), email: str(formData, "email"), postalCode: str(formData, "postalCode"), address: str(formData, "address") };
+}
+
+/** 顧客登録・編集の画面から呼ぶ: 入力中の内容と既存顧客 (全店舗) の重複候補 */
+export async function checkCustomerDuplicates(input: DuplicateInput, excludeId?: string): Promise<DuplicateReport> {
+  const user = await requireActionUser();
+  const db = getDb();
+  const clean = (v: unknown) => String(v ?? "").slice(0, 200);
+  const r = findDuplicateCustomers(db, { name: clean(input.name), kana: clean(input.kana), phone: clean(input.phone), email: clean(input.email), postalCode: clean(input.postalCode), address: clean(input.address) }, excludeId);
+  return toReport(db, user, r);
 }
 
 export async function createCustomer(formData: FormData) {
@@ -18,7 +66,14 @@ export async function createCustomer(formData: FormData) {
   const storeId = resolveStoreId(user, str(formData, "storeId"));
   assertStore(user, storeId, "/customers/new");
   const id = newId("cust");
+  const confirmed = str(formData, "confirmDuplicate") === "1";
   await mutate((db) => {
+    // 既存顧客との重複確認 (画面で確認済みでなければ登録しない)
+    const dup = findDuplicateCustomers(db, duplicateInput(formData));
+    if (needsConfirmation(dup) && !confirmed) {
+      fail("/customers/new", `既存の顧客と重複している可能性があります (${candidateLabel(dup)})。同じお客様でないことを確認し、「確認したうえで新規に登録する」にチェックしてください。`);
+    }
+    const dupNote = needsConfirmation(dup) ? ` · 重複候補 ${candidateLabel(dup)} を確認済み` : "";
     const code = nextCustomerCode(db);
     const now = nowIso();
     const c: Customer = {
@@ -42,7 +97,7 @@ export async function createCustomer(formData: FormData) {
       updatedAt: now,
     };
     db.customers.push(c);
-    addAudit(db, { userId: user.id, action: "create", entity: "customer", entityId: id, entityLabel: `${c.code} ${c.name}`, summary: `顧客を登録 (${c.name})`, storeId });
+    addAudit(db, { userId: user.id, action: "create", entity: "customer", entityId: id, entityLabel: `${c.code} ${c.name}`, summary: `顧客を登録 (${c.name})${dupNote}`, storeId });
   });
   revalidatePath("/customers");
   redirect(withMsg(`/customers/${id}`, "顧客を登録しました。関連する画面にも即時反映されます。"));

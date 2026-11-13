@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { BACKEND, syncDb } from "@/lib/db/store";
+import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
 
 export const dynamic = "force-dynamic";
 // 起動直後は全データの読み込み (約 6 万行) を待つため、実行時間の上限を長めにする
@@ -19,7 +20,9 @@ export async function GET() {
   }
   try {
     await syncDb();
-    return NextResponse.json({ ok: true, ...base, db: "ok" });
+    // アプリに追加したテーブルがデータベースにまだないとき (テーブル定義の SQL の実行待ち)。その機能だけが使えない
+    const missing = BACKEND === "supabase" && missingTables().length ? await recheckMissingTables() : [];
+    return NextResponse.json({ ok: true, ...base, db: "ok", schema: missing.length ? { missing } : "ok" });
   } catch {
     return NextResponse.json({ ok: false, ...base, db: "error" }, { status: 503 });
   }

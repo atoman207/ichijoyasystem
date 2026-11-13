@@ -2,9 +2,9 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canApprove, canManageFinance, isManagerOrAbove } from "@/lib/auth/permissions";
+import { canAccessStore, canApprove, canManageFinance, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
 import { orderChain, userName } from "@/lib/db/queries";
-import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, updateOrderSchedule } from "@/lib/actions/orders";
+import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
 import { decideApproval } from "@/lib/actions/approvals";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
 import { APPROVAL_STATUS, APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, PROGRESS_KIND_LABEL, QUOTE_STATUS } from "@/lib/constants";
@@ -12,6 +12,7 @@ import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, N
 import { OrderScheduleForm } from "@/components/schedule/OrderScheduleForm";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { formStores, formUsers } from "@/components/schedule/form-data";
+import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 
 const STEPS = ["pending_approval", "confirmed", "scheduled", "in_progress", "completed", "invoiced", "paid"] as const;
 
@@ -135,8 +136,10 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             description="引き取り・納品・施工・顧客訪問などを案件に登録すると、担当者とともに店舗の共通カレンダーへ自動で反映されます。問い合わせ段階の現地調査も含みます"
           />
 
+          <AttachmentsCard db={db} user={user} parent={{ type: "order", id: o.id }} returnTo={returnTo} title="現場写真・資料" description="施工前・施工中・完了の写真や図面を、スマートフォンのカメラ・アルバムから複数枚まとめて登録できます。この店舗の担当者・本部・管理者だけが表示できます" />
+
           <Card>
-            <CardHeader title="進捗の記録" description="現場からスマートフォンで記録。写真や変更内容も残せます" />
+            <CardHeader title="進捗の記録" description="現場からスマートフォンで記録。写真は上の「現場写真・資料」に登録します" />
             {active && (
               <form action={addProgress.bind(null, o.id)} className="mb-4 grid grid-cols-1 gap-2 @xl:grid-cols-[160px_1fr_auto]">
                 <Select name="kind" defaultValue={o.status === "in_progress" ? "install" : "note"}>
@@ -195,6 +198,26 @@ export default async function OrderDetailPage({ params, searchParams }: { params
         </div>
 
         <div className="space-y-4">
+          <Card>
+            <CardHeader title="案件情報" description="件名・種別・現場住所を変更できます。担当店舗の変更は本部スタッフ・管理者" />
+            <form action={updateOrderInfo.bind(null, o.id)} className="space-y-2">
+              <Field label="件名" required><Input name="title" defaultValue={o.title} required /></Field>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="種別">
+                  <Select name="category" defaultValue={o.category}>
+                    {(Object.keys(CATEGORY_LABEL) as (keyof typeof CATEGORY_LABEL)[]).map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
+                  </Select>
+                </Field>
+                <Field label="担当店舗">
+                  <Select name="storeId" defaultValue={o.storeId} disabled={!canSeeAllStores(user) || ["invoiced", "paid", "cancelled"].includes(o.status)}>
+                    {db.stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </Select>
+                </Field>
+              </div>
+              <Field label="現場住所"><Input name="siteAddress" defaultValue={o.siteAddress} /></Field>
+              <Button type="submit" size="sm" variant="secondary">変更する</Button>
+            </form>
+          </Card>
           <Card>
             <CardHeader title="お客様" />
             {customer && <Dl columns={1} items={[["氏名", <Link key="n" href={`/customers/${customer.id}`} className="text-accent hover:underline">{customer.name}</Link>], ["電話", customer.phone], ["現場", o.siteAddress], ["希望連絡手段", CHANNEL_LABEL[customer.preferredChannel]]]} />}

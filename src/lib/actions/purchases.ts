@@ -6,6 +6,7 @@ import { addAudit, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
 import type { Database, PurchaseInvoice, User } from "@/lib/db/types";
 import { addDays, toDateKey } from "@/lib/format";
 import { canManageFinance } from "@/lib/auth/permissions";
+import { relinkDocumentAttachments } from "@/lib/attachments";
 import { choice, fail, numField, requireActionUser, str, withMsg } from "./guards";
 
 function request(db: Database, p: PurchaseInvoice, user: User) {
@@ -64,6 +65,7 @@ export async function createPurchase(formData: FormData) {
       doc.status = "confirmed";
       doc.linkedType = "purchase";
       doc.linkedId = id;
+      relinkDocumentAttachments(db, doc.id, { type: "purchase", id, storeId: "hq" });
     }
     if (intent === "submit") request(db, p, user);
   });

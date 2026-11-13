@@ -8,8 +8,10 @@ import { addCommLog } from "@/lib/actions/customers";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { CHANNEL_LABEL, INQUIRY_STATUS, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
 import { Badge, Button, Card, CardHeader, ChannelTag, Dl, Field, Flash, Input, LinkButton, PageHeader, Select, Stat, StatusBadge, StoreTag, Textarea } from "@/components/ui";
+import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { toDateKey } from "@/lib/format";
+import { findDuplicateCustomers } from "@/lib/duplicates";
 
 export default async function CustomerDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -22,6 +24,9 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
   const t = customerTimeline(db, id);
   const store = db.stores.find((s) => s.id === c.storeId);
   const openItems = t.inquiries.filter((i) => ["new", "in_progress", "quoted"].includes(i.status)).length + t.orders.filter((o) => ["pending_approval", "confirmed", "scheduled", "in_progress"].includes(o.status)).length;
+  // 重複の可能性がある既存顧客 (電話・メール・氏名と住所の一致、同じ姓と地区)
+  const dup = findDuplicateCustomers(db, c, c.id);
+  const dupRows = [...dup.high.map((m) => ({ ...m, label: "重複の可能性が高い" })), ...dup.check.map((m) => ({ ...m, label: "要確認" }))];
   const receivable = t.invoices.filter((i) => ["issued", "partially_paid", "overdue"].includes(i.status)).reduce((a, i) => a + i.total - i.paidAmount, 0);
 
   return (
@@ -66,6 +71,20 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
               ]}
             />
           </Card>
+          {dupRows.length > 0 && (
+            <Card className="border-warn/40 bg-warn-soft/30">
+              <CardHeader title="重複の可能性がある顧客" description="同じお客様が別の顧客として登録されていないか確認してください (全店舗の顧客と照合)" />
+              <ul className="space-y-2 text-xs">
+                {dupRows.map((m) => (
+                  <li key={m.id}>
+                    {canAccessStore(user, m.storeId) ? <Link href={`/customers/${m.id}`} className="font-medium text-accent hover:underline">{m.code} {m.name}</Link> : <span className="font-medium text-ink">{m.code} {m.name}</span>}
+                    <span className="text-ink-3"> · {db.stores.find((s) => s.id === m.storeId)?.name}{m.area ? ` · 地区 ${m.area}` : ""}</span>
+                    <div className="text-ink-3">{m.label}: {m.reasons.join("・")}</div>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
           <Card>
             <CardHeader title="対応履歴を記録" description="電話・LINE・メール・来店など、どの手段でのやりとりも一元化" />
             <form action={addCommLog.bind(null, c.id)} className="space-y-3">
@@ -151,9 +170,11 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
             </ul>
           </Card>
 
+          <AttachmentsCard db={db} user={user} parent={{ type: "customer", id: c.id }} customerId={c.id} returnTo={`/customers/${c.id}`} />
+
           {(db.photoAlbums.some((a) => a.customerId === c.id) || db.surveys.some((x) => x.customerId === c.id)) && (
             <Card>
-              <CardHeader title="現場写真・お客様アンケート" description="現場写真は Google ドライブのフォルダ、アンケートはハガキの回答から" />
+              <CardHeader title="移行した現場写真フォルダ・お客様アンケート" description="移行前の現場写真は Google ドライブのフォルダ (リンク)、アンケートはハガキの回答から" />
               <ul className="divide-y divide-line text-sm">
                 {db.photoAlbums
                   .filter((a) => a.customerId === c.id)

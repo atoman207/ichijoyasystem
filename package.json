@@ -4,10 +4,14 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/import/migrate.mjs --if-configured",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "smoke": "node scripts/smoke.mjs",
+    "db:sql": "node scripts/import/generate-data-sql.mjs",
+    "db:setup": "node scripts/import/generate-data-sql.mjs && node scripts/import/setup-database.mjs",
+    "db:migrate": "node scripts/import/generate-schema.mjs && node scripts/import/migrate.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

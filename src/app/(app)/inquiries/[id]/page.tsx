@@ -4,11 +4,13 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canAccessStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
-import { registerCustomerFromInquiry, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
+import { linkInquiryToCustomer, registerCustomerFromInquiry, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
+import { findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
 import { addCommLog } from "@/lib/actions/customers";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
 import { Badge, Button, Card, CardHeader, ChannelTag, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
+import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { caseEvents } from "@/lib/db/schedule";
 import { toDateKey } from "@/lib/format";
@@ -31,6 +33,10 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const events = caseEvents(db, { inquiryId: inq.id, quoteId: quote?.id, orderId: order?.id });
   const caseParam = order ? `orderId=${order.id}` : quote ? `quoteId=${quote.id}` : `inquiryId=${inq.id}`;
   const open = !["lost", "closed"].includes(inq.status);
+  // 顧客未登録のとき: 既存の顧客 (全店舗) と照合した候補
+  const dup = customer ? null : findDuplicateCustomers(db, { name: inq.contactName, phone: inq.contactPhone });
+  const candidates = dup ? [...dup.high.map((m) => ({ ...m, level: "high" as const })), ...dup.check.map((m) => ({ ...m, level: "check" as const })), ...dup.sameName.slice(0, 5).map((m) => ({ ...m, level: "name" as const }))] : [];
+  const storeName = (sid: string) => db.stores.find((s) => s.id === sid)?.name ?? sid;
 
   return (
     <div>
@@ -89,6 +95,11 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                   {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </Select>
               </Field>
+              <Field label="担当店舗" hint="本社・他店舗で受けた問い合わせは、担当の店舗へ回せます (担当者は回した先で決めます)">
+                <Select name="storeId" defaultValue={inq.storeId}>
+                  {db.stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </Select>
+              </Field>
               <Field label="種別">
                 <Select name="category" defaultValue={inq.category}>
                   {(Object.keys(CATEGORY_LABEL) as (keyof typeof CATEGORY_LABEL)[]).map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
@@ -139,6 +150,8 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
               </ul>
             </Card>
           )}
+
+          <AttachmentsCard db={db} user={user} parent={{ type: "inquiry", id: inq.id }} returnTo={`/inquiries/${inq.id}`} description="お客様から届いた写真 (LINE・メール)・郵送の書類・図面などを登録できます" />
         </div>
 
         <div className="space-y-4">
@@ -154,8 +167,38 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             ) : (
               <div>
                 <p className="text-sm text-ink-2">{inq.contactName} 様はまだ顧客登録されていません。</p>
-                <form action={registerCustomerFromInquiry.bind(null, inq.id)} className="mt-3">
-                  <Button type="submit" size="sm">顧客として登録する</Button>
+                {candidates.length > 0 && (
+                  <div className="mt-3 rounded-xl border border-warn/40 bg-warn-soft/40 p-3 text-xs" data-testid="inquiry-duplicates">
+                    <div className="mb-2 font-semibold text-ink">既存の顧客 (全店舗) に候補があります</div>
+                    <ul className="space-y-2">
+                      {candidates.map((m) => (
+                        <li key={m.id} className="rounded-lg bg-panel p-2">
+                          <div className="flex flex-wrap items-baseline gap-x-2">
+                            {canAccessStore(user, m.storeId) ? <Link href={`/customers/${m.id}`} className="font-medium text-accent hover:underline">{m.code} {m.name}</Link> : <span className="font-medium text-ink">{m.code} {m.name}</span>}
+                            <span className="text-ink-3">{storeName(m.storeId)}{m.area ? ` · 地区 ${m.area}` : ""}</span>
+                          </div>
+                          <div className="text-ink-3">{m.level === "high" ? "重複の可能性が高い" : m.level === "check" ? "要確認" : "参考"}: {m.reasons.join("・")}</div>
+                          {canAccessStore(user, m.storeId) ? (
+                            <form action={linkInquiryToCustomer.bind(null, inq.id, m.id)} className="mt-1.5">
+                              <Button type="submit" size="sm" variant="secondary">この顧客に紐づける</Button>
+                            </form>
+                          ) : (
+                            <p className="mt-1 text-ink-3">他店舗の顧客です。同じお客様なら店舗または本部に確認してください。</p>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                    {dup && dup.sameNameTotal > 5 && <p className="mt-2 text-ink-3">同じ氏名の顧客がほかに {dup.sameNameTotal - 5} 件あります (顧客一覧で検索できます)。</p>}
+                  </div>
+                )}
+                <form action={registerCustomerFromInquiry.bind(null, inq.id)} className="mt-3 space-y-2">
+                  {dup && needsConfirmation(dup) && (
+                    <label className="flex items-start gap-2 text-xs text-ink">
+                      <input type="checkbox" name="confirmDuplicate" value="1" required className="mt-0.5 h-4 w-4" />
+                      上の候補とは別のお客様であることを確認した
+                    </label>
+                  )}
+                  <Button type="submit" size="sm" variant={candidates.length ? "secondary" : "primary"}>{candidates.length ? "新しい顧客として登録する" : "顧客として登録する"}</Button>
                 </form>
               </div>
             )}

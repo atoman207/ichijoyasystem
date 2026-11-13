@@ -2,6 +2,8 @@ import type { Customer, Store, User } from "@/lib/db/types";
 import { CHANNEL_LABEL } from "@/lib/constants";
 import { Button, Field, FormActions, Input, LinkButton, Select, Textarea } from "@/components/ui";
 import { canSeeAllStores } from "@/lib/auth/permissions";
+import { checkCustomerDuplicates } from "@/lib/actions/customers";
+import { DuplicateWatcher } from "./DuplicateWatcher";
 
 export function CustomerForm({
   action,
@@ -84,6 +86,7 @@ export function CustomerForm({
           <Input name="tags" defaultValue={customer?.tags.join(", ")} />
         </Field>
       </div>
+      <DuplicateWatcher check={checkCustomerDuplicates} excludeId={customer?.id} requireConfirm={!customer} />
       <Field label="備考 (駐車・訪問時の注意など)">
         <Textarea name="notes" defaultValue={customer?.notes} />
       </Field>

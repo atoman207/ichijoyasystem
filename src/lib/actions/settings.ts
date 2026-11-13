@@ -8,7 +8,7 @@ import { canManageSettings } from "@/lib/auth/permissions";
 import { CATEGORY_LABEL, ROLE_LABEL } from "@/lib/constants";
 import { hashPassword } from "@/lib/auth/password";
 import { setSessionCookie } from "@/lib/auth/session";
-import { choice, fail, isKeyOf, numField, requireActionUser, str, withMsg } from "./guards";
+import { choice, fail, isKeyOf, numField, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 async function requireAdmin(back: string) {
   const user = await requireActionUser();
@@ -40,7 +40,7 @@ export async function createUser(formData: FormData) {
 
 /** パスワードの再設定 (管理者のみ。変更履歴にはパスワードを残さない) */
 export async function resetUserPassword(formData: FormData) {
-  const back = "/settings?tab=users";
+  const back = safeReturn(str(formData, "returnTo"), "/settings?tab=users");
   const admin = await requireAdmin(back);
   const id = str(formData, "userId");
   const password = str(formData, "password");
@@ -61,7 +61,7 @@ export async function resetUserPassword(formData: FormData) {
 
 /** ロール・所属・役職の変更 (管理者のみ)。空欄の項目は変更しない */
 export async function updateUserRole(formData: FormData) {
-  const back = "/settings?tab=users";
+  const back = safeReturn(str(formData, "returnTo"), "/settings?tab=users");
   const admin = await requireAdmin(back);
   const id = str(formData, "userId");
   const role = str(formData, "role") as Role | "";
@@ -89,8 +89,8 @@ export async function updateUserRole(formData: FormData) {
   redirect(withMsg(back, "ロール・所属を変更しました。本人の次の画面表示から反映されます。"));
 }
 
-export async function toggleUserActive(id: string) {
-  const back = "/settings?tab=users";
+export async function toggleUserActive(id: string, formData?: FormData) {
+  const back = formData ? safeReturn(str(formData, "returnTo"), "/settings?tab=users") : "/settings?tab=users";
   const admin = await requireAdmin(back);
   await mutate((db) => {
     const u = db.users.find((x) => x.id === id);
@@ -101,6 +101,32 @@ export async function toggleUserActive(id: string) {
   });
   revalidatePath("/settings");
   redirect(withMsg(back, "ユーザーの状態を変更しました。"));
+}
+
+/** 氏名・フリガナ・ログイン ID・役職・電話の変更 (管理者のみ。個別のアカウント画面から) */
+export async function updateUserProfile(id: string, formData: FormData) {
+  const back = `/settings/users/${id}`;
+  const admin = await requireAdmin(back);
+  const name = str(formData, "name");
+  const email = str(formData, "email").toLowerCase();
+  if (!name || !email) fail(back, "氏名とログイン ID は必須です。");
+  if (/\s/.test(email)) fail(back, "ログイン ID に空白は使えません。");
+  await mutate((db) => {
+    const u = db.users.find((x) => x.id === id);
+    if (!u) fail("/settings?tab=users", "ユーザーが見つかりません。");
+    if (db.users.some((x) => x.id !== id && x.email.toLowerCase() === email)) fail(back, "同じログイン ID のユーザーが存在します。");
+    const before = { ...u };
+    u.name = name;
+    u.kana = str(formData, "kana");
+    u.email = email;
+    u.title = str(formData, "title") || u.title;
+    u.phone = str(formData, "phone") || undefined;
+    const changes = diffChanges(before, u, ["name", "kana", "email", "title", "phone"]);
+    if (changes.length === 0) fail(back, "変更はありませんでした。");
+    addAudit(db, { userId: admin.id, action: "update", entity: "user", entityId: u.id, entityLabel: u.name, summary: `アカウント情報を変更 (${changes.map((c) => ({ name: "氏名", kana: "フリガナ", email: "ログイン ID", title: "役職", phone: "電話" })[c.field as "name"] ?? c.field).join("・")})`, changes });
+  });
+  revalidatePath("/settings");
+  redirect(withMsg(back, "アカウント情報を変更しました。ログイン ID を変えた場合は、新しい ID を本人に伝えてください。"));
 }
 
 export async function updateProduct(id: string, formData: FormData) {

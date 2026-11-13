@@ -424,7 +424,8 @@ export type AuditAction =
   | "status"
   | "login"
   | "logout"
-  | "export";
+  | "export"
+  | "import";
 
 export interface AuditChange {
   field: string;
@@ -575,6 +576,37 @@ export interface CapturedDocument {
   linkedId?: string;
 }
 
+/** 添付ファイルの登録先 (document = 書類取込の元画像。見積・経費・仕入に登録すると、その記録へ付け替える) */
+export type AttachmentParent = "customer" | "inquiry" | "quote" | "order" | "expense" | "purchase" | "document";
+
+/**
+ * 添付ファイル (資料・写真)。本体はストレージ (本番: Supabase Storage の非公開バケット / ローカル: data/uploads) に置き、
+ * ここには台帳 (どの記録の添付か・誰がいつ登録したか) だけを持つ
+ */
+export interface Attachment {
+  id: string;
+  parentType: AttachmentParent;
+  parentId: string;
+  /** 顧客 360 に集めるための顧客 ID (登録先から自動で設定) */
+  customerId?: string;
+  /** 閲覧権限の判定に使う店舗 (登録先の店舗) */
+  storeId: StoreId;
+  kind: "photo" | "file";
+  fileName: string;
+  contentType: string;
+  size: number;
+  storageKey: string;
+  /** 一覧用の縮小画像 (写真のみ) */
+  thumbKey?: string;
+  width?: number;
+  height?: number;
+  caption?: string;
+  /** 撮影日時 (写真の Exif、なければファイルの更新日時) */
+  takenAt?: string;
+  uploadedBy: string;
+  uploadedAt: string;
+}
+
 /** 会社の休業日 (休日カレンダー) */
 export interface CompanyHoliday {
   id: string;
@@ -660,6 +692,7 @@ export interface Database {
   surveys: SurveyResponse[];
   sourceFiles: SourceFile[];
   photoAlbums: PhotoAlbum[];
+  attachments: Attachment[];
 }
 
 export type CollectionName = Exclude<keyof Database, "meta">;

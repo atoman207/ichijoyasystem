@@ -9,6 +9,7 @@ import { decideApproval } from "@/lib/actions/approvals";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { APPROVAL_STATUS, EXPENSE_METHOD_LABEL, EXPENSE_STATUS } from "@/lib/constants";
 import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, PageHeader, StatusBadge, StoreTag } from "@/components/ui";
+import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 
 export default async function ExpenseDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -46,7 +47,8 @@ export default async function ExpenseDetailPage({ params, searchParams }: { para
       )}
 
       <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-3">
-        <Card className="@2xl:col-span-2">
+        <div className="space-y-4 @2xl:col-span-2">
+        <Card>
           <CardHeader title="内容" />
           <Dl columns={2} items={[["支払先", e.vendor], ["日付", fmtDate(e.date)], ["金額 (税込)", <span key="a" className="text-lg font-semibold">{yen(e.amount)}</span>], ["うち消費税", yen(e.taxAmount)], ["勘定科目", e.account], ["支払方法", EXPENSE_METHOD_LABEL[e.paymentMethod]], ["内容・用途", e.description || "-"], ["承認者", e.approvedBy ? `${userName(e.approvedBy)} (${fmtDateTime(e.approvedAt)})` : "-"]]} />
           {doc && (
@@ -62,6 +64,8 @@ export default async function ExpenseDetailPage({ params, searchParams }: { para
             {e.status === "approved" && !canManageFinance(user) && <p className="text-sm text-ink-2">承認済み。本部で精算処理を行います。</p>}
           </form>
         </Card>
+        <AttachmentsCard db={db} user={user} parent={{ type: "expense", id: e.id }} returnTo={returnTo} title="レシート・領収書" description="レシートや領収書の写真を登録できます (書類取込で読み取った元の画像もここに表示されます)" />
+        </div>
         <div className="space-y-4">
           <Card>
             <CardHeader title="承認履歴" />

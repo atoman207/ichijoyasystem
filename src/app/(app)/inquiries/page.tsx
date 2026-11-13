@@ -1,7 +1,7 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
+import { canImportData, canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
 import { fmtDate, fmtDateTime, toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS } from "@/lib/constants";
@@ -33,7 +33,7 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title="問い合わせ" actions={<LinkButton href="/inquiries/new">+ 問い合わせを登録</LinkButton>} />
+      <PageHeader title="問い合わせ" actions={<>{canImportData(user) && <LinkButton href="/data" variant="secondary">CSV 取込・書き出し</LinkButton>}<LinkButton href="/inquiries/new">+ 問い合わせを登録</LinkButton></>} />
       <LinkTabs
         current={current}
         items={[

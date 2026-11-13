@@ -33,14 +33,24 @@ Supabase ダッシュボード → SQL Editor → New query で、次の順に *
 ## B. 1 ファイルで実行する (ichijoya.sql)
 
 ```bash
-node scripts/import/generate-data-sql.mjs   # → supabase/ichijoya.sql (約 31 MB)
+npm run db:setup              # ichijoya.sql を作り直して、そのまま Supabase で実行 (生成 → 実行 → 件数の確認)
+npm run db:setup -- --yes     # すでにデータが入っているデータベースを置き換えるとき
 
-# どちらかで実行
+# 個別に行うとき
+npm run db:sql                # → supabase/ichijoya.sql (約 31 MB。移行データ + デモ用アカウント 15 名)
 SUPABASE_DB_PASSWORD='<データベースのパスワード>' node scripts/import/setup-database.mjs   # psql 不要 (15 秒前後)
 psql "<Supabase の接続文字列>" -v ON_ERROR_STOP=1 -f supabase/ichijoya.sql
 ```
 
 中身は上から、テーブル定義 → データの入れ替え (1 つのトランザクション。途中で失敗すると何も変わらない) → 件数の確認です。最後に表示される `ok` 列がすべて `true` なら完了です。
+
+`npm run db:setup` / `db:sql` は移行データ (`client-data.json`) から作り直すため、運用開始後にアプリで登録したデータ・変更履歴は消えます。**現在の Supabase のデータのまま** ichijoya.sql を作り直して実行する (テーブル定義の追加だけを反映する) ときは、次の順にします。
+
+```bash
+node scripts/import/dump-supabase.mjs                                         # 現在のデータを書き出す (読み取りだけ) → data/import/supabase-current.json
+node scripts/import/generate-data-sql.mjs data/import/supabase-current.json --no-demo   # → supabase/ichijoya.sql (デモ用アカウントは現在の状態のまま)
+node scripts/import/setup-database.mjs --yes                                  # 実行 (書き出しから実行までの間に登録されたデータは残らないため、続けて行う)
+```
 
 `setup-database.mjs` について:
 
@@ -64,8 +74,9 @@ psql の接続文字列は Supabase の Connect → Session pooler。
 ```bash
 node scripts/import/seed-demo-accounts.mjs          # 登録 (既にあれば更新。パスワードを demo1234 に戻し、有効にする)
 node scripts/import/seed-demo-accounts.mjs --off    # 無効にする (ログインできなくなる。登録した案件・履歴は残る)
-node scripts/import/seed-demo-accounts.mjs --sql    # 同じ内容の SQL を supabase/demo-accounts.sql に書き出す (SQL Editor 用。--off --sql で無効化の SQL)
 ```
+
+SQL で登録するときは `supabase/ichijoya.sql` を使います (デモ用アカウントを含みます。別の SQL ファイルはありません)。
 
 - `.env.local` の `NEXT_PUBLIC_SUPABASE_URL` と `SUPABASE_SECRET_KEY` を使います。`users` のデモ用アカウント 15 行だけを書き換え、ほかのデータには触れません。実行中のアプリ (Vercel を含む) は再起動なしで反映します
 - パスワードはハッシュだけを保存します (`users.password` 列は制約で空のみ)。役職の先頭に「【デモ用】」が付きます
@@ -79,10 +90,23 @@ node scripts/import/seed-demo-accounts.mjs --sql    # 同じ内容の SQL を su
 - アプリはサーバーの起動時に全データ (約 6 万行) を読み込み、その後は 2 秒ごとに更新の有無だけを確かめます。Vercel では、関数のリージョン (Project Settings → Functions → Function Region) を Supabase のプロジェクトと同じ地域にすると、起動と書き込みが速くなります
 - テーブルには RLS を設定し、`anon` / `authenticated` (publishable キー) からは読み書きできません。アプリは secret キー (`service_role`) でだけアクセスします
 
-## テーブル定義を変えたとき
+## 資料・写真 (添付ファイル) を使うとき
+
+資料・写真の台帳は `attachments` テーブル、ファイルの本体は Storage の非公開バケット `attachments` に保存します。
+
+1. `attachments` テーブルは 2026-11-13 に作成済みです (テーブル定義の自動反映、または [`migrations/20261112000000_initial_schema.sql`](migrations/20261112000000_initial_schema.sql) の実行で作られます。既存のテーブル・データはそのまま)
+2. バケットはアプリが最初の登録時に自動で作成します (非公開。`public` にはしない)
+3. `/api/health` が `"schema":"ok"` を返せば完了です。テーブルがない間は `"schema":{"missing":["attachments"]}` を返し、資料・写真の登録だけが使えません (ほかの画面は動きます)
+
+- ファイルを直接開ける URL はありません。画面からは `/api/attachments/<ID>` を開き、権限を確かめたあとに 2 分間有効な URL へ転送します
+- 写真はブラウザで長辺 2048px の JPEG (1 枚 0.5〜1.5 MB 程度) に縮小してから保存します。PDF などは 1 ファイル 4 MB まで
+- Storage の容量はプランによって異なります (無料プランは 1 GB)。写真の保存期間・移行の方針 (Phase 1 の決定事項 D9) に合わせてプランを確認してください
+
+## テーブル定義を変えたとき (自動で反映)
 
 1. `src/lib/db/schema.ts` を編集します
-2. `node scripts/import/generate-schema.mjs` (テーブル定義だけの SQL) と `node scripts/import/generate-data-sql.mjs` (ichijoya.sql。分割版は `--split`) で作り直します
-3. 本番で使っているデータを残したまま列を足すときは、テーブル定義だけの SQL を実行します (ichijoya.sql と分割版はデータを置き換えるため)
+2. `npm run db:migrate` を実行します。テーブル定義の SQL (`migrations/20261112000000_initial_schema.sql`) を作り直し、Supabase に反映します (テーブル・列・索引の追加だけ。データは変えない。追加があれば起動中のアプリが読み直す)
+3. デプロイ時も自動で反映します: `npm run build` の前の `prebuild` が同じ処理を行います (接続情報 `SUPABASE_DB_PASSWORD` / `SUPABASE_DB_URL` があるときだけ。`DATA_BACKEND=json` のビルドでは行わない)。Vercel で使うには Environment Variables に `SUPABASE_DB_PASSWORD` を設定します (直接接続は IPv6 のみのため、接続プーラーにつながります)
+4. ichijoya.sql も作り直すときは `node scripts/import/generate-data-sql.mjs` (分割版は `--split`)。現在のデータを残すときは上の「現在の Supabase のデータのまま」の手順で作ります
 
 追加した列は既存のテーブルにも追加されます。列の削除・型の変更・既存の列への制約の追加は自動では行わないため、移行用の SQL を別に書いてください。

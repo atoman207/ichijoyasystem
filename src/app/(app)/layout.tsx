@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { requireUser } from "@/lib/auth/session";
 import { notificationsFor, storeById, storeName } from "@/lib/db/queries";
-import { canManageFinance, canManageSettings, canSeeAllStores, canViewReports } from "@/lib/auth/permissions";
+import { canExportData, canManageFinance, canManageSettings, canSeeAllStores, canViewReports } from "@/lib/auth/permissions";
 import { ROLE_LABEL, APPROVAL_TYPE_LABEL } from "@/lib/constants";
 import { AppShell, type NavItem, type NotificationItem } from "@/components/layout/AppShell";
 import { logout } from "@/lib/actions/auth";
@@ -38,6 +38,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   );
   if (canViewReports(user)) {
     nav.push({ href: "/reports", label: "レポート・分析", short: "レポート", icon: "reports", group: "管理" });
+  }
+  if (canExportData(user)) {
+    nav.push({ href: "/data", label: "データ入出力 (CSV・スプレッドシート)", short: "入出力", icon: "dataio", group: "管理" });
   }
   nav.push({ href: "/audit", label: "変更履歴", icon: "audit", group: "管理" });
   nav.push({ href: "/settings", label: canManageSettings(user) ? "設定" : "設定 (閲覧)", short: "設定", icon: "settings", group: "管理" });

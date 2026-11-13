@@ -2,11 +2,11 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { addAudit, getDb, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
-import type { Channel, ProgressKind } from "@/lib/db/types";
+import { addAudit, diffChanges, getDb, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
+import type { Channel, ProgressKind, StoreId } from "@/lib/db/types";
 import { addDays, toDateKey } from "@/lib/format";
-import { CHANNEL_LABEL, PROGRESS_KIND_LABEL } from "@/lib/constants";
-import { canManageFinance, isManagerOrAbove } from "@/lib/auth/permissions";
+import { CATEGORY_LABEL, CHANNEL_LABEL, PROGRESS_KIND_LABEL } from "@/lib/constants";
+import { canAccessStore, canManageFinance, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
 import { findConflicts, isDateKey, normTime, shortDate, timeLabel, toMinutes } from "@/lib/calendar";
 import { orderEditable, removeUpcomingOrderEvents, syncOrderEvent } from "@/lib/db/schedule";
 import { assertStore, choice, fail, requireActionUser, str, withMsg } from "./guards";
@@ -172,4 +172,49 @@ export async function cancelOrder(id: string, formData: FormData) {
   });
   revalidatePath(back);
   redirect(withMsg(back, "受注をキャンセルしました。"));
+}
+
+/**
+ * 案件情報 (件名・種別・現場住所・担当店舗) の変更
+ * - 担当店舗の変更は本部スタッフ・管理者のみ。案件の予定 (施工・訪問など) と承認待ちの申請も新しい店舗へ移す
+ * - 請求済み・入金済み・キャンセルの案件は担当店舗を変えない (売上・請求の店舗が食い違わないように)
+ */
+export async function updateOrderInfo(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const back = `/orders/${id}`;
+  const title = str(formData, "title");
+  if (!title) fail(back, "件名は必須です。");
+  let moved = false;
+  await mutate((db) => {
+    const o = db.orders.find((x) => x.id === id);
+    if (!o) fail("/orders", "受注が見つかりません。");
+    assertStore(user, o.storeId, back);
+    const before = { ...o };
+    o.title = title;
+    o.category = choice(formData, "category", CATEGORY_LABEL, o.category);
+    o.siteAddress = str(formData, "siteAddress") || o.siteAddress;
+    const storeId = str(formData, "storeId");
+    if (storeId && storeId !== o.storeId) {
+      if (!canSeeAllStores(user)) fail(back, "担当店舗の変更は本部スタッフ・管理者が行います。");
+      if (!db.stores.some((s) => s.id === storeId)) fail(back, "担当店舗が正しくありません。");
+      if (["invoiced", "paid", "cancelled"].includes(o.status)) fail(back, "請求済み・入金済み・キャンセルの案件は、担当店舗を変更できません。");
+      o.storeId = storeId as StoreId;
+      for (const e of db.schedule) if (e.orderId === o.id) e.storeId = o.storeId;
+      for (const a of db.approvals) if (a.status === "pending" && a.targetId === o.id) a.storeId = o.storeId;
+      moved = !canAccessStore(user, o.storeId);
+    }
+    const changes = diffChanges(before, o, ["title", "category", "siteAddress", "storeId"]);
+    if (changes.length === 0) fail(back, "変更はありませんでした。");
+    o.updatedAt = nowIso();
+    // 連動している施工の予定があれば、場所・店舗を合わせる (予定がない案件に新しく作ることはしない)
+    if (db.schedule.some((e) => e.orderId === o.id && e.source === "order")) syncOrderEvent(db, o, user.id);
+    const storeName = db.stores.find((s) => s.id === o.storeId)?.name ?? o.storeId;
+    const LABEL: Record<string, string> = { title: "件名", category: "種別", siteAddress: "現場住所", storeId: `担当店舗 (${storeName})` };
+    addAudit(db, { userId: user.id, action: "update", entity: "order", entityId: id, entityLabel: o.number, summary: `案件情報を変更 (${changes.map((c) => LABEL[c.field] ?? c.field).join("・")})`, storeId: o.storeId, changes });
+  });
+  revalidatePath(back);
+  revalidatePath("/orders");
+  revalidatePath("/schedule");
+  if (moved) redirect(withMsg("/orders", "案件の担当店舗を変更しました。"));
+  redirect(withMsg(back, "案件情報を変更しました。予定表・関連する画面にも反映されます。"));
 }

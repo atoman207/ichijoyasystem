@@ -234,6 +234,7 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
   login: "ログイン",
   logout: "ログアウト",
   export: "書き出し",
+  import: "取込",
 };
 
 export const ENTITY_LABEL: Record<string, string> = {

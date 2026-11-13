@@ -9,6 +9,7 @@ import { decideApproval } from "@/lib/actions/approvals";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
 import { APPROVAL_STATUS, PURCHASE_STATUS } from "@/lib/constants";
 import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, PageHeader, StatusBadge } from "@/components/ui";
+import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 
 export default async function PurchaseDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -45,7 +46,8 @@ export default async function PurchaseDetailPage({ params, searchParams }: { par
         </Card>
       )}
       <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-3">
-        <Card className="@2xl:col-span-2">
+        <div className="space-y-4 @2xl:col-span-2">
+        <Card>
           <CardHeader title="請求内容" />
           <Dl columns={2} items={[["仕入先", supplier?.name], ["区分", supplier?.category], ["支払条件", supplier?.paymentTerms], ["金額 (税込)", <span key="a" className="text-lg font-semibold">{yen(p.amount)}</span>], ["うち消費税", yen(p.taxAmount)], ["内容", p.description], ["支払日", p.paidAt ? fmtDate(p.paidAt) : "-"], ["承認者", userName(p.approvedBy)]]} />
           {doc && (
@@ -67,6 +69,8 @@ export default async function PurchaseDetailPage({ params, searchParams }: { par
             {p.status === "paid" && <p className="text-sm text-good-ink">支払済み ({fmtDate(p.paidAt)})</p>}
           </div>
         </Card>
+        <AttachmentsCard db={db} user={user} parent={{ type: "purchase", id: p.id }} returnTo={returnTo} title="請求書の原本" description="仕入先の請求書 (紙・PDF) を登録できます (書類取込で読み取った元の画像もここに表示されます)" />
+        </div>
         <div className="space-y-4">
           <Card>
             <CardHeader title="承認履歴" />

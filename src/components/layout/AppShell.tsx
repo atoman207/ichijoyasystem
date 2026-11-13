@@ -15,6 +15,7 @@ import {
   ClipboardCheck,
   Clock,
   ClockFading,
+  FileSpreadsheet,
   FileText,
   Hammer,
   FolderOpen,
@@ -56,7 +57,8 @@ export type NavIcon =
   | "ai"
   | "audit"
   | "settings"
-  | "materials";
+  | "materials"
+  | "dataio";
 
 const ICONS: Record<NavIcon, LucideIcon> = {
   dashboard: House,
@@ -76,6 +78,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   audit: ClockFading,
   settings: Settings,
   materials: FolderOpen,
+  dataio: FileSpreadsheet,
 };
 
 export interface NavItem {

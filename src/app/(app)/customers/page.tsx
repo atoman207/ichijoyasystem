@@ -1,7 +1,7 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
+import { canImportData, canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
 import { fmtDate, yen } from "@/lib/format";
 import { CHANNEL_LABEL } from "@/lib/constants";
@@ -36,7 +36,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title="顧客" description={`${rows.length} 件`} actions={<LinkButton href="/customers/new">+ 顧客を登録</LinkButton>} />
+      <PageHeader title="顧客" description={`${rows.length} 件`} actions={<>{canImportData(user) && <LinkButton href="/data" variant="secondary">CSV 取込・書き出し</LinkButton>}<LinkButton href="/customers/new">+ 顧客を登録</LinkButton></>} />
       <form method="get" className="mb-4 flex flex-wrap items-end gap-2">
         <div className="w-full @xl:w-72">
           <Input name="q" defaultValue={sp.q} placeholder="氏名・フリガナ・電話・住所・タグで検索" />

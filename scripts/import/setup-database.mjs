@@ -16,17 +16,14 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { loadEnv } from "./env.mjs";
+import { connectDatabase, mask } from "./db-connect.mjs";
 
-const require = createRequire(import.meta.url);
-const { Client } = require("pg");
 loadEnv();
 
 const args = process.argv.slice(2);
 const SQL_FILE = path.resolve(args.find((a) => !a.startsWith("--")) ?? "supabase/ichijoya.sql");
 const YES = args.includes("--yes");
-const REGIONS = ["ap-northeast-1", "ap-northeast-2", "ap-southeast-1", "ap-southeast-2", "ap-south-1", "us-east-1", "us-east-2", "us-west-1", "us-west-2", "eu-west-1", "eu-west-2", "eu-west-3", "eu-central-1", "eu-central-2", "eu-north-1", "ca-central-1", "sa-east-1"];
 
 if (!fs.existsSync(SQL_FILE)) {
   console.error(`SQL ファイルがありません: ${path.relative(process.cwd(), SQL_FILE)}`);
@@ -34,63 +31,11 @@ if (!fs.existsSync(SQL_FILE)) {
   process.exit(1);
 }
 
-const mask = (s) => s.replace(/:\/\/([^:]+):[^@]+@/, "://$1:****@");
 const t0 = Date.now();
 const log = (m) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${m}`);
 
-function candidates() {
-  if (process.env.SUPABASE_DB_URL) return { direct: [process.env.SUPABASE_DB_URL], poolers: [] };
-  const pw = process.env.SUPABASE_DB_PASSWORD;
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!pw || !url) throw new Error("SUPABASE_DB_URL または SUPABASE_DB_PASSWORD (+ NEXT_PUBLIC_SUPABASE_URL) を設定してください。");
-  const ref = new URL(url).hostname.split(".")[0];
-  const enc = encodeURIComponent(pw);
-  const poolers = [];
-  for (const prefix of ["aws-0", "aws-1"]) for (const r of REGIONS) poolers.push(`postgresql://postgres.${ref}:${enc}@${prefix}-${r}.pooler.supabase.com:5432/postgres`);
-  return { direct: [`postgresql://postgres:${enc}@db.${ref}.supabase.co:5432/postgres`], poolers };
-}
-
-async function tryConnect(conn) {
-  const client = new Client({ connectionString: conn, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 10000, keepAlive: true });
-  try {
-    await client.connect();
-    return client;
-  } catch (err) {
-    await client.end().catch(() => {});
-    const msg = String(err.message);
-    // パスワード誤りは他の接続先を試しても同じなので中止
-    if (/password authentication failed|28P01|SASL/.test(msg) || err.code === "28P01") throw Object.assign(new Error(`パスワードが正しくありません (${mask(conn)})`), { fatal: true });
-    throw new Error(`${mask(conn)}: ${msg.slice(0, 80)}`);
-  }
-}
-
-async function connect() {
-  const { direct, poolers } = candidates();
-  for (const conn of direct) {
-    try {
-      const client = await tryConnect(conn);
-      return { client, conn };
-    } catch (err) {
-      if (err.fatal) throw err;
-      log(`直接接続できないため接続プーラーを試します (${err.message})`);
-    }
-  }
-  if (!poolers.length) throw new Error("データベースに接続できませんでした");
-  // 接続プーラーはプロジェクトのリージョンでしか応答しないので、並列に試して最初につながったものを使う
-  const attempts = poolers.map((conn) => tryConnect(conn).then((client) => ({ client, conn })));
-  let winner;
-  try {
-    winner = await Promise.any(attempts);
-  } catch (agg) {
-    const fatal = agg.errors.find((e) => e.fatal);
-    throw fatal ?? new Error("データベースに接続できませんでした (どのリージョンの接続プーラーにもつながりません)");
-  }
-  for (const a of attempts) a.then(({ client }) => client !== winner.client && client.end().catch(() => {})).catch(() => {});
-  return winner;
-}
-
 const sql = fs.readFileSync(SQL_FILE, "utf8");
-const { client, conn } = await connect();
+const { client, conn } = await connectDatabase(log);
 log(`接続しました: ${mask(conn)}`);
 client.on("notice", () => {}); // truncate ... cascade の通知は表示しない
 try {

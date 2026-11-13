@@ -8,6 +8,7 @@ import { addDays, calcTax, toDateKey } from "@/lib/format";
 import { APPROVAL_RULES, CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { syncOrderEvent } from "@/lib/db/schedule";
 import { approverLabel, approverRole } from "@/lib/auth/permissions";
+import { relinkDocumentAttachments } from "@/lib/attachments";
 import { assertStore, choice, fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
 function parseItems(formData: FormData, back: string): QuoteItem[] {
@@ -132,6 +133,7 @@ export async function createQuote(formData: FormData) {
       doc.status = "confirmed";
       doc.linkedType = "quote";
       doc.linkedId = id;
+      relinkDocumentAttachments(db, doc.id, { type: "quote", id, customerId: q.customerId, storeId });
     }
     if (intent === "submit") role = requestApproval(db, q, user);
   });

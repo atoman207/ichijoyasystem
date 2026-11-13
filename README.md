@@ -83,21 +83,22 @@ DATA_BACKEND=json npm run dev
 | 画面 | URL | 内容 |
 | --- | --- | --- |
 | ダッシュボード | `/` | ロール別 KPI、月次売上 (店舗別)、本日の予定、承認待ち、未対応問い合わせ、進行中施工、最近の更新 |
-| 顧客 | `/customers` | 顧客 360° (基本情報・案件の流れ・外部とのやりとり履歴・予定) |
-| 問い合わせ | `/inquiries` | 電話 / AI電話 / Web / メール / LINE / 来店 / 郵送 / 紹介 などの入口を一元管理 |
+| 顧客 | `/customers` | 顧客 360° (基本情報・案件の流れ・外部とのやりとり履歴・予定・資料と写真)。登録時に既存顧客 (全店舗) との重複確認 |
+| 問い合わせ | `/inquiries` | 電話 / AI電話 / Web / メール / LINE / 来店・対面 / 郵送 / 紹介 などの入口を一元管理。受付日時の指定、既存顧客の候補と紐づけ、他店舗へ回す、資料・写真の添付 |
 | 見積 | `/quotes` | 商品マスタからの明細作成、承認フロー、確定後の金額変更申請、送付記録、印刷用書式 |
-| 受注・施工 | `/orders` | 契約承認 → 施工予定 (予定表連動) → 進捗記録 → 施工完了 (売上計上) → 請求書発行 |
+| 受注・施工 | `/orders` | 契約承認 → 施工予定 (予定表連動) → 進捗記録 → 施工完了 (売上計上) → 請求書発行。現場写真・資料 (カメラ・アルバムから複数枚)、案件情報・担当店舗の変更 |
 | 予定表 | `/schedule` | 週表示、店舗・担当者フィルタ、受注の施工予定を自動反映 |
 | 請求・入金 | `/invoices` | 売掛残高、期日超過、入金登録 (現金/振込/カード/PayPay)、督促記録、印刷用書式 |
 | 経費精算 | `/expenses` | レシート撮影 → 読取 → 承認 → 精算、勘定科目別集計 |
 | 仕入・買掛 | `/purchases` | 仕入先請求書の取込 → 支払承認 → 支払、買掛残高 (本部・管理者) |
-| 書類取込 | `/capture` | 紙 → データ (手書き見積 / 図面 / 仕入請求書 / レシート) |
+| 書類取込 | `/capture` | 紙 → データ (手書き見積 / 図面 / 仕入請求書 / レシート)。元の画像・PDF を保存し、登録した見積・経費・仕入請求書の画面に表示 |
 | 承認 | `/approvals` | あなたの承認待ち / 申請中 / 全体 / 履歴、承認ルール |
 | 社内連絡 | `/messages` | 依頼・報告・確認・連絡のスレッド、メンション通知、案件への紐づけ |
 | AI アシスタント | `/ai` | 一元化データに基づく集計・検索・文面作成 |
 | レポート・分析 | `/reports` | 店舗別・担当者別・期間別・種別別・入口別 (店長以上) |
+| データ入出力 | `/data` | CSV・Google スプレッドシート (リンク共有) からの顧客・問い合わせの取込 (確認 → 実行)、顧客・問い合わせ・受注・月次売上の CSV 書き出し (管理者・本部スタッフ) |
 | 変更履歴 | `/audit` | 監査ログ (変更前後の値つき) |
-| 設定 | `/settings` | ユーザー・店舗・商品マスタ・承認ルール・外部連携・データ管理 (管理者) |
+| 設定 | `/settings` | ユーザー・店舗・商品マスタ・承認ルール・外部連携・データ管理 (管理者)。ユーザーと権限のタブに権限一覧 (ロール × 操作)、ユーザーごとのアカウント画面 `/settings/users/<ID>` |
 | プロフィール | `/profile` | ヘッダー右上のアバターから開く。自分の権限・担当中の問い合わせ/施工・承認・予定・操作履歴 |
 
 画面の構成: 上部に浮かぶヘッダーに一畳屋のロゴ (公式サイト https://ichijoya.co.jp のロゴ)、メニューのタブ
@@ -111,6 +112,7 @@ DATA_BACKEND=json npm run dev
 - Next.js 16 (App Router, Server Components, Server Actions, Turbopack) / React 19 / TypeScript
 - Tailwind CSS v4 (淡いブルーの背景に白いカード、アクセントは青紫 (インディゴ)。Web フォント Inter + Noto Sans JP はオフライン時にシステムフォントへフォールバック。本文の段組みはコンテナクエリ `@container` で、実際の表示幅に合わせて変わる)
 - データ: Supabase (PostgreSQL)。ローカル検証は `data/db.json` (JSON ファイル)。`src/lib/db/store.ts` が切り替えの境界、テーブル定義の正本は `src/lib/db/schema.ts`
+- ファイル (資料・写真・書類取込の元画像): Supabase Storage の非公開バケット `attachments` (初回に自動作成)。ローカル検証は `data/uploads/`。`src/lib/storage.ts` が切り替えの境界。閲覧は `/api/attachments/<ID>` が権限 (登録先の記録の店舗・ロール) を確かめてから期限つきの URL (2 分) へ転送する。写真はブラウザで長辺 2048px に縮小してから送る (Vercel の 1 回の送信は 4.5 MB まで)
 - 認証: 署名付き Cookie セッション + scrypt でハッシュ化したパスワード (2 要素認証は次の段階)
 - AI: `@anthropic-ai/sdk` (Claude) — `ANTHROPIC_API_KEY` 未設定時はサンプル応答で動作
 - 依存ライブラリは最小限 (`lucide-react`, `clsx`, `@anthropic-ai/sdk`, `server-only`)
@@ -137,6 +139,10 @@ src/
     db/master.ts           店舗・ユーザー・商品・仕入先マスタ
     db/seed.ts             サンプルデータ生成 (決定論的)
     db/store.ts            データストア (Supabase / JSON の切り替え境界)
+    storage.ts             ファイルの保存先 (Supabase Storage / data/uploads の切り替え境界)
+    attachments.ts         添付ファイル (資料・写真) の登録先・権限・保存
+    duplicates.ts          既存顧客との重複確認
+    data-io.ts, data-io-spec.ts, csv.ts   CSV・Google スプレッドシートの取込と書き出し
     db/schema.ts           テーブル定義 (Supabase の SQL を生成する元)
     db/supabase.ts         Supabase との読み書き
     db/queries.ts          集計・通知・顧客 360 などの読み取り
@@ -165,15 +171,16 @@ scripts/
 | `SESSION_SECRET` | セッション署名用の秘密鍵 (推奨。未設定なら secret キーから導出) |
 | `ANTHROPIC_API_KEY` | 設定すると書類読取 (Claude vision) と AI アシスタントが実際の Claude で動作 |
 | `DATA_BACKEND` / `DATA_FILE_NAME` | `json` で Supabase を使わずローカルファイル (`data/` 配下、省略時 `db.json`) |
-| `SUPABASE_DB_PASSWORD` または `SUPABASE_DB_URL` | SQL の実行スクリプト (`scripts/import/setup-database.mjs`。ichijoya.sql の実行) 専用。アプリ本体では使わない |
+| `SUPABASE_DB_PASSWORD` または `SUPABASE_DB_URL` | データベースへの直接接続。テーブル定義の自動反映 (`npm run build` の前に `scripts/import/migrate.mjs`) と ichijoya.sql の実行 (`setup-database.mjs`) に使う。アプリ本体では使わない |
 | `REVIEW_ACCESS_KEY` / `REVIEW_LOGIN` | 確認用ログインの鍵 (省略時は secret キーから導出) / `off` で確認用ログインを停止 |
 | `APP_TIME_ZONE` | 日付・時刻の基準 (省略時 `Asia/Tokyo`) |
 
 ## Vercel への公開
 
 1. Vercel の Project Settings → Environment Variables に `NEXT_PUBLIC_SUPABASE_URL`・`SUPABASE_SECRET_KEY`・`SESSION_SECRET` を設定します (Production と Preview)。`NEXT_PUBLIC_` の値はビルド時に埋め込まれるため、設定・変更したあとは再デプロイが必要です
+   - `SUPABASE_DB_PASSWORD` (Production) も設定すると、デプロイのビルドの前にテーブル定義 (`schema.ts`) の追加分を Supabase に自動で反映します (`prebuild` → `scripts/import/migrate.mjs`。テーブル・列・索引の追加だけで、データは変えない。反映に失敗したときはデプロイを止める)。未設定ならこの手順は飛ばします
 2. 本番 (Production) は `main` ブランチから作られます。関数のリージョンは `vercel.json` で `syd1` (Supabase と同じシドニー) にしています
-3. 公開後、`/api/health` が `"backend":"supabase"`・`"db":"ok"`・`"timeZone":"Asia/Tokyo"` を返すことを確認します。`"db":"not_configured"` のときは環境変数が未設定です (サンプルデータで動いてしまうため 503 を返します)
+3. 公開後、`/api/health` が `"backend":"supabase"`・`"db":"ok"`・`"schema":"ok"`・`"timeZone":"Asia/Tokyo"` を返すことを確認します。`"schema":{"missing":[...]}` のときは、アプリに追加したテーブルがデータベースにまだありません。`npm run db:migrate` を実行するか、テーブル定義の SQL (`supabase/migrations/20261112000000_initial_schema.sql`。既存のデータは消えない) を SQL Editor で実行してください (それまでは、その機能だけが使えません)。`"db":"not_configured"` のときは環境変数が未設定です (サンプルデータで動いてしまうため 503 を返します)
 4. Vercel のサーバーは UTC で動くため、起動時に日本時間へ設定しています (`src/instrumentation.ts`)。起動直後は全データ (約 6 万行) を読み込むため、関数の実行時間の上限を 60 秒にしています
 
 ### 確認用ログイン (お客様の画面確認用)

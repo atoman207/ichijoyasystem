@@ -1,10 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useTransition, type FormEvent } from "react";
 import { Camera, Upload } from "lucide-react";
-import { useFormStatus } from "react-dom";
 import type { DocumentKind, StoreId } from "@/lib/db/types";
 import { DOCUMENT_KIND_LABEL } from "@/lib/constants";
+import { prepareFile } from "@/components/attachments/image-prep";
+
+/** 送信できる大きさ (Vercel の 1 回の送信は 4.5 MB まで。写真は縮小してから送る) */
+const MAX_BYTES = 4 * 1024 * 1024;
 
 const SAMPLES: Record<DocumentKind, string[]> = {
   handwritten_quote: ["IMG_手書き見積_和室6畳.jpg", "IMG_手書き見積_襖と畳.jpg"],
@@ -15,8 +18,7 @@ const SAMPLES: Record<DocumentKind, string[]> = {
   other: ["書類.jpg"],
 };
 
-function SubmitButton({ hasFile }: { hasFile: boolean }) {
-  const { pending } = useFormStatus();
+function SubmitButton({ hasFile, pending }: { hasFile: boolean; pending: boolean }) {
   return (
     <button type="submit" disabled={pending} className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-accent text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-60">
       {pending ? "AI が読み取り中…" : hasFile ? "アップロードして読み取る" : "サンプル画像で読み取りを試す"}
@@ -44,6 +46,29 @@ export function CaptureUploader({
   const [fileName, setFileName] = useState<string>("");
   const [sample, setSample] = useState<string>(SAMPLES[defaultKind][0]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState("");
+
+  /** 写真は縮小し、縮小画像・撮影日時を添えて送る (元の画像は見積・経費・仕入の画面で表示する) */
+  function onSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const f = inputRef.current?.files?.[0];
+    setError("");
+    startTransition(async () => {
+      if (f) {
+        const p = await prepareFile(f);
+        if (p.file.size > MAX_BYTES) {
+          setError(`ファイルが大きすぎます (${(p.file.size / 1048576).toFixed(1)} MB)。PDF などは 4 MB までにしてください。`);
+          return;
+        }
+        fd.set("file", p.file, p.file.name);
+        if (p.thumb) fd.set("thumb", p.thumb, "thumb.jpg");
+        if (p.takenAt) fd.set("takenAt", p.takenAt);
+      }
+      await action(fd);
+    });
+  }
 
   function onFile(f: File | undefined) {
     if (!f) {
@@ -61,7 +86,7 @@ export function CaptureUploader({
   }
 
   return (
-    <form action={action} className="space-y-4">
+    <form action={action} onSubmit={onSubmit} className="space-y-4">
       <label className="block">
         <span className="label">書類の種類</span>
         <select
@@ -111,7 +136,7 @@ export function CaptureUploader({
           <>
             <div className="flex gap-3 text-ink-3"><Camera className="h-8 w-8" /><Upload className="h-8 w-8" /></div>
             <p className="mt-3 text-sm font-medium text-ink">タップして撮影 / 画像・PDF を選択</p>
-            <p className="mt-1 text-xs text-ink-3">スマートフォン・タブレットのカメラで撮影した写真をそのまま取り込めます (8MB まで)</p>
+            <p className="mt-1 text-xs text-ink-3">スマートフォン・タブレットのカメラで撮影した写真をそのまま取り込めます (写真は自動で縮小。PDF は 4MB まで)</p>
           </>
         )}
         {fileName && <p className="mt-2 text-xs text-ink-2">{fileName}</p>}
@@ -128,7 +153,8 @@ export function CaptureUploader({
         </label>
       )}
 
-      <SubmitButton hasFile={Boolean(fileName)} />
+      {error && <p role="alert" className="rounded-lg bg-critical-soft px-3 py-2 text-xs text-critical-ink">{error}</p>}
+      <SubmitButton hasFile={Boolean(fileName)} pending={pending} />
       <p className="text-[11px] leading-relaxed text-ink-3">
         {aiEnabled
           ? "Claude (vision) が画像を読み取り、社内所定の項目に構造化します。"

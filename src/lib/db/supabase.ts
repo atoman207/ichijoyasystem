@@ -33,6 +33,11 @@ function sb(): SupabaseClient {
   return client;
 }
 
+/** secret キーのクライアント (サーバー側のみ。ファイルの保存 src/lib/storage.ts でも使う) */
+export function supabaseAdmin(): SupabaseClient {
+  return sb();
+}
+
 function toRow(def: TableDef, e: Entity): Row {
   const row: Row = {};
   for (const [field] of def.columns) {
@@ -58,9 +63,47 @@ function failure(table: string, op: string, error: { message: string; details?: 
   return new Error(`[supabase] ${table} ${op}: ${error?.message ?? "unknown error"}${error?.details ? ` (${error.details})` : ""}`);
 }
 
+/**
+ * まだデータベースに作られていないテーブル (アプリに後から追加したテーブル)。
+ * テーブル定義の SQL (supabase/migrations/...) を実行するまでは空として扱い、ほかの画面は動かし続ける
+ */
+// 起動時の読み込み (instrumentation.ts) と各画面・API は別のモジュールとして動くことがあるため、
+// データ本体 (store.ts) と同じく globalThis に置いて共有する
+const gm = globalThis as typeof globalThis & { __ichijoyaMissingTables?: Set<string> };
+const missing: Set<string> = (gm.__ichijoyaMissingTables ??= new Set<string>());
+export function missingTables(): string[] {
+  return [...missing];
+}
+
+/**
+ * 「ない」と記録したテーブルを確かめ直す (テーブル定義の SQL を実行した直後でも、再起動を待たずに使えるように)。
+ * 作られていれば記録から外す (中身は作成直後で空のため、読み直しは不要)。まだないテーブルの一覧を返す
+ */
+export async function recheckMissingTables(): Promise<string[]> {
+  for (const table of [...missing]) {
+    const { error } = await sb().from(table).select("id").limit(1);
+    if (!error) missing.delete(table);
+  }
+  return [...missing];
+}
+
+/** テーブルが存在しないときのエラー (PostgREST の schema cache にない / PostgreSQL の undefined_table) */
+function isMissingTable(error: { code?: string; message?: string } | null): boolean {
+  return Boolean(error && (error.code === "PGRST205" || error.code === "42P01" || /Could not find the table|does not exist/i.test(error.message ?? "")));
+}
+
 async function fetchTable(def: TableDef): Promise<Entity[]> {
   const head = await sb().from(def.table).select("id", { count: "exact", head: true });
-  if (head.error) throw failure(def.table, "count", head.error);
+  let error = head.error;
+  // テーブルがないとき、HEAD の問い合わせはエラーにならず件数が空 (204) で返る。GET で確かめる
+  if (!error && head.count == null) error = (await sb().from(def.table).select("id").limit(1)).error;
+  if (error && isMissingTable(error)) {
+    if (!missing.has(def.table)) console.warn(`[supabase] table "${def.table}" is missing. Run supabase/migrations/20261112000000_initial_schema.sql`);
+    missing.add(def.table);
+    return [];
+  }
+  missing.delete(def.table);
+  if (error) throw failure(def.table, "count", error);
   const total = head.count ?? 0;
   const pages = Math.ceil(total / PAGE);
   const out: Entity[][] = new Array(pages);
@@ -110,6 +153,11 @@ export interface Changes {
 
 /** 変更分を書き込み、新しいリビジョンを返す */
 export async function writeToSupabase(changes: Changes): Promise<number> {
+  for (const def of TABLES) {
+    if (missing.has(def.table) && (changes.upserts.get(def.collection)?.length || changes.deletes.get(def.collection)?.length)) {
+      throw new Error(`[supabase] table "${def.table}" is missing. Run supabase/migrations/20261112000000_initial_schema.sql`);
+    }
+  }
   for (const def of TABLES) {
     const rows = changes.upserts.get(def.collection);
     if (!rows?.length) continue;

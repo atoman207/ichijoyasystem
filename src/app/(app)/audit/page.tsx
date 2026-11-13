@@ -8,7 +8,7 @@ import type { AuditAction } from "@/lib/db/types";
 import { Avatar, Badge, Button, Flash, Input, Note, PageHeader, Select, StoreTag } from "@/components/ui";
 
 const ACTION_TONE: Record<AuditAction, "neutral" | "info" | "good" | "warn" | "critical" | "accent"> = {
-  create: "info", update: "neutral", delete: "critical", approve: "good", reject: "critical", submit: "warn", send: "accent", status: "neutral", login: "neutral", logout: "neutral", export: "warn",
+  create: "info", update: "neutral", delete: "critical", approve: "good", reject: "critical", submit: "warn", send: "accent", status: "neutral", login: "neutral", logout: "neutral", export: "warn", import: "warn",
 };
 
 function fmtVal(v: unknown): string {

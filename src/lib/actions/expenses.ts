@@ -7,6 +7,7 @@ import type { Database, Expense, ExpensePaymentMethod, User } from "@/lib/db/typ
 import { toDateKey } from "@/lib/format";
 import { APPROVAL_RULES, EXPENSE_METHOD_LABEL } from "@/lib/constants";
 import { approverLabel, approverRole, canManageFinance, canViewExpense } from "@/lib/auth/permissions";
+import { relinkDocumentAttachments } from "@/lib/attachments";
 import { assertStore, choice, fail, numField, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
 function request(db: Database, e: Expense, user: User) {
@@ -59,6 +60,7 @@ export async function createExpense(formData: FormData) {
       doc.status = "confirmed";
       doc.linkedType = "expense";
       doc.linkedId = id;
+      relinkDocumentAttachments(db, doc.id, { type: "expense", id, storeId });
     }
     if (intent === "submit") role = request(db, e, user);
   });

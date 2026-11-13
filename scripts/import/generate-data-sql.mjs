@@ -10,6 +10,10 @@
  *
  * 移行データに加えて、デモ用アカウント (架空の 15 名・パスワード demo1234。scripts/import/demo-accounts.mjs) を users に登録する。
  *
+ * 現在の Supabase のデータで作り直すとき (アプリで登録したデータ・変更履歴を残す):
+ *   node scripts/import/dump-supabase.mjs                                           → data/import/supabase-current.json
+ *   node scripts/import/generate-data-sql.mjs data/import/supabase-current.json --no-demo
+ *
  * SQL Editor は 1 回に約 1 MB までしか実行できない (Supabase Studio の上限 0.98 MB。超えると
  * "Query is too large to be run via the SQL Editor")。ichijoya.sql (約 31 MB) は psql で実行し、
  * SQL Editor では分割版 (1 ファイル 900 KB 以下) を使う。
@@ -55,7 +59,10 @@ if (!fs.existsSync(FILE)) {
 const DEMO = !args.includes("--no-demo");
 const source = JSON.parse(fs.readFileSync(FILE, "utf8"));
 const db = DEMO ? withDemoAccounts(source) : source;
-const demoNote = DEMO ? "デモ用アカウント 15 名 (パスワード demo1234) を含む" : "デモ用アカウントは含まない";
+// 入力が現在の Supabase の書き出し (dump-supabase.mjs) のときは、その時点のデータをそのまま入れ直す
+const dumpedAt = source.meta?.dumpedAt;
+const demoNote = DEMO ? "デモ用アカウント 15 名 (パスワード demo1234) を含む" : dumpedAt ? "デモ用アカウントは書き出し時点の状態のまま" : "デモ用アカウントは含まない";
+const sourceNote = dumpedAt ? `現在の Supabase のデータ (${dumpedAt} 時点の書き出し)` : "共有資料から移行したデータ。サンプルデータは含まない";
 const stamp = new Date().toISOString();
 const total = TABLES.reduce((a, t) => a + (db[t.collection] ?? []).length, 0);
 
@@ -119,7 +126,7 @@ if (!SPLIT) {
     banner([
       "一畳屋 統合業務システム データベース (テーブル定義 + 移行データ) — 1 ファイルで起動",
       `生成: node scripts/import/generate-data-sql.mjs (${stamp})`,
-      `内容: ${TABLES.length + 1} テーブル / ${total.toLocaleString("en-US")} 行 (共有資料から移行したデータ。サンプルデータは含まない。${demoNote})`,
+      `内容: ${TABLES.length + 1} テーブル / ${total.toLocaleString("en-US")} 行 (${sourceNote}。${demoNote})`,
       "",
       "実行方法 (どちらか):",
       "  node scripts/import/setup-database.mjs   (SUPABASE_DB_PASSWORD または SUPABASE_DB_URL を設定。psql 不要)",

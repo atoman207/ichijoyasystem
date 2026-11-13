@@ -1,4 +1,4 @@
-import type { Approval, Expense, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
+import type { Approval, Attachment, Expense, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
 
 /**
  * 権限ルール
@@ -116,7 +116,20 @@ export function canEditEvent(user: User, e: Pick<ScheduleEvent, "storeId" | "ass
   return canAccessStore(user, e.storeId) || e.assigneeIds.includes(user.id) || e.createdBy === user.id;
 }
 
-export const ROLE_ORDER: Role[] = ["admin", "store_manager", "store_staff", "hq_staff"];
+/**
+ * 添付ファイル (資料・写真) の削除: 登録した本人・管理者・その店舗の店長。
+ * 閲覧と登録は添付先の記録 (顧客・案件など) の権限に従う (src/lib/attachments.ts)
+ */
+export function canDeleteAttachment(user: User, a: Pick<Attachment, "uploadedBy" | "storeId">): boolean {
+  return a.uploadedBy === user.id || user.role === "admin" || (user.role === "store_manager" && user.storeId === a.storeId);
+}
+
+/** データの取込 (CSV・Google スプレッドシート): 書き出しと同じく全店舗を扱うロール (管理者・本部スタッフ) */
+export function canImportData(user: User): boolean {
+  return canSeeAllStores(user);
+}
+
+export const ROLE_ORDER: Role[] =["admin", "store_manager", "store_staff", "hq_staff"];
 
 /** 経費を閲覧・申請・削除できるか (店舗スタッフは自分の経費のみ) */
 export function canViewExpense(user: User, e: Pick<Expense, "storeId" | "submittedBy">): boolean {
