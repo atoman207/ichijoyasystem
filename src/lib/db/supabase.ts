@@ -1,7 +1,7 @@
 import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "./types";
-import { META_TABLE, TABLES, isTimestamp, snake, type TableDef } from "./schema";
+import { META_TABLE, TABLES, isTimestamp, loadOrder, snake, type TableDef } from "./schema";
 
 /**
  * Supabase (PostgreSQL) との境界
@@ -112,7 +112,7 @@ async function fetchTable(def: TableDef): Promise<Entity[]> {
     while (next < pages) {
       const p = next++;
       let q = sb().from(def.table).select("*");
-      for (const col of def.orderBy) q = q.order(col, { ascending: true, nullsFirst: true });
+      for (const col of loadOrder(def)) q = q.order(col, { ascending: true, nullsFirst: true });
       const { data, error } = await q.range(p * PAGE, p * PAGE + PAGE - 1);
       if (error) throw failure(def.table, "select", error);
       out[p] = (data ?? []).map((r) => fromRow(def, r as Row));

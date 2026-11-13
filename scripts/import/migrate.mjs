@@ -47,9 +47,13 @@ try {
   client.on("notice", () => {});
   // 使用中のテーブルを長く止めないよう、ロックを待つのは 10 秒まで (待ち切れなければ失敗にして、再実行する)
   await client.query("set lock_timeout = '10s'; set statement_timeout = '120s'");
+  const indexesSql = "select indexname from pg_indexes where schemaname = 'public'";
   const before = new Set((await client.query(columnsSql)).rows.map((r) => `${r.table_name}.${r.column_name}`));
+  const indexesBefore = new Set((await client.query(indexesSql)).rows.map((r) => r.indexname));
   await client.query(sql);
   const after = (await client.query(columnsSql)).rows.map((r) => `${r.table_name}.${r.column_name}`);
+  const newIndexes = (await client.query(indexesSql)).rows.map((r) => r.indexname).filter((n) => !indexesBefore.has(n));
+  if (newIndexes.length) log(`索引を追加しました: ${newIndexes.join(", ")}`);
   const added = after.filter((k) => !before.has(k));
   const beforeTables = new Set([...before].map((k) => k.split(".")[0]));
   const newTables = [...new Set(added.map((k) => k.split(".")[0]))].filter((t) => !beforeTables.has(t));

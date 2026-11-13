@@ -7,7 +7,7 @@
  * - すべてのテーブルで RLS を有効にし、ポリシーは作らない (= publishable キーからは読めない)。
  *   アプリはサーバー側で secret キーを使って読み書きする
  */
-import { META_TABLE, TABLES, snake } from "../../src/lib/db/schema.ts";
+import { META_TABLE, TABLES, loadOrder, snake } from "../../src/lib/db/schema.ts";
 
 const q = (s) => s.replace(/'/g, "''");
 
@@ -44,6 +44,8 @@ export function buildSchemaSql({ header = true } = {}) {
     lines.push(");");
     lines.push(`comment on table ${t.table} is '${q(t.label)}';`);
     for (const cols of t.indexes ?? []) lines.push(`create index if not exists ${t.table}_${cols.join("_")}_idx on ${t.table} (${cols.join(", ")});`);
+    const order = loadOrder(t);
+    if (order.length > 1 || order[0] !== "id") lines.push(`create index if not exists ${t.table}_load_order_idx on ${t.table} (${order.join(", ")});`);
     lines.push("");
   }
 

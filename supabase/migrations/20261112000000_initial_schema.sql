@@ -32,6 +32,7 @@ create table if not exists stores (
   color text not null
 );
 comment on table stores is '店舗';
+create index if not exists stores_load_order_idx on stores (code, id);
 
 -- 社員 (ログインユーザー)
 create table if not exists users (
@@ -76,6 +77,7 @@ comment on table customers is '顧客';
 create index if not exists customers_store_id_idx on customers (store_id);
 create index if not exists customers_name_idx on customers (name);
 create index if not exists customers_area_idx on customers (area);
+create index if not exists customers_load_order_idx on customers (code, id);
 
 -- 問い合わせ
 create table if not exists inquiries (
@@ -106,6 +108,7 @@ comment on table inquiries is '問い合わせ';
 create index if not exists inquiries_store_id_idx on inquiries (store_id);
 create index if not exists inquiries_status_idx on inquiries (status);
 create index if not exists inquiries_customer_id_idx on inquiries (customer_id);
+create index if not exists inquiries_load_order_idx on inquiries (received_at, id);
 
 -- 商品マスタ
 create table if not exists products (
@@ -155,6 +158,7 @@ comment on table quotes is '見積';
 create index if not exists quotes_store_id_idx on quotes (store_id);
 create index if not exists quotes_status_idx on quotes (status);
 create index if not exists quotes_customer_id_idx on quotes (customer_id);
+create index if not exists quotes_load_order_idx on quotes (created_at, id);
 
 -- 受注・施工 (売上)
 create table if not exists orders (
@@ -192,6 +196,7 @@ create index if not exists orders_store_id_idx on orders (store_id);
 create index if not exists orders_status_idx on orders (status);
 create index if not exists orders_customer_id_idx on orders (customer_id);
 create index if not exists orders_sales_date_idx on orders (sales_date);
+create index if not exists orders_load_order_idx on orders (created_at, id);
 
 -- 請求書
 create table if not exists invoices (
@@ -215,6 +220,7 @@ create table if not exists invoices (
 comment on table invoices is '請求書';
 create index if not exists invoices_store_id_idx on invoices (store_id);
 create index if not exists invoices_status_idx on invoices (status);
+create index if not exists invoices_load_order_idx on invoices (created_at, id);
 
 -- 入金
 create table if not exists payments (
@@ -228,6 +234,7 @@ create table if not exists payments (
   created_at timestamptz not null
 );
 comment on table payments is '入金';
+create index if not exists payments_load_order_idx on payments (created_at, id);
 
 -- 仕入先
 create table if not exists suppliers (
@@ -262,6 +269,7 @@ create table if not exists purchases (
   updated_at timestamptz not null
 );
 comment on table purchases is '仕入請求書 (買掛)';
+create index if not exists purchases_load_order_idx on purchases (created_at, id);
 
 -- 経費
 create table if not exists expenses (
@@ -287,6 +295,7 @@ create table if not exists expenses (
 comment on table expenses is '経費';
 create index if not exists expenses_store_id_idx on expenses (store_id);
 create index if not exists expenses_status_idx on expenses (status);
+create index if not exists expenses_load_order_idx on expenses (created_at, id);
 
 -- 承認
 create table if not exists approvals (
@@ -308,6 +317,7 @@ create table if not exists approvals (
 comment on table approvals is '承認';
 create index if not exists approvals_status_idx on approvals (status);
 create index if not exists approvals_target_id_idx on approvals (target_id);
+create index if not exists approvals_load_order_idx on approvals (created_at, id);
 
 -- 変更履歴 (監査ログ)
 create table if not exists audit_logs (
@@ -325,6 +335,7 @@ create table if not exists audit_logs (
 comment on table audit_logs is '変更履歴 (監査ログ)';
 create index if not exists audit_logs_entity_entity_id_idx on audit_logs (entity, entity_id);
 create index if not exists audit_logs_at_idx on audit_logs (at);
+create index if not exists audit_logs_load_order_idx on audit_logs (at, id);
 
 -- 外部とのやりとり履歴
 create table if not exists comm_logs (
@@ -341,6 +352,7 @@ create table if not exists comm_logs (
 );
 comment on table comm_logs is '外部とのやりとり履歴';
 create index if not exists comm_logs_customer_id_idx on comm_logs (customer_id);
+create index if not exists comm_logs_load_order_idx on comm_logs (at, id);
 
 -- 社内連絡 (スレッド)
 create table if not exists threads (
@@ -358,6 +370,7 @@ create table if not exists threads (
   updated_at timestamptz not null
 );
 comment on table threads is '社内連絡 (スレッド)';
+create index if not exists threads_load_order_idx on threads (created_at, id);
 
 -- 社内連絡 (投稿)
 create table if not exists messages (
@@ -370,6 +383,7 @@ create table if not exists messages (
 );
 comment on table messages is '社内連絡 (投稿)';
 create index if not exists messages_thread_id_idx on messages (thread_id);
+create index if not exists messages_load_order_idx on messages (at, id);
 
 -- 取込書類 (紙→データ)
 create table if not exists documents (
@@ -386,6 +400,7 @@ create table if not exists documents (
   linked_id text
 );
 comment on table documents is '取込書類 (紙→データ)';
+create index if not exists documents_load_order_idx on documents (uploaded_at, id);
 
 -- 予定 (全社カレンダー)
 create table if not exists schedule_events (
@@ -419,6 +434,7 @@ create index if not exists schedule_events_date_idx on schedule_events (date);
 create index if not exists schedule_events_store_id_date_idx on schedule_events (store_id, date);
 create index if not exists schedule_events_order_id_idx on schedule_events (order_id);
 create index if not exists schedule_events_customer_id_idx on schedule_events (customer_id);
+create index if not exists schedule_events_load_order_idx on schedule_events (date, start_time, id);
 
 -- 会社の休業日
 create table if not exists company_holidays (
@@ -427,6 +443,7 @@ create table if not exists company_holidays (
   label text not null default '休業日'
 );
 comment on table company_holidays is '会社の休業日';
+create index if not exists company_holidays_load_order_idx on company_holidays (date, id);
 
 -- お客様アンケート
 create table if not exists survey_responses (
@@ -451,6 +468,7 @@ create table if not exists survey_responses (
 );
 comment on table survey_responses is 'お客様アンケート';
 create index if not exists survey_responses_store_id_idx on survey_responses (store_id);
+create index if not exists survey_responses_load_order_idx on survey_responses (received_at, id);
 
 -- 資料台帳 (Google ドライブの共有資料)
 create table if not exists source_files (
@@ -469,6 +487,7 @@ create table if not exists source_files (
 );
 comment on table source_files is '資料台帳 (Google ドライブの共有資料)';
 create index if not exists source_files_folder_idx on source_files (folder);
+create index if not exists source_files_load_order_idx on source_files (folder, path, id);
 
 -- 現場写真台帳
 create table if not exists photo_albums (
@@ -484,6 +503,7 @@ create table if not exists photo_albums (
   sample_files text[] not null default '{}'
 );
 comment on table photo_albums is '現場写真台帳';
+create index if not exists photo_albums_load_order_idx on photo_albums (date, id);
 
 -- 添付ファイル (資料・写真。本体は Storage の attachments バケット)
 create table if not exists attachments (
@@ -508,6 +528,7 @@ create table if not exists attachments (
 comment on table attachments is '添付ファイル (資料・写真。本体は Storage の attachments バケット)';
 create index if not exists attachments_parent_type_parent_id_idx on attachments (parent_type, parent_id);
 create index if not exists attachments_customer_id_idx on attachments (customer_id);
+create index if not exists attachments_load_order_idx on attachments (uploaded_at, id);
 
 -- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)
 -- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する

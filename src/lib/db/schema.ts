@@ -23,6 +23,14 @@ export interface TableDef {
   indexes?: string[][];
 }
 
+/**
+ * 読み込み時の並び順 (orderBy + id)。ページごとに読むため、同じ値の行があっても順序が一意になるよう id を最後に加える。
+ * この並びの索引も作る (schema-sql.mjs)。索引がないと行数が増えたときに並べ替えが時間切れになる
+ */
+export function loadOrder(def: TableDef): string[] {
+  return def.orderBy.includes("id") || !def.columns.some(([f]) => f === "id") ? def.orderBy : [...def.orderBy, "id"];
+}
+
 const ts = "timestamptz";
 
 /** 依存関係の順 (参照される側が先)。削除は逆順に行う */

@@ -96,7 +96,7 @@ DATA_BACKEND=json npm run dev
 | 社内連絡 | `/messages` | 依頼・報告・確認・連絡のスレッド、メンション通知、案件への紐づけ |
 | AI アシスタント | `/ai` | 一元化データに基づく集計・検索・文面作成 |
 | レポート・分析 | `/reports` | 店舗別・担当者別・期間別・種別別・入口別 (店長以上) |
-| データ入出力 | `/data` | CSV・Google スプレッドシート (リンク共有) からの顧客・問い合わせの取込 (確認 → 実行)、顧客・問い合わせ・受注・月次売上の CSV 書き出し (管理者・本部スタッフ) |
+| データ入出力 | `/data` | CSV・Google スプレッドシート (リンク共有) からの顧客・問い合わせの取込 (確認 → 実行)、販売管理ソフトの売上明細の取込 (追加・変更された伝票だけを反映)、顧客・問い合わせ・受注・月次売上の CSV 書き出し (管理者・本部スタッフ) |
 | 変更履歴 | `/audit` | 監査ログ (変更前後の値つき) |
 | 設定 | `/settings` | ユーザー・店舗・商品マスタ・承認ルール・外部連携・データ管理 (管理者)。ユーザーと権限のタブに権限一覧 (ロール × 操作)、ユーザーごとのアカウント画面 `/settings/users/<ID>` |
 | プロフィール | `/profile` | ヘッダー右上のアバターから開く。自分の権限・担当中の問い合わせ/施工・承認・予定・操作履歴 |
@@ -157,7 +157,7 @@ supabase/
   data/                    同じ内容の分割版 (SQL Editor 用。各 900 KB 以下。ローカルで生成・コミットしない)
   README.md                テーブル作成・データ登録の手順
 scripts/
-  import/                  SQL の生成・実行とデータの登録 (generate-schema / generate-data-sql / setup-database / load-to-supabase)、デモ用アカウントの登録 (seed-demo-accounts)
+  import/                  SQL の生成・実行とデータの登録 (generate-schema / generate-data-sql / setup-database / load-to-supabase)、デモ用アカウントの登録 (seed-demo-accounts)、売上明細 CSV の取込 (import-sales-csv)
   smoke.mjs                ブラウザ疎通テスト (npm run smoke)
 ```
 

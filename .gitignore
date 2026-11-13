@@ -66,6 +66,8 @@ next-env.d.ts
 # Phase 1 deliverables (PDF / CSV / document sources) and their builders: delivered separately
 /phase1/
 /scripts/phase1/
+/phase2/
+/scripts/phase2/
 
 # design notes and reference images (not needed to run the app)
 /docs/

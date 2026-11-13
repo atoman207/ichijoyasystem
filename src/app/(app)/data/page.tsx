@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Download, FileSpreadsheet } from "lucide-react";
+import { Download, FileSpreadsheet, Receipt } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canExportData, canImportData } from "@/lib/auth/permissions";
@@ -9,6 +9,7 @@ import { userName } from "@/lib/db/queries";
 import { AUDIT_ACTION_LABEL } from "@/lib/constants";
 import { Badge, Card, CardHeader, Note, PageHeader, Select } from "@/components/ui";
 import { ImportWizard } from "@/components/features/ImportWizard";
+import { SalesLedgerImport } from "@/components/features/SalesLedgerImport";
 
 export const metadata: Metadata = { title: "データ入出力" };
 
@@ -48,6 +49,15 @@ export default async function DataIoPage({ searchParams }: { searchParams: Promi
           <Card>
             <CardHeader title="取り込む (CSV・Google スプレッドシート)" icon={<FileSpreadsheet />} description="内容を確認してから取り込みます。確認の段階ではデータは変わりません" />
             {canImportData(user) ? <ImportWizard /> : <Note>取込は管理者・本部スタッフが行います。</Note>}
+          </Card>
+
+          <Card>
+            <CardHeader
+              title="売上明細の取込 (販売管理ソフト)"
+              icon={<Receipt />}
+              description="顧客は得意先コード、売上は伝票№で登録・更新し、売上台帳から移行した受注・顧客とひも付けます。最新の CSV を取り込むたびに、追加・変更された伝票だけを反映します"
+            />
+            {canImportData(user) ? <SalesLedgerImport /> : <Note>取込は管理者・本部スタッフが行います。</Note>}
           </Card>
 
           {(Object.keys(IMPORT_SPEC) as ImportTarget[]).map((t) => (
