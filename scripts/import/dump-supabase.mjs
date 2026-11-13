@@ -64,7 +64,7 @@ for (const def of TABLES) {
   const rows = [];
   for (let from = 0; ; from += PAGE) {
     let q = sb.from(def.table).select("*");
-    for (const col of def.orderBy) q = q.order(col, { ascending: true, nullsFirst: true });
+    for (const col of def.orderBy) q = q.order(col, { ascending: true, nullsFirst: false });
     // 同じ値の並びが毎回同じになるよう、最後に id でも並べる
     if (!def.orderBy.includes("id")) q = q.order("id", { ascending: true });
     const { data, error } = await q.range(from, from + PAGE - 1);

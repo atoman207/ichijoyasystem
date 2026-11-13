@@ -112,7 +112,9 @@ async function fetchTable(def: TableDef): Promise<Entity[]> {
     while (next < pages) {
       const p = next++;
       let q = sb().from(def.table).select("*");
-      for (const col of loadOrder(def)) q = q.order(col, { ascending: true, nullsFirst: true });
+      // 並び順は索引 (schema-sql.mjs の *_load_order_idx。昇順・空の値は最後) と同じにする。nullsFirst: true だと索引が使われず、
+      // 行の多い表 (受注 4 万行など) で並べ替えが Supabase の時間制限 (8 秒) を超えて読み込みが失敗する (2026-11-13 に発生)
+      for (const col of loadOrder(def)) q = q.order(col, { ascending: true, nullsFirst: false });
       const { data, error } = await q.range(p * PAGE, p * PAGE + PAGE - 1);
       if (error) throw failure(def.table, "select", error);
       out[p] = (data ?? []).map((r) => fromRow(def, r as Row));
