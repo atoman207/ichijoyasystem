@@ -168,9 +168,85 @@ export interface QuoteChange {
   subtotal: number;
   tax: number;
   total: number;
+  /** 単価が税込 */
+  taxIncluded?: boolean;
+  /** 件名・施工内容・備考の変更 (省略時は変更なし) */
+  title?: string;
+  workDetails?: string;
+  notes?: string;
   reason: string;
   requestedBy: string;
   requestedAt: string;
+}
+
+/** 見積の改訂前の版 (金額・内容の変更が承認されるたびに、変更前の内容を残す) */
+export interface QuoteRevision {
+  version: number;
+  title: string;
+  items: QuoteItem[];
+  taxIncluded?: boolean;
+  subtotal: number;
+  discount: number;
+  tax: number;
+  total: number;
+  workDetails?: string;
+  notes?: string;
+  validUntil?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  /** この版から次の版への変更の理由・申請者・承認者・日時 */
+  changeReason?: string;
+  changeRequestedBy?: string;
+  changeApprovedBy?: string;
+  replacedAt: string;
+}
+
+/**
+ * 現場情報・引継ぎ事項 (手書き見積書の 引取・納品日時、支払い方法、備考欄以下の項目)。
+ * 見積 → 受注へ引き継ぎ、受注・施工の画面と予定表で施工担当者と共有する
+ */
+export interface SiteInfo {
+  /** 引取日時 (書かれたとおり。例: 11/21 8:00-8:30) */
+  pickupAt?: string;
+  /** 納品日時 (例: 畳翌日 11/26PM 襖・障子) */
+  deliveryAt?: string;
+  /** 支払い方法 (納品時) */
+  paymentMethod?: string;
+  /** 支払い方法の補足 (VISA など) */
+  paymentNote?: string;
+  /** 備考 */
+  remarks?: string;
+  /** 荷物 (ベッド・タンスなど) */
+  baggage?: string;
+  /** 1 人で作業 OK / NG */
+  oneOk?: string;
+  /** かえ畳 (枚) */
+  spareTatami?: number;
+  /** 戸建て・階 (例: 戸建て 2F) */
+  floor?: string;
+  /** サイズ */
+  sizes?: string;
+  /** わら A / B */
+  straw?: string;
+  /** 建材 A / B */
+  material?: string;
+  /** 必要な道具 (脚立・ローラー・ジャッキ・台車・ジン) */
+  equipment?: string[];
+  /** 紙カーテン */
+  paperCurtain?: string;
+  /** 搬出 遠 / 近 */
+  carryOut?: string;
+  /** 雨天 OK / NG */
+  rain?: string;
+  /** 媒体 (○が付いたもの) */
+  media?: string[];
+  mediaOther?: string;
+  /** 襖紙 */
+  fusumaPaper?: string;
+  /** 欄外の書き込み */
+  otherNotes?: string;
+  updatedBy?: string;
+  updatedAt?: string;
 }
 
 export interface Quote {
@@ -202,6 +278,22 @@ export interface Quote {
   pendingChange?: QuoteChange;
   createdAt: string;
   updatedAt: string;
+  /** 施工内容 (工事の説明。見積書に載せ、受注に引き継ぐ) */
+  workDetails?: string;
+  /** 改訂前の版 (古い順) */
+  revisions?: QuoteRevision[];
+  /** 単価・小計が税込 (手書き見積書の「税込」)。消費税は合計から内税で計算する */
+  taxIncluded?: boolean;
+  /** 現場情報・引継ぎ事項 */
+  siteInfo?: SiteInfo;
+  /** 手書き見積書の No. */
+  paperNo?: string;
+  /** 現場でお客様に手書きの見積書を渡し済み (承認されたら「送付済」にする) */
+  handedOver?: boolean;
+  /** 打合せ中 (仕様・金額をお客様と調整中) */
+  specStatus?: "discussing";
+  /** 見積担当 (現場で見積をした社員) */
+  estimatorId?: string;
 }
 
 export type OrderStatus =
@@ -277,6 +369,22 @@ export interface Order {
   fusumaPaper?: string;
   source?: RecordSource;
   sourceRef?: string;
+  /** 施工内容 (見積から引き継ぎ。受注・施工の画面で変更できる) */
+  workDetails?: string;
+  /** 現場情報・引継ぎ事項 (見積から引き継ぎ) */
+  siteInfo?: SiteInfo;
+  /** 仕様: pending = 一部の仕様が未確定 */
+  specStatus?: "pending" | "fixed";
+  specNote?: string;
+  /** 工事日程: adjusting = 調整中 (日程は scheduledStart があれば確定) */
+  scheduleStatus?: "adjusting";
+  /** 請求書の発行: required = 必要 (業者・後日振込など) / not_required = 不要 (現場で集金など)。未設定は自動判定 */
+  billing?: "required" | "not_required";
+  /** 入金の予定方法 (cash / transfer / visit / card / epay / trade) */
+  plannedPayment?: string;
+  /** 案件の全処理完了 (請求・入金・その他の事務処理まで済んだ) */
+  closedAt?: string;
+  closedBy?: string;
 }
 
 export type InvoiceStatus =
@@ -304,6 +412,12 @@ export interface Invoice {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  /** 発行時の件名・明細・備考 (明細は税抜。Phase 2 以前の請求書にはない → 見積・受注から組み立てる) */
+  title?: string;
+  items?: QuoteItem[];
+  notes?: string;
+  /** 明細が税込 (税込の見積から発行) */
+  taxIncluded?: boolean;
 }
 
 export type PaymentMethod = "cash" | "transfer" | "card" | "paypay" | "other";
@@ -315,6 +429,8 @@ export interface Payment {
   amount: number;
   method: PaymentMethod;
   memo?: string;
+  /** カード・電子決済の入金 (決済会社からの振込) を確認した日。未設定のカード・電子決済は「決済入金待ち」 */
+  settledOn?: string;
   recordedBy: string;
   createdAt: string;
 }
@@ -554,12 +670,15 @@ export interface ScheduleEvent {
 export type DocumentKind =
   | "handwritten_quote"
   | "drawing"
+  | "site_document"
   | "supplier_invoice"
   | "receipt"
   | "contract"
+  | "survey_postcard"
   | "other";
 
-export type DocumentStatus = "uploaded" | "extracted" | "confirmed" | "discarded";
+/** failed = AI の読取に失敗 (手入力で登録するか、読み取り直す) */
+export type DocumentStatus = "uploaded" | "extracted" | "failed" | "confirmed" | "discarded";
 
 export interface CapturedDocument {
   id: string;
@@ -572,8 +691,17 @@ export interface CapturedDocument {
   /** AI/OCR による読取結果 (構造化 JSON) */
   extracted?: Record<string, unknown>;
   confidence?: number;
-  linkedType?: "quote" | "expense" | "purchase";
+  /** 登録先 (見積・経費・仕入請求書、または図面・施工資料を保存した受注・問い合わせ・顧客) */
+  linkedType?: "quote" | "expense" | "purchase" | "order" | "inquiry" | "customer" | "survey";
   linkedId?: string;
+}
+
+/** 設定 (id ごとに 1 行。値は JSON。例: "documents" = 帳票に載せる会社情報・登録番号・振込先) */
+export interface AppSetting {
+  id: string;
+  value: Record<string, unknown>;
+  updatedBy?: string;
+  updatedAt: string;
 }
 
 /** 添付ファイルの登録先 (document = 書類取込の元画像。見積・経費・仕入に登録すると、その記録へ付け替える) */
@@ -634,6 +762,89 @@ export interface SurveyResponse {
   media?: string;
   wouldUseAgain?: string;
   sourceRef?: string;
+  /** はがきに書かれた回答日 */
+  answeredOn?: string;
+  /** ① 電話対応の評価対象 (事務担当) */
+  clerkUserId?: string;
+  /** ②③ の評価対象 (納品担当。複数のことがある。salesUserId・craftsmanUserId を含む) */
+  deliveryUserIds?: string[];
+  /** ⑤ ご利用にあたって重視されたこと (複数回答) */
+  priorityList?: string[];
+  /** ⑥ 何を見てご依頼いただいたか (複数回答) */
+  mediaList?: string[];
+  /** ⑧ ご指摘・お褒めの言葉 (自由記述) */
+  comment?: string;
+  /** ⑧ の分類 (AI またはルールで付ける。例: 仕上がり・職人の対応・説明・提案) */
+  commentTags?: string[];
+  /** ⑧ の内容の種類 */
+  commentTone?: "praise" | "request" | "complaint" | "neutral";
+  /** 取込書類 (はがきの写真) */
+  documentId?: string;
+  /** import = スプレッドシートから移行 / capture = はがきの写真から登録 / manual = 画面で入力 */
+  source?: "import" | "capture" | "manual";
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** クレーム・手直し (手直し 1 点 / クレーム 2 点 / クレーム＋手直し 3 点) */
+export type QualityKind = "rework" | "claim" | "claim_rework";
+
+export interface QualityIssue {
+  id: string;
+  number: string;
+  orderId: string;
+  customerId?: string;
+  /** 集計する店舗 (登録時の案件の担当店舗) */
+  storeId: StoreId;
+  kind: QualityKind;
+  /** 登録時のポイント (ルールを後で変えても、登録済みの点数は変わらない) */
+  points: number;
+  /** 発生日 (集計期間の判定に使う) */
+  occurredOn: string;
+  /** 対象の担当者 (納品担当など) */
+  responsibleUserIds: string[];
+  /** 内容 */
+  description: string;
+  /** 原因 */
+  cause?: string;
+  /** 対策 (再発防止) */
+  countermeasure?: string;
+  status: "open" | "resolved";
+  resolvedOn?: string;
+  /** ポイントを付ける単位 (原因で決める): store = 案件の店舗 / office = 事務 */
+  attribution?: "store" | "office";
+  /** カテゴリー (精度・確認不足・説明不足・その他) */
+  category?: string;
+  /** false = 記録のみで集計しない (点検 DM・点検電話から分かったもの、お客様が原因のものなど) */
+  counted?: boolean;
+  reportedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Google の口コミ (口コミをいただいた担当者にポイント。月ごとに集計し、翌月末に支給) */
+export interface GoogleReview {
+  id: string;
+  /** 口コミの投稿日 (集計月の判定に使う) */
+  postedOn: string;
+  storeId: StoreId;
+  /** ポイントの対象の担当者 */
+  userId: string;
+  reviewerName?: string;
+  /** 星の数 (1〜5) */
+  rating?: number;
+  comment?: string;
+  /** 写真つきの口コミ */
+  hasPhoto?: boolean;
+  /** 登録時のポイント (星の評価・コメント・写真 で 1 点ずつ) */
+  points: number;
+  orderId?: string;
+  customerId?: string;
+  note?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 /** 資料台帳 (Google ドライブで共有された業務資料 1 ファイル) */
@@ -690,8 +901,11 @@ export interface Database {
   documents: CapturedDocument[];
   holidays: CompanyHoliday[];
   surveys: SurveyResponse[];
+  qualityIssues: QualityIssue[];
+  reviews: GoogleReview[];
   sourceFiles: SourceFile[];
   photoAlbums: PhotoAlbum[];
+  settings: AppSetting[];
   attachments: Attachment[];
 }
 

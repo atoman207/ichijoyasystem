@@ -72,3 +72,6 @@ next-env.d.ts
 # design notes and reference images (not needed to run the app)
 /docs/
 /public/Screenshot*
+
+# クライアントの資料 (リポジトリのルートに置いた見積書などの PDF) はコミットしない
+/*.pdf

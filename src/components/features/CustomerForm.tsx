@@ -12,9 +12,11 @@ export function CustomerForm({
   users,
   user,
   cancelHref,
+  returnTo,
 }: {
   action: (formData: FormData) => Promise<void>;
-  customer?: Customer;
+  returnTo?: string;
+  customer?: Partial<Customer>;
   stores: Store[];
   users: User[];
   user: User;
@@ -24,6 +26,7 @@ export function CustomerForm({
   const storeId = customer?.storeId ?? user.storeId;
   return (
     <form action={action} className="space-y-5">
+      {returnTo && <input type="hidden" name="returnTo" value={returnTo} />}
       <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
         <Field label="氏名 / 会社名" required>
           <Input name="name" defaultValue={customer?.name} required placeholder="例: 山田 花子 / 株式会社○○" />
@@ -83,16 +86,16 @@ export function CustomerForm({
           </Field>
         )}
         <Field label="タグ" hint="カンマ区切り (例: リピーター, LINE登録)">
-          <Input name="tags" defaultValue={customer?.tags.join(", ")} />
+          <Input name="tags" defaultValue={customer?.tags?.join(", ")} />
         </Field>
       </div>
-      <DuplicateWatcher check={checkCustomerDuplicates} excludeId={customer?.id} requireConfirm={!customer} />
+      <DuplicateWatcher check={checkCustomerDuplicates} excludeId={customer?.id} requireConfirm={!customer?.id} />
       <Field label="備考 (駐車・訪問時の注意など)">
         <Textarea name="notes" defaultValue={customer?.notes} />
       </Field>
       <FormActions>
         <LinkButton href={cancelHref} variant="secondary">キャンセル</LinkButton>
-        <Button type="submit">{customer ? "更新する" : "登録する"}</Button>
+        <Button type="submit">{customer?.id ? "更新する" : "登録する"}</Button>
       </FormActions>
     </form>
   );

@@ -1,18 +1,17 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
 import type { Database, User } from "@/lib/db/types";
 import { canApprove, canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
 import { monthlySales, storeKpis } from "@/lib/db/queries";
 import { addDays, fmtDate, fmtMonth, toDateKey, toMonthKey, yen } from "@/lib/format";
 import { APPROVAL_TYPE_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, ORDER_STATUS, ROLE_LABEL, SCHEDULE_KIND } from "@/lib/constants";
 import { analyzeConflicts, compareEvents, occursOn, overlapsRange, periodLabel, shortDate, timeLabel } from "@/lib/calendar";
-import { aiEnabled } from "./ocr";
+import { AiError, aiEnabled, generateText } from "./provider";
 
 /**
  * AI アシスタント
  * ------------------------------------------------------------
  * 一元化されたデータを使って、問い合わせ対応・検索・集計・文面作成を支援する。
- * - ANTHROPIC_API_KEY があれば Claude に「ユーザーの権限で見える範囲のデータ要約」を
+ * - AI の API キー (OpenAI / Anthropic。src/lib/ai/provider.ts) があれば、「ユーザーの権限で見える範囲のデータ要約」を
  *   コンテキストとして渡して回答する
  * - 無ければ、キーワードに基づくルールベースの回答 (同じデータソース) を返す
  */
@@ -24,10 +23,8 @@ export interface ChatTurn {
 
 export interface AssistantReply {
   answer: string;
-  provider: "claude" | "rules";
+  provider: "claude" | "openai" | "rules";
 }
-
-export const ASSISTANT_MODEL = "claude-opus-5-5";
 
 const name = (db: Database, id?: string) => db.users.find((u) => u.id === id)?.name ?? "-";
 const cname = (db: Database, id?: string) => db.customers.find((c) => c.id === id)?.name ?? "-";
@@ -188,22 +185,23 @@ export async function answer(db: Database, user: User, history: ChatTurn[], ques
     "",
     contextText(db, user, ctx),
   ].join("\n");
-  const client = new Anthropic();
+  // 会話は user から始まり、user と assistant が交互になるようにそろえる (最初の挨拶などは除く)
+  const turns: ChatTurn[] = [];
+  for (const h of history.slice(-8)) {
+    if (!h.content.trim()) continue;
+    if (!turns.length && h.role !== "user") continue;
+    const last = turns[turns.length - 1];
+    if (last && last.role === h.role) turns[turns.length - 1] = { role: h.role, content: `${last.content}\n\n${h.content}` };
+    else turns.push({ role: h.role, content: h.content });
+  }
+  if (turns.length && turns[turns.length - 1].role === "user") turns.pop();
   try {
-    const res = await client.beta.messages.create({
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      model: ASSISTANT_MODEL,
-      max_tokens: 2000,
-      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-      output_config: { effort: "low" },
-      messages: [...history.slice(-8).map((h) => ({ role: h.role, content: h.content })), { role: "user", content: question }],
-    });
-    if (res.stop_reason === "refusal") return { answer: "この質問には回答できませんでした。", provider: "claude" };
-    const text = res.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-    return { answer: text || "(応答がありませんでした)", provider: "claude" };
+    const res = await generateText({ system, messages: [...turns, { role: "user", content: question }], maxTokens: 4000 });
+    return { answer: res.data.trim() || "(応答がありませんでした)", provider: res.provider };
   } catch (err) {
-    console.warn("[assistant] claude failed, using rules:", (err as Error).message);
-    return { answer: `${rulesAnswer(db, user, question)}\n\n(AI 応答に失敗したためルールベースで回答しました: ${(err as Error).message})`, provider: "rules" };
+    if (err instanceof AiError && err.code === "refusal") return { answer: "この質問には回答できませんでした。", provider: "rules" };
+    const message = err instanceof AiError ? err.message : (err as Error).message;
+    console.warn("[assistant] AI failed, using rules:", err instanceof AiError ? `${err.code} ${err.detail ?? ""}` : message);
+    return { answer: `${rulesAnswer(db, user, question)}\n\n(AI の応答に失敗したため、社内データから自動で回答しました: ${message})`, provider: "rules" };
   }
 }

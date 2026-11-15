@@ -15,7 +15,7 @@ function renderInline(text: string) {
 
 export function AiChat({ userName, userId, aiEnabled }: { userName: string; userId: string; aiEnabled: boolean }) {
   const [turns, setTurns] = useState<(ChatTurn & { provider?: string })[]>([
-    { role: "assistant", content: `こんにちは、${userName} さん。一元化された社内データをもとに、売上・入金・承認・予定・問い合わせ・顧客履歴などの質問に答えます。${aiEnabled ? "" : "\n\n(デモ環境のためルールベースで回答します。本番では Claude が自然文で応答し、文面作成や集計も行います)"}` },
+    { role: "assistant", content: `こんにちは、${userName} さん。一元化された社内データをもとに、売上・入金・承認・予定・問い合わせ・顧客履歴などの質問に答えます。${aiEnabled ? "" : "\n\n(AI の API キーが未設定のため、社内データから決まった形で回答します。キーを設定すると AI が自然文で応答し、文面作成や集計も行います)"}` },
   ]);
   const [input, setInput] = useState("");
   const [pending, start] = useTransition();
@@ -45,7 +45,7 @@ export function AiChat({ userName, userId, aiEnabled }: { userName: string; user
             {t.role === "user" ? <Avatar name={userName} id={userId} size={30} /> : <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-accent text-white"><Bot className="h-4 w-4" /></span>}
             <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${t.role === "user" ? "bg-subtle text-ink" : "border border-line text-ink"}`}>
               {renderInline(t.content)}
-              {t.provider && <div className="mt-1 text-[10px] text-ink-3">{t.provider === "claude" ? "Claude による回答" : "ルールベース (サンプル) 回答"}</div>}
+              {t.provider && <div className="mt-1 text-[10px] text-ink-3">{t.provider === "claude" ? "Claude による回答" : t.provider === "openai" ? "OpenAI による回答" : "社内データからの自動回答"}</div>}
             </div>
           </div>
         ))}

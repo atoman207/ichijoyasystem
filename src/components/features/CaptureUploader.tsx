@@ -12,9 +12,11 @@ const MAX_BYTES = 4 * 1024 * 1024;
 const SAMPLES: Record<DocumentKind, string[]> = {
   handwritten_quote: ["IMG_手書き見積_和室6畳.jpg", "IMG_手書き見積_襖と畳.jpg"],
   drawing: ["IMG_現場図面_1F和室.jpg"],
+  site_document: ["施工仕様書_○○様邸.pdf", "作業指示書_工務店.jpg"],
   supplier_invoice: ["請求書_い草協同組合_11月.pdf", "請求書_九州畳材_11月.jpg"],
   receipt: ["receipt_eneos_給油.jpg", "receipt_ETC_高速代.png", "receipt_ホームセンター.jpg"],
   contract: ["契約書_畳表替え.pdf"],
+  survey_postcard: ["アンケートはがき_No13338.jpg", "アンケートはがき_T698.jpg"],
   other: ["書類.jpg"],
 };
 
@@ -157,8 +159,8 @@ export function CaptureUploader({
       <SubmitButton hasFile={Boolean(fileName)} pending={pending} />
       <p className="text-[11px] leading-relaxed text-ink-3">
         {aiEnabled
-          ? "Claude (vision) が画像を読み取り、社内所定の項目に構造化します。"
-          : "このデモ環境では AI の API キーが未設定のため、サンプルの読取結果が表示されます。本番では撮影した画像を Claude (vision) が読み取り、同じ画面に結果が表示されます。"}
+          ? "AI が画像・PDF を読み取り、書類の種類ごとの項目 (日付・取引先・品名・数量・金額など) に整理します。結果は登録前に確認・修正できます。"
+          : "AI の API キーが未設定のため、サンプルの読取結果が表示されます。キーを設定すると、撮影した画像・PDF を AI が読み取り、同じ画面に結果が表示されます。"}
       </p>
     </form>
   );

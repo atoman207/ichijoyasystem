@@ -141,15 +141,18 @@ export const APPROVAL_TYPE_LABEL: Record<ApprovalType, string> = {
 export const DOCUMENT_KIND_LABEL: Record<DocumentKind, string> = {
   handwritten_quote: "手書き見積書",
   drawing: "現場図面・採寸メモ",
-  supplier_invoice: "仕入先請求書",
+  site_document: "施工資料 (仕様書・指示書・注文書)",
+  supplier_invoice: "請求書 (仕入先・業者から)",
   receipt: "レシート・領収書",
   contract: "契約書",
+  survey_postcard: "お客様アンケート (はがき)",
   other: "その他",
 };
 
 export const DOCUMENT_STATUS: Record<DocumentStatus, { label: string; tone: Tone }> = {
   uploaded: { label: "取込済", tone: "neutral" },
   extracted: { label: "読取完了 (確認待ち)", tone: "warn" },
+  failed: { label: "読取失敗 (手入力)", tone: "critical" },
   confirmed: { label: "登録済", tone: "good" },
   discarded: { label: "破棄", tone: "neutral" },
 };

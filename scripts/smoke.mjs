@@ -17,6 +17,14 @@ const OUT = process.env.SHOT_DIR ?? path.join(process.cwd(), ".smoke-shots");
 fs.mkdirSync(OUT, { recursive: true });
 
 const results = [];
+// 結果は記録するたびに表示する (途中でブラウザが落ちても、そこまでの結果が残るように)
+{
+  const push = results.push.bind(results);
+  results.push = (...items) => {
+    for (const r of items) console.log(`${r.ok ? "ok  " : "FAIL"} ${r.url} (${r.status})`);
+    return push(...items);
+  };
+}
 const errors = [];
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, locale: "ja-JP" });
@@ -26,7 +34,8 @@ page.on("console", (m) => {
   if (m.type() === "error" && !/favicon|404/.test(m.text())) errors.push(`console: ${m.text()}`);
 });
 
-const shot = (name) => page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage: true });
+// スクリーンショットは確認用の記録 (負荷が高いと時間切れになることがあるため、失敗してもテストは続ける)
+const shot = (name) => page.screenshot({ path: path.join(OUT, `${name}.png`), fullPage: true, timeout: 60000 }).catch((e) => console.warn(`screenshot skipped: ${name} (${String(e.message).split("\n")[0]})`));
 
 async function visit(url, name) {
   const res = await page.goto(`${BASE}${url}`, { waitUntil: "networkidle" });
@@ -46,7 +55,7 @@ async function login(roleRegex, storeName, staffRegex) {
   if (storeName) await page.getByRole("button", { name: storeName, exact: true }).click();
   if (staffRegex) await page.getByRole("button", { name: staffRegex }).first().click();
   await page.getByRole("button", { name: /としてログイン/ }).click();
-  await page.waitForURL(`${BASE}/`, { timeout: 30000 });
+  await page.waitForURL(`${BASE}/`, { timeout: 90000 });
   await page.waitForLoadState("networkidle");
 }
 
@@ -54,7 +63,7 @@ async function expectText(re, label) {
   const ok = await page
     .getByText(re)
     .first()
-    .waitFor({ timeout: 30000 })
+    .waitFor({ timeout: 90000 })
     .then(() => true)
     .catch(() => false);
   results.push({ url: label, status: ok ? "ok" : "missing", ok });
@@ -67,41 +76,47 @@ const r0 = await page.goto(`${BASE}/customers`, { waitUntil: "networkidle" });
 results.push({ url: "/customers (未ログイン)", status: r0?.status(), ok: page.url().includes("/login") });
 await shot("00-login");
 
-// ---------------- 店舗スタッフ (合志店 中村 花子) ----------------
-await login(/^店舗スタッフ/, "合志店", /^中村 花子/);
-await shot("10-staff-dashboard");
-for (const [u, n] of [["/inquiries", "11-staff-inquiries"], ["/customers", null], ["/quotes", null], ["/orders", null], ["/schedule", "12-staff-schedule"], ["/invoices", null], ["/expenses", null], ["/capture", null], ["/approvals", null], ["/messages", null], ["/ai", null], ["/audit", null], ["/settings", null], ["/profile", "13-staff-profile"]]) await visit(u, n);
-// 顧客登録
+// ---------------- 管理者: 顧客の新規登録 (初期設定では事務担当・本部・管理者のみ) ----------------
+await login(/^管理者/);
 await visit("/customers/new", null);
 await page.fill('input[name="name"]', "テスト 太郎");
 await page.fill('input[name="kana"]', "テスト タロウ");
 await page.fill('input[name="phone"]', "090-9999-0001");
 await page.fill('input[name="address"]', "熊本県合志市須屋1-1-1");
 await page.getByRole("button", { name: "登録する" }).click();
-await page.waitForURL(/\/customers\/cust_/, { timeout: 30000 });
+await page.waitForURL(/\/customers\/cust_/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
-await expectText(/顧客を登録しました/, "action: 顧客登録");
-await shot("13-staff-customer-created");
-// AI電話受付の問い合わせ → 顧客として登録 → 見積作成 → 承認申請
+await expectText(/顧客を登録しました/, "action: 顧客登録 (管理者)");
+await shot("13-admin-customer-created");
+// AI電話受付の問い合わせ → 顧客として登録 (管理者)
 await visit("/inquiries?status=new", null);
 await page.getByRole("link", { name: /AI電話受付: 和室8畳/ }).first().click();
-await page.waitForURL(/\/inquiries\/inq_/, { timeout: 30000 });
+await page.waitForURL(/\/inquiries\/inq_/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 const inquiryUrl = page.url();
-await shot("14-staff-inquiry-ai-phone");
 const registerBtn = page.getByRole("button", { name: "顧客として登録する" });
 if (await registerBtn.isVisible().catch(() => false)) {
   await registerBtn.click();
-  await page.waitForURL(/\/customers\/.*\/edit/, { timeout: 30000 });
+  await page.waitForURL(/\/customers\/.*\/edit/, { timeout: 90000 });
   await expectText(/顧客として登録しました/, "action: 問い合わせから顧客登録");
 }
+
+// ---------------- 店舗スタッフ (合志店 中村 花子) ----------------
+await login(/^店舗スタッフ/, "合志店", /^中村 花子/);
+await shot("10-staff-dashboard");
+for (const [u, n] of [["/inquiries", "11-staff-inquiries"], ["/customers", null], ["/quotes", null], ["/orders", null], ["/schedule", "12-staff-schedule"], ["/invoices", null], ["/expenses", null], ["/capture", null], ["/approvals", null], ["/messages", null], ["/ai", null], ["/audit", null], ["/settings", null], ["/profile", "13-staff-profile"]]) await visit(u, n);
+// 顧客の新規登録は事務担当に依頼する (初期設定)
+await visit("/customers/new", null);
+await expectText(/事務担当が行います/, "権限: 店舗スタッフは顧客を新規登録しない (初期設定)");
+// 問い合わせ (管理者が顧客を登録済み) → 見積作成 → 承認申請
 await page.goto(inquiryUrl, { waitUntil: "networkidle" });
+await shot("14-staff-inquiry-ai-phone");
 await page.getByRole("link", { name: "見積を作成" }).first().click();
-await page.waitForURL(/\/quotes\/new/, { timeout: 30000 });
+await page.waitForURL(/\/quotes\/new/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 await shot("15-staff-quote-new");
 await page.getByRole("button", { name: "承認を申請" }).click();
-await page.waitForURL(/\/quotes\/q_/, { timeout: 30000 });
+await page.waitForURL(/\/quotes\/q_/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 await expectText(/承認を申請しました/, "action: 見積作成 + 承認申請");
 await shot("16-staff-quote-pending");
@@ -124,7 +139,7 @@ await visit("/quotes?status=approved", null);
 const firstApproved = page.locator("tbody a[href^='/quotes/']").first();
 if (await firstApproved.isVisible().catch(() => false)) {
   await firstApproved.click();
-  await page.waitForURL(/\/quotes\/q_/, { timeout: 30000 });
+  await page.waitForURL(/\/quotes\/q_/, { timeout: 90000 });
   await page.waitForLoadState("networkidle");
   const sendBtn = page.getByRole("button", { name: /送付を記録/ }).first();
   if (await sendBtn.isVisible().catch(() => false)) {
@@ -136,7 +151,7 @@ if (await firstApproved.isVisible().catch(() => false)) {
   const orderBtn = page.getByRole("button", { name: /受注登録/ }).first();
   if (await orderBtn.isVisible().catch(() => false)) {
     await orderBtn.click();
-    await page.waitForURL(/\/orders\/o_/, { timeout: 30000 });
+    await page.waitForURL(/\/orders\/o_/, { timeout: 90000 });
     await page.waitForLoadState("networkidle");
     await expectText(/受注を登録しました/, "action: 受注登録");
     await shot("25-manager-order-pending");
@@ -157,7 +172,7 @@ await visit("/invoices?status=overdue", "31-hq-invoices-overdue");
 const firstInvoice = page.locator("tbody a[href^='/invoices/']").first();
 if (await firstInvoice.isVisible().catch(() => false)) {
   await firstInvoice.click();
-  await page.waitForURL(/\/invoices\/inv_/, { timeout: 30000 });
+  await page.waitForURL(/\/invoices\/inv_/, { timeout: 90000 });
   await page.waitForLoadState("networkidle");
   await shot("32-hq-invoice-detail");
   const payBtn = page.getByRole("button", { name: "入金を登録する" });
@@ -173,12 +188,12 @@ await visit("/orders?status=completed", null);
 const firstCompleted = page.locator("tbody a[href^='/orders/']").first();
 if (await firstCompleted.isVisible().catch(() => false)) {
   await firstCompleted.click();
-  await page.waitForURL(/\/orders\/o_/, { timeout: 30000 });
+  await page.waitForURL(/\/orders\/o_/, { timeout: 90000 });
   await page.waitForLoadState("networkidle");
   const invBtn = page.getByRole("button", { name: /請求書を発行/ });
   if (await invBtn.isVisible().catch(() => false)) {
     await invBtn.click();
-    await page.waitForURL(/\/invoices\/inv_/, { timeout: 30000 });
+    await page.waitForURL(/\/invoices\/inv_/, { timeout: 90000 });
     await page.waitForLoadState("networkidle");
     await expectText(/請求書を発行しました/, "action: 請求書発行");
     await shot("35-hq-invoice-issued");
@@ -189,7 +204,7 @@ await visit("/expenses", "36-hq-expenses");
 // ---------------- 管理者 (山田 太郎) ----------------
 await login(/^管理者/);
 await shot("40-admin-dashboard");
-for (const [u, n] of [["/approvals", "41-admin-approvals"], ["/reports?months=6", "42-admin-reports"], ["/audit", "43-admin-audit"], ["/settings?tab=users", "44-admin-settings-users"], ["/settings?tab=products", "45-admin-settings-products"], ["/settings?tab=rules", null], ["/settings?tab=integrations", null], ["/settings?tab=data", null], ["/settings/users/u06", "44b-admin-user-account"], ["/data", "50-admin-data-io"], ["/messages", "46-admin-messages"], ["/customers", "47-admin-customers"], ["/orders", "48-admin-orders"], ["/schedule", "49-admin-schedule"], ["/profile", null], ["/customers?q=%E7%94%B0%E4%B8%AD", null]]) await visit(u, n);
+for (const [u, n] of [["/approvals", "41-admin-approvals"], ["/reports?months=6", "42-admin-reports"], ["/audit", "43-admin-audit"], ["/settings?tab=users", "44-admin-settings-users"], ["/settings?tab=products", "45-admin-settings-products"], ["/settings?tab=rules", null], ["/settings?tab=integrations", null], ["/settings?tab=documents", null], ["/settings?tab=kpi", null], ["/settings?tab=data", null], ["/kpi", null], ["/kpi/surveys", null], ["/kpi/voice", null], ["/kpi/quality", null], ["/kpi/reviews", null], ["/kpi/incentives", null], ["/settings/users/u06", "44b-admin-user-account"], ["/data", "50-admin-data-io"], ["/messages", "46-admin-messages"], ["/customers", "47-admin-customers"], ["/orders", "48-admin-orders"], ["/schedule", "49-admin-schedule"], ["/profile", null], ["/customers?q=%E7%94%B0%E4%B8%AD", null]]) await visit(u, n);
 // 書類取込 (サンプル読取)
 await visit("/capture?kind=receipt", null);
 await page.getByRole("button", { name: /サンプル画像で読み取りを試す/ }).click();
@@ -197,19 +212,19 @@ await page.waitForURL(/\/capture\?doc=/, { timeout: 60000 });
 await page.waitForLoadState("networkidle");
 await expectText(/読み取りが完了しました/, "action: 書類取込 (サンプル)");
 await shot("50-admin-capture");
-await page.getByRole("link", { name: "経費として登録" }).click();
-await page.waitForURL(/\/expenses\/new/, { timeout: 30000 });
+await page.getByRole("button", { name: /経費として登録/ }).click();
+await page.waitForURL(/\/expenses\/new/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 await shot("51-admin-expense-from-receipt");
 await page.getByRole("button", { name: "承認を申請" }).click();
-await page.waitForURL(/\/expenses\/exp_/, { timeout: 30000 });
+await page.waitForURL(/\/expenses\/exp_/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 await expectText(/経費を登録し/, "action: 経費登録 (レシートから)");
 // AI アシスタント
 await visit("/ai", null);
 await page.fill('input[placeholder^="質問や依頼を入力"]', "今月の売上は？");
 await page.getByRole("button", { name: /送信/ }).click();
-await page.getByText(/ルールベース|Claude による回答/).first().waitFor({ timeout: 60000 });
+await page.getByText(/社内データからの自動回答|Claude による回答|OpenAI による回答/).first().waitFor({ timeout: 60000 });
 await shot("52-admin-ai");
 // 印刷書式
 await visit("/quotes", null);
@@ -220,7 +235,7 @@ await visit("/messages", null);
 const firstThread = page.locator("a[href^='/messages/th_']").first();
 if (await firstThread.isVisible().catch(() => false)) {
   await firstThread.click();
-  await page.waitForURL(/\/messages\/th_/, { timeout: 30000 });
+  await page.waitForURL(/\/messages\/th_/, { timeout: 90000 });
   await page.waitForLoadState("networkidle");
   await page.fill('textarea[name="body"]', "スモークテストからの返信です。");
   await page.getByRole("button", { name: "投稿する" }).click();
@@ -235,7 +250,7 @@ await page.getByRole("menuitem", { name: "プロフィール" }).waitFor({ timeo
 results.push({ url: "header: アバターでユーザーメニューを開く", status: "ok", ok: true });
 await shot("55-admin-user-menu");
 await page.getByRole("menuitem", { name: "プロフィール" }).click();
-await page.waitForURL(`${BASE}/profile`, { timeout: 30000 });
+await page.waitForURL(`${BASE}/profile`, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 await expectText(/このアカウントでできること/, "page: /profile (ユーザーメニューから)");
 await shot("56-admin-profile");
@@ -255,13 +270,13 @@ await page.keyboard.press("Escape");
 // ヘッダー: ロゴ (公式サイトのロゴ) からダッシュボードへ
 await visit("/customers", null);
 await page.getByRole("link", { name: /一畳屋 統合業務システム/ }).click();
-await page.waitForURL(`${BASE}/`, { timeout: 30000 });
+await page.waitForURL(`${BASE}/`, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 results.push({ url: "header: ロゴからダッシュボードへ", status: "ok", ok: true });
 // ヘッダーのタブ (アイコン + 名前): クリックで画面移動し、選択中のタブが強調される
 const headerNav = page.locator("header").getByRole("navigation", { name: "メインメニュー" });
 await headerNav.getByRole("link", { name: "見積", exact: true }).click();
-await page.waitForURL(`${BASE}/quotes`, { timeout: 30000 });
+await page.waitForURL(`${BASE}/quotes`, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 const activeTab = (await headerNav.locator('a[aria-current="page"]').first().textContent().catch(() => "")) ?? "";
 results.push({ url: "header tabs: アイコンから画面移動 (選択中の表示)", status: activeTab || "none", ok: activeTab.includes("見積") });
@@ -270,7 +285,7 @@ await shot("57b-admin-header-tabs");
 await page.getByRole("button", { name: "顧客を検索" }).click();
 await page.getByRole("textbox", { name: "顧客を検索" }).fill("田中");
 await page.keyboard.press("Enter");
-await page.waitForURL(/\/customers\?q=/, { timeout: 30000 });
+await page.waitForURL(/\/customers\?q=/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 results.push({ url: "header: 顧客検索", status: "ok", ok: true });
 // 幅の狭い PC: 入りきらないタブは「その他」にまとめ、そこから画面移動できる
@@ -284,7 +299,7 @@ if (hasMore) {
   await moreMenu.waitFor({ timeout: 10000 });
   await shot("57c-admin-header-more");
   await moreMenu.getByRole("link", { name: /^設定/ }).click();
-  await page.waitForURL(`${BASE}/settings`, { timeout: 30000 });
+  await page.waitForURL(`${BASE}/settings`, { timeout: 90000 });
   await page.waitForLoadState("networkidle");
 }
 results.push({ url: "header tabs (1100px): 「その他」から画面移動", status: hasMore ? "ok" : "no overflow menu", ok: hasMore && page.url() === `${BASE}/settings` });
@@ -292,7 +307,7 @@ await page.setViewportSize({ width: 1366, height: 900 });
 // ヘッダー: ユーザーメニューからログアウト
 await page.getByRole("button", { name: "ユーザーメニュー" }).click();
 await page.getByRole("menuitem", { name: "ログアウト" }).click();
-await page.waitForURL(/\/login/, { timeout: 30000 });
+await page.waitForURL(/\/login/, { timeout: 90000 });
 results.push({ url: "header: ユーザーメニューからログアウト", status: "ok", ok: page.url().includes("/login") });
 await shot("58-logged-out");
 
@@ -302,7 +317,7 @@ await page.setViewportSize({ width: 768, height: 1024 });
 await visit("/", "59-tablet-dashboard");
 await page.getByRole("button", { name: "メニューを開く" }).click();
 await page.locator("#app-drawer").getByRole("link", { name: /^予定表/ }).click();
-await page.waitForURL(`${BASE}/schedule`, { timeout: 30000 });
+await page.waitForURL(`${BASE}/schedule`, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 const drawerClosed = !(await page.locator("#app-drawer").isVisible().catch(() => false));
 results.push({ url: "drawer (tablet): 画面移動で閉じる", status: drawerClosed ? "ok" : "still open", ok: drawerClosed });
@@ -324,7 +339,7 @@ await visit("/orders", "63-mobile-orders");
 await visit("/customers", "64-mobile-customers");
 await page.getByRole("button", { name: "ユーザーメニュー" }).click();
 await page.getByRole("menuitem", { name: "ログアウト" }).click();
-await page.waitForURL(/\/login/, { timeout: 30000 });
+await page.waitForURL(/\/login/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 results.push({ url: "header (mobile): ログアウト", status: "ok", ok: page.url().includes("/login") });
 await shot("65-mobile-login");

@@ -152,7 +152,15 @@ create table if not exists quotes (
   order_id text,
   pending_change jsonb,
   created_at timestamptz not null,
-  updated_at timestamptz not null
+  updated_at timestamptz not null,
+  work_details text,
+  revisions jsonb,
+  tax_included boolean,
+  site_info jsonb,
+  paper_no text,
+  handed_over boolean,
+  spec_status text,
+  estimator_id text
 );
 comment on table quotes is '見積';
 create index if not exists quotes_store_id_idx on quotes (store_id);
@@ -189,7 +197,16 @@ create table if not exists orders (
   tatami_cost numeric,
   fusuma_paper text,
   source text,
-  source_ref text
+  source_ref text,
+  work_details text,
+  site_info jsonb,
+  spec_status text,
+  spec_note text,
+  schedule_status text,
+  billing text,
+  planned_payment text,
+  closed_at timestamptz,
+  closed_by text
 );
 comment on table orders is '受注・施工 (売上)';
 create index if not exists orders_store_id_idx on orders (store_id);
@@ -215,7 +232,11 @@ create table if not exists invoices (
   sent_via text,
   created_by text not null,
   created_at timestamptz not null,
-  updated_at timestamptz not null
+  updated_at timestamptz not null,
+  title text,
+  items jsonb,
+  tax_included boolean,
+  notes text
 );
 comment on table invoices is '請求書';
 create index if not exists invoices_store_id_idx on invoices (store_id);
@@ -230,6 +251,7 @@ create table if not exists payments (
   amount numeric not null,
   method text not null,
   memo text,
+  settled_on date,
   recorded_by text not null,
   created_at timestamptz not null
 );
@@ -464,11 +486,74 @@ create table if not exists survey_responses (
   priorities text,
   media text,
   would_use_again text,
-  source_ref text
+  source_ref text,
+  answered_on date,
+  clerk_user_id text,
+  delivery_user_ids jsonb,
+  priority_list jsonb,
+  media_list jsonb,
+  comment text,
+  comment_tags jsonb,
+  comment_tone text,
+  document_id text,
+  source text,
+  created_by text,
+  created_at timestamptz,
+  updated_at timestamptz
 );
 comment on table survey_responses is 'お客様アンケート';
 create index if not exists survey_responses_store_id_idx on survey_responses (store_id);
 create index if not exists survey_responses_load_order_idx on survey_responses (received_at, id);
+
+-- クレーム・手直し
+create table if not exists quality_issues (
+  id text primary key,
+  number text not null,
+  order_id text not null references orders(id) on delete cascade,
+  customer_id text,
+  store_id text not null references stores(id),
+  kind text not null,
+  points numeric not null,
+  occurred_on date not null,
+  responsible_user_ids jsonb not null default '[]'::jsonb,
+  description text not null,
+  cause text,
+  countermeasure text,
+  status text not null,
+  resolved_on date,
+  attribution text,
+  category text,
+  counted boolean,
+  reported_by text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+comment on table quality_issues is 'クレーム・手直し';
+create index if not exists quality_issues_store_id_idx on quality_issues (store_id);
+create index if not exists quality_issues_order_id_idx on quality_issues (order_id);
+create index if not exists quality_issues_load_order_idx on quality_issues (occurred_on, id);
+
+-- Google 口コミ
+create table if not exists google_reviews (
+  id text primary key,
+  posted_on date not null,
+  store_id text not null references stores(id),
+  user_id text not null,
+  reviewer_name text,
+  rating numeric,
+  comment text,
+  has_photo boolean,
+  points numeric not null,
+  order_id text references orders(id) on delete set null,
+  customer_id text,
+  note text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+comment on table google_reviews is 'Google 口コミ';
+create index if not exists google_reviews_store_id_idx on google_reviews (store_id);
+create index if not exists google_reviews_load_order_idx on google_reviews (posted_on, id);
 
 -- 資料台帳 (Google ドライブの共有資料)
 create table if not exists source_files (
@@ -504,6 +589,15 @@ create table if not exists photo_albums (
 );
 comment on table photo_albums is '現場写真台帳';
 create index if not exists photo_albums_load_order_idx on photo_albums (date, id);
+
+-- 設定 (帳票の会社情報・登録番号・振込先など)
+create table if not exists settings (
+  id text primary key,
+  value jsonb not null,
+  updated_by text,
+  updated_at timestamptz not null
+);
+comment on table settings is '設定 (帳票の会社情報・登録番号・振込先など)';
 
 -- 添付ファイル (資料・写真。本体は Storage の attachments バケット)
 create table if not exists attachments (
@@ -625,6 +719,14 @@ alter table quotes add column if not exists order_id text;
 alter table quotes add column if not exists pending_change jsonb;
 alter table quotes add column if not exists created_at timestamptz not null;
 alter table quotes add column if not exists updated_at timestamptz not null;
+alter table quotes add column if not exists work_details text;
+alter table quotes add column if not exists revisions jsonb;
+alter table quotes add column if not exists tax_included boolean;
+alter table quotes add column if not exists site_info jsonb;
+alter table quotes add column if not exists paper_no text;
+alter table quotes add column if not exists handed_over boolean;
+alter table quotes add column if not exists spec_status text;
+alter table quotes add column if not exists estimator_id text;
 alter table orders add column if not exists number text not null unique;
 alter table orders add column if not exists quote_id text references quotes(id) on delete set null;
 alter table orders add column if not exists customer_id text not null references customers(id);
@@ -652,6 +754,15 @@ alter table orders add column if not exists tatami_cost numeric;
 alter table orders add column if not exists fusuma_paper text;
 alter table orders add column if not exists source text;
 alter table orders add column if not exists source_ref text;
+alter table orders add column if not exists work_details text;
+alter table orders add column if not exists site_info jsonb;
+alter table orders add column if not exists spec_status text;
+alter table orders add column if not exists spec_note text;
+alter table orders add column if not exists schedule_status text;
+alter table orders add column if not exists billing text;
+alter table orders add column if not exists planned_payment text;
+alter table orders add column if not exists closed_at timestamptz;
+alter table orders add column if not exists closed_by text;
 alter table invoices add column if not exists number text not null unique;
 alter table invoices add column if not exists order_id text not null references orders(id);
 alter table invoices add column if not exists customer_id text not null references customers(id);
@@ -667,11 +778,16 @@ alter table invoices add column if not exists sent_via text;
 alter table invoices add column if not exists created_by text not null;
 alter table invoices add column if not exists created_at timestamptz not null;
 alter table invoices add column if not exists updated_at timestamptz not null;
+alter table invoices add column if not exists title text;
+alter table invoices add column if not exists items jsonb;
+alter table invoices add column if not exists tax_included boolean;
+alter table invoices add column if not exists notes text;
 alter table payments add column if not exists invoice_id text not null references invoices(id);
 alter table payments add column if not exists date date not null;
 alter table payments add column if not exists amount numeric not null;
 alter table payments add column if not exists method text not null;
 alter table payments add column if not exists memo text;
+alter table payments add column if not exists settled_on date;
 alter table payments add column if not exists recorded_by text not null;
 alter table payments add column if not exists created_at timestamptz not null;
 alter table suppliers add column if not exists name text not null;
@@ -812,6 +928,52 @@ alter table survey_responses add column if not exists priorities text;
 alter table survey_responses add column if not exists media text;
 alter table survey_responses add column if not exists would_use_again text;
 alter table survey_responses add column if not exists source_ref text;
+alter table survey_responses add column if not exists answered_on date;
+alter table survey_responses add column if not exists clerk_user_id text;
+alter table survey_responses add column if not exists delivery_user_ids jsonb;
+alter table survey_responses add column if not exists priority_list jsonb;
+alter table survey_responses add column if not exists media_list jsonb;
+alter table survey_responses add column if not exists comment text;
+alter table survey_responses add column if not exists comment_tags jsonb;
+alter table survey_responses add column if not exists comment_tone text;
+alter table survey_responses add column if not exists document_id text;
+alter table survey_responses add column if not exists source text;
+alter table survey_responses add column if not exists created_by text;
+alter table survey_responses add column if not exists created_at timestamptz;
+alter table survey_responses add column if not exists updated_at timestamptz;
+alter table quality_issues add column if not exists number text not null;
+alter table quality_issues add column if not exists order_id text not null references orders(id) on delete cascade;
+alter table quality_issues add column if not exists customer_id text;
+alter table quality_issues add column if not exists store_id text not null references stores(id);
+alter table quality_issues add column if not exists kind text not null;
+alter table quality_issues add column if not exists points numeric not null;
+alter table quality_issues add column if not exists occurred_on date not null;
+alter table quality_issues add column if not exists responsible_user_ids jsonb not null default '[]'::jsonb;
+alter table quality_issues add column if not exists description text not null;
+alter table quality_issues add column if not exists cause text;
+alter table quality_issues add column if not exists countermeasure text;
+alter table quality_issues add column if not exists status text not null;
+alter table quality_issues add column if not exists resolved_on date;
+alter table quality_issues add column if not exists attribution text;
+alter table quality_issues add column if not exists category text;
+alter table quality_issues add column if not exists counted boolean;
+alter table quality_issues add column if not exists reported_by text not null;
+alter table quality_issues add column if not exists created_at timestamptz not null;
+alter table quality_issues add column if not exists updated_at timestamptz not null;
+alter table google_reviews add column if not exists posted_on date not null;
+alter table google_reviews add column if not exists store_id text not null references stores(id);
+alter table google_reviews add column if not exists user_id text not null;
+alter table google_reviews add column if not exists reviewer_name text;
+alter table google_reviews add column if not exists rating numeric;
+alter table google_reviews add column if not exists comment text;
+alter table google_reviews add column if not exists has_photo boolean;
+alter table google_reviews add column if not exists points numeric not null;
+alter table google_reviews add column if not exists order_id text references orders(id) on delete set null;
+alter table google_reviews add column if not exists customer_id text;
+alter table google_reviews add column if not exists note text;
+alter table google_reviews add column if not exists created_by text not null;
+alter table google_reviews add column if not exists created_at timestamptz not null;
+alter table google_reviews add column if not exists updated_at timestamptz not null;
 alter table source_files add column if not exists folder text not null;
 alter table source_files add column if not exists folder_name text not null;
 alter table source_files add column if not exists path text not null;
@@ -832,6 +994,9 @@ alter table photo_albums add column if not exists store_id text not null referen
 alter table photo_albums add column if not exists photo_count integer not null default 0;
 alter table photo_albums add column if not exists drive_url text;
 alter table photo_albums add column if not exists sample_files text[] not null default '{}';
+alter table settings add column if not exists value jsonb not null;
+alter table settings add column if not exists updated_by text;
+alter table settings add column if not exists updated_at timestamptz not null;
 alter table attachments add column if not exists parent_type text not null check (parent_type in ('customer','inquiry','quote','order','expense','purchase','document'));
 alter table attachments add column if not exists parent_id text not null;
 alter table attachments add column if not exists customer_id text references customers(id) on delete set null;
@@ -918,12 +1083,21 @@ grant select, insert, update, delete on table company_holidays to service_role;
 alter table survey_responses enable row level security;
 revoke all on table survey_responses from anon, authenticated;
 grant select, insert, update, delete on table survey_responses to service_role;
+alter table quality_issues enable row level security;
+revoke all on table quality_issues from anon, authenticated;
+grant select, insert, update, delete on table quality_issues to service_role;
+alter table google_reviews enable row level security;
+revoke all on table google_reviews from anon, authenticated;
+grant select, insert, update, delete on table google_reviews to service_role;
 alter table source_files enable row level security;
 revoke all on table source_files from anon, authenticated;
 grant select, insert, update, delete on table source_files to service_role;
 alter table photo_albums enable row level security;
 revoke all on table photo_albums from anon, authenticated;
 grant select, insert, update, delete on table photo_albums to service_role;
+alter table settings enable row level security;
+revoke all on table settings from anon, authenticated;
+grant select, insert, update, delete on table settings to service_role;
 alter table attachments enable row level security;
 revoke all on table attachments from anon, authenticated;
 grant select, insert, update, delete on table attachments to service_role;

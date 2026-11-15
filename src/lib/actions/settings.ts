@@ -2,7 +2,11 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { addAudit, diffChanges, mutate, newId } from "@/lib/db/store";
+import { BACKEND, addAudit, diffChanges, mutate, newId } from "@/lib/db/store";
+import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
+import { DOCUMENT_SETTINGS_ID, documentSettings, validRegistrationNumber } from "@/lib/doc-settings";
+import { testConnection } from "@/lib/ai/provider";
+import { CUSTOMER_CREATOR_LABEL, OPS_SETTINGS_ID } from "@/lib/ops-settings";
 import type { Role, ServiceCategory, StoreId } from "@/lib/db/types";
 import { canManageSettings } from "@/lib/auth/permissions";
 import { CATEGORY_LABEL, ROLE_LABEL } from "@/lib/constants";
@@ -174,4 +178,81 @@ export async function updateStore(id: StoreId, formData: FormData) {
   });
   revalidatePath("/settings");
   redirect(withMsg(back, "店舗情報を更新しました。"));
+}
+
+/* ------------------------------------------------------------------ */
+/* 帳票 (見積書・請求書・領収書) の会社情報                               */
+/* ------------------------------------------------------------------ */
+
+export async function updateDocumentSettings(formData: FormData) {
+  const back = "/settings?tab=documents";
+  const admin = await requireAdmin(back);
+  if (BACKEND === "supabase" && missingTables().includes("settings") && (await recheckMissingTables()).includes("settings")) {
+    fail(back, "データベースに設定の表 (settings) がまだありません。開発担当が npm run db:migrate を実行すると保存できるようになります。");
+  }
+  const registrationNumber = str(formData, "registrationNumber").normalize("NFKC").replace(/[\s-]/g, "").toUpperCase();
+  if (!validRegistrationNumber(registrationNumber)) fail(back, "登録番号は T と 13 桁の数字で入力してください (例: T1234567890123)。");
+  const banks = [0, 1, 2]
+    .map((i) => ({ bank: str(formData, `bank${i}`), branch: str(formData, `branch${i}`), type: str(formData, `type${i}`) || "普通", number: str(formData, `number${i}`).normalize("NFKC"), holder: str(formData, `holder${i}`) }))
+    .filter((b) => b.bank || b.number);
+  if (banks.some((b) => !b.bank || !b.number || !b.holder)) fail(back, "振込先は銀行名・口座番号・口座名義をすべて入力してください。");
+  const value = {
+    companyName: str(formData, "companyName"),
+    postalCode: str(formData, "postalCode"),
+    address: str(formData, "address"),
+    tel: str(formData, "tel"),
+    fax: str(formData, "fax"),
+    email: str(formData, "email"),
+    website: str(formData, "website"),
+    registrationNumber,
+    showStore: formData.get("showStore") === "on",
+    bankAccounts: banks,
+    quoteValidDays: numField(formData, "quoteValidDays") || 30,
+    paymentDays: numField(formData, "paymentDays"),
+    quoteNote: str(formData, "quoteNote"),
+    invoiceNote: str(formData, "invoiceNote"),
+  };
+  await mutate((db) => {
+    const now = new Date().toISOString();
+    const row = db.settings.find((s) => s.id === DOCUMENT_SETTINGS_ID);
+    const before = documentSettings(db);
+    if (row) Object.assign(row, { value, updatedBy: admin.id, updatedAt: now });
+    else db.settings.push({ id: DOCUMENT_SETTINGS_ID, value, updatedBy: admin.id, updatedAt: now });
+    const after = documentSettings(db);
+    const changed = (Object.keys(after) as (keyof typeof after)[]).filter((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]));
+    addAudit(db, { userId: admin.id, action: "update", entity: "settings", entityId: DOCUMENT_SETTINGS_ID, entityLabel: "帳票の会社情報", summary: `帳票の会社情報を更新${changed.length ? ` (${changed.length} 項目)` : ""}` });
+  });
+  revalidatePath("/settings");
+  redirect(withMsg(back, "帳票の会社情報を保存しました。見積書・請求書の PDF に反映されます。"));
+}
+
+/** AI の接続を確認する (設定 → 外部連携・AI)。結果は画面に表示し、変更履歴にも残す */
+export async function checkAiConnection(): Promise<{ ok: boolean; message: string }> {
+  const user = await requireActionUser();
+  if (!canManageSettings(user)) return { ok: false, message: "この操作は管理者のみ実行できます。" };
+  const r = await testConnection();
+  await mutate((db) => {
+    addAudit(db, { userId: user.id, action: "update", entity: "settings", entityId: "ai", entityLabel: "AI 接続", summary: r.ok ? `AI の接続を確認 (成功: ${r.provider} / ${r.model} / ${(r.ms / 1000).toFixed(1)} 秒)` : `AI の接続を確認 (失敗: ${r.message})` });
+  }).catch(() => undefined);
+  if (r.ok) return { ok: true, message: `接続できました (${r.provider === "claude" ? "Claude" : "OpenAI"} / ${r.model} / ${(r.ms / 1000).toFixed(1)} 秒)。応答: ${r.reply}` };
+  return { ok: false, message: `${r.message}${r.detail ? ` (詳細: ${r.detail})` : ""}` };
+}
+
+/** 運用の設定 (顧客の新規登録ができる人など) */
+export async function updateOpsSettings(formData: FormData) {
+  const back = "/settings?tab=ops";
+  const admin = await requireAdmin(back);
+  if (BACKEND === "supabase" && missingTables().includes("settings") && (await recheckMissingTables()).includes("settings")) fail(back, "データベースに設定の表がまだありません。");
+  const mode = str(formData, "customerCreators");
+  const customerCreators = mode === "office_and_managers" || mode === "all" ? mode : "office";
+  await mutate((db) => {
+    const now = new Date().toISOString();
+    const row = db.settings.find((s) => s.id === OPS_SETTINGS_ID);
+    const value = { ...(row?.value ?? {}), customerCreators };
+    if (row) Object.assign(row, { value, updatedBy: admin.id, updatedAt: now });
+    else db.settings.push({ id: OPS_SETTINGS_ID, value, updatedBy: admin.id, updatedAt: now });
+    addAudit(db, { userId: admin.id, action: "update", entity: "settings", entityId: OPS_SETTINGS_ID, entityLabel: "運用の設定", summary: `顧客の新規登録ができる人: ${CUSTOMER_CREATOR_LABEL[customerCreators]}` });
+  });
+  revalidatePath("/settings");
+  redirect(withMsg(back, "運用の設定を保存しました。"));
 }

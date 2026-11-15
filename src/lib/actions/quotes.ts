@@ -9,6 +9,11 @@ import { APPROVAL_RULES, CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { syncOrderEvent } from "@/lib/db/schedule";
 import { approverLabel, approverRole } from "@/lib/auth/permissions";
 import { relinkDocumentAttachments } from "@/lib/attachments";
+import { documentSettings } from "@/lib/doc-settings";
+import { quoteTotals } from "@/lib/quote-calc";
+import { siteInfoFromForm } from "@/lib/site-info";
+import { plannedFromSiteInfo } from "@/lib/case-status";
+import { syncHandoverMemo } from "@/lib/db/schedule";
 import { assertStore, choice, fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
 function parseItems(formData: FormData, back: string): QuoteItem[] {
@@ -26,7 +31,8 @@ function parseItems(formData: FormData, back: string): QuoteItem[] {
     const name = String(r.name ?? "").trim();
     if (!name) continue;
     if (!Number.isFinite(qty) || qty <= 0) fail(back, `「${name}」の数量が不正です。`);
-    if (!Number.isFinite(unitPrice) || unitPrice < 0) fail(back, `「${name}」の単価が不正です。`);
+    // 値引きの行は単価がマイナス
+    if (!Number.isFinite(unitPrice)) fail(back, `「${name}」の単価が不正です。`);
     items.push({
       id: newId("qi"),
       productId: r.productId ? String(r.productId) : undefined,
@@ -42,11 +48,8 @@ function parseItems(formData: FormData, back: string): QuoteItem[] {
   return items;
 }
 
-function calc(items: QuoteItem[], discount: number) {
-  const subtotal = items.reduce((s, i) => s + i.amount, 0);
-  const d = Math.min(Math.max(0, discount), subtotal);
-  const tax = calcTax(subtotal - d);
-  return { subtotal, discount: d, tax, total: subtotal - d + tax };
+function calc(items: QuoteItem[], discount: number, taxIncluded = false) {
+  return quoteTotals(items, discount, taxIncluded);
 }
 
 /** 見積から作った受注に、有効な (無効化していない) 請求書があるか。あれば金額は変えられない */
@@ -91,6 +94,9 @@ export async function createQuote(formData: FormData) {
   const id = newId("q");
   let role: string | null = null;
   await mutate((db) => {
+    const documentId = str(formData, "documentId");
+    const doc = documentId ? db.documents.find((d) => d.id === documentId) : undefined;
+    if (doc && (doc.linkedId || doc.status === "discarded")) fail("/capture?doc=" + doc.id, "この取込書類はすでに登録済み (または破棄済み) です。");
     const customer = db.customers.find((c) => c.id === customerId);
     if (!customer) fail(back, "お客様が見つかりません。");
     // 店舗のロールは自店舗のお客様だけ (一覧で見えないお客様の見積を作らない)
@@ -99,7 +105,12 @@ export async function createQuote(formData: FormData) {
     assertStore(user, storeId, back);
     const today = toDateKey(new Date());
     const now = nowIso();
-    const t = calc(items, Number(str(formData, "discount")) || 0);
+    const taxIncluded = str(formData, "taxIncluded") === "1";
+    const t = calc(items, Number(str(formData, "discount")) || 0, taxIncluded);
+    if (t.total <= 0) fail(back, "合計が 0 円以下です。明細を確認してください。");
+    const estimator = str(formData, "estimatorId");
+    const quoteDate = str(formData, "quoteDate");
+    const handedOver = formData.get("handedOver") === "on";
     const q: Quote = {
       id,
       number: nextNumber(db, "Q", db.quotes, today),
@@ -112,11 +123,18 @@ export async function createQuote(formData: FormData) {
       items,
       ...t,
       status: "draft",
-      validUntil: str(formData, "validUntil") || addDays(today, 30),
+      validUntil: str(formData, "validUntil") || addDays(today, documentSettings(db).quoteValidDays),
       createdBy: user.id,
       notes: str(formData, "notes") || undefined,
+      workDetails: str(formData, "workDetails") || undefined,
       source: choice(formData, "source", ["manual", "ocr", "ai_phone"] as const, "manual"),
       documentId: str(formData, "documentId") || undefined,
+      taxIncluded: taxIncluded || undefined,
+      siteInfo: siteInfoFromForm(formData),
+      paperNo: str(formData, "paperNo") || undefined,
+      estimatorId: estimator && db.users.some((u) => u.id === estimator) ? estimator : user.id,
+      handedOver: handedOver || undefined,
+      issuedAt: handedOver && /^\d{4}-\d{2}-\d{2}$/.test(quoteDate) ? quoteDate : undefined,
       createdAt: now,
       updatedAt: now,
     };
@@ -128,7 +146,6 @@ export async function createQuote(formData: FormData) {
       if (inq.status === "new" || inq.status === "in_progress") inq.status = "quoted";
       inq.updatedAt = now;
     }
-    const doc = db.documents.find((d) => d.id === q.documentId);
     if (doc) {
       doc.status = "confirmed";
       doc.linkedType = "quote";
@@ -151,13 +168,19 @@ export async function updateQuote(id: string, formData: FormData) {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
     assertStore(user, q.storeId, back);
-    const t = calc(items, Number(str(formData, "discount")) || 0);
+    const taxIncluded = str(formData, "taxIncluded") === "1";
+    const t = calc(items, Number(str(formData, "discount")) || 0, taxIncluded);
+    if (t.total <= 0) fail(back, "合計が 0 円以下です。明細を確認してください。");
     const now = nowIso();
     if (q.status === "draft") {
+      q.taxIncluded = taxIncluded || undefined;
+      const est = str(formData, "estimatorId");
+      if (est && db.users.some((u) => u.id === est)) q.estimatorId = est;
       q.title = str(formData, "title") || q.title;
       q.category = choice(formData, "category", CATEGORY_LABEL, q.category);
       q.validUntil = str(formData, "validUntil") || q.validUntil;
       q.notes = str(formData, "notes") || undefined;
+      q.workDetails = str(formData, "workDetails") || undefined;
       q.items = items;
       Object.assign(q, t);
       q.updatedAt = now;
@@ -171,24 +194,29 @@ export async function updateQuote(id: string, formData: FormData) {
       if (hasActiveInvoice(db, q.id)) fail(`/quotes/${id}`, "請求書を発行済みの案件は金額を変更できません。入金前であれば、請求書を無効化してから変更を申請してください。");
       const reason = str(formData, "reason");
       if (!reason) fail(back, "確定済みの見積を変更するには変更理由が必要です。");
-      q.pendingChange = { items, ...t, reason, requestedBy: user.id, requestedAt: now };
+      const title = str(formData, "title") || q.title;
+      const workDetails = str(formData, "workDetails");
+      const notes = str(formData, "notes");
+      const sameItems = JSON.stringify(items.map((i) => [i.name, i.spec ?? "", i.qty, i.unit, i.unitPrice])) === JSON.stringify(q.items.map((i) => [i.name, i.spec ?? "", i.qty, i.unit, i.unitPrice]));
+      if (sameItems && t.discount === q.discount && taxIncluded === Boolean(q.taxIncluded) && title === q.title && workDetails === (q.workDetails ?? "") && notes === (q.notes ?? "")) fail(back, "変更された内容がありません。");
+      q.pendingChange = { items, ...t, taxIncluded, title, workDetails, notes, reason, requestedBy: user.id, requestedAt: now };
       q.updatedAt = now;
       const role = requiredRole(db, q.storeId, Math.max(t.total, q.total), user.id);
       db.approvals.push({
         id: newId("ap"),
         type: "quote_amend",
         targetId: q.id,
-        title: `${q.number} ${q.title} (金額変更)`,
+        title: `${q.number} ${q.title} (${t.total !== q.total ? "金額変更" : "内容変更"} 第${q.version + 1}版)`,
         amount: t.total,
         storeId: q.storeId,
         requestedBy: user.id,
         requiredRole: role,
         status: "pending",
-        requestComment: `変更前 ¥${q.total.toLocaleString("ja-JP")} → 変更後 ¥${t.total.toLocaleString("ja-JP")} / 理由: ${reason}`,
+        requestComment: `${t.total !== q.total ? `変更前 ¥${q.total.toLocaleString("ja-JP")} → 変更後 ¥${t.total.toLocaleString("ja-JP")}` : `金額の変更なし (¥${q.total.toLocaleString("ja-JP")})`}${title !== q.title ? ` / 件名: ${title}` : ""}${workDetails !== (q.workDetails ?? "") ? " / 施工内容を変更" : ""} / 理由: ${reason}`,
         createdAt: now,
       });
       addAudit(db, { userId: user.id, action: "submit", entity: "quote", entityId: id, entityLabel: q.number, summary: `確定見積の金額変更を申請 (${q.total.toLocaleString("ja-JP")}円 → ${t.total.toLocaleString("ja-JP")}円)`, storeId: q.storeId, changes: [{ field: "total", before: q.total, after: t.total }] });
-      message = `金額変更を申請しました。${role === "admin" ? "管理者" : "店長"}の承認後に反映されます。`;
+      message = `変更を申請しました。${role === "admin" ? "管理者" : "店長"}の承認後に第${q.version + 1}版として反映されます。`;
     } else {
       fail(`/quotes/${id}`, "この状態の見積は編集できません。");
     }
@@ -268,6 +296,9 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
       scheduledEnd: scheduledStart,
       workerIds,
       siteAddress: str(formData, "siteAddress") || customer?.address || "",
+      workDetails: q.workDetails,
+      siteInfo: q.siteInfo,
+      plannedPayment: plannedFromSiteInfo(q.siteInfo?.paymentMethod),
       progressNotes: [{ id: newId("pn"), at: now, userId: user.id, kind: "note", body: str(formData, "note") || "お客様よりご承諾をいただきました。契約承認を申請します。" }],
       createdBy: user.id,
       createdAt: now,
@@ -278,6 +309,7 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
     // 施工予定日を入れて受注登録した場合は、契約承認前でも予定表に施工予定を載せて日程を押さえる
     const created = db.orders[db.orders.length - 1];
     if (created.scheduledStart) syncOrderEvent(db, created, user.id);
+    syncHandoverMemo(db, created);
     const r = requiredRole(db, q.storeId, q.total, user.id);
     role = r;
     db.approvals.push({ id: newId("ap"), type: "order", targetId: orderId, title: `${db.orders[db.orders.length - 1].number} ${q.title}`, amount: q.total, storeId: q.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: str(formData, "note") || undefined, createdAt: now });
@@ -314,6 +346,20 @@ export async function deleteQuote(id: string) {
     assertStore(user, q.storeId, `/quotes/${id}`);
     if (q.status !== "draft") fail(`/quotes/${id}`, "下書きの見積のみ削除できます。");
     db.quotes.splice(idx, 1);
+    // 取込書類から作った見積なら、書類を確認待ちに戻し、元の画像も書類に戻す
+    const doc = q.documentId ? db.documents.find((d) => d.id === q.documentId && d.linkedType === "quote" && d.linkedId === id) : undefined;
+    if (doc) {
+      doc.status = "extracted";
+      doc.linkedType = undefined;
+      doc.linkedId = undefined;
+      for (const a of db.attachments) {
+        if (a.parentType === "quote" && a.parentId === id && a.fileName === doc.fileName.slice(0, 200)) {
+          a.parentType = "document";
+          a.parentId = doc.id;
+          a.storeId = doc.storeId;
+        }
+      }
+    }
     const inq = db.inquiries.find((i) => i.quoteId === id);
     if (inq) {
       inq.quoteId = undefined;

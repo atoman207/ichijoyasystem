@@ -5,6 +5,8 @@ import Link from "@/components/ui/Link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import {
+  Award,
+  ListChecks,
   Bell,
   CalendarDays,
   CalendarPlus,
@@ -58,7 +60,9 @@ export type NavIcon =
   | "audit"
   | "settings"
   | "materials"
-  | "dataio";
+  | "dataio"
+  | "kpi"
+  | "cases";
 
 const ICONS: Record<NavIcon, LucideIcon> = {
   dashboard: House,
@@ -79,6 +83,8 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   settings: Settings,
   materials: FolderOpen,
   dataio: FileSpreadsheet,
+  kpi: Award,
+  cases: ListChecks,
 };
 
 export interface NavItem {

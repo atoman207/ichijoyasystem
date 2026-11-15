@@ -2,15 +2,22 @@ import { requireUser } from "@/lib/auth/session";
 import { BACKEND, getDb } from "@/lib/db/store";
 import { canExportData, canManageSettings } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
-import { createProduct, createUser, resetUserPassword, toggleUserActive, updateProduct, updateStore, updateUserRole } from "@/lib/actions/settings";
+import { createProduct, createUser, resetUserPassword, toggleUserActive, updateDocumentSettings, updateOpsSettings, updateProduct, updateStore, updateUserRole } from "@/lib/actions/settings";
 import { resetSampleData } from "@/lib/actions/auth";
-import { aiEnabled } from "@/lib/ai/ocr";
+import { aiStatus } from "@/lib/ai/provider";
+import { documentSettings } from "@/lib/doc-settings";
+import { AiConnectionCheck } from "@/components/settings/AiConnectionCheck";
+import { KpiSettingsCard } from "@/components/settings/KpiSettingsCard";
+import { CUSTOMER_CREATOR_LABEL, opsSettings } from "@/lib/ops-settings";
 import { fmtDateTime, yen } from "@/lib/format";
 import { APPROVAL_RULES, CATEGORY_LABEL, CHANNEL_LABEL, ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import type { Role, ServiceCategory } from "@/lib/db/types";
-import { Badge, Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select, StoreTag } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select, StoreTag, Textarea } from "@/components/ui";
 import Link from "@/components/ui/Link";
 import { PermissionTableCard } from "@/components/settings/PermissionTableCard";
+
+/** 「接続を確認」で AI の応答を待つ (最大 50 秒) ため */
+export const maxDuration = 60;
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -19,6 +26,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const admin = canManageSettings(user);
   const tab = sp.tab ?? "users";
   const base = "/settings";
+  const ai = aiStatus();
+  const docSet = documentSettings(db);
 
   return (
     <div>
@@ -30,6 +39,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           { href: `${base}?tab=users`, label: "ユーザーと権限", count: db.users.length },
           { href: `${base}?tab=stores`, label: "店舗" },
           { href: `${base}?tab=products`, label: "商品マスタ", count: db.products.length },
+          { href: `${base}?tab=documents`, label: "帳票 (見積書・請求書)" },
+          { href: `${base}?tab=ops`, label: "運用" },
+          { href: `${base}?tab=kpi`, label: "KPI・インセンティブ" },
           { href: `${base}?tab=rules`, label: "承認ルール・業務フロー" },
           { href: `${base}?tab=integrations`, label: "外部連携・AI" },
           { href: `${base}?tab=data`, label: "データ管理" },
@@ -212,6 +224,88 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         </div>
       )}
 
+      {tab === "documents" && (
+        <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-3">
+          <Card className="@4xl:col-span-2">
+            <CardHeader title="帳票に載せる会社情報" description="見積書・請求書・領収書の PDF に印字します。空欄の項目は帳票に出しません" />
+            {!docSet.registrationNumber && <Note tone="warn">適格請求書発行事業者の登録番号が未設定です。インボイス制度の請求書・領収書には登録番号の記載が必要です。</Note>}
+            {admin ? (
+              <form action={updateDocumentSettings} className="mt-3 space-y-4">
+                <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+                  <Field label="会社名" required><Input name="companyName" defaultValue={docSet.companyName} required /></Field>
+                  <Field label="登録番号 (T + 13 桁)" hint="適格請求書発行事業者の登録番号"><Input name="registrationNumber" defaultValue={docSet.registrationNumber} placeholder="T1234567890123" /></Field>
+                  <Field label="郵便番号"><Input name="postalCode" defaultValue={docSet.postalCode} /></Field>
+                  <Field label="住所"><Input name="address" defaultValue={docSet.address} /></Field>
+                  <Field label="電話"><Input name="tel" defaultValue={docSet.tel} /></Field>
+                  <Field label="FAX"><Input name="fax" defaultValue={docSet.fax} /></Field>
+                  <Field label="メール"><Input name="email" type="email" defaultValue={docSet.email} /></Field>
+                  <Field label="Web サイト"><Input name="website" defaultValue={docSet.website} /></Field>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-ink"><input type="checkbox" name="showStore" defaultChecked={docSet.showStore} className="h-4 w-4" /> 担当店舗の住所・電話も載せる</label>
+                <div>
+                  <div className="label">振込先 (請求書に印字。3 つまで)</div>
+                  <div className="space-y-2">
+                    {[0, 1, 2].map((i) => {
+                      const b = docSet.bankAccounts[i];
+                      return (
+                        <div key={i} className="grid grid-cols-2 gap-2 @3xl:grid-cols-5">
+                          <Input name={`bank${i}`} defaultValue={b?.bank} placeholder="銀行名" aria-label={`振込先${i + 1} 銀行名`} />
+                          <Input name={`branch${i}`} defaultValue={b?.branch} placeholder="支店名" aria-label={`振込先${i + 1} 支店名`} />
+                          <Select name={`type${i}`} defaultValue={b?.type ?? "普通"} aria-label={`振込先${i + 1} 種別`}><option value="普通">普通</option><option value="当座">当座</option></Select>
+                          <Input name={`number${i}`} defaultValue={b?.number} placeholder="口座番号" inputMode="numeric" aria-label={`振込先${i + 1} 口座番号`} />
+                          <Input name={`holder${i}`} defaultValue={b?.holder} placeholder="口座名義 (カナ)" aria-label={`振込先${i + 1} 口座名義`} className="col-span-2 @3xl:col-span-1" />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+                  <Field label="見積の有効期限 (日数)"><Input name="quoteValidDays" type="number" min={1} max={365} defaultValue={docSet.quoteValidDays} /></Field>
+                  <Field label="請求書の支払期限 (発行日からの日数)"><Input name="paymentDays" type="number" min={0} max={365} defaultValue={docSet.paymentDays} /></Field>
+                  <Field label="見積書の定型の備考" className="@xl:col-span-2"><Textarea name="quoteNote" defaultValue={docSet.quoteNote} /></Field>
+                  <Field label="請求書の定型の備考" className="@xl:col-span-2"><Textarea name="invoiceNote" defaultValue={docSet.invoiceNote} /></Field>
+                </div>
+                <Button type="submit">保存</Button>
+              </form>
+            ) : (
+              <dl className="mt-3 grid grid-cols-1 gap-2 text-sm @xl:grid-cols-2">
+                <div><dt className="text-xs text-ink-3">会社名</dt><dd>{docSet.companyName}</dd></div>
+                <div><dt className="text-xs text-ink-3">登録番号</dt><dd>{docSet.registrationNumber || "未設定"}</dd></div>
+                <div><dt className="text-xs text-ink-3">住所</dt><dd>〒{docSet.postalCode} {docSet.address}</dd></div>
+                <div><dt className="text-xs text-ink-3">電話</dt><dd>{docSet.tel || "-"}</dd></div>
+                <div className="@xl:col-span-2"><dt className="text-xs text-ink-3">振込先</dt><dd>{docSet.bankAccounts.length ? docSet.bankAccounts.map((b) => `${b.bank} ${b.branch} ${b.type} ${b.number} ${b.holder}`).join(" / ") : "未設定"}</dd></div>
+              </dl>
+            )}
+          </Card>
+          <Card>
+            <CardHeader title="帳票の出力" description="各画面の「PDF」から出力します" />
+            <ul className="space-y-1.5 text-xs text-ink-2">
+              <li>・見積書: 見積の画面 (改訂版ごとに出力できます)</li>
+              <li>・請求書・領収書: 請求の画面、受注・施工の画面</li>
+              <li>・書式: A4 縦。会社名・登録番号・振込先はこの画面の設定を使います</li>
+              <li>・社内で決まった書式がある場合は、見本 (紙・PDF) をいただければ同じ配置に合わせます</li>
+            </ul>
+          </Card>
+        </div>
+      )}
+
+      {tab === "kpi" && <KpiSettingsCard db={db} admin={admin} />}
+
+      {tab === "ops" && (
+        <Card>
+          <CardHeader title="顧客の新規登録ができる人" description="重複登録を防ぐため、見積の訪問前に事務担当が顧客を登録する運用です。運用を始めてから店長にも広げられます" />
+          <form action={updateOpsSettings} className="space-y-3">
+            <fieldset disabled={!admin} className="space-y-2">
+              {(Object.keys(CUSTOMER_CREATOR_LABEL) as (keyof typeof CUSTOMER_CREATOR_LABEL)[]).map((k) => (
+                <label key={k} className="flex items-center gap-2 text-sm"><input type="radio" name="customerCreators" value={k} defaultChecked={opsSettings(db).customerCreators === k} className="h-4 w-4" /> {CUSTOMER_CREATOR_LABEL[k]}</label>
+              ))}
+            </fieldset>
+            <p className="text-[11px] text-ink-3">事務担当は 設定 → KPI・インセンティブ の「事務担当」で選んだ社員です。登録できない人には、顧客の検索 (既存のお客様の選択) と、事務担当への依頼の案内が表示されます。</p>
+            {admin && <Button type="submit" size="sm">保存</Button>}
+          </form>
+        </Card>
+      )}
+
       {tab === "rules" && (
         <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-2">
           <Card>
@@ -253,8 +347,26 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
 
       {tab === "integrations" && (
         <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-2">
+          <Card className="@2xl:col-span-2">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-ink">AI (書類の読取・アンケートはがきの読取・AI アシスタント)</div>
+                <p className="mt-1 text-xs text-ink-2">
+                  API キーを環境変数に 1 つ設定すると、書類取込の AI 読取 (手書き見積・図面・施工資料・請求書・レシート・アンケートはがき) と AI アシスタントが動作します。
+                  OpenAI のキー (sk-…) は OPENAI_API_KEY、Anthropic のキー (sk-ant-…) は ANTHROPIC_API_KEY に設定します。ローカルは .env.local、本番は Vercel の Environment Variables に入れ、再起動 (再デプロイ) すると反映されます。
+                </p>
+                {ai.enabled && (
+                  <p className="mt-2 text-xs text-ink-2">
+                    接続先: <span className="font-medium text-ink">{ai.label}</span> · モデル: <span className="font-medium text-ink">{ai.model}</span> · キー: 環境変数 {ai.source} (値は表示しません)
+                  </p>
+                )}
+                {ai.note && <p className="mt-2 text-xs text-warn-ink">⚠ {ai.note}</p>}
+              </div>
+              <Badge tone={ai.enabled ? "good" : "neutral"}>{ai.enabled ? "接続設定あり" : "未設定 (サンプルモード)"}</Badge>
+            </div>
+            {admin && <AiConnectionCheck enabled={ai.enabled} />}
+          </Card>
           {[
-            { name: "Claude API (AI 読取・アシスタント)", status: aiEnabled() ? "接続中" : "未設定 (サンプルモード)", ok: aiEnabled(), desc: "ANTHROPIC_API_KEY を .env に設定すると、書類の AI 読取と AI アシスタントが実際の Claude で動作します。" },
             { name: "AI 電話受付", status: "本番で接続", ok: false, desc: "通話内容の要約・用件・折返し先を Webhook で受け取り、問い合わせとして自動登録 (入口: AI電話受付)。" },
             { name: "LINE 公式アカウント", status: "本番で接続", ok: false, desc: "Messaging API で受信メッセージを問い合わせ/やりとり履歴に自動記録。見積書・請求書の PDF 送付。" },
             { name: "Web フォーム (ichijoya.co.jp)", status: "本番で接続", ok: false, desc: "お問い合わせフォームの送信を API で受け取り、問い合わせとして自動登録。" },

@@ -6,7 +6,7 @@ import { addAudit, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Channel, PaymentMethod } from "@/lib/db/types";
 import { toDateKey } from "@/lib/format";
 import { CHANNEL_LABEL, PAYMENT_METHOD_LABEL } from "@/lib/constants";
-import { canManageFinance } from "@/lib/auth/permissions";
+import { canManageFinance, isManagerOrAbove } from "@/lib/auth/permissions";
 import { assertStore, choice, fail, numField, requireActionUser, str, withMsg } from "./guards";
 
 export async function recordPayment(invoiceId: string, formData: FormData) {
@@ -82,4 +82,35 @@ export async function voidInvoice(invoiceId: string, formData: FormData) {
   });
   revalidatePath("/invoices");
   redirect(withMsg(back, "請求書を無効化しました。案件から再発行できます。"));
+}
+
+/** 請求書の記載 (件名・備考・支払期限) を直す。金額の訂正は「無効化 → 見積の変更申請 (承認) → 再発行」で行う */
+export async function updateInvoiceInfo(invoiceId: string, formData: FormData) {
+  const user = await requireActionUser();
+  const back = `/invoices/${invoiceId}`;
+  if (!canManageFinance(user) && !isManagerOrAbove(user)) fail(back, "請求書の修正は店長・本部スタッフ・管理者が行えます。");
+  await mutate((db) => {
+    const inv = db.invoices.find((x) => x.id === invoiceId);
+    if (!inv) fail("/invoices", "請求書が見つかりません。");
+    assertStore(user, inv.storeId, back);
+    if (inv.status === "void") fail(back, "無効化した請求書は修正できません。");
+    if (inv.status === "paid") fail(back, "入金済みの請求書は修正できません。");
+    const dueDate = str(formData, "dueDate");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) fail(back, "支払期限を入力してください。");
+    if (dueDate < inv.issueDate) fail(back, "支払期限は発行日以降の日付にしてください。");
+    const order = db.orders.find((o) => o.id === inv.orderId);
+    const before = { title: inv.title ?? order?.title ?? "", notes: inv.notes ?? "", dueDate: inv.dueDate };
+    const after = { title: str(formData, "title") || before.title, notes: str(formData, "notes"), dueDate };
+    const LABEL: Record<string, string> = { title: "件名", notes: "備考", dueDate: "支払期限" };
+    const changes = (Object.keys(after) as (keyof typeof after)[]).filter((k) => before[k] !== after[k]).map((k) => ({ field: k, before: before[k], after: after[k] }));
+    if (!changes.length) fail(back, "変更はありませんでした。");
+    inv.title = after.title;
+    inv.notes = after.notes || undefined;
+    inv.dueDate = after.dueDate;
+    inv.updatedAt = nowIso();
+    addAudit(db, { userId: user.id, action: "update", entity: "invoice", entityId: inv.id, entityLabel: inv.number, summary: `請求書の記載を修正 (${changes.map((c) => LABEL[c.field]).join("・")})`, storeId: inv.storeId, changes });
+  });
+  revalidatePath(back);
+  revalidatePath("/invoices");
+  redirect(withMsg(back, "請求書の記載を修正しました。PDF にも反映されます。"));
 }

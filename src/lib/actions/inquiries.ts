@@ -2,7 +2,8 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { addAudit, diffChanges, mutate, newId, nextNumber, nowIso, nextCustomerCode } from "@/lib/db/store";
+import { addAudit, diffChanges, getDb, mutate, newId, nextNumber, nowIso, nextCustomerCode } from "@/lib/db/store";
+import { userCanCreateCustomer } from "@/lib/ops-settings";
 import type { Channel, Inquiry, InquiryStatus, ServiceCategory } from "@/lib/db/types";
 import { toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS } from "@/lib/constants";
@@ -121,6 +122,7 @@ export async function setInquiryStatus(id: string, status: InquiryStatus) {
 export async function registerCustomerFromInquiry(id: string, formData?: FormData) {
   const user = await requireActionUser();
   const back = `/inquiries/${id}`;
+  if (!userCanCreateCustomer(getDb(), user)) fail(back, "顧客の新規登録は事務担当が行います。既存のお客様なら「既存の顧客に紐づける」を使うか、事務担当に登録を依頼してください。");
   let customerId = "";
   const confirmed = formData ? str(formData, "confirmDuplicate") === "1" : false;
   await mutate((db) => {

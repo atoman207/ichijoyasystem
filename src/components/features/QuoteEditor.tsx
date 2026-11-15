@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Trash, Plus } from "lucide-react";
 import type { Product, QuoteItem, ServiceCategory } from "@/lib/db/types";
 import { CATEGORY_LABEL } from "@/lib/constants";
+import { quoteTotals } from "@/lib/quote-calc";
 
 interface Row {
   key: string;
@@ -24,12 +25,16 @@ export function QuoteEditor({
   initialItems = [],
   initialDiscount = 0,
   defaultCategory,
+  initialTaxIncluded = false,
 }: {
   products: Product[];
   initialItems?: QuoteItem[];
   initialDiscount?: number;
   defaultCategory?: ServiceCategory;
+  /** 単価を税込で入力する (手書き見積書の「税込」) */
+  initialTaxIncluded?: boolean;
 }) {
+  const [taxIncluded, setTaxIncluded] = useState(initialTaxIncluded);
   const [rows, setRows] = useState<Row[]>(() => {
     if (initialItems.length > 0) {
       return initialItems.map((i) => ({ key: nextKey(), productId: i.productId, name: i.name, spec: i.spec ?? "", qty: i.qty, unit: i.unit, unitPrice: i.unitPrice }));
@@ -50,10 +55,7 @@ export function QuoteEditor({
     return [...map.entries()];
   }, [products]);
 
-  const subtotal = rows.reduce((s, r) => s + Math.round(r.qty * r.unitPrice), 0);
-  const d = Math.min(Math.max(0, discount || 0), subtotal);
-  const tax = Math.floor((subtotal - d) * 0.1);
-  const total = subtotal - d + tax;
+  const { subtotal, discount: d, tax, total } = quoteTotals(rows.map((r) => ({ amount: Math.round(r.qty * r.unitPrice) })), discount || 0, taxIncluded);
 
   function update(key: string, patch: Partial<Row>) {
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -79,6 +81,11 @@ export function QuoteEditor({
     <div>
       <input type="hidden" name="items" value={payload} />
       <input type="hidden" name="discount" value={d} />
+      <input type="hidden" name="taxIncluded" value={taxIncluded ? "1" : ""} />
+      <label className="mb-2 inline-flex items-center gap-2 text-xs text-ink-2">
+        <input type="checkbox" checked={taxIncluded} onChange={(e) => setTaxIncluded(e.target.checked)} className="h-4 w-4" />
+        単価・金額は税込 (手書き見積書の「税込」に○。消費税は合計から内税で計算します)
+      </label>
       <div className="overflow-x-auto rounded-xl border border-line">
         <table className="w-full min-w-[760px] text-sm">
           <thead>
@@ -88,7 +95,7 @@ export function QuoteEditor({
               <th className="px-3 py-2 text-left font-medium">仕様・備考</th>
               <th className="px-3 py-2 text-right font-medium">数量</th>
               <th className="px-3 py-2 text-left font-medium">単位</th>
-              <th className="px-3 py-2 text-right font-medium">単価 (税抜)</th>
+              <th className="px-3 py-2 text-right font-medium">単価 ({taxIncluded ? "税込" : "税抜"})</th>
               <th className="px-3 py-2 text-right font-medium">金額</th>
               <th className="px-2 py-2" />
             </tr>
@@ -114,7 +121,7 @@ export function QuoteEditor({
                 <td className="px-2 py-1.5"><input className="field h-8 py-1 text-xs" value={r.spec} onChange={(e) => update(r.key, { spec: e.target.value })} placeholder="サイズ・柄など" /></td>
                 <td className="px-2 py-1.5"><input type="number" step="0.5" min="0" className="field h-8 w-20 py-1 text-right text-xs tnum" value={r.qty} onChange={(e) => update(r.key, { qty: Number(e.target.value) })} /></td>
                 <td className="px-2 py-1.5"><input className="field h-8 w-14 py-1 text-xs" value={r.unit} onChange={(e) => update(r.key, { unit: e.target.value })} /></td>
-                <td className="px-2 py-1.5"><input type="number" step="100" min="0" className="field h-8 w-28 py-1 text-right text-xs tnum" value={r.unitPrice} onChange={(e) => update(r.key, { unitPrice: Number(e.target.value) })} /></td>
+                <td className="px-2 py-1.5"><input type="number" step="100" className="field h-8 w-28 py-1 text-right text-xs tnum" title="値引きの行はマイナス (例: -1000)" value={r.unitPrice} onChange={(e) => update(r.key, { unitPrice: Number(e.target.value) })} /></td>
                 <td className="px-3 py-1.5 text-right text-sm tnum">{yen(r.qty * r.unitPrice)}</td>
                 <td className="px-2 py-1.5 text-right">
                   <button type="button" onClick={() => remove(r.key)} className="rounded p-1 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label="行を削除">
@@ -131,12 +138,12 @@ export function QuoteEditor({
           <Plus className="h-3.5 w-3.5" /> 行を追加
         </button>
         <div className="w-full max-w-xs space-y-1.5 text-sm">
-          <div className="flex items-center justify-between"><span className="text-ink-2">小計 (税抜)</span><span className="tnum">{yen(subtotal)}</span></div>
+          <div className="flex items-center justify-between"><span className="text-ink-2">小計 ({taxIncluded ? "税込" : "税抜"})</span><span className="tnum">{yen(subtotal)}</span></div>
           <div className="flex items-center justify-between gap-3">
             <span className="whitespace-nowrap text-ink-2">値引き</span>
             <input type="number" step="1000" min="0" className="field h-8 w-32 py-1 text-right text-xs tnum" value={discount} onChange={(e) => setDiscount(Number(e.target.value))} />
           </div>
-          <div className="flex items-center justify-between"><span className="text-ink-2">消費税 (10%)</span><span className="tnum">{yen(tax)}</span></div>
+          <div className="flex items-center justify-between"><span className="text-ink-2">{taxIncluded ? "うち消費税 (10%)" : "消費税 (10%)"}</span><span className="tnum">{yen(tax)}</span></div>
           <div className="flex items-center justify-between border-t border-line pt-1.5 text-base font-semibold"><span>合計 (税込)</span><span className="tnum">{yen(total)}</span></div>
         </div>
       </div>

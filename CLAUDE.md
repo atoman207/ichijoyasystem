@@ -36,3 +36,7 @@ AI コーディング支援 (Claude Code 等) がこのリポジトリで作業�
 - デモ用アカウント (架空の 15 名 `<名前>@ichijoya.example` / `demo1234`、元は `master.ts` の `USERS`) は Supabase にも登録する: `node scripts/import/seed-demo-accounts.mjs` (`--off` で無効化)。`generate-data-sql.mjs` / `load-to-supabase.mjs` も既定で含める。判定は `permissions.ts` の `isDemoAccount` (承認先の判定でデモ用と社員を混ぜない)
 - 店舗 ID は `koshi` / `chuo` / `nishi` / `tamana` / `hq` 固定。店舗名・住所は公開サイトの会社概要に基づく
 - Claude API を呼ぶコードは `claude-opus-5-5` を既定とし、`betas: ["server-side-fallback-2026-07-01"], fallbacks: "default"` を付ける
+- AI の呼び出しは必ず `src/lib/ai/provider.ts` (generateJson / generateText) を通す。OpenAI (`OPENAI_API_KEY`) と Claude (`ANTHROPIC_API_KEY`) をキーの形で自動判定する。JSON Schema は全項目 required・additionalProperties: false、null を許す項目 (anyOf) は 1 回の依頼で 16 個まで (Claude の上限)。Vercel の 60 秒に収めるため、AI を呼ぶ画面は `export const maxDuration = 60`
+- 案件の状態は `src/lib/case-status.ts` に集約 (進捗・見積と仕様・工事日程・請求・入金・事務処理を分けて持ち、多くは記録から自動で決める。人が決めるのは Quote.specStatus / Order.specStatus・scheduleStatus・billing・plannedPayment・closedAt と Payment.settledOn)。手書き見積書の備考欄以下は `SiteInfo` (`src/lib/site-info.ts`) として見積 → 受注へ引き継ぎ、予定表の施工のメモにも書く。税込の見積 (Quote.taxIncluded) の合計は `src/lib/quote-calc.ts`
+- 顧客の新規登録は `canCreateCustomer` (初期設定は事務担当・本部・管理者。設定 → 運用)
+- KPI・インセンティブのルールは `src/lib/kpi-settings.ts` (既定値) と `src/lib/incentive.ts`。既定値はクライアントの「お客様アンケート集計表」KPI シートの評価方法に合わせている (① は全社、② は営業担当、③ は担当職人、④・返信率・クレーム率は店舗)

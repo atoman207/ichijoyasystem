@@ -8,7 +8,7 @@ import { addDays, toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, PROGRESS_KIND_LABEL } from "@/lib/constants";
 import { canAccessStore, canManageFinance, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
 import { findConflicts, isDateKey, normTime, shortDate, timeLabel, toMinutes } from "@/lib/calendar";
-import { orderEditable, removeUpcomingOrderEvents, syncOrderEvent } from "@/lib/db/schedule";
+import { orderEditable, removeUpcomingOrderEvents, syncHandoverMemo, syncOrderEvent } from "@/lib/db/schedule";
 import { assertStore, choice, fail, requireActionUser, str, withMsg } from "./guards";
 
 /** 施工予定 (施工期間・時間帯・施工担当・現場住所) を設定し、予定表の「施工」の予定と連動させる */
@@ -124,8 +124,12 @@ export async function createInvoiceFromOrder(id: string, formData: FormData) {
     const sentVia = choice(formData, "sentVia", CHANNEL_LABEL, "mail");
     const now = nowIso();
     invoiceId = newId("inv");
-    const subtotal = q ? q.subtotal - q.discount : Math.round(o.total / 1.1);
+    // 税抜の金額 = 合計 − 消費税 (税込の見積は内税)
+    const subtotal = q && q.total === o.total ? q.total - q.tax : Math.round(o.total / 1.1);
     const tax = o.total - subtotal;
+    // 発行時の明細を請求書に残す (見積があれば見積の明細。ない案件は「件名 一式」)
+    const items = q && q.total === o.total ? q.items.map((i) => ({ ...i })) : [{ id: newId("qi"), name: o.title, qty: 1, unit: "式", unitPrice: subtotal, amount: subtotal }];
+    const notes = str(formData, "notes") || undefined;
     db.invoices.push({
       id: invoiceId,
       number: nextNumber(db, "INV", db.invoices, today),
@@ -140,6 +144,10 @@ export async function createInvoiceFromOrder(id: string, formData: FormData) {
       paidAmount: 0,
       status: "issued",
       sentVia,
+      title: o.title,
+      items,
+      taxIncluded: q && q.total === o.total ? q.taxIncluded : undefined,
+      notes,
       createdBy: user.id,
       createdAt: now,
       updatedAt: now,
@@ -193,6 +201,7 @@ export async function updateOrderInfo(id: string, formData: FormData) {
     o.title = title;
     o.category = choice(formData, "category", CATEGORY_LABEL, o.category);
     o.siteAddress = str(formData, "siteAddress") || o.siteAddress;
+    if (formData.has("workDetails")) o.workDetails = str(formData, "workDetails") || undefined;
     const storeId = str(formData, "storeId");
     if (storeId && storeId !== o.storeId) {
       if (!canSeeAllStores(user)) fail(back, "担当店舗の変更は本部スタッフ・管理者が行います。");
@@ -203,13 +212,15 @@ export async function updateOrderInfo(id: string, formData: FormData) {
       for (const a of db.approvals) if (a.status === "pending" && a.targetId === o.id) a.storeId = o.storeId;
       moved = !canAccessStore(user, o.storeId);
     }
-    const changes = diffChanges(before, o, ["title", "category", "siteAddress", "storeId"]);
+    const changes = diffChanges(before, o, ["title", "category", "siteAddress", "storeId", "workDetails"]);
     if (changes.length === 0) fail(back, "変更はありませんでした。");
     o.updatedAt = nowIso();
     // 連動している施工の予定があれば、場所・店舗を合わせる (予定がない案件に新しく作ることはしない)
     if (db.schedule.some((e) => e.orderId === o.id && e.source === "order")) syncOrderEvent(db, o, user.id);
     const storeName = db.stores.find((s) => s.id === o.storeId)?.name ?? o.storeId;
-    const LABEL: Record<string, string> = { title: "件名", category: "種別", siteAddress: "現場住所", storeId: `担当店舗 (${storeName})` };
+    const LABEL: Record<string, string> = { title: "件名", category: "種別", siteAddress: "現場住所", storeId: `担当店舗 (${storeName})`, workDetails: "施工内容" };
+    if (changes.some((c) => c.field === "workDetails")) syncHandoverMemo(db, o);
+    if (changes.some((c) => c.field === "workDetails")) o.progressNotes.push({ id: newId("pn"), at: nowIso(), userId: user.id, kind: "change", body: `施工内容を変更: ${o.workDetails ?? "(なし)"}` });
     addAudit(db, { userId: user.id, action: "update", entity: "order", entityId: id, entityLabel: o.number, summary: `案件情報を変更 (${changes.map((c) => LABEL[c.field] ?? c.field).join("・")})`, storeId: o.storeId, changes });
   });
   revalidatePath(back);

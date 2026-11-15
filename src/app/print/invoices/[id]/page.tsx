@@ -5,6 +5,7 @@ import { canAccessStore } from "@/lib/auth/permissions";
 import { fmtDate, yen } from "@/lib/format";
 import { PrintToolbar } from "@/components/features/PrintToolbar";
 import { IchijoyaLogo } from "@/components/brand/Logo";
+import { documentSettings } from "@/lib/doc-settings";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,9 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
   const order = db.orders.find((o) => o.id === inv.orderId);
   const quote = order ? db.quotes.find((q) => q.id === order.quoteId) : undefined;
   const store = db.stores.find((s) => s.id === inv.storeId)!;
+  const settings = documentSettings(db);
+  const items = inv.items?.length ? inv.items : quote && quote.total === inv.total ? quote.items : [{ id: "x", name: inv.title ?? order?.title ?? "工事一式", spec: undefined, qty: 1, unit: "式", unitPrice: inv.subtotal, amount: inv.subtotal }];
+  const itemsSum = items.reduce((a, i) => a + i.amount, 0);
 
   return (
     <div className="min-h-screen bg-subtle py-6 print:bg-white print:py-0">
@@ -31,12 +35,12 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
             <p className="text-[11px] text-ink-2">発行日: {fmtDate(inv.issueDate)} · お支払期限: {fmtDate(inv.dueDate)}</p>
           </div>
           <div className="text-right text-[11px] leading-relaxed">
-            <IchijoyaLogo title="株式会社一畳屋" className="mb-2 ml-auto h-8 w-auto" />
-            <div className="text-base font-semibold">株式会社一畳屋</div>
-            <div>{store.name}</div>
-            <div>〒{store.postalCode} {store.address}</div>
-            <div>TEL {store.phone}</div>
-            <div className="mt-1 text-ink-3">登録番号: T0000000000000 (サンプル)</div>
+            <IchijoyaLogo title={settings.companyName} className="mb-2 ml-auto h-8 w-auto" />
+            <div className="text-base font-semibold">{settings.companyName}</div>
+            {settings.address && <div>〒{settings.postalCode} {settings.address}</div>}
+            {settings.tel && <div>TEL {settings.tel}{settings.fax ? ` / FAX ${settings.fax}` : ""}</div>}
+            {settings.showStore && store.kind !== "hq" && <div className="mt-1">{store.name} 〒{store.postalCode} {store.address} TEL {store.phone}</div>}
+            {settings.registrationNumber && <div className="mt-1">登録番号: {settings.registrationNumber}</div>}
           </div>
         </div>
         <div className="mt-8 flex items-end justify-between border-b-2 border-ink pb-2">
@@ -44,25 +48,26 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
           <div className="text-[11px] text-ink-2">{customer?.address}</div>
         </div>
         <p className="mt-6">下記のとおりご請求申し上げます。</p>
-        <div className="mt-3 text-sm">件名: {order?.title}</div>
+        <div className="mt-3 text-sm">件名: {inv.title ?? order?.title}</div>
         <div className="mt-3 inline-block border-b-2 border-ink px-2 pb-1 text-xl font-semibold tnum">御請求金額 {yen(inv.total)} <span className="text-xs font-normal">(税込)</span></div>
         <table className="mt-6 w-full border-collapse text-[12px]">
           <thead><tr className="border-y border-ink bg-subtle"><th className="px-2 py-1.5 text-left font-medium">品名</th><th className="px-2 py-1.5 text-right font-medium">数量</th><th className="px-2 py-1.5 text-right font-medium">単価</th><th className="px-2 py-1.5 text-right font-medium">金額</th></tr></thead>
           <tbody>
-            {(quote?.items ?? [{ id: "x", name: order?.title ?? "工事一式", qty: 1, unit: "式", unitPrice: inv.subtotal, amount: inv.subtotal }]).map((i) => (
+            {items.map((i) => (
               <tr key={i.id} className="border-b border-line"><td className="px-2 py-1.5">{i.name}{"spec" in i && i.spec ? <span className="ml-1 text-ink-2">({i.spec})</span> : null}</td><td className="px-2 py-1.5 text-right tnum">{i.qty} {i.unit}</td><td className="px-2 py-1.5 text-right tnum">{yen(i.unitPrice)}</td><td className="px-2 py-1.5 text-right tnum">{yen(i.amount)}</td></tr>
             ))}
           </tbody>
           <tfoot>
-            <tr><td colSpan={3} className="px-2 py-1 text-right">小計 (税抜)</td><td className="px-2 py-1 text-right tnum">{yen(inv.subtotal)}</td></tr>
+            {itemsSum > inv.subtotal && <tr><td colSpan={3} className="px-2 py-1 text-right">値引き</td><td className="px-2 py-1 text-right tnum">-{yen(itemsSum - inv.subtotal)}</td></tr>}
+            <tr><td colSpan={3} className="px-2 py-1 text-right">小計 (税抜・10%対象)</td><td className="px-2 py-1 text-right tnum">{yen(inv.subtotal)}</td></tr>
             <tr><td colSpan={3} className="px-2 py-1 text-right">消費税 (10%)</td><td className="px-2 py-1 text-right tnum">{yen(inv.tax)}</td></tr>
             <tr className="border-t border-ink font-semibold"><td colSpan={3} className="px-2 py-1.5 text-right">合計 (税込)</td><td className="px-2 py-1.5 text-right tnum">{yen(inv.total)}</td></tr>
           </tfoot>
         </table>
         <div className="mt-6 rounded border border-line p-3 text-[11px] leading-relaxed">
           <div className="font-medium">お振込先</div>
-          <div>○○銀行 △△支店 普通 0000000 カ) イチジョウヤ (サンプル)</div>
-          <div className="text-ink-3">※ 振込手数料はお客様のご負担にてお願いいたします。現金・PayPay でのお支払いも承ります。</div>
+          {settings.bankAccounts.length ? settings.bankAccounts.map((b, i) => <div key={i}>{b.bank} {b.branch} {b.type} {b.number} {b.holder}</div>) : <div>お振込先は別途ご案内いたします。</div>}
+          {(inv.notes || settings.invoiceNote) && <div className="mt-1 whitespace-pre-wrap text-ink-3">{[inv.notes, settings.invoiceNote].filter(Boolean).join("\n")}</div>}
         </div>
       </div>
     </div>

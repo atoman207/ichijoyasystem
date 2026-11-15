@@ -10,6 +10,8 @@ import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { APPROVAL_STATUS, APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
 import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag } from "@/components/ui";
 import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
+import { SiteInfoCard } from "@/components/features/SiteInfo";
+import { setQuoteDiscussing, updateSiteInfo } from "@/lib/actions/cases";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { caseEvents } from "@/lib/db/schedule";
 import { toDateKey } from "@/lib/format";
@@ -35,14 +37,15 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
     <div>
       <Flash msg={msg} err={err} />
       <PageHeader
-        title={`${q.number}${q.version > 1 ? ` (v${q.version})` : ""} ${q.title}`}
-        badge={<><StatusBadge value={q.status} map={QUOTE_STATUS} />{q.pendingChange && <Badge tone="warn">金額変更 承認待ち</Badge>}{q.source === "ocr" && <Badge tone="accent" dot={false}>手書き見積から取込</Badge>}</>}
-        description={<span className="inline-flex flex-wrap items-center gap-2">{customer?.name} 様 · {CATEGORY_LABEL[q.category]} · <StoreTag store={store} /> · 作成 {userName(q.createdBy)} {fmtDate(q.createdAt)}</span>}
+        title={`${q.number}${q.version > 1 ? ` (第${q.version}版)` : ""} ${q.title}`}
+        badge={<><StatusBadge value={q.status} map={QUOTE_STATUS} />{q.pendingChange && <Badge tone="warn">変更 承認待ち</Badge>}{q.source === "ocr" && <Badge tone="accent" dot={false}>書類取込から作成</Badge>}</>}
+        description={<span className="inline-flex flex-wrap items-center gap-2">{customer?.name} 様 · {CATEGORY_LABEL[q.category]} · <StoreTag store={store} /> · 見積担当 {userName(q.estimatorId ?? q.createdBy)} · 作成 {userName(q.createdBy)} {fmtDate(q.createdAt)}{q.paperNo ? ` · 手書き見積書 No.${q.paperNo}` : ""}{q.handedOver ? " · 現場で手渡し済み" : ""}</span>}
         back={{ href: "/quotes", label: "見積一覧" }}
         actions={
           <>
-            <LinkButton href={`/print/quotes/${q.id}`} variant="secondary" size="sm">見積書を表示・印刷</LinkButton>
-            {["draft", "approved", "sent", "accepted"].includes(q.status) && !q.pendingChange && <LinkButton href={`/quotes/${q.id}/edit`} variant="secondary" size="sm">{q.status === "draft" ? "編集" : "金額変更を申請"}</LinkButton>}
+            <LinkButton href={`/api/pdf/quotes/${q.id}`} variant="secondary" size="sm" target="_blank">見積書 PDF</LinkButton>
+            <LinkButton href={`/print/quotes/${q.id}`} variant="ghost" size="sm">画面で表示・印刷</LinkButton>
+            {["draft", "approved", "sent", "accepted"].includes(q.status) && !q.pendingChange && <LinkButton href={`/quotes/${q.id}/edit`} variant="secondary" size="sm">{q.status === "draft" ? "編集" : "変更を申請 (金額・数量・施工内容)"}</LinkButton>}
           </>
         }
       />
@@ -72,12 +75,16 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
           <CardHeader title="承認待ちの変更内容" description={`申請 ${userName(q.pendingChange.requestedBy)} ${fmtDateTime(q.pendingChange.requestedAt)} · 理由: ${q.pendingChange.reason}`} />
           <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
             <div>
-              <div className="mb-1 text-xs font-medium text-ink-3">変更前 (現在) · 合計 {yen(q.total)}</div>
+              <div className="mb-1 text-xs font-medium text-ink-3">変更前 (第{q.version}版) · 合計 {yen(q.total)}</div>
               <ul className="space-y-0.5 text-xs text-ink-2">{q.items.map((i) => <li key={i.id}>{i.name} × {i.qty}{i.unit} = {yen(i.amount)}</li>)}</ul>
+              {q.pendingChange.title !== undefined && q.pendingChange.title !== q.title && <p className="mt-1 text-xs text-ink-2">件名: {q.title}</p>}
+              {q.pendingChange.workDetails !== undefined && q.pendingChange.workDetails !== (q.workDetails ?? "") && <p className="mt-1 whitespace-pre-wrap text-xs text-ink-2">施工内容: {q.workDetails || "(なし)"}</p>}
             </div>
             <div>
-              <div className="mb-1 text-xs font-medium text-warn-ink">変更後 (案) · 合計 {yen(q.pendingChange.total)}</div>
+              <div className="mb-1 text-xs font-medium text-warn-ink">変更後 (第{q.version + 1}版の案) · 合計 {yen(q.pendingChange.total)}</div>
               <ul className="space-y-0.5 text-xs text-ink">{q.pendingChange.items.map((i, idx) => <li key={idx}>{i.name} × {i.qty}{i.unit} = {yen(i.amount)}</li>)}</ul>
+              {q.pendingChange.title !== undefined && q.pendingChange.title !== q.title && <p className="mt-1 text-xs text-ink">件名: {q.pendingChange.title}</p>}
+              {q.pendingChange.workDetails !== undefined && q.pendingChange.workDetails !== (q.workDetails ?? "") && <p className="mt-1 whitespace-pre-wrap text-xs text-ink">施工内容: {q.pendingChange.workDetails || "(なし)"}</p>}
             </div>
           </div>
           {canDecide ? (
@@ -119,14 +126,58 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
                 ))}
               </tbody>
               <tfoot className="text-sm">
-                <tr className="border-t border-line"><td colSpan={4} className="px-5 py-1.5 text-right text-ink-2">小計 (税抜)</td><td className="px-5 py-1.5 text-right tnum">{yen(q.subtotal)}</td></tr>
+                <tr className="border-t border-line"><td colSpan={4} className="px-5 py-1.5 text-right text-ink-2">小計 ({q.taxIncluded ? "税込" : "税抜"})</td><td className="px-5 py-1.5 text-right tnum">{yen(q.subtotal)}</td></tr>
                 {q.discount > 0 && <tr><td colSpan={4} className="px-5 py-1.5 text-right text-ink-2">値引き</td><td className="px-5 py-1.5 text-right tnum">-{yen(q.discount)}</td></tr>}
-                <tr><td colSpan={4} className="px-5 py-1.5 text-right text-ink-2">消費税 (10%)</td><td className="px-5 py-1.5 text-right tnum">{yen(q.tax)}</td></tr>
+                <tr><td colSpan={4} className="px-5 py-1.5 text-right text-ink-2">{q.taxIncluded ? "うち消費税 (10%)" : "消費税 (10%)"}</td><td className="px-5 py-1.5 text-right tnum">{yen(q.tax)}</td></tr>
                 <tr className="border-t border-line font-semibold"><td colSpan={4} className="px-5 py-2 text-right">合計 (税込)</td><td className="px-5 py-2 text-right text-base tnum">{yen(q.total)}</td></tr>
               </tfoot>
             </table>
+            {q.workDetails && <div className="border-t border-line px-5 py-3 text-xs text-ink-2"><div className="font-medium text-ink">施工内容</div><p className="mt-1 whitespace-pre-wrap">{q.workDetails}</p></div>}
             {q.notes && <p className="border-t border-line px-5 py-3 text-xs text-ink-2">備考: {q.notes}</p>}
           </Card>
+
+          <SiteInfoCard info={q.siteInfo} action={updateSiteInfo.bind(null, "quote", q.id)} returnTo={returnTo} canEdit={!["rejected", "expired"].includes(q.status)} />
+
+          {["approved", "sent"].includes(q.status) && !q.orderId && (
+            <Card>
+              <CardHeader title="お客様の検討状況" description={q.specStatus === "discussing" ? "打合せ中 (仕様・金額をお客様と調整中)" : "見積をお渡しして回答待ち (TEL待ち)"} />
+              <form action={setQuoteDiscussing.bind(null, q.id)} className="flex flex-wrap items-center gap-2">
+                <input type="hidden" name="discussing" value={q.specStatus === "discussing" ? "0" : "1"} />
+                <Button type="submit" variant="secondary" size="sm">{q.specStatus === "discussing" ? "打合せ中を解除 (回答待ちに戻す)" : "打合せ中にする"}</Button>
+                <span className="text-[11px] text-ink-3">案件一覧の「見積・仕様」に反映されます。</span>
+              </form>
+            </Card>
+          )}
+
+          {(q.revisions?.length ?? 0) > 0 && (
+            <Card padded={false}>
+              <div className="px-5 pt-5"><CardHeader title="版の履歴 (改訂)" description="変更が承認されるたびに、変更前の版を残しています。各版の見積書 PDF を出力できます" /></div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[560px] text-sm">
+                  <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-5 py-2 text-left font-medium">版</th><th className="px-3 py-2 text-right font-medium">合計</th><th className="px-3 py-2 text-left font-medium">変更理由・承認</th><th className="px-5 py-2 text-right font-medium">見積書</th></tr></thead>
+                  <tbody>
+                    <tr className="border-t border-line bg-accent-soft/30">
+                      <td className="px-5 py-2 font-medium">第{q.version}版 (現在)</td>
+                      <td className="px-3 py-2 text-right tnum">{yen(q.total)}</td>
+                      <td className="px-3 py-2 text-xs text-ink-2">{q.approvedAt ? `承認 ${userName(q.approvedBy)} ${fmtDateTime(q.approvedAt)}` : "-"}</td>
+                      <td className="px-5 py-2 text-right"><a href={`/api/pdf/quotes/${q.id}`} target="_blank" rel="noopener" className="text-xs text-accent hover:underline">PDF</a></td>
+                    </tr>
+                    {[...(q.revisions ?? [])].reverse().map((r) => (
+                      <tr key={r.version} className="border-t border-line">
+                        <td className="px-5 py-2">第{r.version}版<div className="text-[11px] text-ink-3">{r.title}</div></td>
+                        <td className="px-3 py-2 text-right tnum">{yen(r.total)}</td>
+                        <td className="px-3 py-2 text-xs text-ink-2">
+                          {r.changeReason ? <>第{r.version + 1}版への変更理由: {r.changeReason}<br /></> : null}
+                          <span className="text-ink-3">申請 {userName(r.changeRequestedBy)} · 承認 {userName(r.changeApprovedBy)} {fmtDateTime(r.replacedAt)}</span>
+                        </td>
+                        <td className="px-5 py-2 text-right"><a href={`/api/pdf/quotes/${q.id}?version=${r.version}`} target="_blank" rel="noopener" className="text-xs text-accent hover:underline">PDF</a></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
 
           {/* アクション */}
           {q.status === "draft" && (

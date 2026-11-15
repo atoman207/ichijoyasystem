@@ -3,6 +3,7 @@ import type { Database, Inquiry, Order, Quote, ScheduleEvent, StoreId, User } fr
 import { newId, nowIso } from "./store";
 import { scopeByStore } from "@/lib/auth/permissions";
 import { addDays, toDateKey } from "@/lib/format";
+import { HANDOVER_MARK, handoverMemo } from "@/lib/site-info";
 
 /**
  * 予定表と案件 (問い合わせ → 見積 → 受注) をつなぐサーバー側の処理
@@ -204,6 +205,7 @@ export function syncOrderEvent(db: Database, o: Order, actorId: string, times?: 
     startTime: times ? times.startTime : "09:00",
     endTime: times ? (times.startTime ? times.endTime : undefined) : "15:00",
     source: "order",
+    memo: handoverMemo(o.siteInfo, o.workDetails),
     createdBy: actorId,
     createdAt: now,
     updatedBy: actorId,
@@ -211,6 +213,15 @@ export function syncOrderEvent(db: Database, o: Order, actorId: string, times?: 
   };
   db.schedule.push(ev);
   return ev;
+}
+
+/** 施工の予定 (予定表) のメモに、施工内容と現場情報を引継ぎとして書く (手で書いたメモは残す) */
+export function syncHandoverMemo(db: Database, o: Order): void {
+  const memo = handoverMemo(o.siteInfo, o.workDetails);
+  for (const e of db.schedule) {
+    if (e.orderId !== o.id || e.source !== "order") continue;
+    if (!e.memo || e.memo.startsWith(HANDOVER_MARK)) e.memo = memo;
+  }
 }
 
 /** 受注のキャンセル・契約却下: これからの予定 (今日以降) を外し、過去の予定は履歴として残す */

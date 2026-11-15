@@ -8,11 +8,18 @@ import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, update
 import { decideApproval } from "@/lib/actions/approvals";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
 import { APPROVAL_STATUS, APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, PROGRESS_KIND_LABEL, QUOTE_STATUS } from "@/lib/constants";
-import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
 import { OrderScheduleForm } from "@/components/schedule/OrderScheduleForm";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { formStores, formUsers } from "@/components/schedule/form-data";
 import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
+import { createQualityIssue } from "@/lib/actions/kpi";
+import { updateSiteInfo } from "@/lib/actions/cases";
+import { CaseStatusCard } from "@/components/features/CaseStatusCard";
+import { SiteInfoCard } from "@/components/features/SiteInfo";
+import { QUALITY_CATEGORIES, QUALITY_KIND_HELP, QUALITY_KIND_LABEL, kpiSettings } from "@/lib/kpi-settings";
+import { SCORE_QUESTIONS, SCORE_LABEL } from "@/lib/survey";
+import { deliveryOf } from "@/lib/kpi";
 
 const STEPS = ["pending_approval", "confirmed", "scheduled", "in_progress", "completed", "invoiced", "paid"] as const;
 
@@ -35,6 +42,9 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const main = db.schedule.find((e) => e.orderId === o.id && e.source === "order");
   const today = toDateKey(new Date());
   const survey = db.surveys.find((x) => x.orderId === o.id);
+  const issues = db.qualityIssues.filter((x) => x.orderId === o.id).sort((a, b) => b.occurredOn.localeCompare(a.occurredOn));
+  const qp = kpiSettings(db).qualityPoints;
+  const staffChoices = db.users.filter((u) => u.active && (u.storeId === o.storeId || o.workerIds.includes(u.id))).sort((a, b) => Number(o.workerIds.includes(b.id)) - Number(o.workerIds.includes(a.id)));
   const AMOUNT_LABEL: [keyof NonNullable<typeof o.amounts>, string][] = [["tatami", "畳"], ["fusuma", "襖"], ["shoji", "障子"], ["amido", "網戸"], ["curtain", "カーテン"], ["cloth", "クロス・工事"], ["own", "自社商品"], ["misc", "諸経費"], ["discount", "値引"]];
 
   return (
@@ -45,7 +55,13 @@ export default async function OrderDetailPage({ params, searchParams }: { params
         badge={<StatusBadge value={o.status} map={ORDER_STATUS} />}
         description={<span className="inline-flex flex-wrap items-center gap-2">{CATEGORY_LABEL[o.category]} · <StoreTag store={store} /> · 契約日 {fmtDate(o.contractDate)} · 金額 {yen(o.total)} (税込)</span>}
         back={{ href: "/orders", label: "受注・施工一覧" }}
-        actions={chain.quote && <LinkButton href={`/quotes/${chain.quote.id}`} variant="secondary" size="sm">見積 {chain.quote.number}</LinkButton>}
+        actions={
+          <>
+            {chain.quote && <LinkButton href={`/quotes/${chain.quote.id}`} variant="secondary" size="sm">見積 {chain.quote.number}</LinkButton>}
+            {chain.quote && <LinkButton href={`/api/pdf/quotes/${chain.quote.id}`} variant="ghost" size="sm" target="_blank">見積書 PDF</LinkButton>}
+            {chain.invoice && chain.invoice.status !== "void" && <LinkButton href={`/api/pdf/invoices/${chain.invoice.id}`} variant="secondary" size="sm" target="_blank">請求書 PDF</LinkButton>}
+          </>
+        }
       />
 
       {o.status !== "cancelled" && (
@@ -102,6 +118,20 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             )}
           </Card>
 
+          <CaseStatusCard db={db} order={o} user={user} />
+
+          <SiteInfoCard info={o.siteInfo} action={updateSiteInfo.bind(null, "order", o.id)} returnTo={returnTo} canEdit={o.status !== "cancelled"} description={chain.quote?.siteInfo ? `見積 ${chain.quote.number} (手書き見積書の備考欄以下など) から引き継ぎ。施工担当者と共有し、予定表の施工のメモにも載ります` : undefined} />
+
+          <Card>
+            <CardHeader title="施工内容" description={chain.quote ? `見積 ${chain.quote.number} (第${chain.quote.version}版) から引き継ぎ。右の「案件情報」で変更できます (変更は進捗と変更履歴に残ります)` : "右の「案件情報」で入力・変更できます"} />
+            {o.workDetails ? <p className="whitespace-pre-wrap text-sm text-ink">{o.workDetails}</p> : <p className="text-sm text-ink-3">施工内容は未入力です。</p>}
+            {chain.quote && chain.quote.items.length > 0 && (
+              <ul className="mt-3 space-y-0.5 border-t border-line pt-3 text-xs text-ink-2">
+                {chain.quote.items.map((i) => <li key={i.id}>{i.name}{i.spec ? ` (${i.spec})` : ""} × {i.qty}{i.unit}</li>)}
+              </ul>
+            )}
+          </Card>
+
           {o.amounts && (
             <Card>
               <CardHeader
@@ -112,14 +142,6 @@ export default async function OrderDetailPage({ params, searchParams }: { params
                 columns={3}
                 items={AMOUNT_LABEL.filter(([k]) => o.amounts![k]).map(([k, label]) => [label, yen(o.amounts![k])] as [string, string])}
               />
-              {survey && (
-                <div className="mt-4 rounded-xl bg-subtle/70 px-4 py-3 text-xs text-ink-2">
-                  <div className="mb-1 font-semibold text-ink">お客様アンケート ({fmtDate(survey.receivedAt)})</div>
-                  電話対応 {survey.phoneScore ?? "-"} · 営業対応 {survey.salesScore ?? "-"}{survey.salesName ? ` (${survey.salesName})` : ""} · 職人対応 {survey.craftsmanScore ?? "-"}{survey.craftsmanName ? ` (${survey.craftsmanName})` : ""} · 仕上り {survey.finishScore ?? "-"} (5 段階)
-                  {survey.media && <> · 情報媒体: {survey.media}</>}
-                  {survey.wouldUseAgain && <> · 次回も依頼したい: {survey.wouldUseAgain}</>}
-                </div>
-              )}
             </Card>
           )}
 
@@ -135,6 +157,129 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             canAdd={o.status !== "cancelled"}
             description="引き取り・納品・施工・顧客訪問などを案件に登録すると、担当者とともに店舗の共通カレンダーへ自動で反映されます。問い合わせ段階の現地調査も含みます"
           />
+
+          <Card>
+            <CardHeader
+              title="お客様アンケート"
+              description={survey ? `はがき No.${survey.postcardNo ?? "-"} · 回答 ${fmtDate(survey.answeredOn ?? survey.receivedAt)}` : "施工後に返信いただいたアンケートはがきを登録すると、返信率・評価・KPI に反映されます"}
+              action={survey ? <LinkButton href={`/kpi/surveys/${survey.id}`} variant="ghost" size="sm">詳細</LinkButton> : undefined}
+            />
+            {survey ? (
+              <div className="space-y-2 text-sm">
+                <div className="grid grid-cols-2 gap-2 @xl:grid-cols-4">
+                  {SCORE_QUESTIONS.map((q) => (
+                    <div key={q.key} className="rounded-lg bg-subtle/70 px-3 py-2">
+                      <div className="text-[11px] text-ink-3">{q.no} {q.label}</div>
+                      <div className="font-semibold tnum">{survey[q.key] ?? "-"}<span className="ml-1 text-[11px] font-normal text-ink-3">{survey[q.key] ? SCORE_LABEL[survey[q.key]!] : ""}</span></div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-ink-2">
+                  営業担当: {survey.salesUserId ? userName(survey.salesUserId) : survey.salesName ?? "-"} · 担当職人: {deliveryOf(survey).map((u) => userName(u)).join("・") || survey.craftsmanName || "-"}
+                  {survey.media && <> · 依頼のきっかけ: {survey.media}</>}
+                  {survey.wouldUseAgain && <> · 次回も依頼したい: {survey.wouldUseAgain}</>}
+                </p>
+                {survey.comment && <p className="rounded-lg border border-line px-3 py-2 text-xs text-ink">「{survey.comment}」</p>}
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <LinkButton href="/capture?kind=survey_postcard" variant="secondary" size="sm">はがきを撮影して登録</LinkButton>
+                <LinkButton href={`/kpi/surveys/new?orderId=${o.id}`} variant="ghost" size="sm">手入力で登録</LinkButton>
+              </div>
+            )}
+          </Card>
+
+          <Card>
+            <CardHeader
+              title="クレーム・手直し"
+              description={`手直し ${qp.rework} 点 / クレーム ${qp.claim} 点 / クレーム＋手直し ${qp.claim_rework} 点。登録すると店舗・集計期間・ポイントが自動で KPI に反映されます`}
+              action={<LinkButton href={`/kpi/quality?store=${o.storeId}`} variant="ghost" size="sm">一覧</LinkButton>}
+            />
+            {issues.length > 0 && (
+              <ul className="mb-3 space-y-2">
+                {issues.map((x) => (
+                  <li key={x.id} className="rounded-lg border border-line px-3 py-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Link href={`/kpi/quality/${x.id}`} className="font-medium text-accent hover:underline">{x.number}</Link>
+                      <Badge tone={x.kind === "rework" ? "warn" : "critical"}>{QUALITY_KIND_LABEL[x.kind]} {x.points} 点</Badge>
+                      <Badge tone={x.status === "resolved" ? "good" : "neutral"}>{x.status === "resolved" ? "解決済み" : "対応中"}</Badge>
+                      <span className="text-ink-3">{fmtDate(x.occurredOn)} · 担当: {x.responsibleUserIds.map((u) => userName(u)).join("・")}</span>
+                    </div>
+                    <p className="mt-1 text-ink-2">{x.description}</p>
+                    {(x.cause || x.countermeasure) && <p className="mt-1 text-ink-3">原因: {x.cause ?? "-"} / 対策: {x.countermeasure ?? "-"}</p>}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {o.status !== "cancelled" && o.status !== "pending_approval" && (
+              <details className="rounded-lg border border-line px-3 py-2">
+                <summary className="cursor-pointer text-sm font-medium text-accent">クレーム・手直しを登録する</summary>
+                <form action={createQualityIssue.bind(null, o.id)} className="mt-3 space-y-3">
+                  <input type="hidden" name="returnTo" value={returnTo} />
+                  <fieldset>
+                    <legend className="label">区分</legend>
+                    <div className="grid grid-cols-1 gap-2 @xl:grid-cols-3">
+                      {(["rework", "claim", "claim_rework"] as const).map((k, i) => (
+                        <label key={k} className="flex cursor-pointer gap-2 rounded-lg border border-line p-2 text-xs has-[:checked]:border-accent has-[:checked]:bg-accent-soft/50">
+                          <input type="radio" name="kind" value={k} defaultChecked={i === 0} className="mt-0.5" />
+                          <span><span className="font-medium text-ink">{QUALITY_KIND_LABEL[k]} ({qp[k]} 点)</span><br /><span className="text-ink-3">{QUALITY_KIND_HELP[k]}</span></span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <div className="grid grid-cols-1 gap-3 @xl:grid-cols-3">
+                    <Field label="発生日" required><Input type="date" name="occurredOn" defaultValue={today} required /></Field>
+                    <Field label="ポイントの単位 (原因)" hint="見積の原因は売上の店舗">
+                      <Select name="attribution" defaultValue="store"><option value="store">店舗 (施工・見積の原因)</option><option value="office">事務 (事務の原因)</option></Select>
+                    </Field>
+                    <Field label="カテゴリー">
+                      <Select name="category" defaultValue=""><option value="">(未選択)</option>{QUALITY_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</Select>
+                    </Field>
+                  </div>
+                  <fieldset>
+                    <legend className="label">対象の担当者 (複数可)</legend>
+                    <div className="flex flex-wrap gap-1.5">
+                      {staffChoices.map((u) => (
+                        <label key={u.id} className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-line px-2.5 py-1 text-xs has-[:checked]:border-accent has-[:checked]:bg-accent-soft">
+                          <input type="checkbox" name="responsibleUserIds" value={u.id} defaultChecked={o.workerIds.includes(u.id)} className="h-3.5 w-3.5" />
+                          {u.name}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <Field label="内容" required><Textarea name="description" required rows={2} placeholder="例: 納品時に畳のへりの浮きに気づき、持ち帰って修正" /></Field>
+                  <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+                    <Field label="原因 (分かれば)"><Textarea name="cause" rows={2} /></Field>
+                    <Field label="対策・再発防止 (分かれば)"><Textarea name="countermeasure" rows={2} /></Field>
+                  </div>
+                  <div className="flex flex-wrap gap-4 text-xs text-ink-2">
+                    <label className="flex items-center gap-2"><input type="checkbox" name="resolved" className="h-4 w-4" /> 原因と対策まで入力済み (解決済みにする)</label>
+                    <label className="flex items-center gap-2"><input type="checkbox" name="notCounted" className="h-4 w-4" /> 記録のみ (点検 DM・点検電話から分かったもの、お客様が原因のものなど。集計しない)</label>
+                  </div>
+                  <Button type="submit" size="sm">登録する</Button>
+                </form>
+              </details>
+            )}
+          </Card>
+
+          {chain.quote && db.attachments.some((a) => a.parentType === "quote" && a.parentId === chain.quote!.id) && (
+            <Card>
+              <CardHeader title="見積の資料 (手書き見積書の元の画像など)" description={`見積 ${chain.quote.number} に保存した写真・PDF です`} />
+              <div className="flex flex-wrap gap-2">
+                {db.attachments.filter((a) => a.parentType === "quote" && a.parentId === chain.quote!.id).map((a) => (
+                  <a key={a.id} href={`/api/attachments/${a.id}`} target="_blank" rel="noopener" className="block w-28 overflow-hidden rounded-lg border border-line bg-subtle text-[10px] text-ink-2 hover:border-accent">
+                    {a.kind === "photo" ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={`/api/attachments/${a.id}${a.thumbKey ? "?size=thumb" : ""}`} alt={a.fileName} className="h-24 w-full object-cover" />
+                    ) : (
+                      <span className="flex h-24 items-center justify-center">PDF</span>
+                    )}
+                    <span className="block truncate px-1.5 py-1">{a.fileName}</span>
+                  </a>
+                ))}
+              </div>
+            </Card>
+          )}
 
           <AttachmentsCard db={db} user={user} parent={{ type: "order", id: o.id }} returnTo={returnTo} title="現場写真・資料" description="施工前・施工中・完了の写真や図面を、スマートフォンのカメラ・アルバムから複数枚まとめて登録できます。この店舗の担当者・本部・管理者だけが表示できます" />
 
@@ -188,6 +333,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
                       {(["mail", "email", "line", "chatwork", "visit"] as const).map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}
                     </Select>
                   </Field>
+                  <Field label="備考 (請求書に印字・任意)" className="w-full"><Input name="notes" placeholder="例: 11月分の施工代金です" /></Field>
                   <Button type="submit">請求書を発行 ({yen(o.total)})</Button>
                 </form>
               ) : (
@@ -215,6 +361,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
                 </Field>
               </div>
               <Field label="現場住所"><Input name="siteAddress" defaultValue={o.siteAddress} /></Field>
+              <Field label="施工内容"><Textarea name="workDetails" defaultValue={o.workDetails} rows={3} /></Field>
               <Button type="submit" size="sm" variant="secondary">変更する</Button>
             </form>
           </Card>
@@ -229,6 +376,16 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               <li>見積: {chain.quote ? <><Link href={`/quotes/${chain.quote.id}`} className="text-accent hover:underline">{chain.quote.number}</Link> <StatusBadge value={chain.quote.status} map={QUOTE_STATUS} /></> : "-"}</li>
               <li>請求: {chain.invoice ? <><Link href={`/invoices/${chain.invoice.id}`} className="text-accent hover:underline">{chain.invoice.number}</Link> <StatusBadge value={chain.invoice.status} map={INVOICE_STATUS} /></> : <span className="text-ink-3">未発行</span>}</li>
               <li>入金: {chain.payments.length > 0 ? `${yen(chain.payments.reduce((a, p) => a + p.amount, 0))} (${chain.payments.length} 件)` : <span className="text-ink-3">-</span>}</li>
+            </ul>
+          </Card>
+
+          <Card>
+            <CardHeader title="変更履歴" description="この案件の登録・変更・承認の記録" />
+            <ul className="max-h-80 space-y-1.5 overflow-y-auto text-xs">
+              {db.auditLogs.filter((l) => (l.entity === "order" && l.entityId === o.id) || (chain.quote && l.entity === "quote" && l.entityId === chain.quote.id) || (chain.invoice && l.entity === "invoice" && l.entityId === chain.invoice.id) || (l.entity === "quality" && l.entityLabel === o.number)).slice(-60).reverse().map((l) => (
+                <li key={l.id}><span className="text-ink-3 tnum">{fmtDateTime(l.at)}</span> {l.summary} <span className="text-ink-3">({userName(l.userId)})</span></li>
+              ))}
+              {!db.auditLogs.some((l) => l.entity === "order" && l.entityId === o.id) && <li className="text-ink-3">変更の記録はありません (移行データ)</li>}
             </ul>
           </Card>
 

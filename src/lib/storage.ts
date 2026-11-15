@@ -61,6 +61,16 @@ export async function signedUrl(key: string, download?: string): Promise<string>
   return data.signedUrl;
 }
 
+/** 保存したファイルを読む (書類の読み直しなど。どちらの保存先でも使える) */
+export async function readObject(key: string): Promise<Buffer | null> {
+  if (BACKEND === "supabase") {
+    const { data, error } = await supabaseAdmin().storage.from(BUCKET).download(key);
+    if (error || !data) return null;
+    return Buffer.from(await data.arrayBuffer());
+  }
+  return readLocalObject(key);
+}
+
 /** ローカル (json) のファイルを読む */
 export async function readLocalObject(key: string): Promise<Buffer | null> {
   try {

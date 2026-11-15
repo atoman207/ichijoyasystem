@@ -27,7 +27,7 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-[0.4em]">御見積書</h1>
-            <p className="mt-2 text-[11px] text-ink-2">見積番号: {q.number}{q.version > 1 ? ` (改訂 v${q.version})` : ""}</p>
+            <p className="mt-2 text-[11px] text-ink-2">見積番号: {q.number}{q.version > 1 ? ` (第${q.version}版)` : ""}</p>
             <p className="text-[11px] text-ink-2">発行日: {fmtDate(q.issuedAt ?? q.createdAt)} · 有効期限: {fmtDate(q.validUntil)}</p>
           </div>
           <div className="text-right text-[11px] leading-relaxed">
@@ -91,6 +91,12 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
 
         <div className="mt-6 grid grid-cols-[1fr_auto] gap-6">
           <div className="text-[11px] leading-relaxed text-ink-2">
+            {q.workDetails && (
+              <>
+                <div className="font-medium text-ink">施工内容</div>
+                <p className="mb-2 whitespace-pre-wrap">{q.workDetails}</p>
+              </>
+            )}
             <div className="font-medium text-ink">備考</div>
             <p className="whitespace-pre-wrap">{q.notes ?? "工賃・配送・消費税込みの価格です。規格外サイズや特殊品は別途お見積りいたします。土・祝日の工事もご予約にて承ります。"}</p>
           </div>

@@ -19,6 +19,13 @@ function applyDecision(db: Database, a: Approval, decision: "approved" | "reject
         q.status = "approved";
         q.approvedBy = userId;
         q.approvedAt = now;
+        // 現場で手書きの見積書をお渡し済み → 承認と同時に「送付済 (手渡し)」にする
+        if (q.handedOver) {
+          q.status = "sent";
+          q.sentVia = "visit";
+          q.issuedAt = q.issuedAt ?? now.slice(0, 10);
+          db.commLogs.push({ id: `cl_${Date.now()}`, customerId: q.customerId, channel: "visit", direction: "outbound", subject: `お見積書 ${q.number}`, body: `現場で手書きの見積書 (合計 ¥${q.total.toLocaleString("ja-JP")}) をお渡し済み。システムの見積として承認しました。`, at: now, userId, relatedType: "quote", relatedId: q.id });
+        }
       } else {
         q.status = "draft";
       }
@@ -32,24 +39,65 @@ function applyDecision(db: Database, a: Approval, decision: "approved" | "reject
       const before = q.total;
       if (decision === "approved") {
         const pc = q.pendingChange;
+        // 変更前の版を残す (版の履歴・旧版の PDF 用)
+        q.revisions = [
+          ...(q.revisions ?? []),
+          {
+            version: q.version,
+            title: q.title,
+            items: q.items,
+            taxIncluded: q.taxIncluded,
+            subtotal: q.subtotal,
+            discount: q.discount,
+            tax: q.tax,
+            total: q.total,
+            workDetails: q.workDetails,
+            notes: q.notes,
+            validUntil: q.validUntil,
+            approvedBy: q.approvedBy,
+            approvedAt: q.approvedAt,
+            changeReason: pc.reason,
+            changeRequestedBy: pc.requestedBy,
+            changeApprovedBy: userId,
+            replacedAt: now,
+          },
+        ];
+        const beforeTitle = q.title;
+        const beforeWork = q.workDetails ?? "";
         q.items = pc.items;
         q.discount = pc.discount;
         q.subtotal = pc.subtotal;
         q.tax = pc.tax;
         q.total = pc.total;
+        if (pc.title !== undefined && pc.title) q.title = pc.title;
+        if (pc.taxIncluded !== undefined) q.taxIncluded = pc.taxIncluded || undefined;
+        if (pc.workDetails !== undefined) q.workDetails = pc.workDetails || undefined;
+        if (pc.notes !== undefined) q.notes = pc.notes || undefined;
         q.version += 1;
         q.approvedBy = userId;
         q.approvedAt = now;
-        // 受注済みなら受注金額も連動
+        // 受注済みなら受注金額・施工内容も連動 (受注側で施工内容を書き換えていた場合は残す)
         const o = db.orders.find((x) => x.quoteId === q.id && x.status !== "cancelled");
         if (o) {
+          const notes: string[] = [];
+          if (o.total !== q.total) notes.push(`受注金額を ¥${before.toLocaleString("ja-JP")} → ¥${q.total.toLocaleString("ja-JP")} に更新`);
           o.total = q.total;
+          if (q.title !== beforeTitle && o.title === beforeTitle) {
+            o.title = q.title;
+            notes.push(`件名を「${q.title}」に変更`);
+          }
+          if ((q.workDetails ?? "") !== beforeWork && (o.workDetails ?? "") === beforeWork) {
+            o.workDetails = q.workDetails;
+            notes.push("施工内容を見積の第" + q.version + "版に合わせて更新");
+          }
           o.updatedAt = now;
-          o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `見積変更の承認により受注金額を ¥${before.toLocaleString("ja-JP")} → ¥${q.total.toLocaleString("ja-JP")} に更新` });
+          o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `見積 ${q.number} 第${q.version}版の承認により${notes.length ? notes.join("、") : "内容を更新"} (理由: ${pc.reason})` });
         }
-        addAudit(db, { userId, action: "approve", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `見積の金額変更を承認 (v${q.version})`, storeId: q.storeId, changes: [{ field: "total", before, after: q.total }] });
+        const changes: { field: string; before: unknown; after: unknown }[] = [{ field: "total", before, after: q.total }];
+        if (q.title !== beforeTitle) changes.push({ field: "title", before: beforeTitle, after: q.title });
+        addAudit(db, { userId, action: "approve", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `見積の変更を承認 (第${q.version}版。理由: ${pc.reason})`, storeId: q.storeId, changes });
       } else {
-        addAudit(db, { userId, action: "reject", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `見積の金額変更を却下${comment ? ` (${comment})` : ""}`, storeId: q.storeId });
+        addAudit(db, { userId, action: "reject", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `見積の変更を却下${comment ? ` (${comment})` : ""}`, storeId: q.storeId });
       }
       q.pendingChange = undefined;
       q.updatedAt = now;

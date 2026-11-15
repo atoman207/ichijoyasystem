@@ -157,3 +157,31 @@ export function canViewReports(user: User): boolean {
 export function canExportData(user: User): boolean {
   return canSeeAllStores(user);
 }
+
+/** KPI (アンケート・クレーム・手直し・口コミの集計) を閲覧できる: 全員 (店舗スタッフは自店舗と全社の集計、社員別は自分の分) */
+export function canViewKpi(user: User): boolean {
+  return user.active;
+}
+
+/** アンケート・口コミの修正・削除、クレーム・手直しの削除: 店長・本部スタッフ・管理者 (登録は全員。はがきの取込・案件からの報告) */
+export function canManageKpi(user: User): boolean {
+  return isManagerOrAbove(user) || canSeeAllStores(user);
+}
+
+/** 社員別の KPI・インセンティブ (支給額) を閲覧できる: 管理者・本部スタッフは全員、店長は自店舗の社員、店舗スタッフは自分 */
+export function canViewStaffKpi(user: User, target: Pick<User, "id" | "storeId">): boolean {
+  if (canSeeAllStores(user)) return true;
+  if (user.role === "store_manager") return target.storeId === user.storeId;
+  return target.id === user.id;
+}
+
+/**
+ * 顧客の新規登録 (重複を防ぐため、登録できる人を絞る)。
+ * 管理者・本部スタッフ・事務担当 (設定 → KPI・インセンティブ の事務担当) は常に可。
+ * mode: office = 事務のみ (初期設定) / office_and_managers = 店長も可 / all = 全員
+ */
+export function canCreateCustomer(user: User, ctx: { mode: "office" | "office_and_managers" | "all"; clerkUserIds: string[] }): boolean {
+  if (user.role === "admin" || user.role === "hq_staff" || ctx.clerkUserIds.includes(user.id)) return true;
+  if (ctx.mode === "all") return true;
+  return ctx.mode === "office_and_managers" && user.role === "store_manager";
+}

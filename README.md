@@ -9,7 +9,8 @@
 > shoji specialist in Kumamoto). Next.js 16 App Router + TypeScript + Tailwind v4. Data is stored in Supabase
 > (PostgreSQL; setup SQL in `supabase/`), or in a local JSON file with fictional sample data for development.
 > Role-based access (Administrator / Store Manager / Store Staff / HQ Staff), approval workflows, audit log,
-> company-wide calendar, paper-to-data capture (mock OCR, real Claude vision when `ANTHROPIC_API_KEY` is set),
+> company-wide calendar, paper-to-data capture (sample OCR without a key; real AI reading when `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` is set),
+> quotes with revisions and PDF output (quote / invoice / receipt), customer-survey postcards, claims/rework, Google reviews, KPIs and incentives,
 > AI assistant, dashboards and reports. No client data is included in this repository.
 
 ## データベースと本番データ (Phase 1)
@@ -26,7 +27,7 @@
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SECRET_KEY` | Supabase の接続先と secret キー (サーバー側のみで使用) |
 | `SESSION_SECRET` | ログイン状態の署名鍵 (推奨。未設定なら `SUPABASE_SECRET_KEY` から導出。変更すると全員再ログイン) |
-| `ANTHROPIC_API_KEY` | 任意。AI アシスタント・書類読取を Claude で動かす |
+| `OPENAI_API_KEY` または `ANTHROPIC_API_KEY` | 任意。どちらか 1 つ。書類の AI 読取 (手書き見積・図面・施工資料・請求書・レシート・アンケートはがき)・お客様の声の分析・AI アシスタントを動かす。キーの形 (sk-ant- / sk-) で接続先を自動判定。本番は Vercel の Environment Variables にも設定して再デプロイ |
 | `DATA_BACKEND=json` + `DATA_FILE_NAME` | ローカル検証用。Supabase を使わず `data/<DATA_FILE_NAME>` を使う (例: `import/client-data.json` のコピーで本番データを手元確認) |
 
 ## クイックスタート (ローカル・サンプルデータ)
@@ -86,12 +87,14 @@ DATA_BACKEND=json npm run dev
 | 顧客 | `/customers` | 顧客 360° (基本情報・案件の流れ・外部とのやりとり履歴・予定・資料と写真)。登録時に既存顧客 (全店舗) との重複確認 |
 | 問い合わせ | `/inquiries` | 電話 / AI電話 / Web / メール / LINE / 来店・対面 / 郵送 / 紹介 などの入口を一元管理。受付日時の指定、既存顧客の候補と紐づけ、他店舗へ回す、資料・写真の添付 |
 | 見積 | `/quotes` | 商品マスタからの明細作成、承認フロー、確定後の金額変更申請、送付記録、印刷用書式 |
-| 受注・施工 | `/orders` | 契約承認 → 施工予定 (予定表連動) → 進捗記録 → 施工完了 (売上計上) → 請求書発行。現場写真・資料 (カメラ・アルバムから複数枚)、案件情報・担当店舗の変更 |
+| 受注・施工 | `/orders` | 契約承認 → 施工予定 (予定表連動) → 進捗記録 → 施工完了 (売上計上) → 請求書発行。現場写真・資料 (カメラ・アルバムから複数枚)、案件情報・担当店舗の変更、現場情報・引継ぎ事項、案件の状態 (工事完了・売上計上・請求完了・入金完了・全処理完了)、納品時の集金、クレーム・手直し |
+| 案件の進捗 | `/cases` | 問い合わせ〜全処理完了を 1 つの一覧で。案件進捗・見積と仕様・工事日程・請求・入金を分けて絞り込み (TEL待ち・請求書未発行・未入金・決済入金待ち など) |
+| KPI | `/kpi` | お客様アンケート (はがきの AI 読取)・お客様の声・クレーム・手直し・Google 口コミ・年間インセンティブ |
 | 予定表 | `/schedule` | 週表示、店舗・担当者フィルタ、受注の施工予定を自動反映 |
 | 請求・入金 | `/invoices` | 売掛残高、期日超過、入金登録 (現金/振込/カード/PayPay)、督促記録、印刷用書式 |
 | 経費精算 | `/expenses` | レシート撮影 → 読取 → 承認 → 精算、勘定科目別集計 |
 | 仕入・買掛 | `/purchases` | 仕入先請求書の取込 → 支払承認 → 支払、買掛残高 (本部・管理者) |
-| 書類取込 | `/capture` | 紙 → データ (手書き見積 / 図面 / 仕入請求書 / レシート)。元の画像・PDF を保存し、登録した見積・経費・仕入請求書の画面に表示 |
+| 書類取込 | `/capture` | 紙 → データ (手書き見積書 (備考欄以下まで) / 図面 / 施工資料 / 仕入請求書 / レシート / アンケートはがき)。AI が自信のない項目は黄色で示し、確認のチェックが済むまで登録しない。元の画像・PDF を保存。手書き見積書の読取の正確さ (担当者の修正との一致率) を表示 |
 | 承認 | `/approvals` | あなたの承認待ち / 申請中 / 全体 / 履歴、承認ルール |
 | 社内連絡 | `/messages` | 依頼・報告・確認・連絡のスレッド、メンション通知、案件への紐づけ |
 | AI アシスタント | `/ai` | 一元化データに基づく集計・検索・文面作成 |
@@ -114,8 +117,10 @@ DATA_BACKEND=json npm run dev
 - データ: Supabase (PostgreSQL)。ローカル検証は `data/db.json` (JSON ファイル)。`src/lib/db/store.ts` が切り替えの境界、テーブル定義の正本は `src/lib/db/schema.ts`
 - ファイル (資料・写真・書類取込の元画像): Supabase Storage の非公開バケット `attachments` (初回に自動作成)。ローカル検証は `data/uploads/`。`src/lib/storage.ts` が切り替えの境界。閲覧は `/api/attachments/<ID>` が権限 (登録先の記録の店舗・ロール) を確かめてから期限つきの URL (2 分) へ転送する。写真はブラウザで長辺 2048px に縮小してから送る (Vercel の 1 回の送信は 4.5 MB まで)
 - 認証: 署名付き Cookie セッション + scrypt でハッシュ化したパスワード (2 要素認証は次の段階)
-- AI: `@anthropic-ai/sdk` (Claude) — `ANTHROPIC_API_KEY` 未設定時はサンプル応答で動作
-- 依存ライブラリは最小限 (`lucide-react`, `clsx`, `@anthropic-ai/sdk`, `server-only`)
+- AI: `src/lib/ai/provider.ts` が OpenAI (chat completions + JSON Schema) と Claude (`@anthropic-ai/sdk`、structured outputs) を同じ形で呼ぶ。キー未設定時はサンプル応答。接続は 設定 → 外部連携・AI の「接続を確認」で確かめられる
+- 帳票 PDF: `src/lib/pdf/` (pdf-lib + Noto Sans JP を埋め込み)。`/api/pdf/quotes/<ID>` (`?version=` で旧版)・`/api/pdf/invoices/<ID>`・`/api/pdf/receipts/<ID>`。会社情報・登録番号・振込先は 設定 → 帳票
+- KPI: `src/lib/kpi.ts` (返信率・評価・クレーム率・口コミ) と `src/lib/incentive.ts` (年間インセンティブ)。ルールは 設定 → KPI・インセンティブ
+- 依存ライブラリは最小限 (`lucide-react`, `clsx`, `@anthropic-ai/sdk`, `pdf-lib`, `@pdf-lib/fontkit`, `server-only`)
 
 ```
 src/
@@ -169,7 +174,7 @@ scripts/
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SECRET_KEY` | Supabase の接続先と secret キー。両方あれば Supabase、なければ JSON |
 | `SESSION_SECRET` | セッション署名用の秘密鍵 (推奨。未設定なら secret キーから導出) |
-| `ANTHROPIC_API_KEY` | 設定すると書類読取 (Claude vision) と AI アシスタントが実際の Claude で動作 |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | どちらか 1 つ。書類・はがきの AI 読取と AI アシスタントが動作 (`OPENAI_MODEL`・`AI_PROVIDER` で固定も可。`.env.example` 参照) |
 | `DATA_BACKEND` / `DATA_FILE_NAME` | `json` で Supabase を使わずローカルファイル (`data/` 配下、省略時 `db.json`) |
 | `SUPABASE_DB_PASSWORD` または `SUPABASE_DB_URL` | データベースへの直接接続。テーブル定義の自動反映 (`npm run build` の前に `scripts/import/migrate.mjs`) と ichijoya.sql の実行 (`setup-database.mjs`) に使う。アプリ本体では使わない |
 | `REVIEW_ACCESS_KEY` / `REVIEW_LOGIN` | 確認用ログインの鍵 (省略時は secret キーから導出) / `off` で確認用ログインを停止 |

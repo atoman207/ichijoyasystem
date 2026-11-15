@@ -6,6 +6,7 @@ import { addAudit, diffChanges, getDb, mutate, newId, nowIso, nextCustomerCode }
 import type { Channel, Customer, CustomerType, Database, User } from "@/lib/db/types";
 import { canAccessStore } from "@/lib/auth/permissions";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation, type DuplicateInput, type DuplicateResult } from "@/lib/duplicates";
+import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { CHANNEL_LABEL } from "@/lib/constants";
 import { assertStore, choice, fail, requireActionUser, resolveStoreId, safeReturn, str, withMsg } from "./guards";
 
@@ -61,6 +62,7 @@ export async function checkCustomerDuplicates(input: DuplicateInput, excludeId?:
 
 export async function createCustomer(formData: FormData) {
   const user = await requireActionUser();
+  if (!userCanCreateCustomer(getDb(), user)) fail("/customers/new", "顧客の新規登録は事務担当が行います (設定で店長にも許可できます)。事務担当に登録を依頼してください。");
   const name = str(formData, "name");
   if (!name) fail("/customers/new", "氏名・会社名は必須です。");
   const storeId = resolveStoreId(user, str(formData, "storeId"));
@@ -100,6 +102,8 @@ export async function createCustomer(formData: FormData) {
     addAudit(db, { userId: user.id, action: "create", entity: "customer", entityId: id, entityLabel: `${c.code} ${c.name}`, summary: `顧客を登録 (${c.name})${dupNote}`, storeId });
   });
   revalidatePath("/customers");
+  const returnTo = safeReturn(str(formData, "returnTo"), "");
+  if (returnTo) redirect(withMsg(`${returnTo}${returnTo.includes("?") ? "&" : "?"}customerId=${id}`, "顧客を登録しました。"));
   redirect(withMsg(`/customers/${id}`, "顧客を登録しました。関連する画面にも即時反映されます。"));
 }
 

@@ -24,35 +24,39 @@ export default async function EditQuotePage({ params, searchParams }: { params: 
   return (
     <div className="max-w-5xl">
       <Flash err={err} />
-      <PageHeader title={`${q.number} を編集`} description={`${customerName(q.customerId)} 様 · ${q.title}`} back={{ href: `/quotes/${id}`, label: "見積詳細" }} />
+      <PageHeader title={`${q.number} を編集`} description={`${customerName(q.customerId)} 様 · ${q.title} · 第${q.version}版`} back={{ href: `/quotes/${id}`, label: "見積詳細" }} />
       {amend ? (
-        <Note tone="warn">この見積は確定済み (承認済・送付済・受注) です。金額・内容の変更は <strong>変更申請</strong> として記録され、承認者 (店長または管理者) の承認後に反映されます。変更前の内容は履歴に残ります。</Note>
+        <Note tone="warn">この見積は確定済み (承認済・送付済・受注) です。金額・数量・施工内容の変更は <strong>変更申請</strong> として記録され、承認者 (店長または管理者) の承認後に第{q.version + 1}版として反映されます。変更前の版は「版の履歴」に残り、PDF も出力できます。</Note>
       ) : (
         <Note>下書きの見積です。内容を修正して保存するか、そのまま承認を申請できます。</Note>
       )}
       <Card className="mt-4">
         <form action={updateQuote.bind(null, id)} className="space-y-5">
-          {!amend && (
-            <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2 @4xl:grid-cols-4">
-              <Field label="件名" required className="@4xl:col-span-2"><Input name="title" required defaultValue={q.title} /></Field>
-              <Field label="種別">
-                <Select name="category" defaultValue={q.category}>
-                  {(Object.keys(CATEGORY_LABEL) as ServiceCategory[]).map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
-                </Select>
-              </Field>
-              <Field label="有効期限"><Input name="validUntil" type="date" defaultValue={q.validUntil} /></Field>
-            </div>
-          )}
+          <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2 @4xl:grid-cols-4">
+            <Field label="件名" required className="@4xl:col-span-2"><Input name="title" required defaultValue={q.title} /></Field>
+            {!amend && (
+              <>
+                <Field label="種別">
+                  <Select name="category" defaultValue={q.category}>
+                    {(Object.keys(CATEGORY_LABEL) as ServiceCategory[]).map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
+                  </Select>
+                </Field>
+                <Field label="有効期限"><Input name="validUntil" type="date" defaultValue={q.validUntil} /></Field>
+              </>
+            )}
+          </div>
           <div>
             <div className="label">明細</div>
-            <QuoteEditor products={db.products} initialItems={q.items} initialDiscount={q.discount} />
+            <QuoteEditor products={db.products} initialItems={q.items} initialDiscount={q.discount} initialTaxIncluded={Boolean(q.taxIncluded)} />
           </div>
-          {amend ? (
+          <Field label="施工内容 (見積書に印字し、受注に引き継ぎます)" hint="例: 和室6畳 表替え (さくら)。家具の移動・古畳の引取を含みます">
+            <Textarea name="workDetails" defaultValue={q.workDetails} rows={3} />
+          </Field>
+          <Field label="備考 (見積書に印字)"><Textarea name="notes" defaultValue={q.notes} /></Field>
+          {amend && (
             <Field label="変更理由" required hint="承認者と変更履歴に記録されます">
               <Textarea name="reason" required placeholder="例: お客様より網戸2枚の追加依頼" />
             </Field>
-          ) : (
-            <Field label="備考 (見積書に印字)"><Textarea name="notes" defaultValue={q.notes} /></Field>
           )}
           <FormActions>
             <LinkButton href={`/quotes/${id}`} variant="secondary">キャンセル</LinkButton>

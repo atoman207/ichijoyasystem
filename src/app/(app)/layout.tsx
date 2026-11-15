@@ -22,6 +22,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     { href: "/inquiries", label: "問い合わせ", icon: "inquiries", group: "営業・施工", badge: n.newInquiries || undefined },
     { href: "/quotes", label: "見積", icon: "quotes", group: "営業・施工" },
     { href: "/orders", label: "受注・施工", icon: "orders", group: "営業・施工" },
+    { href: "/cases", label: "案件の進捗 (問い合わせ〜入金・全処理完了)", short: "案件進捗", icon: "cases", group: "営業・施工" },
     { href: "/schedule", label: "予定表", icon: "schedule", group: "営業・施工", badge: n.myConflicts || undefined },
     { href: "/invoices", label: "請求・入金", icon: "invoices", group: "経理", badge: n.overdueInvoices || undefined },
     { href: "/expenses", label: "経費精算", icon: "expenses", group: "経理" },
@@ -36,6 +37,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     { href: "/ai", label: "AIアシスタント", short: "AI", icon: "ai", group: "業務支援" },
     { href: "/materials", label: "資料・写真", icon: "materials", group: "業務支援" },
   );
+  nav.push({ href: "/kpi", label: "KPI (アンケート・クレーム・口コミ・インセンティブ)", short: "KPI", icon: "kpi", group: "管理" });
   if (canViewReports(user)) {
     nav.push({ href: "/reports", label: "レポート・分析", short: "レポート", icon: "reports", group: "管理" });
   }

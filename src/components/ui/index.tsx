@@ -85,6 +85,7 @@ export function LinkButton({
   className,
   children,
   download,
+  target,
 }: {
   href: string;
   variant?: ButtonVariant;
@@ -93,7 +94,16 @@ export function LinkButton({
   children: ReactNode;
   /** ファイルのダウンロード (API)。先読み (prefetch) されないよう通常のリンクにする */
   download?: boolean;
+  /** 別のタブで開く (PDF など。先読みしない通常のリンク) */
+  target?: "_blank";
 }) {
+  if (target) {
+    return (
+      <a href={href} target={target} rel="noopener" className={buttonClass(variant, size, className)}>
+        {children}
+      </a>
+    );
+  }
   if (download) {
     return (
       <a href={href} download className={buttonClass(variant, size, className)}>

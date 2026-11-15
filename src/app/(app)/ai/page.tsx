@@ -1,15 +1,18 @@
 import { requireUser } from "@/lib/auth/session";
-import { aiEnabled } from "@/lib/ai/ocr";
-import { ASSISTANT_MODEL } from "@/lib/ai/assistant";
+import { aiStatus } from "@/lib/ai/provider";
 import { AiChat } from "@/components/features/AiChat";
 import { Badge, Card, CardHeader, PageHeader } from "@/components/ui";
 
+/** AI の応答待ち (最大 50 秒) のため、Vercel の処理時間の上限を 60 秒にする */
+export const maxDuration = 60;
+
 export default async function AiPage() {
   const user = await requireUser();
-  const enabled = aiEnabled();
+  const status = aiStatus();
+  const enabled = status.enabled;
   return (
     <div>
-      <PageHeader title="AI アシスタント" badge={<Badge tone={enabled ? "good" : "neutral"}>{enabled ? `Claude 接続中 (${ASSISTANT_MODEL})` : "サンプルモード"}</Badge>} />
+      <PageHeader title="AI アシスタント" badge={<Badge tone={enabled ? "good" : "neutral"}>{enabled ? `${status.label} 接続中 (${status.model})` : "サンプルモード"}</Badge>} />
       <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-4">
         <div className="@4xl:col-span-3">
           <AiChat userName={user.name} userId={user.id} aiEnabled={enabled} />
