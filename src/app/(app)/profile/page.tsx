@@ -6,9 +6,12 @@ import { getDb } from "@/lib/db/store";
 import { canApprove, canApproveAll, canManageCompanyEvents, canManageFinance, canManageSettings, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
 import { customerName, storeById, storeName, userName } from "@/lib/db/queries";
 import { addDays, fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
-import { APPROVAL_RULES, APPROVAL_TYPE_LABEL, AUDIT_ACTION_LABEL, ENTITY_LABEL, INQUIRY_STATUS, ORDER_STATUS, ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
+import { APPROVAL_TYPE_LABEL, AUDIT_ACTION_LABEL, ENTITY_LABEL, INQUIRY_STATUS, ORDER_STATUS, ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import { Avatar, Badge, Button, Card, CardHeader, ChannelTag, Field, Flash, Input, LinkButton, Note, PageHeader, Stat, StatusBadge, StoreTag } from "@/components/ui";
 import { changeOwnPassword } from "@/lib/actions/auth";
+import { updateOwnNotify } from "@/lib/actions/settings-ops";
+import { approvalSettings } from "@/lib/approval-rules";
+import { NotifyPrefsForm } from "@/components/settings/NotifyPrefsForm";
 import { analyzeConflicts, compareEvents, overlapsRange, timeLabel } from "@/lib/calendar";
 import { ConflictBadge, KindBadge } from "@/components/schedule/parts";
 
@@ -45,7 +48,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
       label:
         canApproveAll(user)
           ? "全案件の承認 (店長承認・管理者承認の両方。自分の申請を除く)"
-          : `自店舗の店長承認 (見積・契約 ${APPROVAL_RULES.quoteAdminThreshold.toLocaleString("ja-JP")} 円未満、経費 ${APPROVAL_RULES.expenseAdminThreshold.toLocaleString("ja-JP")} 円未満。自分の申請を除く)`,
+          : `自店舗の店長承認 (見積・契約 ${approvalSettings(db).quoteAdminThreshold.toLocaleString("ja-JP")} 円未満、経費 ${approvalSettings(db).expenseAdminThreshold.toLocaleString("ja-JP")} 円未満。自分の申請を除く)`,
     },
     { ok: canManageFinance(user) || isManagerOrAbove(user), label: `請求書の発行 (${allStores ? "全店舗" : "自店舗"})` },
     { ok: true, label: `入金の登録 (${allStores ? "全店舗" : "自店舗"})` },
@@ -222,6 +225,11 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
             </li>
           ))}
         </ul>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader title="通知の受け取り方" description="画面のお知らせに加えて、メール・Chatwork で受け取る設定です" icon={<Mail />} />
+        <NotifyPrefsForm u={user} action={updateOwnNotify} />
       </Card>
 
       <Card className="mb-6">

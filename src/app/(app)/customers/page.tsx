@@ -28,6 +28,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
     stats.set(o.customerId, s);
   }
   for (const c of db.commLogs) {
+    if (!c.customerId) continue;
     const s = stats.get(c.customerId) ?? { orders: 0, lifetime: 0 };
     if (!s.last || c.at > s.last) s.last = c.at;
     stats.set(c.customerId, s);

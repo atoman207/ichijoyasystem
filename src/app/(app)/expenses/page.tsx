@@ -25,7 +25,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
   rows = [...rows].sort((a, b) => b.date.localeCompare(a.date));
   const paged = paginate(rows, sp.page);
   const storeMap = new Map(db.stores.map((s) => [s.id, s]));
-  const thisMonth = scoped.filter((e) => e.date.startsWith(month) && e.status !== "rejected" && e.status !== "draft");
+  const thisMonth = scoped.filter((e) => e.date.startsWith(month) && e.status !== "rejected" && e.status !== "denied" && e.status !== "draft");
   const byAccount = new Map<string, number>();
   for (const e of thisMonth) byAccount.set(e.account, (byAccount.get(e.account) ?? 0) + e.amount);
   const top = [...byAccount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
@@ -35,7 +35,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title="経費精算" actions={<><LinkButton href="/capture?kind=receipt" variant="secondary">レシートを撮影・取込</LinkButton><LinkButton href="/expenses/new">+ 経費を登録</LinkButton></>} />
+      <PageHeader title="経費精算" actions={<><LinkButton href="/cashbook" variant="ghost">現金出納帳</LinkButton><LinkButton href="/capture?kind=receipt" variant="secondary">レシートを撮影・取込</LinkButton><LinkButton href="/expenses/new">+ 経費を登録</LinkButton></>} />
       <div className="mb-6 grid grid-cols-2 gap-3 @3xl:grid-cols-4">
         <Stat label="今月の経費 (申請済)" value={yen(thisMonth.reduce((a, e) => a + e.amount, 0))} sub={`${thisMonth.length} 件`} />
         <Stat label="承認待ち" value={`${scoped.filter((e) => e.status === "pending_approval").length} 件`} sub={yen(scoped.filter((e) => e.status === "pending_approval").reduce((a, e) => a + e.amount, 0))} href={`${base}?status=pending_approval`} />
@@ -50,6 +50,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
           { href: `${base}?status=approved`, label: "承認済 (精算待ち)", count: scoped.filter((e) => e.status === "approved").length },
           { href: `${base}?status=paid`, label: "精算済", count: scoped.filter((e) => e.status === "paid").length },
           { href: `${base}?status=rejected`, label: "差戻し", count: scoped.filter((e) => e.status === "rejected").length },
+          { href: `${base}?status=denied`, label: "却下", count: scoped.filter((e) => e.status === "denied").length },
           { href: `${base}?status=draft`, label: "下書き", count: scoped.filter((e) => e.status === "draft").length },
         ]}
       />

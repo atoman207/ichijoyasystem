@@ -2,7 +2,10 @@ import type {
   ApprovalStatus,
   ApprovalType,
   AuditAction,
+  CashSource,
   Channel,
+  DeliveryChannel,
+  DeliveryStatus,
   DocumentKind,
   DocumentStatus,
   ExpensePaymentMethod,
@@ -12,11 +15,14 @@ import type {
   OrderStatus,
   PaymentMethod,
   ProgressKind,
+  PurchasePayMethod,
   PurchaseStatus,
   QuoteStatus,
   Role,
   ScheduleKind,
   ServiceCategory,
+  SupplierKind,
+  TaskStatus,
   ThreadKind,
 } from "@/lib/db/types";
 
@@ -89,6 +95,7 @@ export const QUOTE_STATUS: Record<QuoteStatus, { label: string; tone: Tone }> = 
 
 export const ORDER_STATUS: Record<OrderStatus, { label: string; tone: Tone }> = {
   pending_approval: { label: "契約承認待ち", tone: "warn" },
+  returned: { label: "契約差戻し (再申請待ち)", tone: "serious" },
   confirmed: { label: "受注確定", tone: "accent" },
   scheduled: { label: "施工予定", tone: "info" },
   in_progress: { label: "施工中", tone: "info" },
@@ -111,21 +118,37 @@ export const EXPENSE_STATUS: Record<ExpenseStatus, { label: string; tone: Tone }
   draft: { label: "下書き", tone: "neutral" },
   pending_approval: { label: "承認待ち", tone: "warn" },
   approved: { label: "承認済", tone: "accent" },
-  rejected: { label: "差戻し", tone: "critical" },
+  rejected: { label: "差戻し", tone: "serious" },
+  denied: { label: "却下", tone: "critical" },
   paid: { label: "精算済", tone: "good" },
 };
 
 export const PURCHASE_STATUS: Record<PurchaseStatus, { label: string; tone: Tone }> = {
-  received: { label: "受領", tone: "neutral" },
-  pending_approval: { label: "支払承認待ち", tone: "warn" },
-  approved: { label: "支払承認済", tone: "accent" },
-  paid: { label: "支払済", tone: "good" },
-  disputed: { label: "照会中", tone: "critical" },
+  received: { label: "受領 (支払依頼前)", tone: "neutral" },
+  pending_approval: { label: "支払依頼中 (承認待ち)", tone: "warn" },
+  approved: { label: "支払待ち (承認済)", tone: "accent" },
+  paid: { label: "支払完了", tone: "good" },
+  disputed: { label: "差戻し (照会中)", tone: "serious" },
+  rejected: { label: "支払却下", tone: "critical" },
+};
+
+export const PURCHASE_PAY_METHOD_LABEL: Record<PurchasePayMethod, string> = {
+  transfer: "銀行振込",
+  cash: "現金",
+  card: "法人カード",
+  debit: "口座振替",
+  other: "その他",
+};
+
+export const SUPPLIER_KIND_LABEL: Record<SupplierKind, string> = {
+  supplier: "仕入先",
+  partner: "協力業者",
 };
 
 export const APPROVAL_STATUS: Record<ApprovalStatus, { label: string; tone: Tone }> = {
   pending: { label: "承認待ち", tone: "warn" },
   approved: { label: "承認", tone: "good" },
+  returned: { label: "差戻し", tone: "serious" },
   rejected: { label: "却下", tone: "critical" },
   cancelled: { label: "取下げ", tone: "neutral" },
 };
@@ -136,7 +159,16 @@ export const APPROVAL_TYPE_LABEL: Record<ApprovalType, string> = {
   order: "受注 (契約) の確定",
   expense: "経費精算",
   purchase: "仕入請求書の支払",
+  order_change: "契約内容の変更",
+  customer_change: "顧客の重要情報の変更",
 };
+
+/** 承認の判断の説明 (承認・差戻し・却下で記録の扱いが変わる) */
+export const APPROVAL_DECISION_HELP = {
+  approved: "承認: 申請の内容を反映します",
+  returned: "差戻し: 申請者に戻します。修正して再申請できます",
+  rejected: "却下: 申請を認めません (再申請はしない前提。記録は残ります)",
+} as const;
 
 export const DOCUMENT_KIND_LABEL: Record<DocumentKind, string> = {
   handwritten_quote: "手書き見積書",
@@ -216,6 +248,38 @@ export const THREAD_KIND_LABEL: Record<ThreadKind, string> = {
   notice: "連絡",
 };
 
+/** 業務依頼の状態 (依頼 → 確認 → 報告 → 完了) */
+export const TASK_STATUS: Record<TaskStatus, { label: string; tone: Tone }> = {
+  requested: { label: "依頼中 (未確認)", tone: "warn" },
+  acknowledged: { label: "対応中", tone: "info" },
+  reported: { label: "報告あり (確認待ち)", tone: "accent" },
+  confirmed: { label: "完了", tone: "good" },
+};
+
+export const CASH_SOURCE_LABEL: Record<CashSource, string> = {
+  manual: "手入力",
+  opening: "繰越",
+  payment: "入金から自動",
+  expense: "経費精算から自動",
+  purchase: "仕入の支払から自動",
+};
+
+/** 現金出納の科目・区分 (入金 / 出金)。経費の勘定科目も出金に使える */
+export const CASH_IN_ACCOUNTS = ["売掛金回収 (現金入金)", "小口現金補充", "銀行引出", "雑収入", "その他の入金"] as const;
+export const CASH_OUT_ACCOUNTS = ["銀行預入", "小口現金返却", "仕入 (現金払い)", "その他の出金"] as const;
+
+export const DELIVERY_CHANNEL_LABEL: Record<DeliveryChannel, string> = {
+  email: "メール",
+  line: "LINE",
+  chatwork: "Chatwork",
+};
+
+export const DELIVERY_STATUS: Record<DeliveryStatus, { label: string; tone: Tone }> = {
+  sent: { label: "送信", tone: "good" },
+  failed: { label: "送信失敗", tone: "critical" },
+  skipped: { label: "記録のみ (送信の設定なし)", tone: "neutral" },
+};
+
 export const PROGRESS_KIND_LABEL: Record<ProgressKind, string> = {
   note: "メモ",
   survey: "現場調査",
@@ -258,9 +322,22 @@ export const ENTITY_LABEL: Record<string, string> = {
   product: "商品",
   session: "セッション",
   data: "データ",
+  cash: "現金出納",
+  comm: "やりとり履歴",
+  delivery: "送信",
+  settings: "設定",
+  survey: "アンケート",
+  quality: "クレーム・手直し",
+  review: "口コミ",
+  attachment: "添付ファイル",
+  store: "店舗",
+  accounting: "会計データ",
 };
 
-/** 勘定科目 (経費) */
+/** 勘定科目 (仕入) */
+export const PURCHASE_ACCOUNTS = ["仕入高", "材料費", "外注費", "消耗品費", "荷造運賃", "修繕費", "支払手数料", "雑費"] as const;
+
+/** 勘定科目 (経費)。備品は 10 万円未満なら消耗品費、10 万円以上は工具器具備品 (固定資産) */
 export const EXPENSE_ACCOUNTS = [
   "消耗品費",
   "車両費 (ガソリン代)",
@@ -272,6 +349,12 @@ export const EXPENSE_ACCOUNTS = [
   "修繕費",
   "広告宣伝費",
   "材料費",
+  "工具器具備品",
+  "荷造運賃",
+  "支払手数料",
+  "租税公課",
+  "福利厚生費",
+  "新聞図書費",
   "雑費",
 ] as const;
 

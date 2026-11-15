@@ -5,7 +5,8 @@ import { createQuote } from "@/lib/actions/quotes";
 import { customerOptions } from "@/lib/db/queries";
 import { CustomerSearch } from "@/components/features/CustomerSearch";
 import { addDays, toDateKey } from "@/lib/format";
-import { APPROVAL_RULES, CATEGORY_LABEL, DOCUMENT_KIND_LABEL } from "@/lib/constants";
+import { CATEGORY_LABEL, DOCUMENT_KIND_LABEL } from "@/lib/constants";
+import { approvalSettings } from "@/lib/approval-rules";
 import { matchProduct } from "@/lib/product-match";
 import { documentSettings } from "@/lib/doc-settings";
 import { toSiteInfo } from "@/lib/site-info";
@@ -65,7 +66,7 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
       <Flash err={sp.err} />
       <PageHeader title="見積を作成" back={{ href: inquiry ? `/inquiries/${inquiry.id}` : "/quotes", label: inquiry ? "問い合わせに戻る" : "見積一覧" }} />
       <Note tone="accent">
-        合計 {APPROVAL_RULES.quoteAdminThreshold.toLocaleString("ja-JP")} 円未満は店長承認、以上は管理者承認が必要です (本部の案件と、承認できる店長がいない店舗は管理者)。「承認を申請」すると承認者に通知され、承認後にお客様へ送付できます。
+        合計 {approvalSettings(db).quoteAdminThreshold.toLocaleString("ja-JP")} 円未満は店長承認、以上は管理者承認が必要です (本部の案件と、承認できる店長がいない店舗は管理者)。「承認を申請」すると承認者に通知され、承認後にお客様へ送付できます。
         {doc && <> この見積は取込書類「{doc.fileName}」の読取結果を初期値にしています (品名は商品マスタに対応づけ、単価が読み取れない行はマスタの単価)。内容を確認・修正してください。</>}
       </Note>
       <Card className="mt-4">

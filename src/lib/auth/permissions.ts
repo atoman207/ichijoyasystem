@@ -1,4 +1,4 @@
-import type { Approval, Attachment, Expense, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
+import type { Approval, Attachment, AuditLog, CashEntry, Expense, PurchaseInvoice, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
 
 /**
  * 権限ルール
@@ -7,7 +7,9 @@ import type { Approval, Attachment, Expense, Role, ScheduleEvent, StoreId, Threa
  * - 店長 / 店舗スタッフ: 自店舗の情報のみ
  * - 承認: 店長は自店舗の「店長承認」案件、管理者は全案件
  * - 設定 (ユーザー・商品・承認ルール): 管理者のみ
- * - 請求書の発行: 管理者・本部スタッフ・店長。入金の登録: 自店舗のメンバー (店舗スタッフも可)。仕入の処理: 管理者・本部スタッフ
+ * - 請求書の発行: 管理者・本部スタッフ・店長。入金の登録: 自店舗のメンバー (店舗スタッフも可)
+ * - 仕入: 登録と支払依頼は店長 (自店舗)・本部スタッフ・管理者、支払の承認は管理者、支払完了と経費の精算は本部スタッフ・管理者
+ * - 現金出納帳: 全員が自店舗 (全店舗ロールは全店舗)。会計データの出力: 本部スタッフ・管理者
  * - 承認: 自分が申請したものは承認できない (管理者どうし・店長と管理者で相互に承認する)
  * - 経費: 店舗スタッフは自分の経費のみ、店長は自店舗、全店舗ロールは全件
  * - 社内連絡: 参加しているスレッド・自店舗のスレッド・全社向け (店舗指定なし) のスレッド。全店舗ロールは全件
@@ -173,6 +175,85 @@ export function canViewStaffKpi(user: User, target: Pick<User, "id" | "storeId">
   if (canSeeAllStores(user)) return true;
   if (user.role === "store_manager") return target.storeId === user.storeId;
   return target.id === user.id;
+}
+
+/* ---------------- Phase 4: 経費・仕入・現金出納・会計・履歴 ---------------- */
+
+/** 仕入先・協力業者の台帳を見る: 本部スタッフ・管理者・店長 (店長は支払依頼・やりとりの記録に使う) */
+export function canViewSuppliers(user: User): boolean {
+  return canManageFinance(user) || user.role === "store_manager";
+}
+
+/** 仕入先・協力業者の登録・変更: 本部スタッフ・管理者 */
+export function canEditSuppliers(user: User): boolean {
+  return canManageFinance(user);
+}
+
+/** 仕入請求書の登録と支払依頼: 本部スタッフ・管理者 (全店舗)、店長 (自店舗) */
+export function canRegisterPurchase(user: User): boolean {
+  return canManageFinance(user) || user.role === "store_manager";
+}
+
+/** 仕入請求書を見る: 本部スタッフ・管理者は全件、店長は自店舗 */
+export function canViewPurchase(user: User, p: Pick<PurchaseInvoice, "storeId">): boolean {
+  return canManageFinance(user) || (user.role === "store_manager" && p.storeId === user.storeId);
+}
+
+/** 仕入の支払完了・経費の精算 (お金を払う処理): 本部スタッフ・管理者 */
+export function canPay(user: User): boolean {
+  return canManageFinance(user);
+}
+
+/** 現金出納帳: 全員が自店舗 (全店舗ロールは全店舗) を閲覧・記帳 */
+export function canViewCashbook(user: User, storeId: StoreId): boolean {
+  return user.active && canAccessStore(user, storeId);
+}
+
+/** 現金出納の行の変更・削除: 記帳した本人 (手入力の行)・その店舗の店長・本部スタッフ・管理者。自動の記帳は本部スタッフ・管理者のみ削除できる */
+export function canEditCashEntry(user: User, c: Pick<CashEntry, "storeId" | "recordedBy" | "source">): boolean {
+  if (canManageFinance(user)) return true;
+  if (c.source !== "manual" && c.source !== "opening") return false;
+  return (c.recordedBy === user.id && canAccessStore(user, c.storeId)) || (user.role === "store_manager" && user.storeId === c.storeId);
+}
+
+/** 会計データ (仕訳・明細) の出力と、会計の設定: 本部スタッフ・管理者 */
+export function canExportAccounting(user: User): boolean {
+  return canManageFinance(user);
+}
+
+/** 店舗スタッフが自店舗の履歴を見られる対象 (案件・顧客・予定・請求など。経費・承認・設定などは見ない) */
+const STAFF_AUDIT_ENTITIES = new Set(["customer", "inquiry", "quote", "order", "invoice", "payment", "schedule", "document", "attachment", "survey", "quality", "review", "comm", "cash", "thread"]);
+
+/**
+ * 変更履歴 (監査ログ) の閲覧範囲
+ * - 管理者: すべて
+ * - 本部スタッフ: すべて (ほかの社員のログイン・ログアウトを除く)
+ * - 店長: 自店舗の記録と自分の操作 (ほかの社員のログイン・ログアウトを除く)
+ * - 店舗スタッフ: 自分の操作と、自店舗の案件・顧客・予定・請求などの記録
+ */
+export function canViewAuditEntry(user: User, l: Pick<AuditLog, "userId" | "storeId" | "entity">): boolean {
+  if (user.role === "admin") return true;
+  if (l.userId === user.id) return true;
+  if (l.entity === "session") return false;
+  if (user.role === "hq_staff") return true;
+  if (!l.storeId || l.storeId !== user.storeId) return false;
+  if (user.role === "store_manager") return true;
+  return STAFF_AUDIT_ENTITIES.has(l.entity);
+}
+
+/** 変更履歴の書き出し (CSV): 管理者・本部スタッフ */
+/** 顧客の重要情報を承認なしで変更できる (その店舗の承認者 = 店長と管理者) */
+export function canApplyCustomerChange(user: User, storeId: StoreId): boolean {
+  return user.role === "admin" || (user.role === "store_manager" && user.storeId === storeId);
+}
+
+export function canExportAudit(user: User): boolean {
+  return canSeeAllStores(user);
+}
+
+/** 外部連携の接続確認 (テスト送信) と送信履歴の閲覧: 管理者 */
+export function canManageIntegrations(user: User): boolean {
+  return user.role === "admin";
 }
 
 /**

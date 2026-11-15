@@ -32,7 +32,7 @@ export const surveyDate = (s: Pick<SurveyResponse, "answeredOn" | "receivedAt">)
 
 /** 集計の対象になる案件 (キャンセルを除く) */
 export function periodOrders(db: Pick<Database, "orders">, p: Period | null, storeId?: StoreId): Order[] {
-  return db.orders.filter((o) => o.status !== "cancelled" && o.status !== "pending_approval" && (!storeId || o.storeId === storeId) && inPeriod(orderDate(o), p));
+  return db.orders.filter((o) => o.status !== "cancelled" && o.status !== "pending_approval" && o.status !== "returned" && (!storeId || o.storeId === storeId) && inPeriod(orderDate(o), p));
 }
 
 const avg = (xs: (number | undefined)[]): number | null => {

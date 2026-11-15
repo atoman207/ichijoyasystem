@@ -170,7 +170,7 @@ function parseEdited(formData: FormData, kind: DocumentKind, back: string): Reco
   return Object.fromEntries(Object.entries(data as Record<string, unknown>).filter(([k]) => allowed.has(k)).map(([k, v]) => [k, clip(v)]));
 }
 
-const META_KEYS = ["_provider", "_model", "_aiWarnings", "_error", "_ms", "_readAt", "_sample", "_ai"];
+const META_KEYS = ["_provider", "_model", "_aiWarnings", "_error", "_ms", "_readAt", "_sample", "_ai", "_accountCandidates"];
 
 /** 読取の確認が必要か (AI が自信がないとした項目・行が残っている) */
 function needsConfirmation(prev: Record<string, unknown> | undefined, edited: Record<string, unknown>): boolean {
@@ -281,7 +281,7 @@ export async function saveExtraction(formData: FormData) {
     case "expense":
       redirect(`/expenses/new?documentId=${id}`);
     case "purchase":
-      redirect(`/purchases?documentId=${id}`);
+      redirect(`/purchases/new?documentId=${id}`);
     case "confirm":
       redirect(withMsg(back, "読取内容を確定して保存しました。"));
     default:

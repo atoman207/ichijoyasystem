@@ -84,7 +84,7 @@ export function createCaseResolver(db: Database) {
       quoteId: q?.id,
       orderId: o?.id,
       open,
-      pending: o?.status === "pending_approval",
+      pending: o?.status === "pending_approval" || o?.status === "returned",
     };
   }
 
@@ -142,7 +142,7 @@ export function selectableCases(db: Database, user: User): CaseRef[] {
   const since = addDays(toDateKey(new Date()), -30);
   const out: CaseRef[] = [];
   for (const o of scopeByStore(user, db.orders)) {
-    const active = ["pending_approval", "confirmed", "scheduled", "in_progress"].includes(o.status);
+    const active = ["pending_approval", "returned", "confirmed", "scheduled", "in_progress"].includes(o.status);
     const recent = ["completed", "invoiced", "paid"].includes(o.status) && (o.completedAt ?? "") >= since;
     if (active || recent) {
       const ref = resolver.resolve("order", o.id);

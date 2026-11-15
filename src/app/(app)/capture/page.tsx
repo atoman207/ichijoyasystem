@@ -83,7 +83,7 @@ export default async function CapturePage({ searchParams }: { searchParams: Prom
     const ids = new Set(candidates.map((c) => c.id));
     const orders = scopeByStore(user, db.orders);
     const forCustomer = orders.filter((o) => ids.has(o.customerId)).sort((a, b) => b.contractDate.localeCompare(a.contractDate)).slice(0, 10);
-    const active = orders.filter((o) => ["pending_approval", "confirmed", "scheduled", "in_progress"].includes(o.status) && !ids.has(o.customerId)).sort((a, b) => (b.scheduledStart ?? b.contractDate).localeCompare(a.scheduledStart ?? a.contractDate)).slice(0, 30);
+    const active = orders.filter((o) => ["pending_approval", "returned", "confirmed", "scheduled", "in_progress"].includes(o.status) && !ids.has(o.customerId)).sort((a, b) => (b.scheduledStart ?? b.contractDate).localeCompare(a.scheduledStart ?? a.contractDate)).slice(0, 30);
     for (const o of [...forCustomer, ...active]) targetOptions.push({ value: o.number, label: `受注 ${o.title} / ${customerName(o.customerId)} 様` });
     const inquiries = scopeByStore(user, db.inquiries).filter((i) => ["new", "in_progress", "quoted"].includes(i.status)).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt)).slice(0, 15);
     for (const i of inquiries) targetOptions.push({ value: i.number, label: `問い合わせ ${i.summary.slice(0, 30)}` });

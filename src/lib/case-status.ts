@@ -144,6 +144,7 @@ export function orderCase(o: Order, ix: CaseIndex, today: string): CaseRow {
   const tasks: string[] = [];
   if (!closed) {
     if (stage === "ordered" && o.status === "pending_approval") tasks.push("契約承認待ち");
+    if (stage === "ordered" && o.status === "returned") tasks.push("契約の再申請 (差戻し)");
     if (!done && spec === "pending") tasks.push("仕様の確定");
     if (!done && schedule !== "fixed") tasks.push(schedule === "adjusting" ? "工事日程の調整" : "工事日程の決定");
     if (done && !o.salesDate) tasks.push("売上計上");
@@ -154,7 +155,7 @@ export function orderCase(o: Order, ix: CaseIndex, today: string): CaseRow {
   }
   let detail = "";
   if (stage === "cancelled") detail = "キャンセル";
-  else if (stage === "ordered") detail = `${o.status === "pending_approval" ? "受注 (契約承認待ち)" : "受注・着工前"} · 日程${SCHEDULE_LABEL[schedule]}${o.scheduledStart ? ` (${md(o.scheduledStart)})` : ""}${spec === "pending" ? " · 一部仕様未確定" : ""}`;
+  else if (stage === "ordered") detail = `${o.status === "pending_approval" ? "受注 (契約承認待ち)" : o.status === "returned" ? "受注 (契約差戻し・再申請待ち)" : "受注・着工前"} · 日程${SCHEDULE_LABEL[schedule]}${o.scheduledStart ? ` (${md(o.scheduledStart)})` : ""}${spec === "pending" ? " · 一部仕様未確定" : ""}`;
   else if (stage === "in_progress") detail = "着工中";
   else if (closed) detail = imported ? "完了 (移行データ)" : "完了・全処理完了";
   else if (payment === "paid") detail = `完了・入金済${billing === "unbilled" ? " (請求書未発行)" : " (事務処理あり)"}`;

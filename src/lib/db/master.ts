@@ -161,4 +161,6 @@ export const SUPPLIERS: Supplier[] = [
   { id: "s04", name: "ホームセンター アグリ 合志店", category: "消耗品・工具", phone: "096-000-0004", paymentTerms: "都度払い", closingDay: 31 },
   { id: "s05", name: "熊本運輸サービス", category: "配送・引取", phone: "096-000-0005", paymentTerms: "月末締め 翌月末払い", closingDay: 31 },
   { id: "s06", name: "西日本インテリア商会", category: "カーテン・ブラインド", phone: "092-000-0006", paymentTerms: "月末締め 翌々月10日払い", closingDay: 31 },
+  { id: "s07", name: "肥後内装工房", kind: "partner", category: "クロス張替え (協力業者)", phone: "096-000-0007", email: "info@higo-naisou.example", contactName: "担当 工事部", paymentTerms: "月末締め 翌月末払い", closingDay: 31, payMonthOffset: 1, payDay: 31, active: true },
+  { id: "s08", name: "くまもと建具サービス", kind: "partner", category: "建具の修理・調整 (協力業者)", phone: "096-000-0008", paymentTerms: "20日締め 翌月10日払い", closingDay: 20, payMonthOffset: 1, payDay: 10, active: true },
 ];

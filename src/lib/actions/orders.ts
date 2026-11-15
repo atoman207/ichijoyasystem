@@ -3,10 +3,13 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
-import type { Channel, ProgressKind, StoreId } from "@/lib/db/types";
+import type { StoreId } from "@/lib/db/types";
 import { addDays, toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, PROGRESS_KIND_LABEL } from "@/lib/constants";
-import { canAccessStore, canManageFinance, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
+import { approverRole, canAccessStore, canManageFinance, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
+import { approvalSettings } from "@/lib/approval-rules";
+import { fieldLabel, fieldValue } from "@/lib/field-labels";
+import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { findConflicts, isDateKey, normTime, shortDate, timeLabel, toMinutes } from "@/lib/calendar";
 import { orderEditable, removeUpcomingOrderEvents, syncHandoverMemo, syncOrderEvent } from "@/lib/db/schedule";
 import { assertStore, choice, fail, requireActionUser, str, withMsg } from "./guards";
@@ -156,7 +159,7 @@ export async function createInvoiceFromOrder(id: string, formData: FormData) {
     o.status = "invoiced";
     o.updatedAt = now;
     const num = db.invoices[db.invoices.length - 1].number;
-    db.commLogs.push({ id: newId("cl"), customerId: o.customerId, channel: sentVia, direction: "outbound", subject: `ご請求書 ${num}`, body: `施工完了に伴い、ご請求書 (¥${o.total.toLocaleString("ja-JP")}) を${CHANNEL_LABEL[sentVia]}でお送りしました。お支払期限: ${addDays(today, dueDays)}`, at: now, userId: user.id, relatedType: "invoice", relatedId: invoiceId });
+    db.commLogs.push({ id: newId("cl"), customerId: o.customerId, storeId: o.storeId, channel: sentVia, direction: "outbound", subject: `ご請求書 ${num}`, body: `施工完了に伴い、ご請求書 (¥${o.total.toLocaleString("ja-JP")}) を${CHANNEL_LABEL[sentVia]}でお送りしました。お支払期限: ${addDays(today, dueDays)}`, at: now, userId: user.id, relatedType: "invoice", relatedId: invoiceId });
     addAudit(db, { userId: user.id, action: "create", entity: "invoice", entityId: invoiceId, entityLabel: num, summary: `請求書を発行 (¥${o.total.toLocaleString("ja-JP")} / ${CHANNEL_LABEL[sentVia]})`, storeId: o.storeId });
   });
   revalidatePath("/invoices");
@@ -180,6 +183,84 @@ export async function cancelOrder(id: string, formData: FormData) {
   });
   revalidatePath(back);
   redirect(withMsg(back, "受注をキャンセルしました。"));
+}
+
+/** 契約承認の差戻しの後、内容を見直して再申請する */
+export async function resubmitOrder(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const back = `/orders/${id}`;
+  let approvalId = "";
+  let role = "";
+  await mutate((db) => {
+    const o = db.orders.find((x) => x.id === id);
+    if (!o) fail("/orders", "受注が見つかりません。");
+    assertStore(user, o.storeId, back);
+    if (o.status !== "returned") fail(back, "差し戻された受注のみ再申請できます。");
+    if (db.approvals.some((a) => a.targetId === o.id && a.type === "order" && a.status === "pending")) fail(back, "すでに承認待ちの申請があります。");
+    const now = nowIso();
+    const r = approverRole(db.users, o.storeId, o.total >= approvalSettings(db).quoteAdminThreshold, user.id);
+    role = r;
+    approvalId = newId("ap");
+    const comment = str(formData, "comment");
+    db.approvals.push({ id: approvalId, type: "order", targetId: o.id, title: `${o.number} ${o.title}`, amount: o.total, storeId: o.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: comment ? `再申請: ${comment}` : "再申請", createdAt: now });
+    o.status = "pending_approval";
+    o.updatedAt = now;
+    o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "note", body: `契約承認を再申請しました${comment ? ` (${comment})` : ""}` });
+    addAudit(db, { userId: user.id, action: "submit", entity: "order", entityId: o.id, entityLabel: o.number, summary: `契約承認を再申請 (${r === "admin" ? "管理者" : "店長"}承認)${comment ? ` ${comment}` : ""}`, storeId: o.storeId });
+  });
+  await notifyNewApprovals([approvalId], user.id);
+  revalidatePath(back);
+  revalidatePath("/orders");
+  redirect(withMsg(back, `${role === "admin" ? "管理者" : "店長"}へ契約承認を再申請しました。`));
+}
+
+/**
+ * 契約内容 (重要な情報) の変更を申請する: 契約日・契約金額 (見積から作っていない受注のみ。見積からの受注は見積の金額変更で直す)。
+ * 承認されると受注に反映し、変更前後を履歴に残す
+ */
+export async function requestOrderChange(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const back = `/orders/${id}`;
+  const reason = str(formData, "reason");
+  if (!reason) fail(back, "変更の理由を入力してください。");
+  let approvalId = "";
+  let role = "";
+  await mutate((db) => {
+    const o = db.orders.find((x) => x.id === id);
+    if (!o) fail("/orders", "受注が見つかりません。");
+    assertStore(user, o.storeId, back);
+    if (o.status === "cancelled") fail(back, "キャンセルした受注は変更できません。");
+    if (db.approvals.some((a) => a.targetId === o.id && a.type === "order_change" && a.status === "pending")) fail(back, "承認待ちの契約内容の変更があります。承認・差戻しの後にもう一度申請してください。");
+    const changes: { field: string; before: unknown; after: unknown }[] = [];
+    const contractDate = str(formData, "contractDate");
+    if (contractDate && contractDate !== o.contractDate) {
+      if (!isDateKey(contractDate)) fail(back, "契約日を正しく入力してください。");
+      changes.push({ field: "contractDate", before: o.contractDate, after: contractDate });
+    }
+    const totalRaw = str(formData, "total").replace(/[,¥\s]/g, "");
+    if (totalRaw) {
+      const total = Number(totalRaw);
+      if (!Number.isFinite(total) || total <= 0) fail(back, "契約金額を正しく入力してください。");
+      if (Math.round(total) !== o.total) {
+        if (o.quoteId) fail(back, "見積から作った受注の金額は、見積の画面で「金額・内容の変更を申請」から直してください (版として残ります)。");
+        if (db.invoices.some((i) => i.id === o.invoiceId && i.status !== "void")) fail(back, "請求書を発行済みのため、契約金額は変更できません。入金前であれば本部で請求書を無効化してから申請してください。");
+        changes.push({ field: "total", before: o.total, after: Math.round(total) });
+      }
+    }
+    if (!changes.length) fail(back, "変更する項目がありません。");
+    const newTotal = (changes.find((c) => c.field === "total")?.after as number | undefined) ?? o.total;
+    const r = approverRole(db.users, o.storeId, Math.max(o.total, newTotal) >= approvalSettings(db).quoteAdminThreshold, user.id);
+    role = r;
+    approvalId = newId("ap");
+    const now = nowIso();
+    db.approvals.push({ id: approvalId, type: "order_change", targetId: o.id, title: `${o.number} ${o.title}`, amount: newTotal, storeId: o.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: reason, changes, createdAt: now });
+    o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "change", body: `契約内容の変更を申請 (${changes.map((c) => `${fieldLabel("order", c.field)} ${fieldValue(c.field, c.before)} → ${fieldValue(c.field, c.after)}`).join("、")} / 理由: ${reason})` });
+    o.updatedAt = now;
+    addAudit(db, { userId: user.id, action: "submit", entity: "order", entityId: o.id, entityLabel: o.number, summary: `契約内容の変更を申請 (${changes.map((c) => fieldLabel("order", c.field)).join("・")} / 理由: ${reason})`, storeId: o.storeId, changes });
+  });
+  await notifyNewApprovals([approvalId], user.id);
+  revalidatePath(back);
+  redirect(withMsg(back, `契約内容の変更を${role === "admin" ? "管理者" : "店長"}へ申請しました。承認後に反映されます。`));
 }
 
 /**

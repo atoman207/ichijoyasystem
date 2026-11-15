@@ -13,9 +13,12 @@ export function CustomerForm({
   user,
   cancelHref,
   returnTo,
+  changeNote,
 }: {
   action: (formData: FormData) => Promise<void>;
   returnTo?: string;
+  /** 重要情報の変更に承認が必要なときの案内 (編集の画面) */
+  changeNote?: string;
   customer?: Partial<Customer>;
   stores: Store[];
   users: User[];
@@ -93,6 +96,14 @@ export function CustomerForm({
       <Field label="備考 (駐車・訪問時の注意など)">
         <Textarea name="notes" defaultValue={customer?.notes} />
       </Field>
+      {changeNote && (
+        <div className="rounded-lg border border-warn/40 bg-warn-soft/40 px-3 py-2 text-xs text-ink-2">
+          <p>{changeNote}</p>
+          <Field label="重要情報を変更する理由 (承認者に伝わります)" className="mt-2">
+            <Input name="changeReason" placeholder="例: お客様から電話番号の変更の連絡あり" />
+          </Field>
+        </div>
+      )}
       <FormActions>
         <LinkButton href={cancelHref} variant="secondary">キャンセル</LinkButton>
         <Button type="submit">{customer?.id ? "更新する" : "登録する"}</Button>

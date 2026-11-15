@@ -10,7 +10,12 @@ import { AiConnectionCheck } from "@/components/settings/AiConnectionCheck";
 import { KpiSettingsCard } from "@/components/settings/KpiSettingsCard";
 import { CUSTOMER_CREATOR_LABEL, opsSettings } from "@/lib/ops-settings";
 import { fmtDateTime, yen } from "@/lib/format";
-import { APPROVAL_RULES, CATEGORY_LABEL, CHANNEL_LABEL, ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
+import { CATEGORY_LABEL, CHANNEL_LABEL, DELIVERY_CHANNEL_LABEL, DELIVERY_STATUS, ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
+import { approvalSettings } from "@/lib/approval-rules";
+import { sendTestMessage, updateApprovalSettings, updateNotifySettings } from "@/lib/actions/settings-ops";
+import { appBaseUrl, chatworkConfig, integrationStatuses } from "@/lib/notify/config";
+import { NOTIFY_EVENT_LABEL, notifySettings, type NotifyEvent } from "@/lib/notify/events";
+import { canManageIntegrations } from "@/lib/auth/permissions";
 import type { Role, ServiceCategory } from "@/lib/db/types";
 import { Badge, Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select, StoreTag, Textarea } from "@/components/ui";
 import Link from "@/components/ui/Link";
@@ -28,6 +33,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const base = "/settings";
   const ai = aiStatus();
   const docSet = documentSettings(db);
+  const rules = approvalSettings(db);
 
   return (
     <div>
@@ -313,21 +319,35 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             <table className="w-full text-sm">
               <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-3 py-1.5 text-left font-medium">対象</th><th className="px-3 py-1.5 text-left font-medium">条件</th><th className="px-3 py-1.5 text-left font-medium">承認者</th></tr></thead>
               <tbody className="text-xs">
-                <tr className="border-t border-line"><td className="px-3 py-2">顧客・問い合わせ・現場情報の登録/変更</td><td className="px-3 py-2">-</td><td className="px-3 py-2">不要 (即時反映・履歴記録)</td></tr>
-                <tr className="border-t border-line"><td className="px-3 py-2">見積の確定</td><td className="px-3 py-2">{yen(APPROVAL_RULES.quoteAdminThreshold)} 未満</td><td className="px-3 py-2">店長</td></tr>
-                <tr className="border-t border-line"><td className="px-3 py-2">見積の確定</td><td className="px-3 py-2">{yen(APPROVAL_RULES.quoteAdminThreshold)} 以上 / 本社案件</td><td className="px-3 py-2">管理者</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">問い合わせ・現場情報・顧客のその他の項目の登録/変更</td><td className="px-3 py-2">-</td><td className="px-3 py-2">不要 (即時反映・履歴記録)</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">顧客の重要情報 (氏名・フリガナ・区分・電話・メール・住所) の変更</td><td className="px-3 py-2">{rules.customerChange ? "店舗スタッフ・本部スタッフの変更" : "承認なし (設定で変更可)"}</td><td className="px-3 py-2">{rules.customerChange ? "店長 (店長・管理者の変更は即時反映)" : "不要"}</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">見積の確定</td><td className="px-3 py-2">{yen(rules.quoteAdminThreshold)} 未満</td><td className="px-3 py-2">店長</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">見積の確定</td><td className="px-3 py-2">{yen(rules.quoteAdminThreshold)} 以上 / 本社案件</td><td className="px-3 py-2">管理者</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">確定後の金額変更</td><td className="px-3 py-2">変更前後の高い方で判定</td><td className="px-3 py-2">店長 / 管理者</td></tr>
-                <tr className="border-t border-line"><td className="px-3 py-2">受注 (契約) の確定</td><td className="px-3 py-2">見積と同じ閾値</td><td className="px-3 py-2">店長 / 管理者</td></tr>
-                <tr className="border-t border-line"><td className="px-3 py-2">経費精算</td><td className="px-3 py-2">{yen(APPROVAL_RULES.expenseAdminThreshold)} 未満</td><td className="px-3 py-2">店長</td></tr>
-                <tr className="border-t border-line"><td className="px-3 py-2">経費精算</td><td className="px-3 py-2">{yen(APPROVAL_RULES.expenseAdminThreshold)} 以上 / 本部分</td><td className="px-3 py-2">管理者</td></tr>
-                <tr className="border-t border-line"><td className="px-3 py-2">仕入請求書の支払</td><td className="px-3 py-2">全件</td><td className="px-3 py-2">管理者</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">受注 (契約) の確定</td><td className="px-3 py-2">見積と同じ基準額</td><td className="px-3 py-2">店長 / 管理者</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">契約内容 (契約日・契約金額) の変更</td><td className="px-3 py-2">変更前後の高い方で判定</td><td className="px-3 py-2">店長 / 管理者</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">経費精算</td><td className="px-3 py-2">{yen(rules.expenseAdminThreshold)} 未満</td><td className="px-3 py-2">店長</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">経費精算</td><td className="px-3 py-2">{yen(rules.expenseAdminThreshold)} 以上 / 本部分</td><td className="px-3 py-2">管理者</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">仕入の支払依頼</td><td className="px-3 py-2">全件</td><td className="px-3 py-2">管理者</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">見積・契約・経費 (店舗分)</td><td className="px-3 py-2">承認できる店長がいない (店長のいない店舗・店長本人の申請)</td><td className="px-3 py-2">管理者</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">すべての申請</td><td className="px-3 py-2">申請者本人</td><td className="px-3 py-2">承認できない (ほかの承認者が判断)</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">請求書の無効化</td><td className="px-3 py-2">-</td><td className="px-3 py-2">本部 / 管理者のみ操作可</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">ユーザー・店舗・商品マスタの変更</td><td className="px-3 py-2">-</td><td className="px-3 py-2">管理者のみ操作可</td></tr>
               </tbody>
             </table>
-            <p className="mt-2 text-[11px] text-ink-3">閾値は src/lib/constants.ts の APPROVAL_RULES で変更できます (本番では設定画面から変更可能にする想定)。</p>
+            <p className="mt-2 text-[11px] text-ink-3">判断は「承認」「差戻し (修正して再申請)」「却下」の 3 つ。差戻し・却下は理由の入力が必要で、申請者に通知されます。すべて承認の履歴と変更履歴に残ります。</p>
+            {admin && (
+              <form action={updateApprovalSettings} className="mt-4 space-y-3 border-t border-line pt-4">
+                <div className="text-sm font-medium text-ink">承認ルールを変更する</div>
+                <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+                  <Field label="見積・契約: 管理者の承認になる金額 (以上)"><Input name="quoteAdminThreshold" type="number" min={10000} step={1000} defaultValue={rules.quoteAdminThreshold} required /></Field>
+                  <Field label="経費: 管理者の承認になる金額 (以上)"><Input name="expenseAdminThreshold" type="number" min={1000} step={1000} defaultValue={rules.expenseAdminThreshold} required /></Field>
+                </div>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="customerChange" defaultChecked={rules.customerChange} className="h-4 w-4" /> 顧客の重要情報 (氏名・フリガナ・区分・電話・メール・住所) の変更に承認を必要とする</label>
+                <Button type="submit" size="sm">保存</Button>
+                <p className="text-[11px] text-ink-3">変更は、これから申請するものに使われます (申請済みの承認者は変わりません)。変更は変更履歴に残ります。</p>
+              </form>
+            )}
           </Card>
           <Card>
             <CardHeader title="業務フローと情報の入口・出口" />
@@ -366,14 +386,28 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             </div>
             {admin && <AiConnectionCheck enabled={ai.enabled} />}
           </Card>
+          {integrationStatuses().map((i) => (
+            <Card key={i.key}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-ink">{i.name}</div>
+                  <p className="mt-1 text-xs text-ink-2">送信: {i.detail}</p>
+                  {i.inbound && (
+                    <p className="mt-1 text-xs text-ink-2">
+                      受信: {i.inbound.detail}
+                      <br />
+                      <span className="font-mono text-[11px] text-ink-3">{appBaseUrl()}{i.inbound.path}</span>
+                    </p>
+                  )}
+                </div>
+                <Badge tone={i.configured ? "good" : "neutral"}>{i.configured ? "接続設定あり" : "未設定 (記録のみ)"}</Badge>
+              </div>
+            </Card>
+          ))}
           {[
-            { name: "AI 電話受付", status: "本番で接続", ok: false, desc: "通話内容の要約・用件・折返し先を Webhook で受け取り、問い合わせとして自動登録 (入口: AI電話受付)。" },
-            { name: "LINE 公式アカウント", status: "本番で接続", ok: false, desc: "Messaging API で受信メッセージを問い合わせ/やりとり履歴に自動記録。見積書・請求書の PDF 送付。" },
-            { name: "Web フォーム (ichijoya.co.jp)", status: "本番で接続", ok: false, desc: "お問い合わせフォームの送信を API で受け取り、問い合わせとして自動登録。" },
-            { name: "メール (送受信)", status: "本番で接続", ok: false, desc: "見積書・請求書の送付、受信メールの取り込み (SendGrid / Gmail API 等)。" },
-            { name: "Chatwork", status: "本番で接続", ok: false, desc: "取引先・協力業者とのやりとりを履歴に集約。" },
+            { name: "AI 電話受付", status: "接続先の決定後", ok: false, desc: "通話内容の要約・用件・折返し先を受け取る形式 (D8) が決まれば、Web フォームと同じ受信の仕組みで問い合わせに自動登録します。" },
             { name: "Google スプレッドシート", status: "取込・書き出しに対応", ok: true, desc: "リンクで共有したシートから顧客・問い合わせを取込 (データ入出力の画面)。書き出した CSV はシートでインポート。非公開シートの直接連携はサービスアカウントの準備後。" },
-            { name: "会計ソフト (freee / MF 等)", status: "本番で接続", ok: false, desc: "売上・経費・買掛の仕訳データを連携。" },
+            { name: "会計ソフト (弥生・freee・マネーフォワードなど)", status: "CSV で出力", ok: true, desc: "売上・入金・経費・仕入・現金出納の仕訳と明細を、会計データの出力 (/accounting) から CSV で出力します (汎用・弥生会計のインポート形式)。" },
           ].map((i) => (
             <Card key={i.name}>
               <div className="flex items-start justify-between gap-2">
@@ -382,6 +416,70 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               </div>
             </Card>
           ))}
+          {(() => {
+            const ns = notifySettings(db);
+            const events = Object.keys(NOTIFY_EVENT_LABEL) as NotifyEvent[];
+            return (
+              <Card className="@2xl:col-span-2">
+                <CardHeader title="社内通知 (メール・Chatwork)" description="承認依頼・承認の結果・メンション・業務依頼を、画面のお知らせに加えてメールと Chatwork でも知らせます。メールは「メールで通知を受け取る」にした社員だけに送ります (プロフィール、または 設定 → ユーザー → 各社員)" />
+                <form action={updateNotifySettings} className="space-y-3">
+                  <fieldset disabled={!admin}>
+                    <table className="w-full text-sm">
+                      <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-3 py-1.5 text-left font-medium">通知</th><th className="px-3 py-1.5 text-center font-medium">メール</th><th className="px-3 py-1.5 text-center font-medium">Chatwork (社内ルーム{chatworkConfig()?.roomId ? "" : "・未設定"})</th></tr></thead>
+                      <tbody>
+                        {events.map((e) => (
+                          <tr key={e} className="border-t border-line">
+                            <td className="px-3 py-1.5">{NOTIFY_EVENT_LABEL[e]}</td>
+                            <td className="px-3 py-1.5 text-center"><input type="checkbox" name={`email_${e}`} defaultChecked={ns.email[e]} className="h-4 w-4" aria-label={`メール: ${NOTIFY_EVENT_LABEL[e]}`} /></td>
+                            <td className="px-3 py-1.5 text-center"><input type="checkbox" name={`chatwork_${e}`} defaultChecked={ns.chatwork[e]} className="h-4 w-4" aria-label={`Chatwork: ${NOTIFY_EVENT_LABEL[e]}`} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </fieldset>
+                  {admin && <Button type="submit" size="sm">保存</Button>}
+                </form>
+              </Card>
+            );
+          })()}
+          {canManageIntegrations(user) && (
+            <Card>
+              <CardHeader title="接続の確認 (テスト送信)" description="設定した送信が届くかを確かめます。送信の結果は下の送信履歴に残ります" />
+              <form action={sendTestMessage} className="space-y-2">
+                <Field label="サービス">
+                  <Select name="channel" defaultValue="email">
+                    <option value="email">メール</option>
+                    <option value="line">LINE</option>
+                    <option value="chatwork">Chatwork</option>
+                  </Select>
+                </Field>
+                <Field label="宛先" hint="メールアドレス / LINE のユーザー ID / Chatwork のルーム ID (空欄で社内通知のルーム)"><Input name="to" /></Field>
+                <Button type="submit" size="sm" variant="secondary">テスト送信</Button>
+              </form>
+            </Card>
+          )}
+          {canManageIntegrations(user) && (
+            <Card className="@2xl:col-span-2" padded={false}>
+              <div className="px-5 pt-5"><CardHeader title="送信履歴 (新しい順・50 件)" description="メール・LINE・Chatwork で送った通知・帳票・連絡。設定がないため送らなかったものは「記録のみ」です" /></div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[720px] text-sm">
+                  <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-4 py-2 text-left font-medium">日時</th><th className="px-3 py-2 text-left font-medium">手段</th><th className="px-3 py-2 text-left font-medium">宛先</th><th className="px-3 py-2 text-left font-medium">件名・内容</th><th className="px-3 py-2 text-left font-medium">結果</th></tr></thead>
+                  <tbody>
+                    {[...db.deliveries].reverse().slice(0, 50).map((d) => (
+                      <tr key={d.id} className="border-t border-line align-top">
+                        <td className="px-4 py-2 text-xs tnum text-ink-3">{fmtDateTime(d.createdAt)}<div>{userName(d.userId)}</div></td>
+                        <td className="px-3 py-2 text-xs">{DELIVERY_CHANNEL_LABEL[d.channel]}<div className="text-ink-3">{{ notify: "社内通知", document: "帳票の送付", message: "個別の連絡", test: "接続の確認" }[d.purpose]}</div></td>
+                        <td className="px-3 py-2 text-xs">{d.recipientLabel ?? ""}<div className="font-mono text-[11px] text-ink-3">{d.recipient}</div></td>
+                        <td className="px-3 py-2 text-xs"><div className="font-medium text-ink">{d.subject ?? ""}</div><div className="line-clamp-2 text-ink-3">{d.body}</div>{d.attachments?.length ? <div className="text-[11px] text-ink-3">添付: {d.attachments.join("、")}</div> : null}</td>
+                        <td className="px-3 py-2 text-xs"><Badge tone={DELIVERY_STATUS[d.status].tone}>{DELIVERY_STATUS[d.status].label}</Badge>{d.error && <div className="mt-1 text-[11px] text-critical">{d.error}</div>}</td>
+                      </tr>
+                    ))}
+                    {db.deliveries.length === 0 && <tr><td colSpan={5} className="px-4 py-6 text-center text-xs text-ink-3">送信履歴はありません</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
         </div>
       )}
 

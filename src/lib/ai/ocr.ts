@@ -2,6 +2,7 @@ import "server-only";
 import type { DocumentKind, Product, StoreId } from "@/lib/db/types";
 import { addDays, toDateKey } from "@/lib/format";
 import { EXPENSE_ACCOUNTS } from "@/lib/constants";
+import { readCandidates, suggestAccounts } from "@/lib/expense-account";
 import { matchProduct } from "@/lib/product-match";
 import { COMMENT_TAGS, MEDIA_OPTIONS, PRIORITY_OPTIONS, normPostcardNo, tagComment } from "@/lib/survey";
 import { EQUIPMENT_OPTIONS, PAYMENT_OPTIONS, SITE_MEDIA_OPTIONS } from "@/lib/site-info";
@@ -182,6 +183,10 @@ const SCHEMAS: Record<DocumentKind, Schema> = {
     amount: n("支払金額 (税込の合計。円)"),
     taxAmount: n("消費税額 (円)"),
     account: { type: "string", enum: [...EXPENSE_ACCOUNTS, ""], description: "勘定科目 (内容から選ぶ。決められなければ空文字)" },
+    accountCandidates: arr(
+      obj({ account: { type: "string", enum: [...EXPENSE_ACCOUNTS] }, reason: { type: "string", description: "その科目にした理由 (30 文字以内)" } }),
+      "勘定科目の候補 (可能性の高い順に最大 3 つ。理由つき)",
+    ),
     paymentMethod: { type: "string", enum: ["cash", "card", "transfer", ""], description: "支払方法 (cash=現金, card=カード・電子マネー, transfer=振込。分からなければ空文字)" },
     note: s("但し書き・備考"),
     ...COMMON,
@@ -440,6 +445,10 @@ export function normalizeExtracted(kind: DocumentKind, raw: Record<string, unkno
       if (v === "はい" || v === "いいえ") ex.wouldUseAgain = v;
     } else if (k === "commentTone") {
       if (["praise", "request", "complaint", "neutral"].includes(String(v))) ex.commentTone = v;
+    } else if (k === "accountCandidates") {
+      // 勘定科目の候補 (AI)。確認画面の入力欄ではないため、_ で始まる名前で残す
+      const c = readCandidates(v);
+      if (c.length) ex._accountCandidates = c;
     } else if (k === "items") {
       ex.items = normalizeItems(v, products);
     } else if (k === "rooms" || k === "fittings") {
@@ -503,6 +512,15 @@ export function normalizeExtracted(kind: DocumentKind, raw: Record<string, unkno
     else warnings.push(`登録番号「${reg}」の形 (T と 13 桁) が正しくありません`);
   }
   if (kind === "receipt" && ex.account && !(EXPENSE_ACCOUNTS as readonly string[]).includes(ex.account as string)) delete ex.account;
+  if (kind === "receipt") {
+    // AI の候補がないとき (サンプル読取・手入力) は、店名・品目・但し書きと金額からルールで候補を出す
+    if (!ex._accountCandidates) {
+      const rule = suggestAccounts({ vendor: ex.vendor as string | undefined, description: ex.note as string | undefined, items: items.map((i) => i.name), amount: ex.amount as number | undefined });
+      if (rule.length) ex._accountCandidates = rule;
+    }
+    const cands = ex._accountCandidates as { account: string }[] | undefined;
+    if (!ex.account && cands?.length) ex.account = cands[0].account;
+  }
   if (typeof ex.paymentMethod === "string") {
     const pm = ex.paymentMethod.toLowerCase();
     if (["cash", "card", "transfer"].includes(pm)) ex.paymentMethod = pm;

@@ -2,15 +2,30 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { addAudit, mutate, nowIso } from "@/lib/db/store";
+import { addAudit, getDb, mutate, nowIso } from "@/lib/db/store";
 import { canApprove, canCancelApproval } from "@/lib/auth/permissions";
-import { APPROVAL_TYPE_LABEL } from "@/lib/constants";
-import type { Database, Approval } from "@/lib/db/types";
+import { APPROVAL_STATUS, APPROVAL_TYPE_LABEL } from "@/lib/constants";
+import type { Database, Approval, AuditChange } from "@/lib/db/types";
 import { removeUpcomingOrderEvents, syncOrderEvent } from "@/lib/db/schedule";
+import { fieldLabel, fieldValue } from "@/lib/field-labels";
+import { approvalHref } from "@/lib/approval-href";
+import { approvalResultNotices } from "@/lib/notify/events";
+import { sendAndRecord } from "@/lib/notify/send";
 import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
-function applyDecision(db: Database, a: Approval, decision: "approved" | "rejected", userId: string, comment: string) {
+export type Decision = "approved" | "returned" | "rejected";
+
+/**
+ * 承認の判断を反映する (承認 / 差戻し / 却下)
+ * - 承認: 申請の内容を反映する
+ * - 差戻し: 申請者へ戻す。修正して再申請できる状態にする (見積・経費は下書き・差戻し、受注は「契約差戻し」、仕入は「照会中」)
+ * - 却下: 申請を認めない。経費は「却下」(再申請不可)、仕入は「支払却下」、受注 (契約) はキャンセル、見積は下書きに戻す
+ */
+function applyDecision(db: Database, a: Approval, decision: Decision, userId: string, comment: string, back: string) {
   const now = nowIso();
+  const word = decision === "approved" ? "承認" : decision === "returned" ? "差戻し" : "却下";
+  const note = comment ? ` (${comment})` : "";
+  const action = decision === "approved" ? "approve" : "reject";
   switch (a.type) {
     case "quote": {
       const q = db.quotes.find((x) => x.id === a.targetId);
@@ -24,13 +39,13 @@ function applyDecision(db: Database, a: Approval, decision: "approved" | "reject
           q.status = "sent";
           q.sentVia = "visit";
           q.issuedAt = q.issuedAt ?? now.slice(0, 10);
-          db.commLogs.push({ id: `cl_${Date.now()}`, customerId: q.customerId, channel: "visit", direction: "outbound", subject: `お見積書 ${q.number}`, body: `現場で手書きの見積書 (合計 ¥${q.total.toLocaleString("ja-JP")}) をお渡し済み。システムの見積として承認しました。`, at: now, userId, relatedType: "quote", relatedId: q.id });
+          db.commLogs.push({ id: `cl_${Date.now()}`, customerId: q.customerId, storeId: q.storeId, channel: "visit", direction: "outbound", subject: `お見積書 ${q.number}`, body: `現場で手書きの見積書 (合計 ¥${q.total.toLocaleString("ja-JP")}) をお渡し済み。システムの見積として承認しました。`, at: now, userId, relatedType: "quote", relatedId: q.id });
         }
       } else {
         q.status = "draft";
       }
       q.updatedAt = now;
-      addAudit(db, { userId, action: decision === "approved" ? "approve" : "reject", entity: "quote", entityId: q.id, entityLabel: q.number, summary: decision === "approved" ? "見積を承認" : `見積を差戻し${comment ? ` (${comment})` : ""}`, storeId: q.storeId });
+      addAudit(db, { userId, action, entity: "quote", entityId: q.id, entityLabel: q.number, summary: decision === "approved" ? "見積を承認" : `見積を${word}${note}`, storeId: q.storeId });
       break;
     }
     case "quote_amend": {
@@ -93,11 +108,11 @@ function applyDecision(db: Database, a: Approval, decision: "approved" | "reject
           o.updatedAt = now;
           o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `見積 ${q.number} 第${q.version}版の承認により${notes.length ? notes.join("、") : "内容を更新"} (理由: ${pc.reason})` });
         }
-        const changes: { field: string; before: unknown; after: unknown }[] = [{ field: "total", before, after: q.total }];
+        const changes: AuditChange[] = [{ field: "total", before, after: q.total }];
         if (q.title !== beforeTitle) changes.push({ field: "title", before: beforeTitle, after: q.title });
         addAudit(db, { userId, action: "approve", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `見積の変更を承認 (第${q.version}版。理由: ${pc.reason})`, storeId: q.storeId, changes });
       } else {
-        addAudit(db, { userId, action: "reject", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `見積の変更を却下${comment ? ` (${comment})` : ""}`, storeId: q.storeId });
+        addAudit(db, { userId, action: "reject", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `見積の変更を${word}${note}`, storeId: q.storeId });
       }
       q.pendingChange = undefined;
       q.updatedAt = now;
@@ -119,38 +134,88 @@ function applyDecision(db: Database, a: Approval, decision: "approved" | "reject
         o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "note", body: "契約が承認されました。施工日の調整・材料手配を進めてください。" });
         // 受注登録時に施工予定日があれば、予定表の施工予定を確定状態で保つ
         if (o.scheduledStart) syncOrderEvent(db, o, userId);
+      } else if (decision === "returned") {
+        // 差戻し: 受注は残し、内容を見直して再申請できるようにする (施工予定の仮押さえも残す)
+        o.status = "returned";
+        o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "note", body: `契約承認が差し戻されました${note}。内容を見直して再申請してください。` });
       } else {
         o.status = "cancelled";
-        o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "note", body: `契約承認が却下されました${comment ? ` (${comment})` : ""}` });
+        o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "note", body: `契約承認が却下されました${note}` });
         removeUpcomingOrderEvents(db, o.id);
         releaseQuoteFromOrder(db, o.id);
       }
       o.updatedAt = now;
-      addAudit(db, { userId, action: decision === "approved" ? "approve" : "reject", entity: "order", entityId: o.id, entityLabel: o.number, summary: decision === "approved" ? "受注 (契約) を承認" : "受注 (契約) を却下", storeId: o.storeId });
+      addAudit(db, { userId, action, entity: "order", entityId: o.id, entityLabel: o.number, summary: decision === "approved" ? "受注 (契約) を承認" : `受注 (契約) を${word}${note}`, storeId: o.storeId });
       break;
     }
     case "expense": {
       const e = db.expenses.find((x) => x.id === a.targetId);
       if (!e) return;
-      e.status = decision;
+      e.status = decision === "approved" ? "approved" : decision === "returned" ? "rejected" : "denied";
       if (decision === "approved") {
         e.approvedBy = userId;
         e.approvedAt = now;
       }
       e.updatedAt = now;
-      addAudit(db, { userId, action: decision === "approved" ? "approve" : "reject", entity: "expense", entityId: e.id, entityLabel: e.number, summary: decision === "approved" ? "経費を承認" : `経費を差戻し${comment ? ` (${comment})` : ""}`, storeId: e.storeId });
+      addAudit(db, { userId, action, entity: "expense", entityId: e.id, entityLabel: e.number, summary: decision === "approved" ? "経費を承認" : `経費を${word}${note}`, storeId: e.storeId });
       break;
     }
     case "purchase": {
       const p = db.purchases.find((x) => x.id === a.targetId);
       if (!p) return;
-      p.status = decision === "approved" ? "approved" : "disputed";
+      p.status = decision === "approved" ? "approved" : decision === "returned" ? "disputed" : "rejected";
       if (decision === "approved") p.approvedBy = userId;
       p.updatedAt = now;
-      addAudit(db, { userId, action: decision === "approved" ? "approve" : "reject", entity: "purchase", entityId: p.id, entityLabel: p.number, summary: decision === "approved" ? "仕入請求書の支払を承認" : "仕入請求書を照会中に変更", storeId: p.storeId });
+      addAudit(db, { userId, action, entity: "purchase", entityId: p.id, entityLabel: p.number, summary: decision === "approved" ? "仕入請求書の支払を承認" : decision === "returned" ? `支払依頼を差戻し (照会中)${note}` : `支払依頼を却下${note}`, storeId: p.storeId });
+      break;
+    }
+    case "order_change": {
+      const o = db.orders.find((x) => x.id === a.targetId);
+      if (!o) return;
+      if (decision === "approved") {
+        assertUnchanged("order", o as unknown as Record<string, unknown>, a.changes ?? [], back);
+        if (a.changes?.some((c) => c.field === "total")) {
+          if (o.quoteId) fail(back, "見積から作った受注の金額は、見積の金額変更で直します。この申請は却下してください。");
+          if (db.invoices.some((i) => i.id === o.invoiceId && i.status !== "void")) fail(back, "請求書を発行済みの案件のため、契約金額を変更できません。入金前であれば請求書を無効化してから承認してください。");
+        }
+        applyChanges(o as unknown as Record<string, unknown>, a.changes ?? []);
+        o.updatedAt = now;
+        o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `契約内容の変更が承認されました: ${describe("order", a.changes ?? [])}` });
+        addAudit(db, { userId, action: "approve", entity: "order", entityId: o.id, entityLabel: o.number, summary: `契約内容の変更を承認 (${(a.changes ?? []).map((c) => fieldLabel("order", c.field)).join("・")})`, storeId: o.storeId, changes: a.changes });
+      } else {
+        addAudit(db, { userId, action: "reject", entity: "order", entityId: o.id, entityLabel: o.number, summary: `契約内容の変更を${word}${note}`, storeId: o.storeId });
+      }
+      break;
+    }
+    case "customer_change": {
+      const c = db.customers.find((x) => x.id === a.targetId);
+      if (!c) return;
+      if (decision === "approved") {
+        assertUnchanged("customer", c as unknown as Record<string, unknown>, a.changes ?? [], back);
+        applyChanges(c as unknown as Record<string, unknown>, a.changes ?? []);
+        c.updatedAt = now;
+        addAudit(db, { userId, action: "approve", entity: "customer", entityId: c.id, entityLabel: c.name, summary: `顧客の重要情報の変更を承認 (${(a.changes ?? []).map((x) => fieldLabel("customer", x.field)).join("・")})`, storeId: c.storeId, changes: a.changes });
+      } else {
+        addAudit(db, { userId, action: "reject", entity: "customer", entityId: c.id, entityLabel: c.name, summary: `顧客の重要情報の変更を${word}${note}`, storeId: c.storeId });
+      }
       break;
     }
   }
+}
+
+/** 申請の後に同じ項目がほかで変わっていたら反映しない (古い内容で上書きしないように) */
+function assertUnchanged(entity: string, target: Record<string, unknown>, changes: AuditChange[], back: string) {
+  const norm = (v: unknown) => (v === undefined || v === null || v === "" ? "" : JSON.stringify(v));
+  const moved = changes.filter((c) => norm(target[c.field]) !== norm(c.before));
+  if (moved.length) fail(back, `申請の後に「${moved.map((c) => fieldLabel(entity, c.field)).join("・")}」が変更されています。古い内容で上書きしないよう、この申請は差し戻して出し直してください。`);
+}
+
+function applyChanges(target: Record<string, unknown>, changes: AuditChange[]) {
+  for (const c of changes) target[c.field] = c.after === "" || c.after === null ? undefined : c.after;
+}
+
+function describe(entity: string, changes: AuditChange[]): string {
+  return changes.map((c) => `${fieldLabel(entity, c.field)} ${fieldValue(c.field, c.before)} → ${fieldValue(c.field, c.after)}`).join("、");
 }
 
 /** 受注を解消したとき (契約承認の却下・取下げ)、見積を受注登録の前の状態に戻す (再度「受注登録」「失注」ができるように) */
@@ -168,30 +233,36 @@ function quoteInvoiced(db: Database, quoteId: string): boolean {
   return db.orders.some((o) => o.quoteId === quoteId && o.status !== "cancelled" && db.invoices.some((i) => i.id === o.invoiceId && i.status !== "void"));
 }
 
-export async function decideApproval(approvalId: string, decision: "approved" | "rejected", formData: FormData) {
+export async function decideApproval(approvalId: string, decision: Decision, formData: FormData) {
   const user = await requireActionUser();
   const returnTo = safeReturn(str(formData, "returnTo"), "/approvals");
   const comment = str(formData, "comment");
+  if (!["approved", "returned", "rejected"].includes(decision)) fail(returnTo, "判断の種類が正しくありません。");
+  if (decision !== "approved" && !comment) fail(returnTo, `${decision === "returned" ? "差戻し" : "却下"}の理由をコメントに入力してください (申請者に伝わります)。`);
   let label = "";
+  let decided: Approval | undefined;
   await mutate((db) => {
     const a = db.approvals.find((x) => x.id === approvalId);
     if (!a) fail(returnTo, "承認依頼が見つかりません。");
     if (a.status !== "pending") fail(returnTo, "この依頼はすでに処理済みです。");
-    if (a.requestedBy === user.id) fail(returnTo, "自分が申請した依頼は承認・差し戻しできません。他の承認者に依頼してください。");
-    if (!canApprove(user, a)) fail(returnTo, `この依頼は${a.requiredRole === "admin" ? "管理者" : "店長"}のみ承認できます。`);
+    if (a.requestedBy === user.id) fail(returnTo, "自分が申請した依頼は承認・差戻し・却下できません。他の承認者に依頼してください。");
+    if (!canApprove(user, a)) fail(returnTo, `この依頼は${a.requiredRole === "admin" ? "管理者" : "店長"}のみ判断できます。`);
     if (decision === "approved" && a.type === "quote_amend" && quoteInvoiced(db, a.targetId)) {
-      fail(returnTo, "請求書を発行済みの案件のため、金額変更を反映できません。入金前であれば請求書を無効化してから承認するか、却下してください。");
+      fail(returnTo, "請求書を発行済みの案件のため、金額変更を反映できません。入金前であれば請求書を無効化してから承認するか、差し戻してください。");
     }
     a.status = decision;
     a.decidedBy = user.id;
     a.decidedAt = nowIso();
     a.decisionComment = comment || undefined;
     label = `${APPROVAL_TYPE_LABEL[a.type]}: ${a.title}`;
-    applyDecision(db, a, decision, user.id, comment);
-    addAudit(db, { userId: user.id, action: decision === "approved" ? "approve" : "reject", entity: "approval", entityId: a.id, entityLabel: a.title, summary: `${APPROVAL_TYPE_LABEL[a.type]}を${decision === "approved" ? "承認" : "却下"}`, storeId: a.storeId });
+    applyDecision(db, a, decision, user.id, comment, returnTo);
+    addAudit(db, { userId: user.id, action: decision === "approved" ? "approve" : "reject", entity: "approval", entityId: a.id, entityLabel: a.title, summary: `${APPROVAL_TYPE_LABEL[a.type]}を${APPROVAL_STATUS[decision].label}${comment ? ` (${comment})` : ""}`, storeId: a.storeId });
+    decided = { ...a };
   });
+  if (decided) await sendAndRecord(approvalResultNotices(getDb(), decided, approvalHref(decided)), user.id);
   revalidatePath("/", "layout");
-  redirect(withMsg(returnTo, `${label} を${decision === "approved" ? "承認" : "却下"}しました。関連する画面に反映されています。`));
+  const done = decision === "approved" ? "承認しました。関連する画面に反映されています。" : decision === "returned" ? "差し戻しました。申請者が修正して再申請できます。" : "却下しました。";
+  redirect(withMsg(returnTo, `${label} を${done}`));
 }
 
 export async function cancelApproval(approvalId: string, formData: FormData) {
@@ -216,7 +287,7 @@ export async function cancelApproval(approvalId: string, formData: FormData) {
       if (e && e.status === "pending_approval") e.status = "draft";
     } else if (a.type === "order") {
       const o = db.orders.find((x) => x.id === a.targetId);
-      if (o && o.status === "pending_approval") {
+      if (o && (o.status === "pending_approval" || o.status === "returned")) {
         o.status = "cancelled";
         removeUpcomingOrderEvents(db, o.id);
         releaseQuoteFromOrder(db, o.id);
@@ -225,6 +296,7 @@ export async function cancelApproval(approvalId: string, formData: FormData) {
       const p = db.purchases.find((x) => x.id === a.targetId);
       if (p && p.status === "pending_approval") p.status = "received";
     }
+    // order_change / customer_change は申請を取り下げるだけ (対象は変えていない)
     addAudit(db, { userId: user.id, action: "status", entity: "approval", entityId: a.id, entityLabel: a.title, summary: `${APPROVAL_TYPE_LABEL[a.type]}の申請を取下げ`, storeId: a.storeId });
   });
   revalidatePath("/", "layout");

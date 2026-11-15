@@ -53,8 +53,8 @@ export function buildContext(db: Database, user: User, now = new Date()) {
   const inquiries = scopeByStore(user, db.inquiries).filter((i) => ["new", "in_progress"].includes(i.status)).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
   const jobs = scopeByStore(user, db.orders).filter((o) => ["confirmed", "scheduled", "in_progress"].includes(o.status));
   const month = toMonthKey(now);
-  const expenses = scopeByStore(user, db.expenses).filter((e) => e.date.startsWith(month) && e.status !== "draft" && e.status !== "rejected");
-  const purchases = all ? db.purchases.filter((p) => p.status !== "paid") : [];
+  const expenses = scopeByStore(user, db.expenses).filter((e) => e.date.startsWith(month) && e.status !== "draft" && e.status !== "rejected" && e.status !== "denied");
+  const purchases = all ? db.purchases.filter((p) => p.status !== "paid" && p.status !== "rejected") : [];
   return { today, all, kpis, sales, pending, mine, invoices, overdue, events, inquiries, jobs, expenses, purchases };
 }
 
@@ -149,7 +149,7 @@ export function rulesAnswer(db: Database, user: User, q: string, now = new Date(
   }
   if (has("仕入", "買掛", "支払")) {
     if (!ctx.all) return "仕入・買掛の情報は本部スタッフ・管理者のみ参照できます。";
-    return `未払の仕入請求は ${ctx.purchases.length} 件、合計 ${yen(ctx.purchases.reduce((a, p) => a + p.amount, 0))} です。\n\n${ctx.purchases.map((p) => `・${p.number} ${db.suppliers.find((s) => s.id === p.supplierId)?.name}: ${yen(p.amount)} (期限 ${fmtDate(p.dueDate)}, ${p.status === "pending_approval" ? "支払承認待ち" : p.status === "approved" ? "承認済" : "受領"})`).join("\n")}`;
+    return `未払の仕入請求は ${ctx.purchases.length} 件、合計 ${yen(ctx.purchases.reduce((a, p) => a + p.amount, 0))} です。\n\n${ctx.purchases.map((p) => `・${p.number} ${db.suppliers.find((s) => s.id === p.supplierId)?.name}: ${yen(p.amount)} (期限 ${fmtDate(p.dueDate)}, ${p.status === "pending_approval" ? "支払依頼中" : p.status === "approved" ? "支払待ち (承認済)" : p.status === "disputed" ? "差戻し (照会中)" : "受領"})`).join("\n")}`;
   }
   if (has("文面", "返信", "メール", "LINE", "案内文", "テンプレ")) {
     return `以下は見積送付時の文面例です。お客様名・金額・施工日はシステムの情報で自動的に差し込めます。\n\n---\n○○ 様\n\nこのたびはお問い合わせいただき、誠にありがとうございます。\n株式会社一畳屋 ${sname(db, user.storeId)} の ${user.name} です。\n\nご依頼いただきました「和室6畳 畳表替え (さくら)」のお見積書 (合計 ¥121,000 税込) をお送りいたします。\n工賃・配送・古畳の処分費を含んだ金額です。土・祝日の施工もご予約にて承ります。\n\nご不明な点がございましたら、お電話 (0120-158-108) または LINE にてお気軽にお問い合わせください。\n\n株式会社一畳屋 ${sname(db, user.storeId)}\n---`;

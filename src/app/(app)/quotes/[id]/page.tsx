@@ -2,19 +2,24 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canApprove, canCancelApproval } from "@/lib/auth/permissions";
+import { canAccessStore, canApprove } from "@/lib/auth/permissions";
 import { quoteChain, userName } from "@/lib/db/queries";
 import { convertQuoteToOrder, deleteQuote, markQuoteLost, sendQuote, submitQuote } from "@/lib/actions/quotes";
-import { decideApproval, cancelApproval } from "@/lib/actions/approvals";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
-import { APPROVAL_STATUS, APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
+import { APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
 import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag } from "@/components/ui";
+import { ApprovalDecision, ApprovalHistoryCard, HistoryCard, RecordStamp } from "@/components/features/History";
+import { ContactList, ContactLogForm } from "@/components/features/Contacts";
+import { SendDocumentCard } from "@/components/features/SendDocument";
 import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { SiteInfoCard } from "@/components/features/SiteInfo";
 import { setQuoteDiscussing, updateSiteInfo } from "@/lib/actions/cases";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { caseEvents } from "@/lib/db/schedule";
 import { toDateKey } from "@/lib/format";
+
+/** 見積書の PDF を作ってメールで送る (送信の応答を待つ) ため */
+export const maxDuration = 60;
 
 export default async function QuoteDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -53,22 +58,13 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
       {q.status === "pending_approval" && pending && (
         <Card className="mb-4 border-warn/40 bg-warn-soft/40">
           <CardHeader title={`承認待ち: ${APPROVAL_TYPE_LABEL[pending.type]}`} description={`${pending.requiredRole === "admin" ? "管理者" : "店長"}の承認が必要 · 申請 ${userName(pending.requestedBy)} ${fmtDateTime(pending.createdAt)}${pending.requestComment ? ` · ${pending.requestComment}` : ""}`} />
-          {canDecide ? (
-            <form className="flex flex-wrap items-end gap-2">
-              <input type="hidden" name="returnTo" value={returnTo} />
-              <Field label="コメント (任意)" className="w-full @xl:w-80"><Input name="comment" placeholder="例: 値引き幅を確認済み" /></Field>
-              <Button type="submit" formAction={decideApproval.bind(null, pending.id, "approved")}>承認する</Button>
-              <Button type="submit" variant="danger" formAction={decideApproval.bind(null, pending.id, "rejected")}>差し戻す</Button>
-            </form>
-          ) : (
-            <form className="flex items-center gap-3">
-              <input type="hidden" name="returnTo" value={returnTo} />
-              <p className="text-sm text-ink-2">承認者の確認を待っています。</p>
-              {canCancelApproval(user, pending) && <Button type="submit" variant="ghost" size="sm" formAction={cancelApproval.bind(null, pending.id)}>申請を取り下げる</Button>}
-            </form>
-          )}
+          <ApprovalDecision approval={pending} user={user} returnTo={returnTo} waitingText="承認者の確認を待っています。" />
         </Card>
       )}
+      {q.status === "draft" && (() => {
+        const last = chain.approvals.filter((a) => a.targetId === q.id && a.type === "quote" && (a.status === "returned" || a.status === "rejected")).sort((a, b) => (b.decidedAt ?? "").localeCompare(a.decidedAt ?? ""))[0];
+        return last ? <Note tone="warn">{last.status === "returned" ? "差し戻されました" : "却下されました"} ({userName(last.decidedBy)} · {fmtDateTime(last.decidedAt)}): {last.decisionComment ?? "理由の記入なし"}。{last.status === "returned" ? "内容を修正して再申請してください。" : ""}</Note> : null;
+      })()}
 
       {q.pendingChange && pending?.type === "quote_amend" && (
         <Card className="mb-4 border-warn/40">
@@ -87,16 +83,9 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
               {q.pendingChange.workDetails !== undefined && q.pendingChange.workDetails !== (q.workDetails ?? "") && <p className="mt-1 whitespace-pre-wrap text-xs text-ink">施工内容: {q.pendingChange.workDetails || "(なし)"}</p>}
             </div>
           </div>
-          {canDecide ? (
-            <form className="mt-4 flex flex-wrap items-end gap-2">
-              <input type="hidden" name="returnTo" value={returnTo} />
-              <Field label="コメント (任意)" className="w-full @xl:w-80"><Input name="comment" /></Field>
-              <Button type="submit" formAction={decideApproval.bind(null, pending.id, "approved")}>変更を承認する</Button>
-              <Button type="submit" variant="danger" formAction={decideApproval.bind(null, pending.id, "rejected")}>却下する</Button>
-            </form>
-          ) : (
-            <p className="mt-3 text-xs text-ink-3">{pending.requiredRole === "admin" ? "管理者" : "店長"}の承認待ちです。</p>
-          )}
+          <div className="mt-4">
+            <ApprovalDecision approval={pending} user={user} returnTo={returnTo} approveLabel="変更を承認する" />
+          </div>
         </Card>
       )}
 
@@ -192,7 +181,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
           {(q.status === "approved" || q.status === "sent") && !q.orderId && (
             <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-2">
               <Card>
-                <CardHeader title="お客様へ送付" description="送付手段は相手に合わせて選択。送付の記録は顧客のやりとり履歴に残ります" />
+                <CardHeader title="送付の記録 (郵送・手渡し・電話など)" description="システムの外で送った場合に記録します。記録は顧客のやりとり履歴に残ります" />
                 <form action={sendQuote.bind(null, q.id)} className="flex flex-wrap items-end gap-2">
                   <Field label="送付手段">
                     <Select name="channel" defaultValue={customer?.preferredChannel === "visit" ? "mail" : customer?.preferredChannel ?? "email"}>
@@ -222,7 +211,24 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
               </Card>
             </div>
           )}
+          {(q.status === "approved" || q.status === "sent" || q.status === "accepted") && (
+            <SendDocumentCard
+              kind="quote"
+              id={q.id}
+              number={q.number}
+              customer={customer}
+              defaultMessage={`${customer?.name ?? ""} 様\n\nいつもお世話になっております。株式会社一畳屋です。\nお見積書 (${q.number}${q.version > 1 ? ` 第${q.version}版` : ""} / ${q.title} / 合計 ${yen(q.total)}) をお送りいたします。\n有効期限: ${fmtDate(q.validUntil)}\n\nご不明な点がございましたら、お気軽にお問い合わせください。`}
+            />
+          )}
           {q.status === "pending_approval" && !canDecide && <Note>承認されると「お客様へ送付」「受注登録」が行えるようになります。</Note>}
+
+          <Card>
+            <CardHeader title="やりとりの記録" description="この見積に関するお客様とのやりとり (電話・メール・LINE・対面など)" />
+            {customer && <ContactLogForm returnTo={returnTo} customerId={customer.id} caseRef={q.number} defaultChannel={customer.preferredChannel === "line" ? "line" : customer.preferredChannel === "email" ? "email" : "phone"} canSend />}
+            <div className="mt-4 border-t border-line pt-3">
+              <ContactList db={db} logs={db.commLogs.filter((c) => c.relatedType === "quote" && c.relatedId === q.id)} showParty={false} returnTo={returnTo} />
+            </div>
+          </Card>
 
           <CaseScheduleCard
             events={caseEvents(db, { inquiryId: q.inquiryId, quoteId: q.id, orderId: chain.order?.id })}
@@ -257,27 +263,9 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
               {doc && <li>取込書類: <Link href={`/capture?doc=${doc.id}`} className="text-accent hover:underline">{doc.fileName}</Link></li>}
             </ul>
           </Card>
-          <Card>
-            <CardHeader title="承認履歴" />
-            <ul className="space-y-2 text-xs">
-              {chain.approvals.filter((a) => a.targetId === q.id).map((a) => (
-                <li key={a.id} className="rounded-lg border border-line p-2">
-                  <div className="flex items-center justify-between gap-2"><span className="font-medium">{APPROVAL_TYPE_LABEL[a.type]}</span><StatusBadge value={a.status} map={APPROVAL_STATUS} /></div>
-                  <div className="mt-1 text-ink-3">申請 {userName(a.requestedBy)} {fmtDateTime(a.createdAt)}</div>
-                  {a.decidedBy && <div className="text-ink-3">{a.status === "approved" ? "承認" : "判断"} {userName(a.decidedBy)} {fmtDateTime(a.decidedAt)}{a.decisionComment ? ` · ${a.decisionComment}` : ""}</div>}
-                </li>
-              ))}
-              {chain.approvals.filter((a) => a.targetId === q.id).length === 0 && <li className="text-ink-3">履歴はありません</li>}
-            </ul>
-          </Card>
-          <Card>
-            <CardHeader title="変更履歴" />
-            <ul className="space-y-1.5 text-xs">
-              {db.auditLogs.filter((l) => l.entity === "quote" && l.entityId === q.id).reverse().map((l) => (
-                <li key={l.id}><span className="text-ink-3 tnum">{fmtDateTime(l.at)}</span> {l.summary} <span className="text-ink-3">({userName(l.userId)})</span></li>
-              ))}
-            </ul>
-          </Card>
+          <RecordStamp db={db} targets={[{ entity: "quote", id: q.id }]} created={{ by: q.createdBy, at: q.createdAt }} approved={q.approvedBy ? [{ by: q.approvedBy, at: q.approvedAt }] : []} />
+          <ApprovalHistoryCard approvals={chain.approvals.filter((a) => a.targetId === q.id)} />
+          <HistoryCard db={db} user={user} targets={[{ entity: "quote", id: q.id }]} />
         </div>
       </div>
     </div>

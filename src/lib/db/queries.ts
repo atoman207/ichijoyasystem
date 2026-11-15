@@ -33,6 +33,7 @@ export function userById(id?: string): User | undefined {
   return byId(getDb().users, id);
 }
 export function userName(id?: string): string {
+  if (id === "system") return "システム (外部連携)";
   return userById(id)?.name ?? "-";
 }
 export function storeById(id?: StoreId) {
@@ -90,6 +91,10 @@ export interface NotificationSummary {
   assignedEvents: { id: string; title: string; when: string; by: string; updated: boolean }[];
   /** あなたが担当する今後 14 日間の予定のうち、時間帯が重なっている組み合わせの数 */
   myConflicts: number;
+  /** 業務依頼: あなたへの未完了の依頼 (未確認・期限超過を先に) と、あなたの依頼への報告 (確認待ち) */
+  tasks: { threadId: string; title: string; detail: string }[];
+  /** あなたが対応する業務依頼の件数 (依頼先として未完了 + 依頼者として報告の確認待ち) */
+  taskCount: number;
   total: number;
 }
 
@@ -123,6 +128,19 @@ export function notificationsFor(user: User): NotificationSummary {
     .slice(0, 5)
     .map((e) => ({ id: e.id, title: e.title, when: periodLabel(e), by: userName(e.updatedBy ?? e.createdBy), updated: Boolean(e.createdAt && e.updatedAt && e.updatedAt > e.createdAt) }));
   const myConflicts = analyzeConflicts(mine).pairs.filter((p) => p.userId === user.id).length;
+  // 業務依頼
+  const toMe = db.threads.filter((t) => t.taskStatus && (t.taskStatus === "requested" || t.taskStatus === "acknowledged") && (t.assigneeIds ?? []).includes(user.id));
+  const reports = db.threads.filter((t) => t.taskStatus === "reported" && t.createdBy === user.id);
+  const rank = (t: (typeof toMe)[number]) => (t.dueDate && t.dueDate < today ? 0 : t.taskStatus === "requested" ? 1 : 2);
+  const tasks = [
+    ...reports.map((t) => ({ threadId: t.id, title: `報告があります: ${t.title}`, detail: `${userName(db.messages.filter((m) => m.threadId === t.id && m.event === "report").slice(-1)[0]?.userId)} さんの報告を確認して完了にしてください` })),
+    ...[...toMe].sort((a, b) => rank(a) - rank(b) || (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999")).map((t) => ({
+      threadId: t.id,
+      title: `${t.dueDate && t.dueDate < today ? "期限超過の依頼" : t.taskStatus === "requested" ? "新しい業務依頼" : "対応中の依頼"}: ${t.title}`,
+      detail: `依頼 ${userName(t.createdBy)}${t.dueDate ? ` · 期限 ${t.dueDate}` : ""}`,
+    })),
+  ].slice(0, 6);
+  const taskCount = toMe.length + reports.length;
   return {
     pendingApprovals,
     myRequests,
@@ -132,7 +150,9 @@ export function notificationsFor(user: User): NotificationSummary {
     todayEvents,
     assignedEvents,
     myConflicts,
-    total: pendingApprovals.length + mentions.length + overdueInvoices + newInquiries + assignedEvents.length + (myConflicts > 0 ? 1 : 0),
+    tasks,
+    taskCount,
+    total: pendingApprovals.length + mentions.length + overdueInvoices + newInquiries + assignedEvents.length + (myConflicts > 0 ? 1 : 0) + taskCount,
   };
 }
 

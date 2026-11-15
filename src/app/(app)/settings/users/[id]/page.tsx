@@ -4,6 +4,8 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canManageSettings, canSeeAllStores, isDemoAccount } from "@/lib/auth/permissions";
 import { resetUserPassword, toggleUserActive, updateUserProfile, updateUserRole } from "@/lib/actions/settings";
+import { updateUserNotify } from "@/lib/actions/settings-ops";
+import { NotifyPrefsForm } from "@/components/settings/NotifyPrefsForm";
 import { fmtDateTime } from "@/lib/format";
 import { AUDIT_ACTION_LABEL, ENTITY_LABEL, ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import type { Role } from "@/lib/db/types";
@@ -91,6 +93,10 @@ export default async function UserAccountPage({ params, searchParams }: { params
               <Button type="submit" size="sm" variant={u.active ? "danger" : "secondary"} disabled={u.id === user.id}>{u.active ? "無効にする (ログインを止める)" : "有効にする"}</Button>
               {u.id === user.id && <p className="mt-1 text-[11px] text-ink-3">自分自身は無効にできません。</p>}
             </form>
+          </Card>
+          <Card>
+            <CardHeader title="通知の受け取り方" description="承認依頼・承認の結果・メンション・業務依頼をメール・Chatwork でも知らせる設定" />
+            <NotifyPrefsForm u={u} action={updateUserNotify.bind(null, u.id)} />
           </Card>
           <Card>
             <CardHeader title="パスワードの再設定" description="ログイン中の端末はログアウトされます。新しいパスワードは本人に直接伝えてください" />

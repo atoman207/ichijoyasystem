@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { requireUser } from "@/lib/auth/session";
 import { notificationsFor, storeById, storeName } from "@/lib/db/queries";
-import { canExportData, canManageFinance, canManageSettings, canSeeAllStores, canViewReports } from "@/lib/auth/permissions";
+import { canExportAccounting, canExportData, canManageSettings, canRegisterPurchase, canSeeAllStores, canViewReports, canViewSuppliers } from "@/lib/auth/permissions";
 import { ROLE_LABEL, APPROVAL_TYPE_LABEL } from "@/lib/constants";
 import { AppShell, type NavItem, type NotificationItem } from "@/components/layout/AppShell";
 import { logout } from "@/lib/actions/auth";
@@ -25,15 +25,24 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     { href: "/cases", label: "案件の進捗 (問い合わせ〜入金・全処理完了)", short: "案件進捗", icon: "cases", group: "営業・施工" },
     { href: "/schedule", label: "予定表", icon: "schedule", group: "営業・施工", badge: n.myConflicts || undefined },
     { href: "/invoices", label: "請求・入金", icon: "invoices", group: "経理", badge: n.overdueInvoices || undefined },
+    { href: "/finance", label: "入出金の予定 (未入金・支払待ち)", short: "入出金予定", icon: "finance", group: "経理" },
     { href: "/expenses", label: "経費精算", icon: "expenses", group: "経理" },
+    { href: "/cashbook", label: "現金出納帳", short: "現金出納", icon: "cashbook", group: "経理" },
   ];
-  if (canManageFinance(user)) {
-    nav.push({ href: "/purchases", label: "仕入・買掛", icon: "purchases", group: "経理" });
+  if (canRegisterPurchase(user)) {
+    nav.push({ href: "/purchases", label: "仕入・買掛 (支払依頼)", short: "仕入・買掛", icon: "purchases", group: "経理" });
+  }
+  if (canViewSuppliers(user)) {
+    nav.push({ href: "/suppliers", label: "仕入先・協力業者", short: "取引先", icon: "suppliers", group: "経理" });
+  }
+  if (canExportAccounting(user)) {
+    nav.push({ href: "/accounting", label: "会計データの出力 (仕訳・明細)", short: "会計データ", icon: "accounting", group: "経理" });
   }
   nav.push(
     { href: "/capture", label: "書類取込 (紙→データ)", short: "書類取込", icon: "capture", group: "業務支援" },
     { href: "/approvals", label: "承認", icon: "approvals", group: "業務支援", badge: n.pendingApprovals.length || undefined },
-    { href: "/messages", label: "社内連絡", icon: "messages", group: "業務支援", badge: n.mentions.length || undefined },
+    { href: "/messages", label: "社内連絡・業務依頼", short: "社内連絡", icon: "messages", group: "業務支援", badge: n.mentions.length + n.taskCount || undefined },
+    { href: "/contacts", label: "連絡履歴 (お客様・協力業者)", short: "連絡履歴", icon: "contacts", group: "業務支援" },
     { href: "/ai", label: "AIアシスタント", short: "AI", icon: "ai", group: "業務支援" },
     { href: "/materials", label: "資料・写真", icon: "materials", group: "業務支援" },
   );
@@ -61,6 +70,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       href: `/messages/${m.threadId}`,
     })),
   ];
+  for (const t of n.tasks) {
+    notifications.push({ kind: "task", title: t.title, detail: t.detail, href: `/messages/${t.threadId}` });
+  }
   for (const e of n.assignedEvents) {
     notifications.push({
       kind: "schedule",

@@ -2,12 +2,13 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canApprove, canManageFinance, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
+import { canAccessStore, canManageFinance, canRegisterPurchase, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
 import { orderChain, userName } from "@/lib/db/queries";
-import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
-import { decideApproval } from "@/lib/actions/approvals";
+import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, requestOrderChange, resubmitOrder, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
-import { APPROVAL_STATUS, APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, PROGRESS_KIND_LABEL, QUOTE_STATUS } from "@/lib/constants";
+import { APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, PROGRESS_KIND_LABEL, QUOTE_STATUS } from "@/lib/constants";
+import { ApprovalDecision, ApprovalHistoryCard, HistoryCard, RecordStamp } from "@/components/features/History";
+import { ContactList, ContactLogForm } from "@/components/features/Contacts";
 import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
 import { OrderScheduleForm } from "@/components/schedule/OrderScheduleForm";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
@@ -35,8 +36,16 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const store = db.stores.find((s) => s.id === o.storeId);
   const chain = orderChain(db, o);
   const pending = chain.approvals.find((a) => a.status === "pending" && a.type === "order");
-  const canDecide = pending ? canApprove(user, pending) : false;
-  const stepIndex = STEPS.indexOf(o.status as (typeof STEPS)[number]);
+  const pendingChange = chain.approvals.find((a) => a.status === "pending" && a.type === "order_change" && a.targetId === o.id);
+  const lastReturn = chain.approvals.filter((a) => a.type === "order" && a.targetId === o.id && a.status === "returned").sort((a, b) => (b.decidedAt ?? "").localeCompare(a.decidedAt ?? ""))[0];
+  const stepIndex = STEPS.indexOf((o.status === "returned" ? "pending_approval" : o.status) as (typeof STEPS)[number]);
+  const contactLogs = db.commLogs.filter((c) => (c.relatedType === "order" && c.relatedId === o.id) || (chain.quote && c.relatedType === "quote" && c.relatedId === chain.quote.id) || (chain.invoice && c.relatedType === "invoice" && c.relatedId === chain.invoice.id) || db.purchases.some((p) => p.orderId === o.id && c.relatedType === "purchase" && c.relatedId === p.id));
+  // やりとりの相手に選べる協力業者・仕入先 (取引中。協力業者を先に)
+  const partners = db.suppliers
+    .filter((s) => s.active !== false)
+    .sort((a, b) => Number(b.kind === "partner") - Number(a.kind === "partner") || a.name.localeCompare(b.name, "ja"))
+    .map((s) => ({ id: s.id, label: `${s.kind === "partner" ? "[協力業者] " : "[仕入先] "}${s.name}` }));
+  const orderPurchases = db.purchases.filter((p) => p.orderId === o.id);
   const returnTo = `/orders/${id}`;
   const active = ["confirmed", "scheduled", "in_progress"].includes(o.status);
   const main = db.schedule.find((e) => e.orderId === o.id && e.source === "order");
@@ -77,16 +86,29 @@ export default async function OrderDetailPage({ params, searchParams }: { params
       {pending && (
         <Card className="mb-4 border-warn/40 bg-warn-soft/40">
           <CardHeader title="契約承認待ち" description={`${pending.requiredRole === "admin" ? "管理者" : "店長"}の承認が必要 · 申請 ${userName(pending.requestedBy)} ${fmtDateTime(pending.createdAt)}${pending.requestComment ? ` · ${pending.requestComment}` : ""}`} />
-          {canDecide ? (
-            <form className="flex flex-wrap items-end gap-2">
-              <input type="hidden" name="returnTo" value={returnTo} />
-              <Field label="コメント (任意)" className="w-full @xl:w-80"><Input name="comment" /></Field>
-              <Button type="submit" formAction={decideApproval.bind(null, pending.id, "approved")}>契約を承認する</Button>
-              <Button type="submit" variant="danger" formAction={decideApproval.bind(null, pending.id, "rejected")}>却下する</Button>
+          <ApprovalDecision approval={pending} user={user} returnTo={returnTo} approveLabel="契約を承認する" waitingText="承認後に施工手配へ進めます。" />
+        </Card>
+      )}
+      {o.status === "returned" && !pending && (
+        <Card className="mb-4 border-serious/40 bg-serious-soft/40">
+          <CardHeader title="契約承認が差し戻されました" description={lastReturn ? `${userName(lastReturn.decidedBy)} · ${fmtDateTime(lastReturn.decidedAt)} · 理由: ${lastReturn.decisionComment ?? "記入なし"}` : undefined} />
+          <p className="mb-3 text-xs text-ink-2">施工予定・案件情報・見積 (金額は見積の変更申請) を見直してから再申請してください。案件をやめる場合はキャンセルします。</p>
+          <form action={resubmitOrder.bind(null, o.id)} className="flex flex-wrap items-end gap-2">
+            <Field label="再申請のコメント" className="w-full @xl:w-96"><Input name="comment" placeholder="例: 施工日を確定し、材料の手配先を変更しました" /></Field>
+            <Button type="submit">契約承認を再申請する</Button>
+          </form>
+          {isManagerOrAbove(user) && (
+            <form action={cancelOrder.bind(null, o.id)} className="mt-3 flex flex-wrap items-end gap-2 border-t border-line pt-3">
+              <Field label="キャンセル理由" className="w-full @xl:w-72"><Input name="reason" /></Field>
+              <Button type="submit" variant="danger" size="sm">受注をキャンセル</Button>
             </form>
-          ) : (
-            <p className="text-sm text-ink-2">承認後に施工手配へ進めます。</p>
           )}
+        </Card>
+      )}
+      {pendingChange && (
+        <Card className="mb-4 border-warn/40 bg-warn-soft/40">
+          <CardHeader title={`承認待ち: ${APPROVAL_TYPE_LABEL[pendingChange.type]}`} description={`${pendingChange.requiredRole === "admin" ? "管理者" : "店長"}の承認が必要 · 申請 ${userName(pendingChange.requestedBy)} ${fmtDateTime(pendingChange.createdAt)} · 理由: ${pendingChange.requestComment ?? "-"}`} />
+          <ApprovalDecision approval={pendingChange} user={user} returnTo={returnTo} approveLabel="変更を承認する" />
         </Card>
       )}
 
@@ -305,6 +327,33 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             </ol>
           </Card>
 
+          <Card>
+            <CardHeader title="やりとりの記録 (お客様・協力業者)" description="この案件のお客様・協力業者・仕入先とのやりとりを残します。見積・請求・仕入に紐付いた記録もここに集まります" />
+            {o.status !== "cancelled" && <ContactLogForm returnTo={returnTo} customerId={o.customerId} caseRef={o.number} suppliers={partners} defaultChannel={customer?.preferredChannel === "line" ? "line" : "phone"} canSend />}
+            <p className="mt-1 text-[11px] text-ink-3">協力業者を選ぶと協力業者とのやりとりとして、選ばないとお客様とのやりとりとして記録します。</p>
+            <div className="mt-3 border-t border-line pt-3">
+              <ContactList db={db} logs={contactLogs} returnTo={returnTo} empty="この案件のやりとりの記録はありません" />
+            </div>
+          </Card>
+
+          {(orderPurchases.length > 0 || canRegisterPurchase(user)) && (
+            <Card>
+              <CardHeader title="この案件の仕入・外注" description={orderPurchases.length ? `${orderPurchases.length} 件 · ${yen(orderPurchases.filter((p) => p.status !== "rejected").reduce((a, p) => a + p.amount, 0))}` : "協力業者への外注・材料の仕入を案件に紐付けて登録できます"} action={canRegisterPurchase(user) && o.status !== "cancelled" ? <LinkButton href={`/purchases/new?orderRef=${encodeURIComponent(o.number)}`} variant="ghost" size="sm">仕入を登録</LinkButton> : undefined} />
+              {orderPurchases.length > 0 && (
+                <ul className="space-y-1 text-xs">
+                  {orderPurchases.map((p) => (
+                    <li key={p.id} className="flex flex-wrap items-center gap-2">
+                      {canManageFinance(user) || p.storeId === user.storeId ? <Link href={`/purchases/${p.id}`} className="font-mono text-accent hover:underline">{p.number}</Link> : <span className="font-mono">{p.number}</span>}
+                      <span>{db.suppliers.find((s) => s.id === p.supplierId)?.name}</span>
+                      <span className="tnum">{yen(p.amount)}</span>
+                      <span className="text-ink-3">{p.description}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+          )}
+
           {active && (
             <Card>
               <CardHeader title="施工完了 → 売上計上" description="完了を登録すると売上に計上され、請求書を発行できるようになります" />
@@ -379,27 +428,28 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             </ul>
           </Card>
 
-          <Card>
-            <CardHeader title="変更履歴" description="この案件の登録・変更・承認の記録" />
-            <ul className="max-h-80 space-y-1.5 overflow-y-auto text-xs">
-              {db.auditLogs.filter((l) => (l.entity === "order" && l.entityId === o.id) || (chain.quote && l.entity === "quote" && l.entityId === chain.quote.id) || (chain.invoice && l.entity === "invoice" && l.entityId === chain.invoice.id) || (l.entity === "quality" && l.entityLabel === o.number)).slice(-60).reverse().map((l) => (
-                <li key={l.id}><span className="text-ink-3 tnum">{fmtDateTime(l.at)}</span> {l.summary} <span className="text-ink-3">({userName(l.userId)})</span></li>
-              ))}
-              {!db.auditLogs.some((l) => l.entity === "order" && l.entityId === o.id) && <li className="text-ink-3">変更の記録はありません (移行データ)</li>}
-            </ul>
-          </Card>
+          {o.status !== "cancelled" && !pendingChange && (
+            <Card>
+              <CardHeader title="契約内容の変更 (承認が必要)" description={chain.quote ? "契約日を変更できます。金額は見積の画面の「変更を申請」で直します (版として残ります)" : "契約日・契約金額の変更を申請します。承認されると反映し、変更前後を履歴に残します"} />
+              <form action={requestOrderChange.bind(null, o.id)} className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="契約日"><Input type="date" name="contractDate" defaultValue={o.contractDate} /></Field>
+                  {!chain.quote && <Field label="契約金額 (税込)"><Input type="number" name="total" defaultValue={o.total} min={1} /></Field>}
+                </div>
+                <Field label="変更の理由" required><Input name="reason" required placeholder="例: お客様のご要望で追加工事" /></Field>
+                <Button type="submit" size="sm" variant="secondary">変更を申請する</Button>
+              </form>
+            </Card>
+          )}
 
-          <Card>
-            <CardHeader title="承認履歴" />
-            <ul className="space-y-2 text-xs">
-              {chain.approvals.map((a) => (
-                <li key={a.id} className="rounded-lg border border-line p-2">
-                  <div className="flex items-center justify-between"><span className="font-medium">{APPROVAL_TYPE_LABEL[a.type]}</span><StatusBadge value={a.status} map={APPROVAL_STATUS} /></div>
-                  <div className="mt-1 text-ink-3">申請 {userName(a.requestedBy)} · {a.decidedBy ? `${a.status === "approved" ? "承認" : "判断"} ${userName(a.decidedBy)} ${fmtDateTime(a.decidedAt)}` : "未決"}</div>
-                </li>
-              ))}
-            </ul>
-          </Card>
+          <RecordStamp db={db} targets={[{ entity: "order", id: o.id }]} created={{ by: o.createdBy, at: o.createdAt }} approved={o.approvedBy ? [{ by: o.approvedBy }] : []} />
+          <HistoryCard
+            db={db}
+            user={user}
+            targets={[{ entity: "order", id: o.id }, ...(chain.quote ? [{ entity: "quote", id: chain.quote.id }] : []), ...(chain.invoice ? [{ entity: "invoice", id: chain.invoice.id }, { entity: "payment", id: chain.invoice.id }] : [])]}
+            description="この案件 (見積・請求を含む) の登録・変更・承認の記録。変更した項目は変更前と変更後の値を残しています"
+          />
+          <ApprovalHistoryCard approvals={chain.approvals} />
         </div>
       </div>
     </div>

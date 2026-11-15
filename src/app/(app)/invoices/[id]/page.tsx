@@ -4,11 +4,17 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canAccessStore, canManageFinance, isManagerOrAbove } from "@/lib/auth/permissions";
 import { customerName, userName } from "@/lib/db/queries";
-import { logInvoiceContact, recordPayment, updateInvoiceInfo, voidInvoice } from "@/lib/actions/invoices";
+import { logInvoiceContact, recordPayment, updateExpectedPayment, updateInvoiceInfo, voidInvoice } from "@/lib/actions/invoices";
 import { settlePayment } from "@/lib/actions/cases";
-import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
+import { fmtDate, toDateKey, yen } from "@/lib/format";
 import { CHANNEL_LABEL, INVOICE_STATUS, PAYMENT_METHOD_LABEL } from "@/lib/constants";
 import { Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
+import { HistoryCard, RecordStamp } from "@/components/features/History";
+import { ContactList } from "@/components/features/Contacts";
+import { SendDocumentCard } from "@/components/features/SendDocument";
+
+/** PDF を作ってメールで送る (送信の応答を待つ) ため */
+export const maxDuration = 60;
 
 export default async function InvoiceDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -25,7 +31,9 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
   const quote = order ? db.quotes.find((q) => q.id === order.quoteId) : undefined;
   const payments = db.payments.filter((p) => p.invoiceId === inv.id).sort((a, b) => b.date.localeCompare(a.date));
   const remaining = inv.total - inv.paidAmount;
-  const comms = db.commLogs.filter((c) => c.relatedId === inv.id).sort((a, b) => b.at.localeCompare(a.at));
+  const comms = db.commLogs.filter((c) => c.relatedType === "invoice" && c.relatedId === inv.id);
+  const returnTo = `/invoices/${inv.id}`;
+  const open = inv.status !== "void" && inv.status !== "paid";
 
   return (
     <div>
@@ -43,13 +51,13 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
           </>
         }
       />
-      {status === "overdue" && <Note tone="warn">支払期限を {Math.round((new Date(today).getTime() - new Date(inv.dueDate).getTime()) / 86400000)} 日超過しています。督促の記録を残し、入金確認後に入金登録してください。</Note>}
+      {status === "overdue" && <Note tone="warn">支払期限を {Math.round((new Date(today).getTime() - new Date(inv.dueDate).getTime()) / 86400000)} 日超過しています。督促の記録を残し、入金の予定を確認したら「入金予定」に登録してください。</Note>}
 
       <div className="mt-4 grid grid-cols-1 gap-4 @3xl:grid-cols-3">
         <div className="space-y-4 @3xl:col-span-2">
           <Card>
             <CardHeader title="請求内容" />
-            <Dl columns={3} items={[["件名", inv.title ?? order?.title], ["小計 (税抜)", yen(inv.subtotal)], ["消費税", yen(inv.tax)], ["請求額 (税込)", <span key="t" className="font-semibold">{yen(inv.total)}</span>], ["入金額", yen(inv.paidAmount)], ["残高", <span key="r" className={remaining > 0 ? "font-semibold text-critical" : "font-semibold text-good-ink"}>{yen(remaining)}</span>], ["送付方法", inv.sentVia ? CHANNEL_LABEL[inv.sentVia] : "-"], ["受注", order ? <Link key="o" href={`/orders/${order.id}`} className="text-accent hover:underline">{order.number}</Link> : "-"], ["見積", quote ? <Link key="q" href={`/quotes/${quote.id}`} className="text-accent hover:underline">{quote.number}</Link> : "-"]]} />
+            <Dl columns={3} items={[["件名", inv.title ?? order?.title], ["小計 (税抜)", yen(inv.subtotal)], ["消費税", yen(inv.tax)], ["請求額 (税込)", <span key="t" className="font-semibold">{yen(inv.total)}</span>], ["入金額", yen(inv.paidAmount)], ["残高", <span key="r" className={remaining > 0 ? "font-semibold text-critical" : "font-semibold text-good-ink"}>{yen(remaining)}</span>], ["送付方法", inv.sentVia ? CHANNEL_LABEL[inv.sentVia] : "-"], ["受注", order ? <Link key="o" href={`/orders/${order.id}`} className="text-accent hover:underline">{order.number}</Link> : "-"], ["見積", quote ? <Link key="q" href={`/quotes/${quote.id}`} className="text-accent hover:underline">{quote.number}</Link> : "-"], ["入金予定", inv.expectedDate ? `${fmtDate(inv.expectedDate)} · ${yen(inv.expectedAmount ?? remaining)}${inv.expectedNote ? ` · ${inv.expectedNote}` : ""}` : "-"]]} />
             {(inv.items ?? quote?.items) && (
               <table className="mt-4 w-full text-sm">
                 <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-3 py-1.5 text-left font-medium">品名</th><th className="px-3 py-1.5 text-right font-medium">数量</th><th className="px-3 py-1.5 text-right font-medium">金額 (税抜)</th></tr></thead>
@@ -57,14 +65,15 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
               </table>
             )}
             {inv.notes && <p className="mt-3 text-xs text-ink-2">備考: {inv.notes}</p>}
+            <div className="mt-3"><RecordStamp db={db} targets={[{ entity: "invoice", id: inv.id }, { entity: "payment", id: inv.id }]} created={{ by: inv.createdBy, at: inv.createdAt }} /></div>
           </Card>
 
           {remaining > 0 && inv.status !== "void" && (
             <Card>
-              <CardHeader title="入金を登録" description="現金・振込・カード・PayPay など。登録すると売掛残高と案件状態に即時反映" />
+              <CardHeader title="入金を登録" description="現金・振込・カード・PayPay など。登録すると売掛残高と案件の状態に反映され、現金は店舗の現金出納帳にも記帳します" />
               <form action={recordPayment.bind(null, inv.id)} className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @5xl:grid-cols-4">
                 <Field label="入金日"><Input type="date" name="date" defaultValue={today} /></Field>
-                <Field label="金額"><Input type="number" name="amount" defaultValue={remaining} min={1} max={remaining} /></Field>
+                <Field label="金額"><Input type="number" name="amount" defaultValue={inv.expectedAmount ?? remaining} min={1} max={remaining} /></Field>
                 <Field label="方法">
                   <Select name="method" defaultValue={customer?.type === "corporate" ? "transfer" : "cash"}>
                     {(Object.keys(PAYMENT_METHOD_LABEL) as (keyof typeof PAYMENT_METHOD_LABEL)[]).map((m) => <option key={m} value={m}>{PAYMENT_METHOD_LABEL[m]}</option>)}
@@ -72,6 +81,21 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
                 </Field>
                 <Field label="メモ"><Input name="memo" placeholder="例: 内金 / 振込名義" /></Field>
                 <div className="@xl:col-span-2 @5xl:col-span-4"><Button type="submit">入金を登録する</Button></div>
+              </form>
+            </Card>
+          )}
+
+          {open && (
+            <Card>
+              <CardHeader title="入金予定" description="お客様と約束した入金日・金額を登録すると、入出金の予定・顧客別の請求状況に表示されます (入金を登録すると自動で消えます)" />
+              <form action={updateExpectedPayment.bind(null, inv.id)} className="grid grid-cols-1 gap-3 @xl:grid-cols-4">
+                <Field label="入金予定日" required><Input type="date" name="expectedDate" defaultValue={inv.expectedDate} /></Field>
+                <Field label="入金予定額" hint="空欄は残高の全額"><Input type="number" name="expectedAmount" min={0} max={remaining} defaultValue={inv.expectedAmount} /></Field>
+                <Field label="メモ" className="@xl:col-span-2"><Input name="expectedNote" defaultValue={inv.expectedNote} placeholder="例: 月末に振込とお電話あり" /></Field>
+                <div className="flex flex-wrap gap-2 @xl:col-span-4">
+                  <Button type="submit" size="sm" name="intent" value="save" variant="secondary">{inv.expectedDate ? "入金予定を変更" : "入金予定を登録"}</Button>
+                  {inv.expectedDate && <Button type="submit" size="sm" name="intent" value="clear" variant="ghost">入金予定を取り消す</Button>}
+                </div>
               </form>
             </Card>
           )}
@@ -87,7 +111,7 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
                   <span className="flex items-center gap-2">
                     {(p.method === "card" || p.method === "paypay") && !p.settledOn && (
                       <form action={settlePayment.bind(null, p.id)} className="flex items-center gap-1">
-                        <input type="hidden" name="returnTo" value={`/invoices/${inv.id}`} />
+                        <input type="hidden" name="returnTo" value={returnTo} />
                         <input type="date" name="settledOn" defaultValue={today} className="field h-7 w-36 py-0.5 text-xs" aria-label="入金を確認した日" />
                         <Button type="submit" size="sm" variant="secondary">入金を確認</Button>
                       </form>
@@ -99,16 +123,26 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
               {payments.length === 0 && <li className="py-3 text-ink-3">入金はまだありません</li>}
             </ul>
           </Card>
+
+          {inv.status !== "void" && (
+            <SendDocumentCard
+              kind="invoice"
+              id={inv.id}
+              number={inv.number}
+              customer={customer}
+              defaultMessage={`${customer?.name ?? ""} 様\n\nいつもお世話になっております。株式会社一畳屋です。\nご請求書 (${inv.number} / ご請求額 ${yen(inv.total)}) をお送りいたします。\nお支払期限: ${fmtDate(inv.dueDate)}\n\nご不明な点がございましたら、お気軽にお問い合わせください。`}
+            />
+          )}
         </div>
 
         <div className="space-y-4">
           <Card>
             <CardHeader title="お客様" />
-            {customer && <Dl columns={1} items={[["氏名", <Link key="n" href={`/customers/${customer.id}`} className="text-accent hover:underline">{customer.name}</Link>], ["電話", customer.phone], ["住所", customer.address], ["希望連絡手段", CHANNEL_LABEL[customer.preferredChannel]]]} />}
+            {customer && <Dl columns={1} items={[["氏名", <Link key="n" href={`/customers/${customer.id}`} className="text-accent hover:underline">{customer.name}</Link>], ["電話", customer.phone], ["メール", customer.email ?? "-"], ["住所", customer.address], ["希望連絡手段", CHANNEL_LABEL[customer.preferredChannel]]]} />}
           </Card>
           {inv.status !== "void" && (
             <Card>
-              <CardHeader title={status === "overdue" ? "督促・送付の記録" : "送付の記録"} />
+              <CardHeader title={status === "overdue" ? "督促・送付の記録" : "送付の記録"} description="郵送・手渡し・電話での督促など、システムの外で行った送付も記録します" />
               <form action={logInvoiceContact.bind(null, inv.id)} className="space-y-2">
                 <Field label="種別">
                   <Select name="kind" defaultValue={status === "overdue" ? "reminder" : "send"}>
@@ -124,9 +158,9 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
                 <Field label="内容"><Input name="body" placeholder="任意" /></Field>
                 <Button type="submit" size="sm" variant="secondary">記録する</Button>
               </form>
-              <ul className="mt-3 space-y-1.5 text-xs">
-                {comms.map((c) => <li key={c.id}><span className="tnum text-ink-3">{fmtDateTime(c.at)}</span> {c.subject} <span className="text-ink-3">({CHANNEL_LABEL[c.channel]})</span></li>)}
-              </ul>
+              <div className="mt-3 border-t border-line pt-2">
+                <ContactList db={db} logs={comms} showParty={false} returnTo={returnTo} empty="送付・督促の記録はありません" />
+              </div>
             </Card>
           )}
           {(canManageFinance(user) || isManagerOrAbove(user)) && inv.status !== "void" && inv.status !== "paid" && (
@@ -152,12 +186,7 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
               </form>
             </Card>
           )}
-          <Card>
-            <CardHeader title="変更履歴" />
-            <ul className="space-y-1.5 text-xs">
-              {db.auditLogs.filter((l) => (l.entity === "invoice" || l.entity === "payment") && l.entityId === inv.id).reverse().map((l) => <li key={l.id}><span className="tnum text-ink-3">{fmtDateTime(l.at)}</span> {l.summary} <span className="text-ink-3">({userName(l.userId)})</span></li>)}
-            </ul>
-          </Card>
+          <HistoryCard db={db} user={user} targets={[{ entity: "invoice", id: inv.id }, { entity: "payment", id: inv.id }]} />
         </div>
       </div>
     </div>

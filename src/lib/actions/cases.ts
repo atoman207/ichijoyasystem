@@ -11,6 +11,7 @@ import { toDateKey } from "@/lib/format";
 import { netAmount } from "@/lib/quote-calc";
 import { siteInfoFromForm, siteInfoLines } from "@/lib/site-info";
 import { PLANNED_PAYMENT_LABEL, caseIndex, orderCase } from "@/lib/case-status";
+import { postCash } from "@/lib/cashbook";
 import { assertStore, choice, fail, numField, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 /* ------------------------------------------------------------------ */
@@ -186,7 +187,12 @@ export async function recordCollection(orderId: string, formData: FormData) {
     }
     const remaining = inv.total - inv.paidAmount;
     if (amount > remaining) fail(back, `金額が残高 (¥${remaining.toLocaleString("ja-JP")}) を超えています。`);
-    db.payments.push({ id: newId("pay"), invoiceId: inv.id, date, amount, method, memo: str(formData, "memo") || "納品時に集金・決済", recordedBy: user.id, createdAt: now });
+    const paymentId = newId("pay");
+    db.payments.push({ id: paymentId, invoiceId: inv.id, date, amount, method, memo: str(formData, "memo") || "納品時に集金・決済", recordedBy: user.id, createdAt: now });
+    // 現金の集金は店舗の現金出納帳に記帳する
+    if (method === "cash") {
+      postCash(db, { storeId: o.storeId, date, direction: "in", amount, account: "売掛金回収 (現金入金)", counterparty: db.customers.find((c) => c.id === o.customerId)?.name, description: `${inv.number} 納品時の集金`, source: "payment", sourceId: paymentId, userId: user.id });
+    }
     inv.paidAmount += amount;
     inv.status = inv.paidAmount >= inv.total ? "paid" : "partially_paid";
     inv.updatedAt = now;

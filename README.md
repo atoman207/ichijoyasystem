@@ -91,17 +91,22 @@ DATA_BACKEND=json npm run dev
 | 案件の進捗 | `/cases` | 問い合わせ〜全処理完了を 1 つの一覧で。案件進捗・見積と仕様・工事日程・請求・入金を分けて絞り込み (TEL待ち・請求書未発行・未入金・決済入金待ち など) |
 | KPI | `/kpi` | お客様アンケート (はがきの AI 読取)・お客様の声・クレーム・手直し・Google 口コミ・年間インセンティブ |
 | 予定表 | `/schedule` | 週表示、店舗・担当者フィルタ、受注の施工予定を自動反映 |
-| 請求・入金 | `/invoices` | 売掛残高、期日超過、入金登録 (現金/振込/カード/PayPay)、督促記録、印刷用書式 |
-| 経費精算 | `/expenses` | レシート撮影 → 読取 → 承認 → 精算、勘定科目別集計 |
-| 仕入・買掛 | `/purchases` | 仕入先請求書の取込 → 支払承認 → 支払、買掛残高 (本部・管理者) |
+| 請求・入金 | `/invoices` | 売掛残高、期日超過、顧客別の請求状況、入金予定 (入金予定日・金額)、入金登録 (現金/振込/カード/PayPay)、督促記録、見積書・請求書のメール (PDF 添付)・LINE (PDF のリンク) 送信、印刷用書式 |
+| 入出金の予定 | `/finance` | 未入金 (入金予定日・支払期限の順)、決済会社からの入金待ち、支払待ち・支払依頼中 (仕入・経費の精算) |
+| 経費精算 | `/expenses` | レシート撮影 → AI 読取 (勘定科目の候補つき) → 承認 → 精算 (現金は現金出納帳に記帳)。手入力でも勘定科目の候補 (ルール・AI)、下書き・差戻しの修正と再申請 |
+| 現金出納帳 | `/cashbook` | 店舗ごとの手元現金の入出金と残高 (繰越・月別・科目別の集計)。現金の入金・経費の精算・仕入の現金払いは自動で記帳 |
+| 仕入・買掛 | `/purchases` | 仕入請求書 (仕入内容の明細・案件) の登録 → 支払依頼 (管理者の承認) → 支払待ち → 支払完了 (支払日・方法)。仕入先別の買掛金、支払予定 (店長は自店舗) |
+| 仕入先・協力業者 | `/suppliers` | 取引先の台帳 (支払条件から支払期限を自動計算・振込先・登録番号・LINE / Chatwork)、仕入請求書とやりとりの記録 |
+| 会計データの出力 | `/accounting` | 期間・店舗を指定して仕訳 (汎用 CSV・弥生会計のインポート形式) と明細 (売上・入金・経費・仕入・現金出納) を CSV で出力。科目名・税区分の設定 (本部・管理者) |
 | 書類取込 | `/capture` | 紙 → データ (手書き見積書 (備考欄以下まで) / 図面 / 施工資料 / 仕入請求書 / レシート / アンケートはがき)。AI が自信のない項目は黄色で示し、確認のチェックが済むまで登録しない。元の画像・PDF を保存。手書き見積書の読取の正確さ (担当者の修正との一致率) を表示 |
-| 承認 | `/approvals` | あなたの承認待ち / 申請中 / 全体 / 履歴、承認ルール |
-| 社内連絡 | `/messages` | 依頼・報告・確認・連絡のスレッド、メンション通知、案件への紐づけ |
+| 承認 | `/approvals` | あなたの承認待ち / 申請中 / 全体 / 履歴 (種類・判断・申請者・判断者・期間で絞り込み、CSV)。判断は承認・差戻し・却下。見積の金額変更、契約内容の変更、顧客の重要情報の変更、経費、仕入の支払依頼 |
+| 社内連絡・業務依頼 | `/messages` | 連絡・確認のスレッド、メンション通知、案件への紐づけ。業務依頼 (依頼先・期限 → 確認 → 報告 → 完了 / 差し戻し) |
+| 連絡履歴 | `/contacts` | お客様・協力業者・仕入先との電話・メール・LINE・Chatwork・Web・対面のやりとりの記録と検索、案件への紐付け、メール・LINE・Chatwork での送信 |
 | AI アシスタント | `/ai` | 一元化データに基づく集計・検索・文面作成 |
 | レポート・分析 | `/reports` | 店舗別・担当者別・期間別・種別別・入口別 (店長以上) |
 | データ入出力 | `/data` | CSV・Google スプレッドシート (リンク共有) からの顧客・問い合わせの取込 (確認 → 実行)、販売管理ソフトの売上明細の取込 (追加・変更された伝票だけを反映)、顧客・問い合わせ・受注・月次売上の CSV 書き出し (管理者・本部スタッフ) |
-| 変更履歴 | `/audit` | 監査ログ (変更前後の値つき) |
-| 設定 | `/settings` | ユーザー・店舗・商品マスタ・承認ルール・外部連携・データ管理 (管理者)。ユーザーと権限のタブに権限一覧 (ロール × 操作)、ユーザーごとのアカウント画面 `/settings/users/<ID>` |
+| 変更履歴 | `/audit` | 監査ログ (登録者・変更者・承認者、変更前後の値)。ロールに応じた閲覧範囲、期間・対象・操作・操作者での絞り込み、CSV (管理者・本部) |
+| 設定 | `/settings` | ユーザー・店舗・商品マスタ・承認ルール (基準額・顧客の重要情報の承認)・外部連携 (メール・LINE・Chatwork・Web フォームの状態、テスト送信、社内通知、送信履歴)・データ管理 (管理者)。ユーザーと権限のタブに権限一覧 (ロール × 操作)、ユーザーごとのアカウント画面 `/settings/users/<ID>` |
 | プロフィール | `/profile` | ヘッダー右上のアバターから開く。自分の権限・担当中の問い合わせ/施工・承認・予定・操作履歴 |
 
 画面の構成: 上部に浮かぶヘッダーに一畳屋のロゴ (公式サイト https://ichijoya.co.jp のロゴ)、メニューのタブ
@@ -120,6 +125,8 @@ DATA_BACKEND=json npm run dev
 - AI: `src/lib/ai/provider.ts` が OpenAI (chat completions + JSON Schema) と Claude (`@anthropic-ai/sdk`、structured outputs) を同じ形で呼ぶ。キー未設定時はサンプル応答。接続は 設定 → 外部連携・AI の「接続を確認」で確かめられる
 - 帳票 PDF: `src/lib/pdf/` (pdf-lib + Noto Sans JP を埋め込み)。`/api/pdf/quotes/<ID>` (`?version=` で旧版)・`/api/pdf/invoices/<ID>`・`/api/pdf/receipts/<ID>`。会社情報・登録番号・振込先は 設定 → 帳票
 - KPI: `src/lib/kpi.ts` (返信率・評価・クレーム率・口コミ) と `src/lib/incentive.ts` (年間インセンティブ)。ルールは 設定 → KPI・インセンティブ
+- 外部連携: `src/lib/notify/` (メールは Resend / SendGrid の API、LINE Messaging API、Chatwork API を fetch で呼ぶ。設定がなければ送らずに送信履歴に「記録のみ」)。受信は `/api/integrations/line`・`/api/integrations/chatwork` (署名を確認)・`/api/integrations/webform` (共有鍵)。LINE で送る帳票は期限つきの署名リンク `/api/doc/<種類>/<ID>`
+- 会計データ: `src/lib/accounting.ts` (仕訳の組み立て)・`src/lib/sjis.ts` (Shift_JIS への変換)・`/api/accounting`
 - 依存ライブラリは最小限 (`lucide-react`, `clsx`, `@anthropic-ai/sdk`, `pdf-lib`, `@pdf-lib/fontkit`, `server-only`)
 
 ```
@@ -129,9 +136,9 @@ src/
     (app)/                 認証後の画面 (ヘッダーのレイアウト)
       page.tsx             ダッシュボード
       customers/ inquiries/ quotes/ orders/ schedule/ invoices/ expenses/
-      purchases/ capture/ approvals/ messages/ ai/ reports/ audit/ settings/
+      purchases/ suppliers/ cashbook/ finance/ accounting/ contacts/ capture/ approvals/ messages/ ai/ reports/ audit/ settings/
     print/                 見積書・請求書の印刷用書式
-    api/export, api/health
+    api/export, api/health, api/accounting (会計データ), api/integrations (LINE・Chatwork・Web フォームの受信), api/doc (帳票の共有リンク)
     icon.png, apple-icon.png  ブラウザのタブ・ホーム画面用アイコン (公式サイトのファビコン)
   components/
     ui/                    ボタン・バッジ・テーブル・フォーム等の共通部品
@@ -179,6 +186,11 @@ scripts/
 | `SUPABASE_DB_PASSWORD` または `SUPABASE_DB_URL` | データベースへの直接接続。テーブル定義の自動反映 (`npm run build` の前に `scripts/import/migrate.mjs`) と ichijoya.sql の実行 (`setup-database.mjs`) に使う。アプリ本体では使わない |
 | `REVIEW_ACCESS_KEY` / `REVIEW_LOGIN` | 確認用ログインの鍵 (省略時は secret キーから導出) / `off` で確認用ログインを停止 |
 | `APP_TIME_ZONE` | 日付・時刻の基準 (省略時 `Asia/Tokyo`) |
+| `RESEND_API_KEY` または `SENDGRID_API_KEY` と `MAIL_FROM` | メールの送信 (見積書・請求書の送付、社内通知) |
+| `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_CHANNEL_SECRET` | LINE の送信 / 受信 (Webhook の署名の確認) |
+| `CHATWORK_API_TOKEN` / `CHATWORK_ROOM_ID` / `CHATWORK_WEBHOOK_TOKEN` | Chatwork の送信 / 社内通知のルーム / 受信 (Webhook の署名の確認) |
+| `WEBFORM_SECRET` | Web サイトのお問い合わせフォームからの受信の共有鍵 |
+| `APP_BASE_URL` | 通知・送付文に入れる画面の URL (省略時は Vercel の URL) |
 
 ## Vercel への公開
 

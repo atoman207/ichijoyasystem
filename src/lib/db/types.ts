@@ -42,6 +42,12 @@ export interface User {
   active: boolean;
   /** 入社日 */
   hiredOn?: string;
+  /** 通知を受け取るメールアドレス (ログイン ID がメールアドレスでない社員も設定できる) */
+  notifyEmail?: string;
+  /** メールで通知を受け取る (承認依頼・承認結果・メンション・業務依頼) */
+  notifyByEmail?: boolean;
+  /** Chatwork のアカウント ID (社内ルームへの通知で [To] に使う) */
+  chatworkAccountId?: string;
 }
 
 /** 情報の入口 / 出口 */
@@ -298,6 +304,8 @@ export interface Quote {
 
 export type OrderStatus =
   | "pending_approval"
+  /** 契約の承認が差し戻された (内容を見直して再申請する) */
+  | "returned"
   | "confirmed"
   | "scheduled"
   | "in_progress"
@@ -418,6 +426,12 @@ export interface Invoice {
   notes?: string;
   /** 明細が税込 (税込の見積から発行) */
   taxIncluded?: boolean;
+  /** 入金予定日 (お客様と約束した日) */
+  expectedDate?: string;
+  /** 入金予定額 (分割・一部の入金のときは今回の予定額。空は残高の全額) */
+  expectedAmount?: number;
+  /** 入金予定のメモ (例: 月末に振込予定と電話あり) */
+  expectedNote?: string;
 }
 
 export type PaymentMethod = "cash" | "transfer" | "card" | "paypay" | "other";
@@ -435,11 +449,13 @@ export interface Payment {
   createdAt: string;
 }
 
+/** rejected = 差戻し (修正して再申請できる) / denied = 却下 (再申請しない) */
 export type ExpenseStatus =
   | "draft"
   | "pending_approval"
   | "approved"
   | "rejected"
+  | "denied"
   | "paid";
 
 export type ExpensePaymentMethod = "cash" | "card" | "transfer";
@@ -464,7 +480,13 @@ export interface Expense {
   approvedAt?: string;
   createdAt: string;
   updatedAt: string;
+  /** 精算日 (精算済みにした日) と処理した人 */
+  paidAt?: string;
+  paidBy?: string;
 }
+
+/** 取引先の区分: supplier = 仕入先 (材料・商品) / partner = 協力業者 (外注・施工の協力会社) */
+export type SupplierKind = "supplier" | "partner";
 
 export interface Supplier {
   id: string;
@@ -472,16 +494,57 @@ export interface Supplier {
   category: string;
   phone?: string;
   email?: string;
+  /** 支払条件 (文章。例: 月末締め 翌月末払い)。締め日・支払月・支払日が未設定のときはここから読み取る */
   paymentTerms: string;
+  /** 締め日 (31 = 末日) */
   closingDay: number;
+  kind?: SupplierKind;
+  kana?: string;
+  /** 先方の担当者 */
+  contactName?: string;
+  postalCode?: string;
+  address?: string;
+  fax?: string;
+  /** 支払月 (締め日の月から 0 = 当月 / 1 = 翌月 / 2 = 翌々月) */
+  payMonthOffset?: number;
+  /** 支払日 (31 = 末日) */
+  payDay?: number;
+  /** 振込先 (銀行・支店・種別・口座番号・名義) */
+  bankInfo?: string;
+  /** 適格請求書発行事業者の登録番号 */
+  registrationNumber?: string;
+  /** LINE のユーザー ID (協力業者へ LINE で連絡するとき) */
+  lineId?: string;
+  /** Chatwork のルーム ID (協力業者とのやりとりのルーム) */
+  chatworkRoomId?: string;
+  notes?: string;
+  /** false = 取引終了 (一覧・選択肢に出さない) */
+  active?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
+/** rejected = 支払の却下 / disputed = 照会中 (差戻し。内容を確認して再申請できる) */
 export type PurchaseStatus =
   | "received"
   | "pending_approval"
   | "approved"
   | "paid"
-  | "disputed";
+  | "disputed"
+  | "rejected";
+
+/** 仕入の明細 (品名・数量・単価・金額は税込) */
+export interface PurchaseItem {
+  id: string;
+  name: string;
+  spec?: string;
+  qty: number;
+  unit: string;
+  unitPrice: number;
+  amount: number;
+}
+
+export type PurchasePayMethod = "transfer" | "cash" | "card" | "debit" | "other";
 
 export interface PurchaseInvoice {
   id: string;
@@ -489,6 +552,7 @@ export interface PurchaseInvoice {
   supplierId: string;
   storeId: StoreId;
   invoiceDate: string;
+  /** 支払期限 (請求書に書かれた期限。仕入先の締め日・支払日から自動で計算) */
   dueDate: string;
   amount: number;
   taxAmount: number;
@@ -498,9 +562,24 @@ export interface PurchaseInvoice {
   documentId?: string;
   registeredBy: string;
   approvedBy?: string;
+  /** 支払日 (支払完了の日) */
   paidAt?: string;
   createdAt: string;
   updatedAt: string;
+  /** 仕入内容 (明細) */
+  items?: PurchaseItem[];
+  /** 勘定科目 (仕入高・外注費・材料費など) */
+  account?: string;
+  /** 関連する案件 (受注) */
+  orderId?: string;
+  /** 仕入先の請求書番号 */
+  supplierInvoiceNo?: string;
+  /** 支払予定日 (支払う日。既定は支払期限) */
+  scheduledPayDate?: string;
+  /** 支払方法と記録 (支払完了のとき) */
+  payMethod?: PurchasePayMethod;
+  payReference?: string;
+  paidBy?: string;
 }
 
 export type ApprovalType =
@@ -508,9 +587,14 @@ export type ApprovalType =
   | "quote_amend"
   | "order"
   | "expense"
-  | "purchase";
+  | "purchase"
+  /** 受注 (契約) の重要な情報 (契約金額・契約日) の変更 */
+  | "order_change"
+  /** 顧客の重要な情報 (氏名・住所・電話など) の変更 */
+  | "customer_change";
 
-export type ApprovalStatus = "pending" | "approved" | "rejected" | "cancelled";
+/** returned = 差戻し (修正して再申請) / rejected = 却下 / cancelled = 取下げ */
+export type ApprovalStatus = "pending" | "approved" | "returned" | "rejected" | "cancelled";
 
 export interface Approval {
   id: string;
@@ -527,6 +611,8 @@ export interface Approval {
   decidedAt?: string;
   decisionComment?: string;
   createdAt: string;
+  /** 変更の申請 (order_change / customer_change) の内容。承認すると after の値を反映する */
+  changes?: AuditChange[];
 }
 
 export type AuditAction =
@@ -569,11 +655,16 @@ export type RelatedType =
   | "invoice"
   | "expense"
   | "purchase"
-  | "customer";
+  | "customer"
+  | "supplier";
 
+/**
+ * 外部とのやりとり (お客様・協力業者・仕入先との連絡の記録)。
+ * お客様とのやりとりは customerId、協力業者・仕入先とのやりとりは supplierId を持つ (両方を持つこともある。例: 協力業者と案件の打合せ)
+ */
 export interface CommLog {
   id: string;
-  customerId: string;
+  customerId?: string;
   channel: Channel;
   direction: "inbound" | "outbound";
   subject: string;
@@ -582,9 +673,20 @@ export interface CommLog {
   userId: string;
   relatedType?: RelatedType;
   relatedId?: string;
+  /** 協力業者・仕入先 */
+  supplierId?: string;
+  /** 閲覧範囲の店舗 (登録時に案件・お客様の店舗から決める) */
+  storeId?: StoreId;
+  /** 相手の担当者名 */
+  contactName?: string;
+  /** 送信履歴 (メール・LINE・Chatwork で送ったとき) */
+  deliveryId?: string;
 }
 
 export type ThreadKind = "request" | "report" | "question" | "notice";
+
+/** 業務依頼の進み方: 依頼 → 確認 (受付) → 報告 → 依頼者の確認 (完了) */
+export type TaskStatus = "requested" | "acknowledged" | "reported" | "confirmed";
 
 export interface Thread {
   id: string;
@@ -599,7 +701,19 @@ export interface Thread {
   status: "open" | "done";
   createdAt: string;
   updatedAt: string;
+  /** 業務依頼の担当者 (依頼先) */
+  assigneeIds?: string[];
+  /** 業務依頼の期限 */
+  dueDate?: string;
+  taskStatus?: TaskStatus;
+  acknowledgedAt?: string;
+  reportedAt?: string;
+  confirmedAt?: string;
+  confirmedBy?: string;
 }
+
+/** 業務依頼の操作を記録した投稿 (ack = 確認・受付 / report = 報告 / confirm = 依頼者の確認 / reopen = 差し戻し) */
+export type MessageEvent = "ack" | "report" | "confirm" | "reopen";
 
 export interface Message {
   id: string;
@@ -608,6 +722,58 @@ export interface Message {
   body: string;
   at: string;
   mentions: string[];
+  event?: MessageEvent;
+}
+
+/** 現金出納 (店舗の手元現金の入出金) */
+export type CashSource = "manual" | "opening" | "payment" | "expense" | "purchase";
+
+export interface CashEntry {
+  id: string;
+  number: string;
+  storeId: StoreId;
+  date: string;
+  direction: "in" | "out";
+  amount: number;
+  /** 科目・区分 (例: 売掛金回収・消耗品費・銀行預入・小口現金補充) */
+  account: string;
+  /** 相手 (お客様・支払先) */
+  counterparty?: string;
+  description: string;
+  /** manual = 手入力 / opening = 繰越 (期首の残高) / payment・expense・purchase = 入金・経費精算・仕入の支払から自動で記帳 */
+  source: CashSource;
+  /** 自動で記帳した元の記録 (入金・経費・仕入請求書の ID) */
+  sourceId?: string;
+  recordedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type DeliveryChannel = "email" | "line" | "chatwork";
+/** sent = 送信 / failed = 送信失敗 / skipped = 送信の設定がないため記録のみ */
+export type DeliveryStatus = "sent" | "failed" | "skipped";
+
+/** 送信履歴 (メール・LINE・Chatwork で外部へ送った通知・帳票・連絡) */
+export interface Delivery {
+  id: string;
+  channel: DeliveryChannel;
+  /** 宛先 (メールアドレス・LINE のユーザー ID・Chatwork のルーム ID) */
+  recipient: string;
+  /** 宛先の名前 (お客様・社員・協力業者) */
+  recipientLabel?: string;
+  subject?: string;
+  body: string;
+  /** 添付したファイル名 */
+  attachments?: string[];
+  status: DeliveryStatus;
+  error?: string;
+  /** notify = 社内通知 / document = 見積書・請求書の送付 / message = 個別の連絡 / test = 接続の確認 */
+  purpose: "notify" | "document" | "message" | "test";
+  relatedType?: RelatedType | "approval" | "thread";
+  relatedId?: string;
+  /** 送信した人 (自動の通知は操作した人) */
+  userId: string;
+  createdAt: string;
 }
 
 /**
@@ -907,6 +1073,8 @@ export interface Database {
   photoAlbums: PhotoAlbum[];
   settings: AppSetting[];
   attachments: Attachment[];
+  cashEntries: CashEntry[];
+  deliveries: Delivery[];
 }
 
 export type CollectionName = Exclude<keyof Database, "meta">;

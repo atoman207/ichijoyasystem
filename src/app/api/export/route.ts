@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/session";
 import { addAudit, mutate, syncDb } from "@/lib/db/store";
-import { canExportData } from "@/lib/auth/permissions";
+import { canExportData, canViewAuditEntry } from "@/lib/auth/permissions";
+import { APPROVAL_STATUS, APPROVAL_TYPE_LABEL, AUDIT_ACTION_LABEL, ENTITY_LABEL } from "@/lib/constants";
+import { fieldLabel, fieldValue } from "@/lib/field-labels";
 import { monthlySales } from "@/lib/db/queries";
 import { toCsv } from "@/lib/csv";
 import { exportCustomers, exportInquiries, exportOrders, templateRows } from "@/lib/data-io";
@@ -16,6 +18,8 @@ const TYPE_LABEL: Record<string, string> = {
   orders: "受注・施工一覧 (CSV)",
   sales: "月次売上 (CSV)",
   db: "全データ (JSON)",
+  audit: "変更履歴 (CSV)",
+  approvals: "承認履歴 (CSV)",
 };
 
 /**
@@ -63,6 +67,58 @@ export async function GET(req: Request) {
     const rows: (string | number)[][] = [["年月", ...db.stores.map((s) => s.name), "合計"]];
     for (const m of sales) rows.push([m.month, ...db.stores.map((s) => m.byStore[s.id]), m.total]);
     return csv(toCsv(rows), `monthly_sales_${stamp}.csv`);
+  }
+  const userOf = (id?: string) => (id === "system" ? "システム (外部連携)" : (db.users.find((u) => u.id === id)?.name ?? id ?? ""));
+  const names = new Map<string, string>([...db.users.map((u) => [u.id, u.name] as [string, string]), ...db.suppliers.map((s) => [s.id, s.name] as [string, string])]);
+  const from = params.get("from") ?? "";
+  const to = params.get("to") ?? "";
+  if (type === "audit") {
+    // 画面と同じ絞り込み・閲覧範囲。変更した項目は 1 項目 1 行 (変更前・変更後)
+    let logs = db.auditLogs.filter((l) => canViewAuditEntry(user, l));
+    const f = (k: string) => params.get(k) ?? "";
+    if (f("entity")) logs = logs.filter((l) => l.entity === f("entity"));
+    if (f("action")) logs = logs.filter((l) => l.action === f("action"));
+    if (f("user")) logs = logs.filter((l) => l.userId === f("user"));
+    if (store) logs = logs.filter((l) => l.storeId === store);
+    if (from) logs = logs.filter((l) => l.at.slice(0, 10) >= from);
+    if (to) logs = logs.filter((l) => l.at.slice(0, 10) <= to);
+    if (f("q")) logs = logs.filter((l) => [l.summary, l.entityLabel].join(" ").toLowerCase().includes(f("q").toLowerCase()));
+    const rows: (string | number)[][] = [["日時", "操作した人", "操作", "対象", "対象の番号・名前", "店舗", "内容", "変更した項目", "変更前", "変更後"]];
+    for (const l of logs) {
+      const base = [new Date(l.at).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }), userOf(l.userId), AUDIT_ACTION_LABEL[l.action] ?? l.action, ENTITY_LABEL[l.entity] ?? l.entity, l.entityLabel, l.storeId ? (db.stores.find((s) => s.id === l.storeId)?.name ?? l.storeId) : "", l.summary];
+      if (l.changes?.length) for (const c of l.changes) rows.push([...base, fieldLabel(l.entity, c.field), fieldValue(c.field, c.before, names), fieldValue(c.field, c.after, names)]);
+      else rows.push([...base, "", "", ""]);
+    }
+    return csv(toCsv(rows), `audit_log_${stamp}.csv`);
+  }
+  if (type === "approvals") {
+    let list = db.approvals.filter((a) => a.status !== "pending");
+    const kind = params.get("kind");
+    const status = params.get("status");
+    if (kind) list = list.filter((a) => a.type === kind);
+    if (status) list = list.filter((a) => a.status === status);
+    if (from) list = list.filter((a) => (a.decidedAt ?? a.createdAt).slice(0, 10) >= from);
+    if (to) list = list.filter((a) => (a.decidedAt ?? a.createdAt).slice(0, 10) <= to);
+    const rows: (string | number)[][] = [["申請日時", "種類", "件名", "金額", "店舗", "申請者", "申請コメント", "承認者の区分", "判断", "判断した人", "判断日時", "判断コメント", "変更の内容"]];
+    for (const a of list.sort((x, y) => x.createdAt.localeCompare(y.createdAt))) {
+      const entity = a.type === "customer_change" ? "customer" : "order";
+      rows.push([
+        new Date(a.createdAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }),
+        APPROVAL_TYPE_LABEL[a.type],
+        a.title,
+        a.amount,
+        db.stores.find((s) => s.id === a.storeId)?.name ?? a.storeId,
+        userOf(a.requestedBy),
+        a.requestComment ?? "",
+        a.requiredRole === "admin" ? "管理者" : "店長",
+        APPROVAL_STATUS[a.status].label,
+        userOf(a.decidedBy),
+        a.decidedAt ? new Date(a.decidedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }) : "",
+        a.decisionComment ?? "",
+        (a.changes ?? []).map((c) => `${fieldLabel(entity, c.field)}: ${fieldValue(c.field, c.before)} → ${fieldValue(c.field, c.after)}`).join(" / "),
+      ]);
+    }
+    return csv(toCsv(rows), `approval_history_${stamp}.csv`);
   }
   // パスワード (ハッシュ) は書き出さない。このファイルは分析・保管用で、ユーザーの復元には使えない
   const safe = { ...db, users: db.users.map((u) => ({ ...u, password: u.password ? "***" : undefined, passwordHash: u.passwordHash ? "***" : undefined })) };

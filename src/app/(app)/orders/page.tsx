@@ -8,7 +8,7 @@ import { CATEGORY_LABEL, ORDER_STATUS } from "@/lib/constants";
 import type { OrderStatus } from "@/lib/db/types";
 import { Button, EmptyRow, Flash, Input, LinkTabs, PageHeader, Select, StatusBadge, StoreTag, Table, Td, Th, Tr, Pager, paginate } from "@/components/ui";
 
-const ACTIVE: OrderStatus[] = ["pending_approval", "confirmed", "scheduled", "in_progress"];
+const ACTIVE: OrderStatus[] = ["pending_approval", "returned", "confirmed", "scheduled", "in_progress"];
 
 export default async function OrdersPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -38,6 +38,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
         items={[
           { href: `${base}?status=active`, label: "進行中", count: count((s) => ACTIVE.includes(s)) },
           { href: `${base}?status=pending_approval`, label: "契約承認待ち", count: count((s) => s === "pending_approval") },
+          { href: `${base}?status=returned`, label: "契約差戻し", count: count((s) => s === "returned") },
           { href: `${base}?status=scheduled`, label: "施工予定", count: count((s) => s === "scheduled") },
           { href: `${base}?status=in_progress`, label: "施工中", count: count((s) => s === "in_progress") },
           { href: `${base}?status=completed`, label: "施工完了 (未請求)", count: count((s) => s === "completed") },

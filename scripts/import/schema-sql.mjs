@@ -7,7 +7,7 @@
  * - すべてのテーブルで RLS を有効にし、ポリシーは作らない (= publishable キーからは読めない)。
  *   アプリはサーバー側で secret キーを使って読み書きする
  */
-import { META_TABLE, TABLES, loadOrder, snake } from "../../src/lib/db/schema.ts";
+import { META_TABLE, RELAXED_NOT_NULL, TABLES, loadOrder, snake } from "../../src/lib/db/schema.ts";
 
 const q = (s) => s.replace(/'/g, "''");
 
@@ -43,9 +43,6 @@ export function buildSchemaSql({ header = true } = {}) {
     lines.push(t.columns.map(([name, spec]) => `  ${snake(name)} ${spec}`).join(",\n"));
     lines.push(");");
     lines.push(`comment on table ${t.table} is '${q(t.label)}';`);
-    for (const cols of t.indexes ?? []) lines.push(`create index if not exists ${t.table}_${cols.join("_")}_idx on ${t.table} (${cols.join(", ")});`);
-    const order = loadOrder(t);
-    if (order.length > 1 || order[0] !== "id") lines.push(`create index if not exists ${t.table}_load_order_idx on ${t.table} (${order.join(", ")});`);
     lines.push("");
   }
 
@@ -57,6 +54,17 @@ export function buildSchemaSql({ header = true } = {}) {
       lines.push(`alter table ${t.table} add column if not exists ${snake(name)} ${spec};`);
     }
   }
+  lines.push("");
+  // 索引は列の追加の後に作る (後から追加した列の索引が、列より先に作られて失敗しないように)
+  lines.push("-- 索引 (検索・読み込みの並び順)");
+  for (const t of TABLES) {
+    for (const cols of t.indexes ?? []) lines.push(`create index if not exists ${t.table}_${cols.join("_")}_idx on ${t.table} (${cols.join(", ")});`);
+    const order = loadOrder(t);
+    if (order.length > 1 || order[0] !== "id") lines.push(`create index if not exists ${t.table}_load_order_idx on ${t.table} (${order.join(", ")});`);
+  }
+  lines.push("");
+  lines.push("-- 後から not null を外した列 (データは変えない。外した後に実行しても変化なし)");
+  for (const [table, column] of RELAXED_NOT_NULL) lines.push(`alter table ${table} alter column ${column} drop not null;`);
   lines.push("");
   lines.push("-- 行レベルセキュリティ: 有効化のみ (ポリシーなし)。publishable / anon キーからはアクセスできない");
   lines.push("-- アプリが使う secret キー (service_role) には読み書きの権限を明示的に付ける (プロジェクトの既定の権限に頼らない)");

@@ -3,9 +3,11 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
-import type { Channel, Database, Quote, QuoteItem, ServiceCategory, StoreId, User } from "@/lib/db/types";
-import { addDays, calcTax, toDateKey } from "@/lib/format";
-import { APPROVAL_RULES, CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
+import type { Database, Quote, QuoteItem, StoreId, User } from "@/lib/db/types";
+import { addDays, toDateKey } from "@/lib/format";
+import { CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
+import { approvalSettings, manYen } from "@/lib/approval-rules";
+import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { syncOrderEvent } from "@/lib/db/schedule";
 import { approverLabel, approverRole } from "@/lib/auth/permissions";
 import { relinkDocumentAttachments } from "@/lib/attachments";
@@ -59,7 +61,7 @@ function hasActiveInvoice(db: Database, quoteId: string): boolean {
 
 /** 見積・受注の承認者 (金額が基準以上、本部の案件、承認できる店長がいない店舗は管理者) */
 function requiredRole(db: Database, storeId: StoreId, amount: number, requesterId: string): "store_manager" | "admin" {
-  return approverRole(db.users, storeId, amount >= APPROVAL_RULES.quoteAdminThreshold, requesterId);
+  return approverRole(db.users, storeId, amount >= approvalSettings(db).quoteAdminThreshold, requesterId);
 }
 
 function requestApproval(db: Database, q: Quote, user: User, comment?: string) {
@@ -78,7 +80,7 @@ function requestApproval(db: Database, q: Quote, user: User, comment?: string) {
     createdAt: nowIso(),
   });
   q.status = "pending_approval";
-  addAudit(db, { userId: user.id, action: "submit", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `見積の承認を申請 (${approverLabel(role, q.total >= APPROVAL_RULES.quoteAdminThreshold, "¥50万")})`, storeId: q.storeId });
+  addAudit(db, { userId: user.id, action: "submit", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `見積の承認を申請 (${approverLabel(role, q.total >= approvalSettings(db).quoteAdminThreshold, manYen(approvalSettings(db).quoteAdminThreshold))})`, storeId: q.storeId });
   return role;
 }
 
@@ -93,6 +95,7 @@ export async function createQuote(formData: FormData) {
   const intent = str(formData, "intent");
   const id = newId("q");
   let role: string | null = null;
+  const approvalIds: string[] = [];
   await mutate((db) => {
     const documentId = str(formData, "documentId");
     const doc = documentId ? db.documents.find((d) => d.id === documentId) : undefined;
@@ -152,8 +155,12 @@ export async function createQuote(formData: FormData) {
       doc.linkedId = id;
       relinkDocumentAttachments(db, doc.id, { type: "quote", id, customerId: q.customerId, storeId });
     }
-    if (intent === "submit") role = requestApproval(db, q, user);
+    if (intent === "submit") {
+      role = requestApproval(db, q, user);
+      approvalIds.push(db.approvals[db.approvals.length - 1].id);
+    }
   });
+  await notifyNewApprovals(approvalIds, user.id);
   revalidatePath("/quotes");
   redirect(withMsg(`/quotes/${id}`, intent === "submit" ? `見積を作成し、${role === "admin" ? "管理者" : "店長"}へ承認を申請しました。` : "見積を下書き保存しました。"));
 }
@@ -164,6 +171,7 @@ export async function updateQuote(id: string, formData: FormData) {
   const items = parseItems(formData, back);
   const intent = str(formData, "intent");
   let message = "見積を更新しました。";
+  const approvalIds: string[] = [];
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
@@ -187,6 +195,7 @@ export async function updateQuote(id: string, formData: FormData) {
       addAudit(db, { userId: user.id, action: "update", entity: "quote", entityId: id, entityLabel: q.number, summary: `見積 (下書き) を更新 (合計 ${t.total.toLocaleString("ja-JP")}円)`, storeId: q.storeId });
       if (intent === "submit") {
         const role = requestApproval(db, q, user);
+        approvalIds.push(db.approvals[db.approvals.length - 1].id);
         message = `見積を更新し、${role === "admin" ? "管理者" : "店長"}へ承認を申請しました。`;
       }
     } else if (q.status === "approved" || q.status === "sent" || q.status === "accepted") {
@@ -215,12 +224,14 @@ export async function updateQuote(id: string, formData: FormData) {
         requestComment: `${t.total !== q.total ? `変更前 ¥${q.total.toLocaleString("ja-JP")} → 変更後 ¥${t.total.toLocaleString("ja-JP")}` : `金額の変更なし (¥${q.total.toLocaleString("ja-JP")})`}${title !== q.title ? ` / 件名: ${title}` : ""}${workDetails !== (q.workDetails ?? "") ? " / 施工内容を変更" : ""} / 理由: ${reason}`,
         createdAt: now,
       });
+      approvalIds.push(db.approvals[db.approvals.length - 1].id);
       addAudit(db, { userId: user.id, action: "submit", entity: "quote", entityId: id, entityLabel: q.number, summary: `確定見積の金額変更を申請 (${q.total.toLocaleString("ja-JP")}円 → ${t.total.toLocaleString("ja-JP")}円)`, storeId: q.storeId, changes: [{ field: "total", before: q.total, after: t.total }] });
       message = `変更を申請しました。${role === "admin" ? "管理者" : "店長"}の承認後に第${q.version + 1}版として反映されます。`;
     } else {
       fail(`/quotes/${id}`, "この状態の見積は編集できません。");
     }
   });
+  await notifyNewApprovals(approvalIds, user.id);
   revalidatePath("/quotes");
   redirect(withMsg(`/quotes/${id}`, message));
 }
@@ -229,13 +240,16 @@ export async function submitQuote(id: string) {
   const user = await requireActionUser();
   const back = `/quotes/${id}`;
   let role = "";
+  let approvalId = "";
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
     assertStore(user, q.storeId, back);
     if (q.status !== "draft") fail(back, "下書きの見積のみ申請できます。");
     role = requestApproval(db, q, user);
+    approvalId = db.approvals[db.approvals.length - 1].id;
   });
+  await notifyNewApprovals([approvalId], user.id);
   revalidatePath(back);
   redirect(withMsg(back, `${role === "admin" ? "管理者" : "店長"}へ承認を申請しました。`));
 }
@@ -269,6 +283,7 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
   const back = `/quotes/${id}`;
   let orderId = "";
   let role = "";
+  let approvalId = "";
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
@@ -312,9 +327,11 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
     syncHandoverMemo(db, created);
     const r = requiredRole(db, q.storeId, q.total, user.id);
     role = r;
-    db.approvals.push({ id: newId("ap"), type: "order", targetId: orderId, title: `${db.orders[db.orders.length - 1].number} ${q.title}`, amount: q.total, storeId: q.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: str(formData, "note") || undefined, createdAt: now });
+    approvalId = newId("ap");
+    db.approvals.push({ id: approvalId, type: "order", targetId: orderId, title: `${db.orders[db.orders.length - 1].number} ${q.title}`, amount: q.total, storeId: q.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: str(formData, "note") || undefined, createdAt: now });
     addAudit(db, { userId: user.id, action: "create", entity: "order", entityId: orderId, entityLabel: db.orders[db.orders.length - 1].number, summary: `見積 ${q.number} から受注を登録し契約承認を申請`, storeId: q.storeId });
   });
+  await notifyNewApprovals([approvalId], user.id);
   revalidatePath("/orders");
   redirect(withMsg(`/orders/${orderId}`, `受注を登録しました。${role === "admin" ? "管理者" : "店長"}の契約承認後に施工手配へ進めます。`));
 }

@@ -6,6 +6,12 @@ import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import {
   Award,
+  Calculator,
+  Coins,
+  Landmark,
+  ListTodo,
+  PhoneCall,
+  Truck,
   ListChecks,
   Bell,
   CalendarDays,
@@ -62,7 +68,12 @@ export type NavIcon =
   | "materials"
   | "dataio"
   | "kpi"
-  | "cases";
+  | "cases"
+  | "cashbook"
+  | "finance"
+  | "accounting"
+  | "contacts"
+  | "suppliers";
 
 const ICONS: Record<NavIcon, LucideIcon> = {
   dashboard: House,
@@ -85,6 +96,11 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   dataio: FileSpreadsheet,
   kpi: Award,
   cases: ListChecks,
+  cashbook: Coins,
+  finance: Landmark,
+  accounting: Calculator,
+  contacts: PhoneCall,
+  suppliers: Truck,
 };
 
 export interface NavItem {
@@ -111,7 +127,7 @@ export interface ShellUser {
 }
 
 export interface NotificationItem {
-  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict";
+  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict" | "task";
   title: string;
   detail?: string;
   href: string;
@@ -125,6 +141,7 @@ const NOTIFICATION_STYLE: Record<NotificationItem["kind"], { icon: LucideIcon; c
   request: { icon: Clock, cls: "bg-neutral-soft text-ink-2" },
   schedule: { icon: CalendarPlus, cls: "bg-info-soft text-info-ink" },
   conflict: { icon: CalendarX2, cls: "bg-critical-soft text-critical-ink" },
+  task: { icon: ListTodo, cls: "bg-warn-soft text-warn-ink" },
 };
 
 const CREATE_ITEMS: { href: string; label: string; desc: string; icon: LucideIcon }[] = [
@@ -132,7 +149,10 @@ const CREATE_ITEMS: { href: string; label: string; desc: string; icon: LucideIco
   { href: "/customers/new", label: "顧客を登録", desc: "新規のお客様・法人", icon: Users },
   { href: "/quotes/new", label: "見積を作成", desc: "商品マスタから単価を自動入力", icon: FileText },
   { href: "/schedule/new", label: "予定を登録", desc: "現地調査・施工・会議・社内行事など", icon: CalendarPlus },
-  { href: "/messages/new", label: "社内連絡を送る", desc: "依頼・報告・確認をシステム内で", icon: MessageSquare },
+  { href: "/messages/new", label: "社内連絡を送る", desc: "連絡・確認・報告をシステム内で", icon: MessageSquare },
+  { href: "/messages/new?kind=request", label: "業務を依頼", desc: "担当者・期限つき。確認 → 報告 → 完了", icon: ListTodo },
+  { href: "/contacts", label: "やりとりを記録", desc: "お客様・協力業者との電話・メール・LINE", icon: PhoneCall },
+  { href: "/expenses/new", label: "経費を登録", desc: "備品・ガソリン代など (勘定科目の候補つき)", icon: Wallet },
   { href: "/capture", label: "書類を取り込む", desc: "紙を撮影 → AI が読取", icon: ScanLine },
 ];
 

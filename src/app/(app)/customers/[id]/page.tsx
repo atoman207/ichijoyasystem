@@ -4,10 +4,11 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canAccessStore } from "@/lib/auth/permissions";
 import { customerTimeline, userName } from "@/lib/db/queries";
-import { addCommLog } from "@/lib/actions/customers";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { CHANNEL_LABEL, INQUIRY_STATUS, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
-import { Badge, Button, Card, CardHeader, ChannelTag, Dl, Field, Flash, Input, LinkButton, PageHeader, Select, Stat, StatusBadge, StoreTag, Textarea } from "@/components/ui";
+import { Badge, Card, CardHeader, ChannelTag, Dl, Flash, LinkButton, PageHeader, Stat, StatusBadge, StoreTag } from "@/components/ui";
+import { ApprovalDecision, ApprovalHistoryCard, HistoryCard, RecordStamp } from "@/components/features/History";
+import { ContactList, ContactLogForm } from "@/components/features/Contacts";
 import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { toDateKey } from "@/lib/format";
@@ -23,11 +24,15 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
   if (!canAccessStore(user, c.storeId)) redirect("/customers?err=" + encodeURIComponent("この顧客を閲覧する権限がありません。"));
   const t = customerTimeline(db, id);
   const store = db.stores.find((s) => s.id === c.storeId);
-  const openItems = t.inquiries.filter((i) => ["new", "in_progress", "quoted"].includes(i.status)).length + t.orders.filter((o) => ["pending_approval", "confirmed", "scheduled", "in_progress"].includes(o.status)).length;
+  const openItems = t.inquiries.filter((i) => ["new", "in_progress", "quoted"].includes(i.status)).length + t.orders.filter((o) => ["pending_approval", "returned", "confirmed", "scheduled", "in_progress"].includes(o.status)).length;
   // 重複の可能性がある既存顧客 (電話・メール・氏名と住所の一致、同じ姓と地区)
   const dup = findDuplicateCustomers(db, c, c.id);
   const dupRows = [...dup.high.map((m) => ({ ...m, label: "重複の可能性が高い" })), ...dup.check.map((m) => ({ ...m, label: "要確認" }))];
   const receivable = t.invoices.filter((i) => ["issued", "partially_paid", "overdue"].includes(i.status)).reduce((a, i) => a + i.total - i.paidAmount, 0);
+  const changeApprovals = db.approvals.filter((a) => a.type === "customer_change" && a.targetId === c.id);
+  const pendingChange = changeApprovals.find((a) => a.status === "pending");
+  const returnTo = `/customers/${c.id}`;
+  const billed = t.invoices.filter((i) => i.status !== "void");
 
   return (
     <div>
@@ -45,6 +50,13 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
           </>
         }
       />
+
+      {pendingChange && (
+        <Card className="mb-4 border-warn/40 bg-warn-soft/40">
+          <CardHeader title="承認待ち: 顧客の重要情報の変更" description={`${pendingChange.requiredRole === "admin" ? "管理者" : "店長"}の承認が必要 · 申請 ${userName(pendingChange.requestedBy)} ${fmtDateTime(pendingChange.createdAt)}${pendingChange.requestComment ? ` · 理由: ${pendingChange.requestComment}` : ""}`} />
+          <ApprovalDecision approval={pendingChange} user={user} returnTo={returnTo} approveLabel="変更を承認する" />
+        </Card>
+      )}
 
       <div className="mb-6 grid grid-cols-2 gap-3 @3xl:grid-cols-4">
         <Stat label="累計売上 (税込)" value={yen(t.lifetime)} />
@@ -86,32 +98,25 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
             </Card>
           )}
           <Card>
-            <CardHeader title="対応履歴を記録" description="電話・LINE・メール・来店など、どの手段でのやりとりも一元化" />
-            <form action={addCommLog.bind(null, c.id)} className="space-y-3">
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="手段">
-                  <Select name="channel" defaultValue={c.preferredChannel}>
-                    {(Object.keys(CHANNEL_LABEL) as (keyof typeof CHANNEL_LABEL)[]).map((k) => (
-                      <option key={k} value={k}>{CHANNEL_LABEL[k]}</option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label="方向">
-                  <Select name="direction" defaultValue="outbound">
-                    <option value="outbound">こちらから連絡</option>
-                    <option value="inbound">お客様から連絡</option>
-                  </Select>
-                </Field>
-              </div>
-              <Field label="件名">
-                <Input name="subject" placeholder="例: 施工日の確認" />
-              </Field>
-              <Field label="内容" required>
-                <Textarea name="body" required placeholder="やりとりの内容" />
-              </Field>
-              <Button type="submit" size="sm">記録する</Button>
-            </form>
+            <CardHeader title="請求状況" description={`請求 ${billed.length} 件 · 請求額 ${yen(billed.reduce((a, i) => a + i.total, 0))} · 入金済 ${yen(billed.reduce((a, i) => a + i.paidAmount, 0))}`} action={<LinkButton href={`/invoices?view=customers&q=${encodeURIComponent(c.name)}`} variant="ghost" size="sm">顧客別の一覧</LinkButton>} />
+            {billed.filter((i) => i.total - i.paidAmount > 0).length === 0 ? (
+              <p className="text-xs text-ink-3">未入金の請求はありません</p>
+            ) : (
+              <ul className="space-y-1.5 text-xs">
+                {billed.filter((i) => i.total - i.paidAmount > 0).map((i) => (
+                  <li key={i.id} className="flex flex-wrap items-center gap-2">
+                    <Link href={`/invoices/${i.id}`} className="font-mono text-accent hover:underline">{i.number}</Link>
+                    <StatusBadge value={i.status} map={INVOICE_STATUS} />
+                    <span className="tnum">残 {yen(i.total - i.paidAmount)}</span>
+                    <span className="text-ink-3">期限 {fmtDate(i.dueDate)}{i.expectedDate ? ` · 入金予定 ${fmtDate(i.expectedDate)}` : ""}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </Card>
+          <RecordStamp db={db} targets={[{ entity: "customer", id: c.id }]} created={{ at: c.createdAt }} />
+          {changeApprovals.length > 0 && <ApprovalHistoryCard approvals={changeApprovals} title="重要情報の変更の承認履歴" />}
+          <HistoryCard db={db} user={user} targets={[{ entity: "customer", id: c.id }]} description="顧客情報の登録・変更 (変更前と変更後の値)・承認の記録" />
         </div>
 
         <div className="space-y-4 @3xl:col-span-2">
@@ -152,22 +157,11 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
           </Card>
 
           <Card>
-            <CardHeader title="外部とのやりとり履歴" description={`${t.comms.length} 件 · 担当者が変わっても経緯を把握できます`} />
-            <ul className="divide-y divide-line">
-              {t.comms.slice(0, 15).map((cl) => (
-                <li key={cl.id} className="py-2.5">
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-ink-3">
-                    <span className="tnum">{fmtDateTime(cl.at)}</span>
-                    <ChannelTag channel={cl.channel} />
-                    <Badge tone={cl.direction === "inbound" ? "info" : "neutral"} dot={false}>{cl.direction === "inbound" ? "受信" : "送信"}</Badge>
-                    <span>{userName(cl.userId)}</span>
-                  </div>
-                  <div className="mt-1 text-sm font-medium text-ink">{cl.subject}</div>
-                  <div className="text-sm text-ink-2">{cl.body}</div>
-                </li>
-              ))}
-              {t.comms.length === 0 && <li className="py-4 text-sm text-ink-3">履歴はありません</li>}
-            </ul>
+            <CardHeader title="外部とのやりとり履歴" description={`${t.comms.length} 件 · 電話・メール・LINE・Web・対面のやりとりを案件に紐付けて残します。メール・LINE は「相手に送信する」で送れます`} />
+            <ContactLogForm returnTo={returnTo} customerId={c.id} defaultChannel={c.preferredChannel === "line" ? "line" : c.preferredChannel === "email" ? "email" : "phone"} canSend />
+            <div className="mt-4 border-t border-line pt-3">
+              <ContactList db={db} logs={t.comms.slice(0, 50)} showParty={false} returnTo={returnTo} linkable empty="やりとりの記録はありません" />
+            </div>
           </Card>
 
           <AttachmentsCard db={db} user={user} parent={{ type: "customer", id: c.id }} customerId={c.id} returnTo={`/customers/${c.id}`} />

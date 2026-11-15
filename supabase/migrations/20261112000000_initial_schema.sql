@@ -32,7 +32,6 @@ create table if not exists stores (
   color text not null
 );
 comment on table stores is '店舗';
-create index if not exists stores_load_order_idx on stores (code, id);
 
 -- 社員 (ログインユーザー)
 create table if not exists users (
@@ -47,7 +46,10 @@ create table if not exists users (
   title text not null default '',
   phone text,
   active boolean not null default true,
-  hired_on date
+  hired_on date,
+  notify_email text,
+  notify_by_email boolean,
+  chatwork_account_id text
 );
 comment on table users is '社員 (ログインユーザー)';
 
@@ -74,10 +76,6 @@ create table if not exists customers (
   updated_at timestamptz not null
 );
 comment on table customers is '顧客';
-create index if not exists customers_store_id_idx on customers (store_id);
-create index if not exists customers_name_idx on customers (name);
-create index if not exists customers_area_idx on customers (area);
-create index if not exists customers_load_order_idx on customers (code, id);
 
 -- 問い合わせ
 create table if not exists inquiries (
@@ -105,10 +103,6 @@ create table if not exists inquiries (
   source_ref text
 );
 comment on table inquiries is '問い合わせ';
-create index if not exists inquiries_store_id_idx on inquiries (store_id);
-create index if not exists inquiries_status_idx on inquiries (status);
-create index if not exists inquiries_customer_id_idx on inquiries (customer_id);
-create index if not exists inquiries_load_order_idx on inquiries (received_at, id);
 
 -- 商品マスタ
 create table if not exists products (
@@ -163,10 +157,6 @@ create table if not exists quotes (
   estimator_id text
 );
 comment on table quotes is '見積';
-create index if not exists quotes_store_id_idx on quotes (store_id);
-create index if not exists quotes_status_idx on quotes (status);
-create index if not exists quotes_customer_id_idx on quotes (customer_id);
-create index if not exists quotes_load_order_idx on quotes (created_at, id);
 
 -- 受注・施工 (売上)
 create table if not exists orders (
@@ -209,11 +199,6 @@ create table if not exists orders (
   closed_by text
 );
 comment on table orders is '受注・施工 (売上)';
-create index if not exists orders_store_id_idx on orders (store_id);
-create index if not exists orders_status_idx on orders (status);
-create index if not exists orders_customer_id_idx on orders (customer_id);
-create index if not exists orders_sales_date_idx on orders (sales_date);
-create index if not exists orders_load_order_idx on orders (created_at, id);
 
 -- 請求書
 create table if not exists invoices (
@@ -236,12 +221,12 @@ create table if not exists invoices (
   title text,
   items jsonb,
   tax_included boolean,
-  notes text
+  notes text,
+  expected_date date,
+  expected_amount numeric,
+  expected_note text
 );
 comment on table invoices is '請求書';
-create index if not exists invoices_store_id_idx on invoices (store_id);
-create index if not exists invoices_status_idx on invoices (status);
-create index if not exists invoices_load_order_idx on invoices (created_at, id);
 
 -- 入金
 create table if not exists payments (
@@ -256,7 +241,6 @@ create table if not exists payments (
   created_at timestamptz not null
 );
 comment on table payments is '入金';
-create index if not exists payments_load_order_idx on payments (created_at, id);
 
 -- 仕入先
 create table if not exists suppliers (
@@ -266,7 +250,23 @@ create table if not exists suppliers (
   phone text,
   email text,
   payment_terms text not null default '',
-  closing_day integer not null default 31
+  closing_day integer not null default 31,
+  kind text,
+  kana text,
+  contact_name text,
+  postal_code text,
+  address text,
+  fax text,
+  pay_month_offset integer,
+  pay_day integer,
+  bank_info text,
+  registration_number text,
+  line_id text,
+  chatwork_room_id text,
+  notes text,
+  active boolean,
+  created_at timestamptz,
+  updated_at timestamptz
 );
 comment on table suppliers is '仕入先';
 
@@ -288,10 +288,17 @@ create table if not exists purchases (
   approved_by text,
   paid_at text,
   created_at timestamptz not null,
-  updated_at timestamptz not null
+  updated_at timestamptz not null,
+  items jsonb,
+  account text,
+  order_id text,
+  supplier_invoice_no text,
+  scheduled_pay_date date,
+  pay_method text,
+  pay_reference text,
+  paid_by text
 );
 comment on table purchases is '仕入請求書 (買掛)';
-create index if not exists purchases_load_order_idx on purchases (created_at, id);
 
 -- 経費
 create table if not exists expenses (
@@ -312,12 +319,11 @@ create table if not exists expenses (
   approved_by text,
   approved_at timestamptz,
   created_at timestamptz not null,
-  updated_at timestamptz not null
+  updated_at timestamptz not null,
+  paid_at date,
+  paid_by text
 );
 comment on table expenses is '経費';
-create index if not exists expenses_store_id_idx on expenses (store_id);
-create index if not exists expenses_status_idx on expenses (status);
-create index if not exists expenses_load_order_idx on expenses (created_at, id);
 
 -- 承認
 create table if not exists approvals (
@@ -334,12 +340,10 @@ create table if not exists approvals (
   decided_by text,
   decided_at timestamptz,
   decision_comment text,
-  created_at timestamptz not null
+  created_at timestamptz not null,
+  changes jsonb
 );
 comment on table approvals is '承認';
-create index if not exists approvals_status_idx on approvals (status);
-create index if not exists approvals_target_id_idx on approvals (target_id);
-create index if not exists approvals_load_order_idx on approvals (created_at, id);
 
 -- 変更履歴 (監査ログ)
 create table if not exists audit_logs (
@@ -355,14 +359,11 @@ create table if not exists audit_logs (
   store_id text
 );
 comment on table audit_logs is '変更履歴 (監査ログ)';
-create index if not exists audit_logs_entity_entity_id_idx on audit_logs (entity, entity_id);
-create index if not exists audit_logs_at_idx on audit_logs (at);
-create index if not exists audit_logs_load_order_idx on audit_logs (at, id);
 
--- 外部とのやりとり履歴
+-- 外部とのやりとり履歴 (お客様・協力業者・仕入先)
 create table if not exists comm_logs (
   id text primary key,
-  customer_id text not null references customers(id),
+  customer_id text references customers(id),
   channel text not null,
   direction text not null,
   subject text not null default '',
@@ -370,11 +371,13 @@ create table if not exists comm_logs (
   at timestamptz not null,
   user_id text not null,
   related_type text,
-  related_id text
+  related_id text,
+  supplier_id text,
+  store_id text,
+  contact_name text,
+  delivery_id text
 );
-comment on table comm_logs is '外部とのやりとり履歴';
-create index if not exists comm_logs_customer_id_idx on comm_logs (customer_id);
-create index if not exists comm_logs_load_order_idx on comm_logs (at, id);
+comment on table comm_logs is '外部とのやりとり履歴 (お客様・協力業者・仕入先)';
 
 -- 社内連絡 (スレッド)
 create table if not exists threads (
@@ -389,10 +392,16 @@ create table if not exists threads (
   related_label text,
   status text not null,
   created_at timestamptz not null,
-  updated_at timestamptz not null
+  updated_at timestamptz not null,
+  assignee_ids text[],
+  due_date date,
+  task_status text,
+  acknowledged_at timestamptz,
+  reported_at timestamptz,
+  confirmed_at timestamptz,
+  confirmed_by text
 );
 comment on table threads is '社内連絡 (スレッド)';
-create index if not exists threads_load_order_idx on threads (created_at, id);
 
 -- 社内連絡 (投稿)
 create table if not exists messages (
@@ -401,11 +410,10 @@ create table if not exists messages (
   user_id text not null,
   body text not null,
   at timestamptz not null,
-  mentions text[] not null default '{}'
+  mentions text[] not null default '{}',
+  event text
 );
 comment on table messages is '社内連絡 (投稿)';
-create index if not exists messages_thread_id_idx on messages (thread_id);
-create index if not exists messages_load_order_idx on messages (at, id);
 
 -- 取込書類 (紙→データ)
 create table if not exists documents (
@@ -422,7 +430,6 @@ create table if not exists documents (
   linked_id text
 );
 comment on table documents is '取込書類 (紙→データ)';
-create index if not exists documents_load_order_idx on documents (uploaded_at, id);
 
 -- 予定 (全社カレンダー)
 create table if not exists schedule_events (
@@ -452,11 +459,6 @@ create table if not exists schedule_events (
   source_ref text
 );
 comment on table schedule_events is '予定 (全社カレンダー)';
-create index if not exists schedule_events_date_idx on schedule_events (date);
-create index if not exists schedule_events_store_id_date_idx on schedule_events (store_id, date);
-create index if not exists schedule_events_order_id_idx on schedule_events (order_id);
-create index if not exists schedule_events_customer_id_idx on schedule_events (customer_id);
-create index if not exists schedule_events_load_order_idx on schedule_events (date, start_time, id);
 
 -- 会社の休業日
 create table if not exists company_holidays (
@@ -465,7 +467,6 @@ create table if not exists company_holidays (
   label text not null default '休業日'
 );
 comment on table company_holidays is '会社の休業日';
-create index if not exists company_holidays_load_order_idx on company_holidays (date, id);
 
 -- お客様アンケート
 create table if not exists survey_responses (
@@ -502,8 +503,6 @@ create table if not exists survey_responses (
   updated_at timestamptz
 );
 comment on table survey_responses is 'お客様アンケート';
-create index if not exists survey_responses_store_id_idx on survey_responses (store_id);
-create index if not exists survey_responses_load_order_idx on survey_responses (received_at, id);
 
 -- クレーム・手直し
 create table if not exists quality_issues (
@@ -529,9 +528,6 @@ create table if not exists quality_issues (
   updated_at timestamptz not null
 );
 comment on table quality_issues is 'クレーム・手直し';
-create index if not exists quality_issues_store_id_idx on quality_issues (store_id);
-create index if not exists quality_issues_order_id_idx on quality_issues (order_id);
-create index if not exists quality_issues_load_order_idx on quality_issues (occurred_on, id);
 
 -- Google 口コミ
 create table if not exists google_reviews (
@@ -552,8 +548,6 @@ create table if not exists google_reviews (
   updated_at timestamptz not null
 );
 comment on table google_reviews is 'Google 口コミ';
-create index if not exists google_reviews_store_id_idx on google_reviews (store_id);
-create index if not exists google_reviews_load_order_idx on google_reviews (posted_on, id);
 
 -- 資料台帳 (Google ドライブの共有資料)
 create table if not exists source_files (
@@ -571,8 +565,6 @@ create table if not exists source_files (
   imported_to text
 );
 comment on table source_files is '資料台帳 (Google ドライブの共有資料)';
-create index if not exists source_files_folder_idx on source_files (folder);
-create index if not exists source_files_load_order_idx on source_files (folder, path, id);
 
 -- 現場写真台帳
 create table if not exists photo_albums (
@@ -588,7 +580,6 @@ create table if not exists photo_albums (
   sample_files text[] not null default '{}'
 );
 comment on table photo_albums is '現場写真台帳';
-create index if not exists photo_albums_load_order_idx on photo_albums (date, id);
 
 -- 設定 (帳票の会社情報・登録番号・振込先など)
 create table if not exists settings (
@@ -620,9 +611,44 @@ create table if not exists attachments (
   uploaded_at timestamptz not null
 );
 comment on table attachments is '添付ファイル (資料・写真。本体は Storage の attachments バケット)';
-create index if not exists attachments_parent_type_parent_id_idx on attachments (parent_type, parent_id);
-create index if not exists attachments_customer_id_idx on attachments (customer_id);
-create index if not exists attachments_load_order_idx on attachments (uploaded_at, id);
+
+-- 現金出納 (店舗の手元現金の入出金)
+create table if not exists cash_entries (
+  id text primary key,
+  number text not null unique,
+  store_id text not null references stores(id),
+  date date not null,
+  direction text not null check (direction in ('in','out')),
+  amount numeric not null check (amount > 0),
+  account text not null,
+  counterparty text,
+  description text not null default '',
+  source text not null default 'manual',
+  source_id text,
+  recorded_by text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+comment on table cash_entries is '現金出納 (店舗の手元現金の入出金)';
+
+-- 送信履歴 (メール・LINE・Chatwork)
+create table if not exists deliveries (
+  id text primary key,
+  channel text not null check (channel in ('email','line','chatwork')),
+  recipient text not null,
+  recipient_label text,
+  subject text,
+  body text not null default '',
+  attachments jsonb,
+  status text not null check (status in ('sent','failed','skipped')),
+  error text,
+  purpose text not null,
+  related_type text,
+  related_id text,
+  user_id text not null,
+  created_at timestamptz not null
+);
+comment on table deliveries is '送信履歴 (メール・LINE・Chatwork)';
 
 -- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)
 -- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する
@@ -646,6 +672,9 @@ alter table users add column if not exists title text not null default '';
 alter table users add column if not exists phone text;
 alter table users add column if not exists active boolean not null default true;
 alter table users add column if not exists hired_on date;
+alter table users add column if not exists notify_email text;
+alter table users add column if not exists notify_by_email boolean;
+alter table users add column if not exists chatwork_account_id text;
 alter table customers add column if not exists code text not null unique;
 alter table customers add column if not exists name text not null;
 alter table customers add column if not exists kana text not null default '';
@@ -782,6 +811,9 @@ alter table invoices add column if not exists title text;
 alter table invoices add column if not exists items jsonb;
 alter table invoices add column if not exists tax_included boolean;
 alter table invoices add column if not exists notes text;
+alter table invoices add column if not exists expected_date date;
+alter table invoices add column if not exists expected_amount numeric;
+alter table invoices add column if not exists expected_note text;
 alter table payments add column if not exists invoice_id text not null references invoices(id);
 alter table payments add column if not exists date date not null;
 alter table payments add column if not exists amount numeric not null;
@@ -796,6 +828,22 @@ alter table suppliers add column if not exists phone text;
 alter table suppliers add column if not exists email text;
 alter table suppliers add column if not exists payment_terms text not null default '';
 alter table suppliers add column if not exists closing_day integer not null default 31;
+alter table suppliers add column if not exists kind text;
+alter table suppliers add column if not exists kana text;
+alter table suppliers add column if not exists contact_name text;
+alter table suppliers add column if not exists postal_code text;
+alter table suppliers add column if not exists address text;
+alter table suppliers add column if not exists fax text;
+alter table suppliers add column if not exists pay_month_offset integer;
+alter table suppliers add column if not exists pay_day integer;
+alter table suppliers add column if not exists bank_info text;
+alter table suppliers add column if not exists registration_number text;
+alter table suppliers add column if not exists line_id text;
+alter table suppliers add column if not exists chatwork_room_id text;
+alter table suppliers add column if not exists notes text;
+alter table suppliers add column if not exists active boolean;
+alter table suppliers add column if not exists created_at timestamptz;
+alter table suppliers add column if not exists updated_at timestamptz;
 alter table purchases add column if not exists number text not null unique;
 alter table purchases add column if not exists supplier_id text not null references suppliers(id);
 alter table purchases add column if not exists store_id text not null references stores(id);
@@ -812,6 +860,14 @@ alter table purchases add column if not exists approved_by text;
 alter table purchases add column if not exists paid_at text;
 alter table purchases add column if not exists created_at timestamptz not null;
 alter table purchases add column if not exists updated_at timestamptz not null;
+alter table purchases add column if not exists items jsonb;
+alter table purchases add column if not exists account text;
+alter table purchases add column if not exists order_id text;
+alter table purchases add column if not exists supplier_invoice_no text;
+alter table purchases add column if not exists scheduled_pay_date date;
+alter table purchases add column if not exists pay_method text;
+alter table purchases add column if not exists pay_reference text;
+alter table purchases add column if not exists paid_by text;
 alter table expenses add column if not exists number text not null unique;
 alter table expenses add column if not exists store_id text not null references stores(id);
 alter table expenses add column if not exists submitted_by text not null;
@@ -829,6 +885,8 @@ alter table expenses add column if not exists approved_by text;
 alter table expenses add column if not exists approved_at timestamptz;
 alter table expenses add column if not exists created_at timestamptz not null;
 alter table expenses add column if not exists updated_at timestamptz not null;
+alter table expenses add column if not exists paid_at date;
+alter table expenses add column if not exists paid_by text;
 alter table approvals add column if not exists type text not null;
 alter table approvals add column if not exists target_id text not null;
 alter table approvals add column if not exists title text not null;
@@ -842,6 +900,7 @@ alter table approvals add column if not exists decided_by text;
 alter table approvals add column if not exists decided_at timestamptz;
 alter table approvals add column if not exists decision_comment text;
 alter table approvals add column if not exists created_at timestamptz not null;
+alter table approvals add column if not exists changes jsonb;
 alter table audit_logs add column if not exists at timestamptz not null;
 alter table audit_logs add column if not exists user_id text not null;
 alter table audit_logs add column if not exists action text not null;
@@ -851,7 +910,7 @@ alter table audit_logs add column if not exists entity_label text not null defau
 alter table audit_logs add column if not exists summary text not null default '';
 alter table audit_logs add column if not exists changes jsonb;
 alter table audit_logs add column if not exists store_id text;
-alter table comm_logs add column if not exists customer_id text not null references customers(id);
+alter table comm_logs add column if not exists customer_id text references customers(id);
 alter table comm_logs add column if not exists channel text not null;
 alter table comm_logs add column if not exists direction text not null;
 alter table comm_logs add column if not exists subject text not null default '';
@@ -860,6 +919,10 @@ alter table comm_logs add column if not exists at timestamptz not null;
 alter table comm_logs add column if not exists user_id text not null;
 alter table comm_logs add column if not exists related_type text;
 alter table comm_logs add column if not exists related_id text;
+alter table comm_logs add column if not exists supplier_id text;
+alter table comm_logs add column if not exists store_id text;
+alter table comm_logs add column if not exists contact_name text;
+alter table comm_logs add column if not exists delivery_id text;
 alter table threads add column if not exists title text not null;
 alter table threads add column if not exists kind text not null;
 alter table threads add column if not exists store_id text;
@@ -871,11 +934,19 @@ alter table threads add column if not exists related_label text;
 alter table threads add column if not exists status text not null;
 alter table threads add column if not exists created_at timestamptz not null;
 alter table threads add column if not exists updated_at timestamptz not null;
+alter table threads add column if not exists assignee_ids text[];
+alter table threads add column if not exists due_date date;
+alter table threads add column if not exists task_status text;
+alter table threads add column if not exists acknowledged_at timestamptz;
+alter table threads add column if not exists reported_at timestamptz;
+alter table threads add column if not exists confirmed_at timestamptz;
+alter table threads add column if not exists confirmed_by text;
 alter table messages add column if not exists thread_id text not null references threads(id) on delete cascade;
 alter table messages add column if not exists user_id text not null;
 alter table messages add column if not exists body text not null;
 alter table messages add column if not exists at timestamptz not null;
 alter table messages add column if not exists mentions text[] not null default '{}';
+alter table messages add column if not exists event text;
 alter table documents add column if not exists kind text not null;
 alter table documents add column if not exists file_name text not null;
 alter table documents add column if not exists uploaded_by text not null;
@@ -1013,6 +1084,103 @@ alter table attachments add column if not exists caption text;
 alter table attachments add column if not exists taken_at timestamptz;
 alter table attachments add column if not exists uploaded_by text not null references users(id);
 alter table attachments add column if not exists uploaded_at timestamptz not null;
+alter table cash_entries add column if not exists number text not null unique;
+alter table cash_entries add column if not exists store_id text not null references stores(id);
+alter table cash_entries add column if not exists date date not null;
+alter table cash_entries add column if not exists direction text not null check (direction in ('in','out'));
+alter table cash_entries add column if not exists amount numeric not null check (amount > 0);
+alter table cash_entries add column if not exists account text not null;
+alter table cash_entries add column if not exists counterparty text;
+alter table cash_entries add column if not exists description text not null default '';
+alter table cash_entries add column if not exists source text not null default 'manual';
+alter table cash_entries add column if not exists source_id text;
+alter table cash_entries add column if not exists recorded_by text not null;
+alter table cash_entries add column if not exists created_at timestamptz not null;
+alter table cash_entries add column if not exists updated_at timestamptz not null;
+alter table deliveries add column if not exists channel text not null check (channel in ('email','line','chatwork'));
+alter table deliveries add column if not exists recipient text not null;
+alter table deliveries add column if not exists recipient_label text;
+alter table deliveries add column if not exists subject text;
+alter table deliveries add column if not exists body text not null default '';
+alter table deliveries add column if not exists attachments jsonb;
+alter table deliveries add column if not exists status text not null check (status in ('sent','failed','skipped'));
+alter table deliveries add column if not exists error text;
+alter table deliveries add column if not exists purpose text not null;
+alter table deliveries add column if not exists related_type text;
+alter table deliveries add column if not exists related_id text;
+alter table deliveries add column if not exists user_id text not null;
+alter table deliveries add column if not exists created_at timestamptz not null;
+
+-- 索引 (検索・読み込みの並び順)
+create index if not exists stores_load_order_idx on stores (code, id);
+create index if not exists customers_store_id_idx on customers (store_id);
+create index if not exists customers_name_idx on customers (name);
+create index if not exists customers_area_idx on customers (area);
+create index if not exists customers_load_order_idx on customers (code, id);
+create index if not exists inquiries_store_id_idx on inquiries (store_id);
+create index if not exists inquiries_status_idx on inquiries (status);
+create index if not exists inquiries_customer_id_idx on inquiries (customer_id);
+create index if not exists inquiries_load_order_idx on inquiries (received_at, id);
+create index if not exists quotes_store_id_idx on quotes (store_id);
+create index if not exists quotes_status_idx on quotes (status);
+create index if not exists quotes_customer_id_idx on quotes (customer_id);
+create index if not exists quotes_load_order_idx on quotes (created_at, id);
+create index if not exists orders_store_id_idx on orders (store_id);
+create index if not exists orders_status_idx on orders (status);
+create index if not exists orders_customer_id_idx on orders (customer_id);
+create index if not exists orders_sales_date_idx on orders (sales_date);
+create index if not exists orders_load_order_idx on orders (created_at, id);
+create index if not exists invoices_store_id_idx on invoices (store_id);
+create index if not exists invoices_status_idx on invoices (status);
+create index if not exists invoices_load_order_idx on invoices (created_at, id);
+create index if not exists payments_load_order_idx on payments (created_at, id);
+create index if not exists purchases_status_idx on purchases (status);
+create index if not exists purchases_supplier_id_idx on purchases (supplier_id);
+create index if not exists purchases_load_order_idx on purchases (created_at, id);
+create index if not exists expenses_store_id_idx on expenses (store_id);
+create index if not exists expenses_status_idx on expenses (status);
+create index if not exists expenses_load_order_idx on expenses (created_at, id);
+create index if not exists approvals_status_idx on approvals (status);
+create index if not exists approvals_target_id_idx on approvals (target_id);
+create index if not exists approvals_load_order_idx on approvals (created_at, id);
+create index if not exists audit_logs_entity_entity_id_idx on audit_logs (entity, entity_id);
+create index if not exists audit_logs_at_idx on audit_logs (at);
+create index if not exists audit_logs_load_order_idx on audit_logs (at, id);
+create index if not exists comm_logs_customer_id_idx on comm_logs (customer_id);
+create index if not exists comm_logs_supplier_id_idx on comm_logs (supplier_id);
+create index if not exists comm_logs_related_type_related_id_idx on comm_logs (related_type, related_id);
+create index if not exists comm_logs_load_order_idx on comm_logs (at, id);
+create index if not exists threads_load_order_idx on threads (created_at, id);
+create index if not exists messages_thread_id_idx on messages (thread_id);
+create index if not exists messages_load_order_idx on messages (at, id);
+create index if not exists documents_load_order_idx on documents (uploaded_at, id);
+create index if not exists schedule_events_date_idx on schedule_events (date);
+create index if not exists schedule_events_store_id_date_idx on schedule_events (store_id, date);
+create index if not exists schedule_events_order_id_idx on schedule_events (order_id);
+create index if not exists schedule_events_customer_id_idx on schedule_events (customer_id);
+create index if not exists schedule_events_load_order_idx on schedule_events (date, start_time, id);
+create index if not exists company_holidays_load_order_idx on company_holidays (date, id);
+create index if not exists survey_responses_store_id_idx on survey_responses (store_id);
+create index if not exists survey_responses_load_order_idx on survey_responses (received_at, id);
+create index if not exists quality_issues_store_id_idx on quality_issues (store_id);
+create index if not exists quality_issues_order_id_idx on quality_issues (order_id);
+create index if not exists quality_issues_load_order_idx on quality_issues (occurred_on, id);
+create index if not exists google_reviews_store_id_idx on google_reviews (store_id);
+create index if not exists google_reviews_load_order_idx on google_reviews (posted_on, id);
+create index if not exists source_files_folder_idx on source_files (folder);
+create index if not exists source_files_load_order_idx on source_files (folder, path, id);
+create index if not exists photo_albums_load_order_idx on photo_albums (date, id);
+create index if not exists attachments_parent_type_parent_id_idx on attachments (parent_type, parent_id);
+create index if not exists attachments_customer_id_idx on attachments (customer_id);
+create index if not exists attachments_load_order_idx on attachments (uploaded_at, id);
+create index if not exists cash_entries_store_id_date_idx on cash_entries (store_id, date);
+create index if not exists cash_entries_source_id_idx on cash_entries (source_id);
+create index if not exists cash_entries_load_order_idx on cash_entries (date, created_at, id);
+create index if not exists deliveries_related_type_related_id_idx on deliveries (related_type, related_id);
+create index if not exists deliveries_load_order_idx on deliveries (created_at, id);
+
+-- 後から not null を外した列 (データは変えない。外した後に実行しても変化なし)
+alter table comm_logs alter column customer_id drop not null;
 
 -- 行レベルセキュリティ: 有効化のみ (ポリシーなし)。publishable / anon キーからはアクセスできない
 -- アプリが使う secret キー (service_role) には読み書きの権限を明示的に付ける (プロジェクトの既定の権限に頼らない)
@@ -1101,6 +1269,12 @@ grant select, insert, update, delete on table settings to service_role;
 alter table attachments enable row level security;
 revoke all on table attachments from anon, authenticated;
 grant select, insert, update, delete on table attachments to service_role;
+alter table cash_entries enable row level security;
+revoke all on table cash_entries from anon, authenticated;
+grant select, insert, update, delete on table cash_entries to service_role;
+alter table deliveries enable row level security;
+revoke all on table deliveries from anon, authenticated;
+grant select, insert, update, delete on table deliveries to service_role;
 
 -- 書き込みのたびにリビジョンを +1 (他のサーバーインスタンスが変更を検知して読み直す)
 create or replace function public.bump_revision() returns bigint
