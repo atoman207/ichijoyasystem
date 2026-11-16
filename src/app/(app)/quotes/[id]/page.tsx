@@ -17,6 +17,7 @@ import { setQuoteDiscussing, updateSiteInfo } from "@/lib/actions/cases";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { caseEvents } from "@/lib/db/schedule";
 import { toDateKey } from "@/lib/format";
+import { AiSummary } from "@/components/features/AiSummary";
 
 /** 見積書の PDF を作ってメールで送る (送信の応答を待つ) ため */
 export const maxDuration = 60;
@@ -263,6 +264,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
               {doc && <li>取込書類: <Link href={`/capture?doc=${doc.id}`} className="text-accent hover:underline">{doc.fileName}</Link></li>}
             </ul>
           </Card>
+          <AiSummary kind="quote" id={q.id} />
           <RecordStamp db={db} targets={[{ entity: "quote", id: q.id }]} created={{ by: q.createdBy, at: q.createdAt }} approved={q.approvedBy ? [{ by: q.approvedBy, at: q.approvedAt }] : []} />
           <ApprovalHistoryCard approvals={chain.approvals.filter((a) => a.targetId === q.id)} />
           <HistoryCard db={db} user={user} targets={[{ entity: "quote", id: q.id }]} />

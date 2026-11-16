@@ -53,6 +53,8 @@ export const ROLE_DESCRIPTION: Record<Role, string> = {
 export const CHANNEL_LABEL: Record<Channel, string> = {
   phone: "電話",
   ai_phone: "AI電話受付",
+  ai_chat: "AIテキスト相談",
+  ai_voice: "AI音声相談",
   web: "Webフォーム",
   email: "メール",
   line: "LINE",
@@ -306,6 +308,7 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
 
 export const ENTITY_LABEL: Record<string, string> = {
   customer: "顧客",
+  knowledge: "社内資料 (ナレッジ)",
   inquiry: "問い合わせ",
   quote: "見積",
   order: "受注・施工",

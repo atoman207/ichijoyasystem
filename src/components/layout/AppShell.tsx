@@ -6,7 +6,9 @@ import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import {
   Award,
+  BookOpen,
   Calculator,
+  CircleHelp,
   Coins,
   Landmark,
   ListTodo,
@@ -73,7 +75,9 @@ export type NavIcon =
   | "finance"
   | "accounting"
   | "contacts"
-  | "suppliers";
+  | "suppliers"
+  | "knowledge"
+  | "help";
 
 const ICONS: Record<NavIcon, LucideIcon> = {
   dashboard: House,
@@ -101,6 +105,8 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   accounting: Calculator,
   contacts: PhoneCall,
   suppliers: Truck,
+  knowledge: BookOpen,
+  help: CircleHelp,
 };
 
 export interface NavItem {

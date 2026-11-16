@@ -6,6 +6,8 @@ import { addDays, fmtDate, fmtMonth, toDateKey, toMonthKey, yen } from "@/lib/fo
 import { APPROVAL_TYPE_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, ORDER_STATUS, ROLE_LABEL, SCHEDULE_KIND } from "@/lib/constants";
 import { analyzeConflicts, compareEvents, occursOn, overlapsRange, periodLabel, shortDate, timeLabel } from "@/lib/calendar";
 import { AiError, aiEnabled, generateText } from "./provider";
+import { searchRecords } from "./search";
+import { isStrongHit, searchKnowledge, type KnowledgeHit } from "@/lib/knowledge";
 
 /**
  * AI アシスタント
@@ -96,6 +98,12 @@ function contextText(db: Database, user: User, ctx: ReturnType<typeof buildConte
 export function rulesAnswer(db: Database, user: User, q: string, now = new Date()): string {
   const ctx = buildContext(db, user, now);
   const has = (...ws: string[]) => ws.some((w) => q.includes(w));
+  // 顧客・案件の検索 (名前の敬称・番号・電話番号・「」の言葉) を最初に見る
+  const found = searchRecords(db, user, q);
+  if (found.context) return `検索の結果です (閲覧できる店舗の記録から)。\n\n${found.context}\n\n番号・名前をクリックすると詳しい画面を開きます。`;
+  // 社内資料にはっきり当てはまるとき (例: 「支払方法は？」に資料「お支払い方法」) は、集計のルールより先に答える
+  const strong = searchKnowledge(db.knowledge, q, { limit: 3 });
+  if (isStrongHit(strong[0])) return knowledgeAnswer(strong);
 
   if (has("売上", "うりあげ", "業績")) {
     const total = ctx.kpis.reduce((a, k) => a + k.salesThisMonth, 0);
@@ -154,7 +162,10 @@ export function rulesAnswer(db: Database, user: User, q: string, now = new Date(
   if (has("文面", "返信", "メール", "LINE", "案内文", "テンプレ")) {
     return `以下は見積送付時の文面例です。お客様名・金額・施工日はシステムの情報で自動的に差し込めます。\n\n---\n○○ 様\n\nこのたびはお問い合わせいただき、誠にありがとうございます。\n株式会社一畳屋 ${sname(db, user.storeId)} の ${user.name} です。\n\nご依頼いただきました「和室6畳 畳表替え (さくら)」のお見積書 (合計 ¥121,000 税込) をお送りいたします。\n工賃・配送・古畳の処分費を含んだ金額です。土・祝日の施工もご予約にて承ります。\n\nご不明な点がございましたら、お電話 (0120-158-108) または LINE にてお気軽にお問い合わせください。\n\n株式会社一畳屋 ${sname(db, user.storeId)}\n---`;
   }
-  // 顧客検索
+  // 社内資料
+  const hits = searchKnowledge(db.knowledge, q, { limit: 3 });
+  if (hits.length) return knowledgeAnswer(hits);
+  // 顧客検索 (姓だけ)
   const custHit = scopeByStore(user, db.customers).filter((c) => q.includes(c.name.split(" ")[0]) && c.name.split(" ")[0].length >= 2);
   if (custHit.length > 0 && has("顧客", "様", "さん", "履歴", "電話", "住所")) {
     return custHit.slice(0, 3).map((c) => {
@@ -168,22 +179,35 @@ export function rulesAnswer(db: Database, user: User, q: string, now = new Date(
     const best = [...ctx.kpis].sort((a, b) => b.salesThisMonth - a.salesThisMonth)[0];
     return `店舗別の今月の状況:\n\n${ctx.kpis.map((k) => `・${sname(db, k.storeId)}: 売上 ${yen(k.salesThisMonth)} / 受注 ${k.orderCount} 件 / 成約率 ${Math.round(k.quoteWinRate * 100)}% / 未対応 ${k.openInquiries} 件 / 売掛 ${yen(k.receivables)}`).join("\n")}\n\n今月の売上トップは ${best ? sname(db, best.storeId) : "-"} です。`;
   }
-  return `ご質問の意図を特定できませんでした。次のような質問に答えられます:\n\n・「今月の売上は？」「店舗ごとの比較」\n・「未入金の請求は？」「期日超過の督促対象」\n・「承認待ちの案件」\n・「今日の予定」「明日の予定」「今週の予定」「予定の重複」\n・「未対応の問い合わせ」「進行中の施工」\n・「今月の経費」「未払の仕入」\n・「○○様の履歴」(顧客名で検索)\n・「見積送付の文面を作って」\n\n${aiEnabled() ? "" : "※ 本番環境では Claude が自然文で回答し、データ検索・集計・資料作成を行います。"}`;
+  return `ご質問の意図を特定できませんでした。次のような質問に答えられます:\n\n・「田中様の履歴」「O-2026-0012 の状況」「090-1234-5678 のお客様」(顧客・案件の検索)\n・社内資料 (ナレッジ) に登録した内容 (支払方法・商品の価格の目安・作業手順など)\n・「今月の売上は？」「店舗ごとの比較」\n・「未入金の請求は？」「期日超過の督促対象」\n・「承認待ちの案件」\n・「今日の予定」「明日の予定」「今週の予定」「予定の重複」\n・「未対応の問い合わせ」「進行中の施工」\n・「今月の経費」「未払の仕入」\n・「○○様の履歴」(顧客名で検索)\n・「見積送付の文面を作って」\n\n${aiEnabled() ? "" : "※ 本番環境では Claude が自然文で回答し、データ検索・集計・資料作成を行います。"}`;
 }
 
 /* ------------------------------------------------------------------ */
 
+function knowledgeAnswer(hits: KnowledgeHit[]): string {
+  return `社内資料から関係しそうな内容です。\n\n${hits.map((h) => `**${h.entry.title}** (${h.entry.category})\n${h.snippet}`).join("\n\n")}\n\n詳しくは「社内資料 (ナレッジ)」の画面で確認してください。`;
+}
+
 export async function answer(db: Database, user: User, history: ChatTurn[], question: string): Promise<AssistantReply> {
   if (!aiEnabled()) return { answer: rulesAnswer(db, user, question), provider: "rules" };
   const ctx = buildContext(db, user);
+  // 質問に出てきた顧客・番号の記録と、関係しそうな社内資料 (続きの質問では直前の質問も手がかりにする)
+  const lastUser = [...history].reverse().find((h) => h.role === "user")?.content ?? "";
+  const records = searchRecords(db, user, question);
+  const extra = { context: records.context || (lastUser ? searchRecords(db, user, lastUser).context : ""), knowledge: searchKnowledge(db.knowledge, question, { limit: 5 }) };
+  if (!extra.knowledge.length && lastUser) extra.knowledge = searchKnowledge(db.knowledge, `${lastUser} ${question}`, { limit: 3 });
   const system = [
     "あなたは株式会社一畳屋 (熊本の畳・襖・障子・網戸の専門店, 4店舗+本社) の社内業務アシスタントです。",
     "以下の社内データ要約 (利用者の権限で閲覧可能な範囲) に基づいて、日本語で簡潔かつ具体的に回答してください。",
     "数値は根拠となるデータを示し、推測で補わないでください。データに無いことは「システムに情報がありません」と答えてください。",
     "依頼があればお客様向けの文面 (メール・LINE) や社内連絡の下書きも作成してください。",
+    "「社内資料」に書かれている内容 (価格の目安・手順・社内ルール) は、それを優先して答え、使った資料を (社内資料: タイトル) の形で示してください。社内資料にもデータにもないことは推測せず「資料に記載がありません」と答えてください。",
+    "顧客・受注・見積・問い合わせ・請求に触れるときは、検索結果にある [番号](/orders/…) の形のリンクをそのまま付けてください。",
     "回答は Markdown の箇条書きを活用し、長くなりすぎないようにしてください。",
     "",
     contextText(db, user, ctx),
+    extra.context ? `\n## 検索結果 (質問に出てきた顧客・番号・電話番号に当てはまる記録)\n${extra.context}` : "",
+    extra.knowledge.length ? `\n## 社内資料 (質問に関係しそうなもの)\n${extra.knowledge.map((h) => `### ${h.entry.title} (${h.entry.category})\n${h.entry.body.slice(0, 1800)}`).join("\n\n")}` : "",
   ].join("\n");
   // 会話は user から始まり、user と assistant が交互になるようにそろえる (最初の挨拶などは除く)
   const turns: ChatTurn[] = [];
@@ -197,7 +221,11 @@ export async function answer(db: Database, user: User, history: ChatTurn[], ques
   if (turns.length && turns[turns.length - 1].role === "user") turns.pop();
   try {
     const res = await generateText({ system, messages: [...turns, { role: "user", content: question }], maxTokens: 4000 });
-    return { answer: res.data.trim() || "(応答がありませんでした)", provider: res.provider };
+    let text = res.data.trim() || "(応答がありませんでした)";
+    // 検索で見つかった記録へのリンク: AI が本文に付けなかったものを最後にまとめて付ける (画面をすぐ開けるように)
+    const missing = records.links.filter((l) => !text.includes(`](${l.href})`)).slice(0, 6);
+    if (missing.length) text += `\n\n関連する画面: ${missing.map((l) => `[${l.label}](${l.href})`).join(" / ")}`;
+    return { answer: text, provider: res.provider };
   } catch (err) {
     if (err instanceof AiError && err.code === "refusal") return { answer: "この質問には回答できませんでした。", provider: "rules" };
     const message = err instanceof AiError ? err.message : (err as Error).message;

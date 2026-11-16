@@ -4,8 +4,8 @@ import type { NextRequest } from "next/server";
 /**
  * 認証ガード (楽観的チェック)
  * セッション Cookie が無ければ /login へリダイレクトする。
- * 外部サービスからの受信 (/api/integrations/*: LINE・Chatwork・Web フォーム) と、お客様に送る帳票の共有リンク (/api/doc/*) は
- * ログインなしで届くため matcher から除外し、署名・共有鍵の確認を各ルートで行う。
+ * 外部サービスからの受信 (/api/integrations/*: LINE・Chatwork・Web フォーム・AI 受付)、お客様に送る帳票の共有リンク (/api/doc/*)、
+ * サーバーの定期実行 (/api/cron/*) はログインなしで届くため matcher から除外し、署名・共有鍵の確認を各ルートで行う。
  * 署名の検証とロール判定はサーバーコンポーネント側 (requireUser) で行う。
  */
 const SESSION_COOKIE = "ichijoya_session";
@@ -29,5 +29,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/health|api/integrations/|api/doc/).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/health|api/integrations/|api/doc/|api/cron/).*)"],
 };

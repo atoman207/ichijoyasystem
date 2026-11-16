@@ -13,6 +13,7 @@ import { isEmail } from "@/lib/notify/channels";
 import { sendAndRecord, type Outgoing } from "@/lib/notify/send";
 import { appBaseUrl } from "@/lib/notify/config";
 import { fieldLabel } from "@/lib/field-labels";
+import { AI_INTAKE_SETTINGS_ID, HANDOFF_MODE_LABEL, aiIntakeSettings } from "@/lib/ai-intake";
 import { fail, numField, requireActionUser, str, withMsg } from "./guards";
 
 /** settings の 1 行を保存する (なければ作る) */
@@ -159,4 +160,36 @@ async function saveNotify(actorId: string, targetId: string, formData: FormData,
     addAudit(db, { userId: actorId, action: "update", entity: "user", entityId: u.id, entityLabel: u.name, summary: `通知の受け取り方を変更 (${changes.map((c) => fieldLabel("user", c.field)).join("・")})`, changes });
   });
   revalidatePath(back);
+}
+
+/** 既存の AI システムからの受付の取込 (登録する店舗・引き継ぎの方法・店舗ごとの引き継ぎ先) */
+export async function updateAiIntakeSettings(formData: FormData) {
+  const back = "/settings?tab=integrations";
+  const user = await requireActionUser();
+  if (!canManageSettings(user)) fail(back, "AI 受付の設定は管理者のみ変更できます。");
+  await assertSettingsTable(back);
+  await mutate((db) => {
+    const defaultStore = db.stores.find((s) => s.id === str(formData, "defaultStore"))?.id ?? "hq";
+    const mode = str(formData, "handoff");
+    const handoff = mode === "requested" || mode === "never" ? mode : "always";
+    const assignees: Record<string, string> = {};
+    for (const s of db.stores) {
+      const uid = str(formData, `assignee_${s.id}`);
+      if (!uid) continue;
+      if (!db.users.some((u) => u.id === uid && u.active)) fail(back, `${s.name}の引き継ぎ先が見つかりません。`);
+      assignees[s.id] = uid;
+    }
+    const before = aiIntakeSettings(db);
+    saveSetting(db, AI_INTAKE_SETTINGS_ID, { defaultStore, handoff, assignees }, user.id);
+    const name = (id?: string) => db.users.find((u) => u.id === id)?.name ?? "店長";
+    const changes = [
+      ...(before.defaultStore !== defaultStore ? [{ field: "店舗が分からないときの登録先", before: db.stores.find((s) => s.id === before.defaultStore)?.name, after: db.stores.find((s) => s.id === defaultStore)?.name }] : []),
+      ...(before.handoff !== handoff ? [{ field: "引き継ぎ", before: HANDOFF_MODE_LABEL[before.handoff], after: HANDOFF_MODE_LABEL[handoff] }] : []),
+      ...db.stores.filter((s) => (before.assignees[s.id] ?? "") !== (assignees[s.id] ?? "")).map((s) => ({ field: `引き継ぎ先: ${s.name}`, before: name(before.assignees[s.id]), after: name(assignees[s.id]) })),
+    ];
+    if (!changes.length) fail(back, "変更はありませんでした。");
+    addAudit(db, { userId: user.id, action: "update", entity: "settings", entityId: AI_INTAKE_SETTINGS_ID, entityLabel: "AI 受付の取込", summary: `AI 受付の取込の設定を変更 (${changes.length} 項目)`, changes });
+  });
+  revalidatePath("/settings");
+  redirect(withMsg(back, "AI 受付の取込の設定を保存しました。"));
 }

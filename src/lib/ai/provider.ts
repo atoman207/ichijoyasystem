@@ -11,7 +11,8 @@ import Anthropic from "@anthropic-ai/sdk";
  *
  * - Claude: claude-opus-5-5。安全上の理由で応答が止まったときは、サーバー側で別のモデルに切り替える
  *   (server-side-fallback, fallbacks: "default")。JSON は structured outputs (output_config.format) で受け取る
- * - OpenAI: chat completions の JSON schema (strict)。モデルは OPENAI_MODEL、なければ利用できるものを順に試す
+ * - OpenAI: chat completions の JSON schema (strict)。モデルは OPENAI_MODEL、なければ OPENAI_MODELS を先頭から順に試す
+ *   (最新の gpt-6.1-terra。使えないキーでは gpt-4.1)。推論モデルには reasoning_effort (AI_EFFORT、既定 low) を付ける
  * - Vercel の 1 回の処理は 60 秒まで (画面側で maxDuration = 60)。AI の呼び出しは全体で 50 秒までに収め、
  *   混雑・一時的な障害は時間が残っていれば 1 回だけやり直す。間に合わないときは利用者に「もう一度」を案内する
  */
@@ -19,8 +20,15 @@ import Anthropic from "@anthropic-ai/sdk";
 export type AiProviderName = "claude" | "openai";
 
 export const CLAUDE_MODEL = "claude-opus-5-5";
-/** OpenAI のモデル (先頭から順に試し、使えたものを覚える。OPENAI_MODEL があれば最優先) */
-const OPENAI_MODELS = ["gpt-4.1", "gpt-5-mini", "gpt-4o", "gpt-5"];
+/**
+ * OpenAI のモデル (先頭から順に試し、使えたものを覚える。OPENAI_MODEL があれば最優先)
+ * - gpt-6.1-terra: 最新 (2026 年 10 月)。画像の読み取りに強く、画像を高い解像度のまま読む (patch 方式)。料金も gpt-4.1 より安い
+ * - gpt-4.1: 予備 (最新のモデルが使えないキー・組織のとき)。画像は短い辺 768px に縮小して読むため、細かい ○ 囲みの読み取りは弱い
+ */
+const OPENAI_MODELS = ["gpt-6.1-terra", "gpt-4.1"];
+/** 推論 (reasoning) に対応するモデル: gpt-5 以降・o シリーズ。reasoning_effort を付け、推論の分だけ出力の上限を足す */
+const isReasoningModel = (model: string) => /^(gpt-([5-9]|\d{2,})|o\d)/.test(model);
+const REASONING_HEADROOM = 8000;
 /** AI の呼び出し全体の上限 (Vercel の 60 秒に、保存などの時間を残す) */
 const DEADLINE_MS = 50_000;
 
@@ -150,6 +158,7 @@ export async function generateJson<T>(req: JsonRequest): Promise<AiResult<T>> {
       { role: "user", content: req.parts.map(toOpenAiPart) },
     ],
     maxTokens: req.maxTokens ?? 8000,
+    effort: effortFromEnv(req.effort ?? "low"),
     responseFormat: { type: "json_schema", json_schema: { name: req.schemaName, strict: true, schema: req.schema } },
   });
   return { data: parseJson<T>(text), provider: "openai", model, ms: Date.now() - t0 };
@@ -182,6 +191,7 @@ export async function generateText(req: TextRequest): Promise<AiResult<string>> 
   const { text, model } = await openAiCall(c, {
     messages: [{ role: "system", content: req.system }, ...req.messages],
     maxTokens: req.maxTokens ?? 4000,
+    effort: effortFromEnv("low"),
   });
   return { data: text, provider: "openai", model, ms: Date.now() - t0 };
 }
@@ -289,7 +299,7 @@ type OpenAiBody = { choices?: { message?: { content?: string | null; refusal?: s
 
 async function openAiCall(
   c: AiConfig,
-  opts: { messages: { role: "system" | "user" | "assistant"; content: OpenAiContent }[]; maxTokens: number; responseFormat?: Record<string, unknown> },
+  opts: { messages: { role: "system" | "user" | "assistant"; content: OpenAiContent }[]; maxTokens: number; effort: AiEffort; responseFormat?: Record<string, unknown> },
 ): Promise<{ text: string; model: string }> {
   const base = (process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1").replace(/\/$/, "");
   const preferred = process.env.OPENAI_MODEL?.trim();
@@ -297,11 +307,14 @@ async function openAiCall(
   const deadline = Date.now() + DEADLINE_MS;
   let lastError: AiError | undefined;
   let retried = false;
+  /** reasoning_effort を受け付けなかったモデル (同じモデルで付けずにやり直す) */
+  const noEffort = new Set<string>();
   for (let i = 0; i < models.length; i++) {
     const model = models[i];
     const remaining = deadline - Date.now();
     if (remaining < 5_000) throw lastError ?? new AiError("timeout", MSG.timeout);
-    const reasoning = /^(gpt-5|o\d)/.test(model);
+    const reasoning = isReasoningModel(model);
+    const withEffort = reasoning && !noEffort.has(model);
     let res: Response;
     try {
       res = await fetch(`${base}/chat/completions`, {
@@ -310,9 +323,10 @@ async function openAiCall(
         body: JSON.stringify({
           model,
           messages: opts.messages,
-          max_completion_tokens: opts.maxTokens,
+          // 推論モデルは推論の分も出力に数えるため、上限に余裕を足す (使った分だけの料金)
+          max_completion_tokens: reasoning ? opts.maxTokens + REASONING_HEADROOM : opts.maxTokens,
           ...(opts.responseFormat ? { response_format: opts.responseFormat } : {}),
-          ...(reasoning ? { reasoning_effort: "low" } : {}),
+          ...(withEffort ? { reasoning_effort: opts.effort } : {}),
         }),
         signal: AbortSignal.timeout(remaining),
       });
@@ -348,6 +362,12 @@ async function openAiCall(
           continue;
         }
         throw new AiError("rate_limit", MSG.busy, msg);
+      }
+      // reasoning_effort (の値) に対応していない → 同じモデルで付けずにもう一度
+      if (res.status === 400 && withEffort && /reasoning/i.test(msg)) {
+        noEffort.add(model);
+        i--;
+        continue;
       }
       // モデルがない・この使い方に対応していない → 次のモデルを試す
       if (res.status === 404 || /model_not_found/.test(code) || (res.status === 400 && /model|not supported|unsupported|does not support|response_format|json_schema|reasoning_effort|max_completion_tokens/i.test(msg))) {

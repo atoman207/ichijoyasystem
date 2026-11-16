@@ -21,6 +21,7 @@ import { SiteInfoCard } from "@/components/features/SiteInfo";
 import { QUALITY_CATEGORIES, QUALITY_KIND_HELP, QUALITY_KIND_LABEL, kpiSettings } from "@/lib/kpi-settings";
 import { SCORE_QUESTIONS, SCORE_LABEL } from "@/lib/survey";
 import { deliveryOf } from "@/lib/kpi";
+import { AiSummary } from "@/components/features/AiSummary";
 
 const STEPS = ["pending_approval", "confirmed", "scheduled", "in_progress", "completed", "invoiced", "paid"] as const;
 
@@ -442,6 +443,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             </Card>
           )}
 
+          <AiSummary kind="order" id={o.id} />
           <RecordStamp db={db} targets={[{ entity: "order", id: o.id }]} created={{ by: o.createdBy, at: o.createdAt }} approved={o.approvedBy ? [{ by: o.approvedBy }] : []} />
           <HistoryCard
             db={db}

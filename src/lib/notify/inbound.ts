@@ -151,7 +151,7 @@ export function recordWebForm(db: Database, f: WebFormInput): { created: boolean
   return { created: true, inquiry: inq };
 }
 
-function buildInquiry(db: Database, p: { id: string; channel: Channel; storeId: StoreId; contactName: string; contactPhone?: string; customerId?: string; category?: ServiceCategory; summary: string; detail: string; receivedAt: string; sourceRef: string }): Inquiry {
+export function buildInquiry(db: Database, p: { id: string; channel: Channel; storeId: StoreId; contactName: string; contactPhone?: string; customerId?: string; category?: ServiceCategory; summary: string; detail: string; receivedAt: string; sourceRef: string }): Inquiry {
   return {
     id: p.id,
     number: nextNumber(db, "INQ", db.inquiries, p.receivedAt.slice(0, 10)),

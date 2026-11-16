@@ -43,18 +43,20 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     { href: "/approvals", label: "承認", icon: "approvals", group: "業務支援", badge: n.pendingApprovals.length || undefined },
     { href: "/messages", label: "社内連絡・業務依頼", short: "社内連絡", icon: "messages", group: "業務支援", badge: n.mentions.length + n.taskCount || undefined },
     { href: "/contacts", label: "連絡履歴 (お客様・協力業者)", short: "連絡履歴", icon: "contacts", group: "業務支援" },
-    { href: "/ai", label: "AIアシスタント", short: "AI", icon: "ai", group: "業務支援" },
+    { href: "/ai", label: "AIアシスタント (質問・検索・文書の作成)", short: "AI", icon: "ai", group: "業務支援" },
+    { href: "/knowledge", label: "社内資料 (ナレッジ・AI の回答の根拠)", short: "社内資料", icon: "knowledge", group: "業務支援" },
     { href: "/materials", label: "資料・写真", icon: "materials", group: "業務支援" },
   );
   nav.push({ href: "/kpi", label: "KPI (アンケート・クレーム・口コミ・インセンティブ)", short: "KPI", icon: "kpi", group: "管理" });
   if (canViewReports(user)) {
-    nav.push({ href: "/reports", label: "レポート・分析", short: "レポート", icon: "reports", group: "管理" });
+    nav.push({ href: "/reports", label: "経営ダッシュボード (売上・受注・施工・請求・経費)", short: "経営", icon: "reports", group: "管理" });
   }
   if (canExportData(user)) {
     nav.push({ href: "/data", label: "データ入出力 (CSV・スプレッドシート)", short: "入出力", icon: "dataio", group: "管理" });
   }
   nav.push({ href: "/audit", label: "変更履歴", icon: "audit", group: "管理" });
   nav.push({ href: "/settings", label: canManageSettings(user) ? "設定" : "設定 (閲覧)", short: "設定", icon: "settings", group: "管理" });
+  nav.push({ href: "/help", label: "使い方 (操作説明)", short: "使い方", icon: "help", group: "管理" });
 
   const notifications: NotificationItem[] = [
     ...n.pendingApprovals.map<NotificationItem>((a) => ({

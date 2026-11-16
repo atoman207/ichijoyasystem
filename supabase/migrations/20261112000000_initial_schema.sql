@@ -650,6 +650,23 @@ create table if not exists deliveries (
 );
 comment on table deliveries is '送信履歴 (メール・LINE・Chatwork)';
 
+-- 社内資料 (ナレッジ・AI の回答の根拠)
+create table if not exists knowledge (
+  id text primary key,
+  title text not null,
+  body text not null default '',
+  category text not null default '',
+  tags text[] not null default '{}',
+  source text not null check (source in ('manual','sheet','file')),
+  source_ref text,
+  active boolean not null default true,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz not null
+);
+comment on table knowledge is '社内資料 (ナレッジ・AI の回答の根拠)';
+
 -- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)
 -- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する
 alter table stores add column if not exists code text not null;
@@ -1110,6 +1127,17 @@ alter table deliveries add column if not exists related_type text;
 alter table deliveries add column if not exists related_id text;
 alter table deliveries add column if not exists user_id text not null;
 alter table deliveries add column if not exists created_at timestamptz not null;
+alter table knowledge add column if not exists title text not null;
+alter table knowledge add column if not exists body text not null default '';
+alter table knowledge add column if not exists category text not null default '';
+alter table knowledge add column if not exists tags text[] not null default '{}';
+alter table knowledge add column if not exists source text not null check (source in ('manual','sheet','file'));
+alter table knowledge add column if not exists source_ref text;
+alter table knowledge add column if not exists active boolean not null default true;
+alter table knowledge add column if not exists created_by text not null;
+alter table knowledge add column if not exists created_at timestamptz not null;
+alter table knowledge add column if not exists updated_by text;
+alter table knowledge add column if not exists updated_at timestamptz not null;
 
 -- 索引 (検索・読み込みの並び順)
 create index if not exists stores_load_order_idx on stores (code, id);
@@ -1178,6 +1206,8 @@ create index if not exists cash_entries_source_id_idx on cash_entries (source_id
 create index if not exists cash_entries_load_order_idx on cash_entries (date, created_at, id);
 create index if not exists deliveries_related_type_related_id_idx on deliveries (related_type, related_id);
 create index if not exists deliveries_load_order_idx on deliveries (created_at, id);
+create index if not exists knowledge_source_ref_idx on knowledge (source_ref);
+create index if not exists knowledge_load_order_idx on knowledge (created_at, id);
 
 -- 後から not null を外した列 (データは変えない。外した後に実行しても変化なし)
 alter table comm_logs alter column customer_id drop not null;
@@ -1275,6 +1305,9 @@ grant select, insert, update, delete on table cash_entries to service_role;
 alter table deliveries enable row level security;
 revoke all on table deliveries from anon, authenticated;
 grant select, insert, update, delete on table deliveries to service_role;
+alter table knowledge enable row level security;
+revoke all on table knowledge from anon, authenticated;
+grant select, insert, update, delete on table knowledge to service_role;
 
 -- 書き込みのたびにリビジョンを +1 (他のサーバーインスタンスが変更を検知して読み直す)
 create or replace function public.bump_revision() returns bigint

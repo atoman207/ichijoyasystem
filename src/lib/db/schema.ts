@@ -785,6 +785,27 @@ export const TABLES: TableDef[] = [
     orderBy: ["created_at"],
     indexes: [["related_type", "related_id"]],
   },
+  {
+    collection: "knowledge",
+    table: "knowledge",
+    label: "社内資料 (ナレッジ・AI の回答の根拠)",
+    columns: [
+      ["id", "text primary key"],
+      ["title", "text not null"],
+      ["body", "text not null default ''"],
+      ["category", "text not null default ''"],
+      ["tags", "text[] not null default '{}'"],
+      ["source", "text not null check (source in ('manual','sheet','file'))"],
+      ["sourceRef", "text"],
+      ["active", "boolean not null default true"],
+      ["createdBy", "text not null"],
+      ["createdAt", `${ts} not null`],
+      ["updatedBy", "text"],
+      ["updatedAt", `${ts} not null`],
+    ],
+    orderBy: ["created_at"],
+    indexes: [["source_ref"]],
+  },
 ];
 
 /**

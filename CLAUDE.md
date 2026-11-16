@@ -44,3 +44,7 @@ AI コーディング支援 (Claude Code 等) がこのリポジトリで作業�
 - 現金の入出金は `src/lib/cashbook.ts` の `postCash` で現金出納帳に記帳する (現金の入金・現金の経費の精算・仕入の現金払い。元の記録 1 件につき 1 行)。会計データの仕訳は `src/lib/accounting.ts`
 - 変更履歴の項目名・値の表示は `src/lib/field-labels.ts`。update の監査ログには `changes` (変更前・変更後) を必ず付ける。履歴の閲覧範囲は `canViewAuditEntry`
 - KPI・インセンティブのルールは `src/lib/kpi-settings.ts` (既定値) と `src/lib/incentive.ts`。既定値はクライアントの「お客様アンケート集計表」KPI シートの評価方法に合わせている (① は全社、② は営業担当、③ は担当職人、④・返信率・クレーム率は店舗)
+- 経営ダッシュボードの集計は `src/lib/management.ts` (期間 `resolvePeriod`・`managementReport`・CSV `mgmtCsvRows`)。画面 `/reports` と CSV `/api/reports` は同じ関数を使う。店舗のロールは自店舗に固定
+- 社内資料 (ナレッジ) は `knowledge` テーブル。検索は `src/lib/knowledge.ts` (2 文字の組 + IDF)、スプレッドシートの同期は `src/lib/knowledge-sync.ts` (画面のボタンと `/api/cron/knowledge-sync`)。AI アシスタントは `src/lib/ai/search.ts` (顧客・案件の検索) と社内資料を system に入れる。要約は `src/lib/ai/summary.ts`、文書の作成は `src/lib/ai/draft.ts`。どれも AI のキーがないときはルール・定型文で答える
+- 既存の AI システムからの受付は `src/lib/ai-intake.ts` (`normalizeIntake` で項目名の違いを吸収 → `recordAiIntake`)。入口は `ai_chat` / `ai_voice` / `ai_phone`。引き継ぎは問い合わせにひも付く業務依頼 (`createHandoffTask`)
+- 本番サーバー (Xserver VPS) の手順とスクリプトは `deploy/` (`setup-server.sh`・`deploy.sh`・`backup.sh`)。`scripts/ops/` に本番の確認とファイルのバックアップ。本番運用の準備の自動確認は `src/lib/golive.ts`

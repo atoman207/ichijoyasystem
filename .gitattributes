@@ -1,0 +1,3 @@
+# サーバー (Linux) で実行するファイルは、Windows で取り出しても改行を LF のままにする
+*.sh text eol=lf
+deploy/** text eol=lf

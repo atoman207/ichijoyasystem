@@ -104,7 +104,7 @@ if (await registerBtn.isVisible().catch(() => false)) {
 // ---------------- 店舗スタッフ (合志店 中村 花子) ----------------
 await login(/^店舗スタッフ/, "合志店", /^中村 花子/);
 await shot("10-staff-dashboard");
-for (const [u, n] of [["/inquiries", "11-staff-inquiries"], ["/customers", null], ["/quotes", null], ["/orders", null], ["/schedule", "12-staff-schedule"], ["/invoices", null], ["/expenses", null], ["/capture", null], ["/approvals", null], ["/messages", null], ["/ai", null], ["/audit", null], ["/settings", null], ["/profile", "13-staff-profile"], ["/finance", null], ["/cashbook", null], ["/contacts", null], ["/messages?tab=tasks", null], ["/expenses/new", null]]) await visit(u, n);
+for (const [u, n] of [["/inquiries", "11-staff-inquiries"], ["/customers", null], ["/quotes", null], ["/orders", null], ["/schedule", "12-staff-schedule"], ["/invoices", null], ["/expenses", null], ["/capture", null], ["/approvals", null], ["/messages", null], ["/ai", null], ["/audit", null], ["/settings", null], ["/profile", "13-staff-profile"], ["/finance", null], ["/cashbook", null], ["/contacts", null], ["/messages?tab=tasks", null], ["/expenses/new", null], ["/knowledge", null], ["/help", null], ["/ai?tab=draft", null]]) await visit(u, n);
 // 顧客の新規登録は事務担当に依頼する (初期設定)
 await visit("/customers/new", null);
 await expectText(/事務担当が行います/, "権限: 店舗スタッフは顧客を新規登録しない (初期設定)");
@@ -135,6 +135,8 @@ if (await approveBtn.isVisible().catch(() => false)) {
   errors.push("店長の承認待ちが見つかりません");
 }
 await visit("/reports", "23-manager-reports");
+await visit("/reports?period=this_month", null);
+await visit("/knowledge", null);
 await visit("/quotes?status=approved", null);
 const firstApproved = page.locator("tbody a[href^='/quotes/']").first();
 if (await firstApproved.isVisible().catch(() => false)) {
@@ -204,7 +206,7 @@ await visit("/expenses", "36-hq-expenses");
 // ---------------- 管理者 (山田 太郎) ----------------
 await login(/^管理者/);
 await shot("40-admin-dashboard");
-for (const [u, n] of [["/approvals", "41-admin-approvals"], ["/reports?months=6", "42-admin-reports"], ["/audit", "43-admin-audit"], ["/settings?tab=users", "44-admin-settings-users"], ["/settings?tab=products", "45-admin-settings-products"], ["/settings?tab=rules", null], ["/settings?tab=integrations", null], ["/settings?tab=documents", null], ["/settings?tab=kpi", null], ["/settings?tab=data", null], ["/kpi", null], ["/kpi/surveys", null], ["/kpi/voice", null], ["/kpi/quality", null], ["/kpi/reviews", null], ["/kpi/incentives", null], ["/settings/users/u06", "44b-admin-user-account"], ["/data", "50-admin-data-io"], ["/messages", "46-admin-messages"], ["/customers", "47-admin-customers"], ["/orders", "48-admin-orders"], ["/schedule", "49-admin-schedule"], ["/profile", null], ["/customers?q=%E7%94%B0%E4%B8%AD", null], ["/finance", null], ["/finance?tab=payables", null], ["/cashbook", null], ["/suppliers", null], ["/purchases?view=suppliers", null], ["/purchases?view=schedule", null], ["/purchases/new", null], ["/accounting", null], ["/accounting?tab=settings", null], ["/contacts", null], ["/invoices?view=customers&only=open", null], ["/approvals?tab=history", null], ["/messages?tab=alltasks", null], ["/audit?changed=1", null]]) await visit(u, n);
+for (const [u, n] of [["/approvals", "41-admin-approvals"], ["/reports?months=6", "42-admin-reports"], ["/audit", "43-admin-audit"], ["/settings?tab=users", "44-admin-settings-users"], ["/settings?tab=products", "45-admin-settings-products"], ["/settings?tab=rules", null], ["/settings?tab=integrations", null], ["/settings?tab=documents", null], ["/settings?tab=kpi", null], ["/settings?tab=data", null], ["/kpi", null], ["/kpi/surveys", null], ["/kpi/voice", null], ["/kpi/quality", null], ["/kpi/reviews", null], ["/kpi/incentives", null], ["/settings/users/u06", "44b-admin-user-account"], ["/data", "50-admin-data-io"], ["/messages", "46-admin-messages"], ["/customers", "47-admin-customers"], ["/orders", "48-admin-orders"], ["/schedule", "49-admin-schedule"], ["/profile", null], ["/customers?q=%E7%94%B0%E4%B8%AD", null], ["/finance", null], ["/finance?tab=payables", null], ["/cashbook", null], ["/suppliers", null], ["/purchases?view=suppliers", null], ["/purchases?view=schedule", null], ["/purchases/new", null], ["/accounting", null], ["/accounting?tab=settings", null], ["/contacts", null], ["/invoices?view=customers&only=open", null], ["/approvals?tab=history", null], ["/messages?tab=alltasks", null], ["/audit?changed=1", null], ["/reports?period=custom&from=2026-01-01&to=2026-06-30&store=koshi", null], ["/knowledge", null], ["/help", null], ["/ai?tab=draft", null], ["/settings?tab=golive", null]]) await visit(u, n);
 // 書類取込 (サンプル読取)
 await visit("/capture?kind=receipt", null);
 await page.getByRole("button", { name: /サンプル画像で読み取りを試す/ }).click();

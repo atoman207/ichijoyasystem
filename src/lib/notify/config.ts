@@ -48,6 +48,11 @@ export function webformSecret(): string | null {
   return env("WEBFORM_SECRET") || null;
 }
 
+/** 既存の AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) からの受信の共有鍵 */
+export function aiIntakeSecret(): string | null {
+  return env("AI_INTAKE_SECRET") || null;
+}
+
 /** 通知・送付文に入れる画面の URL の先頭 (末尾の / なし) */
 export function appBaseUrl(): string {
   const v = env("APP_BASE_URL") || (env("VERCEL_PROJECT_PRODUCTION_URL") ? `https://${env("VERCEL_PROJECT_PRODUCTION_URL")}` : env("VERCEL_URL") ? `https://${env("VERCEL_URL")}` : "http://localhost:3000");
@@ -61,7 +66,7 @@ export function linkSecret(): string {
 }
 
 export interface IntegrationStatus {
-  key: "email" | "line" | "chatwork" | "webform";
+  key: "email" | "line" | "chatwork" | "webform" | "ai_intake";
   name: string;
   configured: boolean;
   detail: string;
@@ -101,6 +106,13 @@ export function integrationStatuses(): IntegrationStatus[] {
       configured: Boolean(webformSecret()),
       detail: webformSecret() ? "受信の共有鍵の設定あり (WEBFORM_SECRET)" : "WEBFORM_SECRET を設定すると、フォームの送信を問い合わせとして登録します",
       inbound: { configured: Boolean(webformSecret()), path: "/api/integrations/webform", detail: "POST (JSON)。ヘッダー Authorization: Bearer <WEBFORM_SECRET>" },
+    },
+    {
+      key: "ai_intake",
+      name: "既存の AI システム (AI テキスト相談・AI 音声相談・AI 電話受付)",
+      configured: Boolean(aiIntakeSecret()),
+      detail: aiIntakeSecret() ? "受信の共有鍵の設定あり (AI_INTAKE_SECRET)" : "AI_INTAKE_SECRET を設定すると、各 AI システムの受付を問い合わせとして登録し、担当者に引き継ぎます",
+      inbound: { configured: Boolean(aiIntakeSecret()), path: "/api/integrations/ai-intake?source=phone", detail: "POST (JSON)。ヘッダー Authorization: Bearer <AI_INTAKE_SECRET>。source は chat / voice / phone" },
     },
   ];
 }

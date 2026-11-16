@@ -4,11 +4,14 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nextNumber, nowIso, nextCustomerCode } from "@/lib/db/store";
 import { userCanCreateCustomer } from "@/lib/ops-settings";
-import type { Channel, Inquiry, InquiryStatus, ServiceCategory } from "@/lib/db/types";
+import type { Inquiry, InquiryStatus } from "@/lib/db/types";
 import { toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS } from "@/lib/constants";
 import { canAccessStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
+import { createHandoffTask } from "@/lib/ai-intake";
+import { taskNotices } from "@/lib/notify/events";
+import { sendAndRecord } from "@/lib/notify/send";
 import { assertStore, choice, fail, isKeyOf, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
 export async function createInquiry(formData: FormData) {
@@ -146,7 +149,8 @@ export async function registerCustomerFromInquiry(id: string, formData?: FormDat
       address: "",
       storeId: inq.storeId,
       assignedUserId: inq.assignedUserId ?? user.id,
-      preferredChannel: inq.channel === "ai_phone" ? "phone" : inq.channel,
+      // AI 受付 (電話・テキスト・音声) から登録したお客様への連絡は電話にしておく (担当者が変更できる)
+      preferredChannel: inq.channel === "ai_phone" || inq.channel === "ai_chat" || inq.channel === "ai_voice" ? "phone" : inq.channel,
       firstContactChannel: inq.channel,
       tags: [],
       notes: `問い合わせ ${inq.number} から登録`,
@@ -188,4 +192,43 @@ export async function linkInquiryToCustomer(id: string, customerId: string) {
   });
   revalidatePath(back);
   redirect(withMsg(back, "既存の顧客に紐づけました。これまでの履歴とあわせて表示されます。"));
+}
+
+/**
+ * 担当者への引き継ぎ (AI 受付・電話番・他店舗からの引き継ぎなど)
+ * 問い合わせの担当者を変え、引き継ぎ先に「業務依頼」(依頼 → 確認 → 報告 → 完了) を作って通知する
+ */
+export async function handoffInquiry(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const back = `/inquiries/${id}`;
+  const assigneeId = str(formData, "assigneeId");
+  const note = str(formData, "note").slice(0, 2000);
+  const dueDate = str(formData, "dueDate");
+  if (!assigneeId) fail(back, "引き継ぎ先を選んでください。");
+  if (!note) fail(back, "引き継ぐ内容 (お客様の状況・お願いしたい対応) を入力してください。");
+  if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) fail(back, "期限を正しく入力してください。");
+  let threadId = "";
+  await mutate((db) => {
+    const inq = db.inquiries.find((x) => x.id === id);
+    if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
+    assertStore(user, inq.storeId, back);
+    const assignee = db.users.find((u) => u.id === assigneeId && u.active);
+    if (!assignee) fail(back, "引き継ぎ先の社員が見つかりません。");
+    if (!canSeeAllStores(user) && assignee.storeId !== inq.storeId && assignee.role !== "admin" && assignee.role !== "hq_staff") fail(back, "引き継ぎ先は、この問い合わせの店舗の社員か本部の社員から選んでください。");
+    const before = inq.assignedUserId;
+    inq.assignedUserId = assignee.id;
+    if (inq.status === "new") inq.status = "in_progress";
+    inq.updatedAt = nowIso();
+    addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `担当者に引き継ぎ (${db.users.find((u) => u.id === before)?.name ?? "未割当"} → ${assignee.name})`, storeId: inq.storeId, changes: before !== assignee.id ? [{ field: "assignedUserId", before: before ?? null, after: assignee.id }] : undefined });
+    const t = createHandoffTask(db, { inquiry: inq, assignee, requestedBy: user.id, note: `${note}\n\n問い合わせ: /inquiries/${inq.id}`, dueDate: dueDate || undefined, storeId: inq.storeId });
+    threadId = t.id;
+  });
+  const db = getDb();
+  const t = db.threads.find((x) => x.id === threadId);
+  if (t) {
+    await sendAndRecord(taskNotices(db, t, user.id, "request", note), user.id);
+  }
+  revalidatePath(back);
+  revalidatePath("/messages");
+  redirect(withMsg(back, "担当者に引き継ぎました。引き継ぎ先の「業務依頼」に表示され、確認・報告の状況はこの画面で確認できます。"));
 }

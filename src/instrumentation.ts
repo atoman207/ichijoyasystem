@@ -9,7 +9,7 @@ export async function register() {
   process.env.TZ = process.env.APP_TIME_ZONE || "Asia/Tokyo";
   const { BACKEND, syncDb } = await import("./lib/db/store");
   if (BACKEND !== "supabase") {
-    if (process.env.VERCEL === "1" && process.env.DATA_BACKEND !== "json") {
+    if ((process.env.VERCEL === "1" || process.env.NODE_ENV === "production") && process.env.DATA_BACKEND !== "json") {
       console.error("[db] Supabase の環境変数 (NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SECRET_KEY) が未設定です。サンプルデータで動作しています。");
     }
     return;

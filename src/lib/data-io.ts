@@ -385,7 +385,9 @@ export function sheetCsvUrl(link: string): { url: string; label: string } | null
   const m = u.pathname.match(/^\/spreadsheets\/d\/([a-zA-Z0-9_-]{20,})/);
   if (!m) return null;
   const gid = (u.hash.match(/gid=(\d+)/) ?? u.search.match(/gid=(\d+)/))?.[1] ?? "0";
-  return { url: `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`, label: `Google スプレッドシート (${m[1].slice(0, 8)}… シート ${gid})` };
+  // 取得先は Google 固定 (SHEETS_EXPORT_BASE は検証用の差し替え。通常は設定しない)
+  const base = (process.env.SHEETS_EXPORT_BASE?.trim() || "https://docs.google.com").replace(/\/+$/, "");
+  return { url: `${base}/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`, label: `Google スプレッドシート (${m[1].slice(0, 8)}… シート ${gid})` };
 }
 
 /** スプレッドシートを CSV として取得する (リンクを知っている全員が閲覧できる共有設定が必要) */

@@ -54,6 +54,10 @@ export interface User {
 export type Channel =
   | "phone"
   | "ai_phone"
+  /** AI テキスト相談 (既存の AI チャット相談からの連携) */
+  | "ai_chat"
+  /** AI 音声相談 (既存の AI 音声相談からの連携) */
+  | "ai_voice"
   | "web"
   | "email"
   | "line"
@@ -749,6 +753,28 @@ export interface CashEntry {
   updatedAt: string;
 }
 
+/** 社内資料 (ナレッジ) の出どころ: 画面で登録 / Google スプレッドシートから同期 / ファイルから取込 */
+export type KnowledgeSource = "manual" | "sheet" | "file";
+
+/** 社内資料 (ナレッジ)。AI アシスタントが回答の根拠に使う (商品・価格の目安、施工の手順、社内ルール、よくある質問など) */
+export interface KnowledgeEntry {
+  id: string;
+  title: string;
+  body: string;
+  /** 分類 (例: 商品・価格 / 施工 / 社内ルール / よくある質問) */
+  category: string;
+  tags: string[];
+  source: KnowledgeSource;
+  /** 取込元 (sheet:<シートの設定 ID>:<行の見出し> / ファイル名) */
+  sourceRef?: string;
+  /** false = AI の回答に使わない (一時的に止める) */
+  active: boolean;
+  createdBy: string;
+  createdAt: string;
+  updatedBy?: string;
+  updatedAt: string;
+}
+
 export type DeliveryChannel = "email" | "line" | "chatwork";
 /** sent = 送信 / failed = 送信失敗 / skipped = 送信の設定がないため記録のみ */
 export type DeliveryStatus = "sent" | "failed" | "skipped";
@@ -1075,6 +1101,7 @@ export interface Database {
   attachments: Attachment[];
   cashEntries: CashEntry[];
   deliveries: Delivery[];
+  knowledge: KnowledgeEntry[];
 }
 
 export type CollectionName = Exclude<keyof Database, "meta">;

@@ -10,6 +10,7 @@ import { EXPENSE_METHOD_LABEL, EXPENSE_STATUS } from "@/lib/constants";
 import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, StatusBadge, StoreTag } from "@/components/ui";
 import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { ApprovalDecision, ApprovalHistoryCard, HistoryCard, RecordStamp } from "@/components/features/History";
+import { AiSummary } from "@/components/features/AiSummary";
 
 export default async function ExpenseDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -70,6 +71,7 @@ export default async function ExpenseDetailPage({ params, searchParams }: { para
           <AttachmentsCard db={db} user={user} parent={{ type: "expense", id: e.id }} returnTo={returnTo} title="レシート・領収書" description="レシートや領収書の写真を登録できます (書類取込で読み取った元の画像もここに表示されます)" />
         </div>
         <div className="space-y-4">
+          <AiSummary kind="expense" id={e.id} />
           <ApprovalHistoryCard approvals={approvals} />
           <HistoryCard db={db} user={user} targets={[{ entity: "expense", id: e.id }]} />
         </div>

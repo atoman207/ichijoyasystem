@@ -5,12 +5,19 @@ import { Bot, Send } from "lucide-react";
 import { askAssistant } from "@/lib/actions/ai";
 import type { ChatTurn } from "@/lib/ai/assistant";
 import { Avatar } from "@/components/ui";
+import Link from "@/components/ui/Link";
 
-const SUGGESTIONS = ["今月の売上は？", "未入金の請求を教えて", "承認待ちの案件は？", "今日の予定", "未対応の問い合わせ", "今月の経費の内訳", "店舗ごとの比較", "見積送付のLINE文面を作って"];
+const SUGGESTIONS = ["今月の売上は？", "未入金の請求を教えて", "承認待ちの案件は？", "今日の予定", "未対応の問い合わせ", "施工中の現場の一覧", "今月の経費の内訳", "店舗ごとの比較", "支払方法は何が使える？", "見積送付のLINE文面を作って"];
 
+/** 太字 (**…**) と、システム内の画面へのリンク ([番号](/orders/…)) だけを表示に反映する (外部の URL はリンクにしない) */
 function renderInline(text: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((p, i) => (p.startsWith("**") && p.endsWith("**") ? <strong key={i}>{p.slice(2, -2)}</strong> : <span key={i}>{p}</span>));
+  const parts = text.split(/(\*\*[^*]+\*\*|\[[^\]]{1,80}\]\(\/[A-Za-z0-9/_?=&%.-]{1,200}\))/g);
+  return parts.map((p, i) => {
+    if (p.startsWith("**") && p.endsWith("**")) return <strong key={i}>{p.slice(2, -2)}</strong>;
+    const m = /^\[([^\]]+)\]\((\/[^)]+)\)$/.exec(p);
+    if (m && !m[2].startsWith("//")) return <Link key={i} href={m[2]} className="font-medium text-accent hover:underline">{m[1]}</Link>;
+    return <span key={i}>{p}</span>;
+  });
 }
 
 export function AiChat({ userName, userId, aiEnabled }: { userName: string; userId: string; aiEnabled: boolean }) {
@@ -70,7 +77,7 @@ export function AiChat({ userName, userId, aiEnabled }: { userName: string; user
           }}
           className="flex gap-2"
         >
-          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="質問や依頼を入力 (例: 田中様の履歴を教えて)" className="field flex-1" />
+          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="質問や依頼を入力 (例: 田中様の履歴 / O-2026-0012 の状況 / 支払方法は？)" className="field flex-1" />
           <button type="submit" disabled={pending || !input.trim()} className="inline-flex h-9 items-center gap-1 rounded-lg bg-accent px-4 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50">
             <Send className="h-4 w-4" /> 送信
           </button>

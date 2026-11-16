@@ -1,0 +1,35 @@
+# 一畳屋 業務システム (Next.js) の常駐サービス
+# setup-server.sh が /etc/systemd/system/ichijoya.service にコピーする
+#   状態: systemctl status ichijoya / ログ: journalctl -u ichijoya -f / 再起動: systemctl restart ichijoya
+
+[Unit]
+Description=Ichijoya business system (Next.js)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ichijoya
+Group=ichijoya
+WorkingDirectory=/srv/ichijoya/current
+# 秘密の設定 (所有者 root・権限 640。グループ ichijoya が読める)
+EnvironmentFile=/etc/ichijoya/ichijoya.env
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=127.0.0.1
+# 外部からは nginx (443) だけを公開し、アプリは 127.0.0.1:3000 で待ち受ける
+ExecStart=/srv/ichijoya/current/node_modules/.bin/next start -p 3000 -H 127.0.0.1
+Restart=always
+RestartSec=5
+# 起動時に全データ (約 6 万行) を読み込むため、待ち時間を長めにする
+TimeoutStartSec=180
+# メモリが不足したときにほかのサービスを巻き込まないよう上限を決める (VPS のメモリに合わせて調整)
+MemoryMax=3G
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/srv/ichijoya /var/lib/ichijoya
+
+[Install]
+WantedBy=multi-user.target

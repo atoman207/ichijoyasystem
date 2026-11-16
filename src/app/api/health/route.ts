@@ -8,14 +8,15 @@ export const maxDuration = 60;
 
 /**
  * 死活監視用。データベースを読めるかどうかも確かめる (件数などの中身は返さない)
- * - Vercel で Supabase の環境変数が未設定のときは、サンプルデータで動いてしまうため "not_configured" (503) を返す
+ * - 本番 (Vercel・VPS) で Supabase の環境変数が未設定のときは、サンプルデータで動いてしまうため "not_configured" (503) を返す
  * - timeZone: サーバーの日付・時刻の基準 (instrumentation.ts で日本時間に設定)
  */
 export async function GET() {
   const time = new Date().toISOString();
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const base = { service: "ichijoya-ims", backend: BACKEND, timeZone, time };
-  if (process.env.VERCEL === "1" && BACKEND === "json" && process.env.DATA_BACKEND !== "json") {
+  // 本番 (Vercel・VPS の next start) で Supabase の設定がないときは、サンプルデータで動いてしまうため異常として返す
+  if ((process.env.VERCEL === "1" || process.env.NODE_ENV === "production") && BACKEND === "json" && process.env.DATA_BACKEND !== "json") {
     return NextResponse.json({ ok: false, ...base, db: "not_configured" }, { status: 503 });
   }
   try {

@@ -12,7 +12,8 @@ import { CUSTOMER_CREATOR_LABEL, opsSettings } from "@/lib/ops-settings";
 import { fmtDateTime, yen } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, DELIVERY_CHANNEL_LABEL, DELIVERY_STATUS, ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import { approvalSettings } from "@/lib/approval-rules";
-import { sendTestMessage, updateApprovalSettings, updateNotifySettings } from "@/lib/actions/settings-ops";
+import { sendTestMessage, updateAiIntakeSettings, updateApprovalSettings, updateNotifySettings } from "@/lib/actions/settings-ops";
+import { HANDOFF_MODE_LABEL, aiIntakeSettings, type HandoffMode } from "@/lib/ai-intake";
 import { appBaseUrl, chatworkConfig, integrationStatuses } from "@/lib/notify/config";
 import { NOTIFY_EVENT_LABEL, notifySettings, type NotifyEvent } from "@/lib/notify/events";
 import { canManageIntegrations } from "@/lib/auth/permissions";
@@ -20,6 +21,7 @@ import type { Role, ServiceCategory } from "@/lib/db/types";
 import { Badge, Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select, StoreTag, Textarea } from "@/components/ui";
 import Link from "@/components/ui/Link";
 import { PermissionTableCard } from "@/components/settings/PermissionTableCard";
+import { GoLivePanel } from "@/components/settings/GoLivePanel";
 
 /** 「接続を確認」で AI の応答を待つ (最大 50 秒) ため */
 export const maxDuration = 60;
@@ -51,6 +53,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           { href: `${base}?tab=rules`, label: "承認ルール・業務フロー" },
           { href: `${base}?tab=integrations`, label: "外部連携・AI" },
           { href: `${base}?tab=data`, label: "データ管理" },
+          { href: `${base}?tab=golive`, label: "本番運用の準備" },
         ]}
       />
 
@@ -405,7 +408,6 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             </Card>
           ))}
           {[
-            { name: "AI 電話受付", status: "接続先の決定後", ok: false, desc: "通話内容の要約・用件・折返し先を受け取る形式 (D8) が決まれば、Web フォームと同じ受信の仕組みで問い合わせに自動登録します。" },
             { name: "Google スプレッドシート", status: "取込・書き出しに対応", ok: true, desc: "リンクで共有したシートから顧客・問い合わせを取込 (データ入出力の画面)。書き出した CSV はシートでインポート。非公開シートの直接連携はサービスアカウントの準備後。" },
             { name: "会計ソフト (弥生・freee・マネーフォワードなど)", status: "CSV で出力", ok: true, desc: "売上・入金・経費・仕入・現金出納の仕訳と明細を、会計データの出力 (/accounting) から CSV で出力します (汎用・弥生会計のインポート形式)。" },
           ].map((i) => (
@@ -416,6 +418,44 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               </div>
             </Card>
           ))}
+          {(() => {
+            const intake = aiIntakeSettings(db);
+            const base = appBaseUrl();
+            return (
+              <Card className="@2xl:col-span-2">
+                <CardHeader title="既存の AI システムからの受付 (AI テキスト相談・AI 音声相談・AI 電話受付)" description="各 AI システムの「受付が終わったときの送信 (Webhook)」を下の URL に設定すると、受付ごとに問い合わせを登録し、会話の記録をやりとり履歴に残して、担当者に引き継ぎます。同じ受付 ID は 1 件だけ登録します" />
+                <ul className="mb-3 space-y-1 text-xs text-ink-2">
+                  {(["chat", "voice", "phone"] as const).map((k) => (
+                    <li key={k}><span className="inline-block w-28 text-ink-3">{k === "chat" ? "AI テキスト相談" : k === "voice" ? "AI 音声相談" : "AI 電話受付"}</span><span className="font-mono text-[11px] break-all">POST {base}/api/integrations/ai-intake?source={k}</span></li>
+                  ))}
+                  <li className="text-ink-3">認証: ヘッダー Authorization: Bearer &lt;AI_INTAKE_SECRET&gt; (ヘッダーを設定できないシステムは URL の末尾に &amp;token=&lt;AI_INTAKE_SECRET&gt;)。受け取る項目: name・phone・email・address・summary (要約)・purpose (用件)・transcript (会話)・desiredDate (希望日)・callbackPhone (折返し先)・store (店舗)・handoff (引き継ぎが必要)・urgency・id (受付 ID) など</li>
+                </ul>
+                <form action={updateAiIntakeSettings} className="space-y-3">
+                  <fieldset disabled={!admin} className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+                    <Field label="店舗が分からないときの登録先">
+                      <Select name="defaultStore" defaultValue={intake.defaultStore}>
+                        {db.stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </Select>
+                    </Field>
+                    <Field label="担当者への引き継ぎ">
+                      <Select name="handoff" defaultValue={intake.handoff}>
+                        {(Object.keys(HANDOFF_MODE_LABEL) as HandoffMode[]).map((m) => <option key={m} value={m}>{HANDOFF_MODE_LABEL[m]}</option>)}
+                      </Select>
+                    </Field>
+                    {db.stores.map((s) => (
+                      <Field key={s.id} label={`引き継ぎ先: ${s.name}`} hint="未設定は店長">
+                        <Select name={`assignee_${s.id}`} defaultValue={intake.assignees[s.id] ?? ""}>
+                          <option value="">店長 ({userName(s.managerUserId)})</option>
+                          {db.users.filter((u) => u.active && (u.storeId === s.id || u.role === "admin" || u.role === "hq_staff")).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                        </Select>
+                      </Field>
+                    ))}
+                  </fieldset>
+                  {admin && <Button type="submit" size="sm">保存</Button>}
+                </form>
+              </Card>
+            );
+          })()}
           {(() => {
             const ns = notifySettings(db);
             const events = Object.keys(NOTIFY_EVENT_LABEL) as NotifyEvent[];
@@ -482,6 +522,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           )}
         </div>
       )}
+
+      {tab === "golive" && (admin ? <GoLivePanel db={db} /> : <Note>本番運用の準備の確認は管理者が行います。</Note>)}
 
       {tab === "data" && (
         <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-2">

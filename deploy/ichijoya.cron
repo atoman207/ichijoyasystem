@@ -1,0 +1,13 @@
+# 一畳屋 業務システムの定期実行 (setup-server.sh が /etc/cron.d/ichijoya に置く)
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+TZ=Asia/Tokyo
+
+# バックアップ (データベース・添付ファイル) 毎日 3:30
+30 3 * * * ichijoya bash /srv/ichijoya/current/deploy/backup.sh >> /var/log/ichijoya/backup.log 2>&1
+
+# 社内資料 (Google スプレッドシート) の同期 毎時 15 分
+15 * * * * ichijoya bash /srv/ichijoya/current/deploy/run-task.sh knowledge-sync >> /var/log/ichijoya/cron.log 2>&1
+
+# 死活監視 5 分ごと (止まっていたら再起動を試み、ログに残す)
+*/5 * * * * root bash /srv/ichijoya/current/deploy/run-task.sh health >> /var/log/ichijoya/health.log 2>&1

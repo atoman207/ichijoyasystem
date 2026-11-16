@@ -4,16 +4,17 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canAccessStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
-import { linkInquiryToCustomer, registerCustomerFromInquiry, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
+import { handoffInquiry, linkInquiryToCustomer, registerCustomerFromInquiry, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
 import { findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
 import { addCommLog } from "@/lib/actions/customers";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
-import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
+import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, ORDER_STATUS, QUOTE_STATUS, TASK_STATUS } from "@/lib/constants";
 import { Badge, Button, Card, CardHeader, ChannelTag, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
 import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { caseEvents } from "@/lib/db/schedule";
 import { toDateKey } from "@/lib/format";
+import { AiSummary } from "@/components/features/AiSummary";
 
 export default async function InquiryDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -37,6 +38,12 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const dup = customer ? null : findDuplicateCustomers(db, { name: inq.contactName, phone: inq.contactPhone });
   const candidates = dup ? [...dup.high.map((m) => ({ ...m, level: "high" as const })), ...dup.check.map((m) => ({ ...m, level: "check" as const })), ...dup.sameName.slice(0, 5).map((m) => ({ ...m, level: "name" as const }))] : [];
   const storeName = (sid: string) => db.stores.find((s) => s.id === sid)?.name ?? sid;
+  // AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) からの受付: 会話の記録
+  const fromAi = inq.channel === "ai_phone" || inq.channel === "ai_chat" || inq.channel === "ai_voice";
+  const aiLogs = db.commLogs.filter((c) => c.relatedType === "inquiry" && c.relatedId === inq.id && (c.channel === "ai_phone" || c.channel === "ai_chat" || c.channel === "ai_voice"));
+  // 担当者への引き継ぎ (業務依頼)
+  const handoffs = db.threads.filter((t) => t.kind === "request" && t.relatedType === "inquiry" && t.relatedId === inq.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const handoffUsers = db.users.filter((u) => u.active && (u.storeId === inq.storeId || u.role === "admin" || u.role === "hq_staff" || canSeeAllStores(user)));
 
   return (
     <div>
@@ -54,8 +61,8 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
         }
       />
 
-      {inq.channel === "ai_phone" && (
-        <Note tone="accent">この問い合わせは AI 電話受付から自動登録されました。内容を確認し、担当者の割当と折返し対応を行ってください。顧客として登録すると、その後の見積・施工・請求まで情報が引き継がれます。</Note>
+      {fromAi && (
+        <Note tone="accent">この問い合わせは{CHANNEL_LABEL[inq.channel]}から自動登録されました。内容を確認し、担当者の割当と{inq.channel === "ai_chat" ? "お客様への連絡" : "折返し対応"}を行ってください。顧客として登録すると、その後の見積・施工・請求まで情報が引き継がれます。</Note>
       )}
 
       <div className="mt-4 grid grid-cols-1 gap-4 @3xl:grid-cols-3">
@@ -66,6 +73,48 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             <div className="mt-4">
               <Dl columns={3} items={[["お客様", inq.contactName], ["電話", inq.contactPhone ?? "-"], ["担当", userName(inq.assignedUserId)], ["登録者", userName(inq.createdBy)], ["次のアクション", inq.nextAction ?? "-"], ["期限", inq.nextActionDue ? fmtDate(inq.nextActionDue) : "-"]]} />
             </div>
+          </Card>
+
+          {aiLogs.length > 0 && (
+            <Card>
+              <CardHeader title={`${CHANNEL_LABEL[inq.channel]}の記録`} description="AI システムから受け取った会話・要約 (受け取ったまま保存しています)" />
+              {aiLogs.map((c) => (
+                <details key={c.id} className="text-sm" open={aiLogs.length === 1}>
+                  <summary className="cursor-pointer text-xs text-ink-3"><span className="tnum">{fmtDateTime(c.at)}</span> · {c.subject}</summary>
+                  <pre className="mt-2 max-h-80 overflow-y-auto rounded-lg bg-subtle p-3 font-sans text-xs whitespace-pre-wrap text-ink">{c.body}</pre>
+                </details>
+              ))}
+            </Card>
+          )}
+
+          <Card>
+            <CardHeader title="担当者への引き継ぎ" description="引き継ぎ先に「業務依頼」を作って通知します。相手が確認 → 対応の報告 → 依頼者の確認で完了になります" />
+            {handoffs.length > 0 && (
+              <ul className="mb-3 space-y-1.5 text-sm">
+                {handoffs.map((t) => (
+                  <li key={t.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line px-3 py-2">
+                    <span className="min-w-0">
+                      <Link href={`/messages/${t.id}`} className="font-medium text-accent hover:underline">{(t.assigneeIds ?? []).map((a) => userName(a)).join("・")}</Link>
+                      <span className="ml-2 text-xs text-ink-3">依頼 {userName(t.createdBy)} · {fmtDateTime(t.createdAt)}{t.dueDate ? ` · 期限 ${fmtDate(t.dueDate)}` : ""}</span>
+                    </span>
+                    {t.taskStatus && <StatusBadge value={t.taskStatus} map={TASK_STATUS} />}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {open && (
+              <form action={handoffInquiry.bind(null, inq.id)} className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+                <Field label="引き継ぎ先" required>
+                  <Select name="assigneeId" defaultValue={inq.assignedUserId ?? ""} required>
+                    <option value="">選んでください</option>
+                    {handoffUsers.map((u) => <option key={u.id} value={u.id}>{u.name} ({storeName(u.storeId)})</option>)}
+                  </Select>
+                </Field>
+                <Field label="期限"><Input type="date" name="dueDate" defaultValue={toDateKey(new Date())} /></Field>
+                <Field label="引き継ぐ内容" className="@xl:col-span-2" required><Textarea name="note" required placeholder="例: 6畳の表替えのご相談。明日の午前中に折返しを希望されています。" /></Field>
+                <div className="@xl:col-span-2"><Button type="submit" size="sm">引き継ぐ</Button></div>
+              </form>
+            )}
           </Card>
 
           <CaseScheduleCard
@@ -127,7 +176,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                 <input type="hidden" name="relatedId" value={inq.id} />
                 <input type="hidden" name="returnTo" value={`/inquiries/${inq.id}`} />
                 <Field label="手段">
-                  <Select name="channel" defaultValue={inq.channel === "ai_phone" ? "phone" : inq.channel}>
+                  <Select name="channel" defaultValue={fromAi ? "phone" : inq.channel}>
                     {(Object.keys(CHANNEL_LABEL) as (keyof typeof CHANNEL_LABEL)[]).map((k) => <option key={k} value={k}>{CHANNEL_LABEL[k]}</option>)}
                   </Select>
                 </Field>
@@ -155,6 +204,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
         </div>
 
         <div className="space-y-4">
+          <AiSummary kind="inquiry" id={inq.id} />
           <Card>
             <CardHeader title="お客様" />
             {customer ? (

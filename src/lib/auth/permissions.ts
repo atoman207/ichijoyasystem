@@ -266,3 +266,13 @@ export function canCreateCustomer(user: User, ctx: { mode: "office" | "office_an
   if (ctx.mode === "all") return true;
   return ctx.mode === "office_and_managers" && user.role === "store_manager";
 }
+
+/** 社内資料 (ナレッジ) の登録・修正: 店長・本部スタッフ・管理者 (閲覧と AI での利用は全員) */
+export function canEditKnowledge(user: User): boolean {
+  return user.role === "admin" || user.role === "hq_staff" || user.role === "store_manager";
+}
+
+/** 社内資料の取込元 (Google スプレッドシート) の登録・同期: 本部スタッフ・管理者 */
+export function canManageKnowledgeSources(user: User): boolean {
+  return user.role === "admin" || user.role === "hq_staff";
+}
