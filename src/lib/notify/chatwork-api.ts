@@ -7,6 +7,31 @@ import { chatworkConfig, chatworkWebhookTokens } from "./config";
  * Webhook は Chatwork の画面でしか作れない (API がない) ため、ここでは受信先の URL とトークンの数を示す
  */
 
+const g = globalThis as typeof globalThis & { __ichijoyaCwSelf?: { token: string; id: string; at: number } };
+
+/**
+ * 連携用アカウント (API トークンの持ち主) の ID。システムから送った投稿を受信として数えないために使う。
+ * CHATWORK_SELF_ACCOUNT_ID があればそれ、なければ Chatwork の /me から取得して覚えておく (12 時間)
+ */
+export async function chatworkSelfId(): Promise<string | undefined> {
+  const explicit = (process.env.CHATWORK_SELF_ACCOUNT_ID ?? "").trim();
+  if (explicit) return explicit;
+  const cfg = chatworkConfig();
+  if (!cfg) return undefined;
+  const cached = g.__ichijoyaCwSelf;
+  if (cached && cached.token === cfg.token && Date.now() - cached.at < 12 * 3600_000) return cached.id;
+  try {
+    const res = await fetch(`${cfg.base}/me`, { headers: { "X-ChatWorkToken": cfg.token }, signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return undefined;
+    const id = String(((await res.json()) as { account_id?: number }).account_id ?? "");
+    if (!id) return undefined;
+    g.__ichijoyaCwSelf = { token: cfg.token, id, at: Date.now() };
+    return id;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface ChatworkCheck {
   ok: boolean;
   lines: string[];
@@ -24,7 +49,7 @@ export async function checkChatwork(db: Database, webhookUrl: string): Promise<C
     const me = (await meRes.json()) as { account_id?: number; name?: string; organization_name?: string };
     const self = (process.env.CHATWORK_SELF_ACCOUNT_ID ?? "").trim();
     lines.push(`連携用アカウント: ${me.name ?? "-"}${me.organization_name ? ` (${me.organization_name})` : ""} · アカウント ID ${me.account_id ?? "-"}`);
-    if (!self) lines.push(`CHATWORK_SELF_ACCOUNT_ID が未設定です → ${me.account_id} を設定すると、システムからの投稿を受信に数えません。`);
+    if (!self) lines.push(`CHATWORK_SELF_ACCOUNT_ID は未設定 → 自動で ${me.account_id} を使います (システムからの投稿は受信に数えません)。`);
     else if (self !== String(me.account_id)) {
       ok = false;
       lines.push(`CHATWORK_SELF_ACCOUNT_ID (${self}) が連携用アカウントの ID (${me.account_id}) と違います。`);

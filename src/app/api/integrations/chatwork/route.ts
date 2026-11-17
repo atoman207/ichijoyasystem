@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { mutate, syncDb } from "@/lib/db/store";
 import { chatworkWebhookTokens } from "@/lib/notify/config";
 import { recordChatworkEvent, verifyHmac, type ChatworkPayload } from "@/lib/notify/inbound";
+import { chatworkSelfId } from "@/lib/notify/chatwork-api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,7 +28,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
   }
   await syncDb();
-  const self = (process.env.CHATWORK_SELF_ACCOUNT_ID ?? "").trim() || undefined;
+  // 連携用アカウント自身の投稿 (システムから送った連絡) は受信に数えない
+  const self = await chatworkSelfId();
   const result = await mutate((db) => recordChatworkEvent(db, payload, self));
   return NextResponse.json({ ok: true, result });
 }

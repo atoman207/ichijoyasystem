@@ -217,7 +217,8 @@ export function recordLineGroupMessage(db: Database, g: LineGroup, m: PendingLin
 
 export interface ChatworkPayload {
   webhook_event_type?: string;
-  webhook_event?: { message_id?: string | number; room_id?: string | number; account_id?: string | number; body?: string; send_time?: number };
+  /** message_created: account_id (投稿した人) / mention_to_me: from_account_id (メンションした人) */
+  webhook_event?: { message_id?: string | number; room_id?: string | number; account_id?: string | number; from_account_id?: string | number; body?: string; send_time?: number };
 }
 
 /** Chatwork の投稿: 協力業者・仕入先のルーム (ルーム ID を登録した取引先) の投稿をやりとり履歴に登録する */
@@ -227,7 +228,7 @@ export function recordChatworkEvent(db: Database, p: ChatworkPayload, selfAccoun
   const room = String(ev.room_id ?? "");
   const msgId = safeId(String(ev.message_id ?? ""));
   if (!room || !msgId) return "ignored";
-  if (selfAccountId && String(ev.account_id ?? "") === selfAccountId) return "ignored";
+  if (selfAccountId && String(ev.account_id ?? ev.from_account_id ?? "") === selfAccountId) return "ignored";
   const supplier = db.suppliers.find((s) => s.chatworkRoomId === room);
   if (!supplier) return "ignored";
   const logId = `cl_cw_${msgId}`;
