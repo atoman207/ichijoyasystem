@@ -72,6 +72,20 @@ VPS に SSH で接続して実行します。各手順の「確認」で結果�
    LINE Developers の Webhook URL、Chatwork の Webhook、Web サイトのフォーム、既存の AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) の送信先を `https://<ドメイン>/api/integrations/...` に変更します。URL の一覧は 設定 → 外部連携・AI に表示されます。
 9. **Vercel の停止** (移行する場合): 新しいドメインで 1 週間ほど問題がないことを確かめてから、Vercel のプロジェクトを停止します。
 
+## 2-0. このサーバーで開発していたとき (1 回で公開: go-live.sh)
+
+このリポジトリと `.env.local` があるサーバーでは、次の 1 回で「初期設定 → ビルド・起動 → ドメインでの公開」まで行います。
+
+```bash
+cd /home/ichijoya/Documents/ichijoyasistem
+sudo bash deploy/go-live.sh ichijoya-system.jp <証明書の連絡先メール>
+```
+
+- 本番は **3000 番** (systemd の `ichijoya`。VPS を再起動しても自動で起動し、止まれば 5 秒後に再起動)。外からは nginx の https だけ
+- DNS (A レコード) がまだこの VPS を向いていなければ、5 分ごとに確かめる定期実行を置き、向いた時点で証明書を取って https で公開します (`/var/log/ichijoya/domain.log`)
+- 作業中の変更は `npm run dev` (**3001 番**) で確認し、コミットしてから `npm run deploy` で本番に出します。3001 番は本番と同じデータベースを使うので、操作すると本番のデータが変わります
+- 事前に VPS のパネルのファイアウォールで HTTP (80)・HTTPS (443) を許可してください
+
 ## 2-A. ドメインがまだないとき (IP アドレスで公開)
 
 ドメインを用意するまでは、`http://<VPS の IP アドレス>:3000` (と `http://<IP>`) で使えるようにします。証明書がないため通信は暗号化されません。社内の確認用としてください。
@@ -101,6 +115,7 @@ sudo bash /srv/ichijoya/repo/deploy/enable-domain.sh <ドメイン> <証明書�
 ## 3. 更新 (デプロイ) とロールバック
 
 ```bash
+npm run deploy                                                        # (このサーバーのリポジトリで) コミット済みの main を公開
 sudo -u ichijoya bash /srv/ichijoya/repo/deploy/deploy.sh            # 最新の main を公開
 sudo -u ichijoya bash /srv/ichijoya/repo/deploy/deploy.sh v1.2.0     # タグ・コミットを指定して公開
 sudo -u ichijoya bash /srv/ichijoya/repo/deploy/deploy.sh --rollback # 1 つ前の版に戻す

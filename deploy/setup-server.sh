@@ -141,9 +141,17 @@ if [[ -n "$ENV_FROM" ]]; then
   done < "$ENV_FROM"
 fi
 # 待ち受けるアドレスと URL (IP アドレスで公開するあいだは 0.0.0.0:3000。ドメインにしたら enable-domain.sh が 127.0.0.1 に戻す)
-if [[ $IP_MODE -eq 1 ]]; then
+# 既にドメイン (https) で公開済みなら、--ip で実行し直しても公開の設定 (nginx・待ち受け・3000 番) は戻さない
+DOMAIN_LIVE=0
+if [[ $IP_MODE -eq 1 && "$(env_value APP_BASE_URL)" == https://* ]]; then
+  DOMAIN_LIVE=1
+  echo "  → $(env_value APP_BASE_URL) で公開済みのため、nginx・待ち受けのアドレス・3000 番の設定は変えません"
+fi
+if [[ $DOMAIN_LIVE -eq 1 ]]; then
+  :
+elif [[ $IP_MODE -eq 1 ]]; then
   set_env BIND_HOST 0.0.0.0
-  [[ "$(env_value APP_BASE_URL)" == https://* ]] || set_env APP_BASE_URL "$BASE_URL"
+  set_env APP_BASE_URL "$BASE_URL"
 else
   set_env BIND_HOST 127.0.0.1
 fi
@@ -162,12 +170,16 @@ chmod 440 /etc/sudoers.d/ichijoya
 visudo -cf /etc/sudoers.d/ichijoya >/dev/null
 
 log "nginx (${DOMAIN:-IP アドレス} → 127.0.0.1:3000)"
-if [[ $IP_MODE -eq 1 ]]; then
+systemctl enable --now nginx >/dev/null 2>&1 || true
+if [[ $DOMAIN_LIVE -eq 1 ]]; then
+  echo "  → 公開済みの設定 (/etc/nginx/sites-available/ichijoya) をそのまま使います"
+elif [[ $IP_MODE -eq 1 ]]; then
   # ドメインがないあいだは、どの名前・IP アドレスへの接続も受ける (http://<IP>/ → アプリ)
   sed "s/server_name __DOMAIN__;/server_name _;/; s/listen 80;/listen 80 default_server;/; s/listen \[::\]:80;/listen [::]:80 default_server;/" "$SRC/nginx-ichijoya.conf" > /etc/nginx/sites-available/ichijoya
 else
   sed "s/__DOMAIN__/$DOMAIN/g" "$SRC/nginx-ichijoya.conf" > /etc/nginx/sites-available/ichijoya
 fi
+install -d /etc/nginx/snippets
 ln -sf /etc/nginx/sites-available/ichijoya /etc/nginx/sites-enabled/ichijoya
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
@@ -176,7 +188,7 @@ systemctl reload nginx
 log "ファイアウォール (SSH・HTTP・HTTPS のみ)"
 ufw allow OpenSSH >/dev/null
 ufw allow 'Nginx Full' >/dev/null
-if [[ $IP_MODE -eq 1 ]]; then
+if [[ $IP_MODE -eq 1 && $DOMAIN_LIVE -eq 0 ]]; then
   ufw allow 3000/tcp >/dev/null   # http://<IP>:3000 (ドメインにしたら enable-domain.sh が閉じる)
 fi
 ufw --force enable >/dev/null

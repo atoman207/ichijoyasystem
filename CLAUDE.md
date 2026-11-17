@@ -17,7 +17,8 @@ AI コーディング支援 (Claude Code 等) がこのリポジトリで作業�
 7. 本文 (`src/app/(app)` 配下) の段組みは画面幅の `sm:` / `lg:` ではなくコンテナクエリ (`@xl:` 576px / `@3xl:` 768px / `@4xl:` 896px / `@5xl:` 1024px) で指定する。部品の置き場所 (カード・列) で使える幅が変わるため。グリッドは `grid-cols-1` を基本に書き、狭い画面ではみ出さないようにする。メニューはヘッダーのタブ (`src/components/layout/AppShell.tsx`、項目は `src/app/(app)/layout.tsx` の `nav`)。ロゴは `src/components/brand/Logo.tsx` を使う
 
 ## コマンド
-- `npm run dev` / `npm run build` / `npm start`
+- `npm run dev` (開発用。**3001 番**) / `npm run build` / `npm start`
+- 本番は同じ VPS の **3000 番** (systemd `ichijoya`、`/srv/ichijoya/current`、https://ichijoya-system.jp)。作業中の変更は 3001 番で確認し、コミットしてから `npm run deploy` で本番に出す (deploy/README.md)。3001 番も本番のデータベースを使う
 - `npx tsc --noEmit` — 型チェック
 - `npm run db:migrate` — テーブル定義 (schema.ts) を Supabase に反映 (追加だけ。データは変えない)。`npm run build` の前にも `prebuild` で自動実行 (接続情報があり、`DATA_BACKEND=json` でないとき)
 - `npx eslint src` — Lint

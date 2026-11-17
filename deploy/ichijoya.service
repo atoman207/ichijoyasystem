@@ -16,6 +16,8 @@ WorkingDirectory=/srv/ichijoya/current
 EnvironmentFile=/etc/ichijoya/ichijoya.env
 Environment=NODE_ENV=production
 Environment=PORT=3000
+# ProtectHome で /home に書けないため、Next.js の利用統計 (ホームに設定を書く) を止める
+Environment=NEXT_TELEMETRY_DISABLED=1
 # 待ち受けるアドレス。ドメインで公開した後は nginx (443) だけを公開し、アプリは 127.0.0.1:3000 で待ち受ける。
 # ドメインがまだないあいだは、設定ファイルの BIND_HOST=0.0.0.0 で http://<IP アドレス>:3000 から開けるようにする
 Environment=BIND_HOST=127.0.0.1

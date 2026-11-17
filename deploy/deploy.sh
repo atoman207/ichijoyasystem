@@ -34,13 +34,27 @@ wait_healthy() {
   return 1
 }
 
+# 3000 番は本番のサービス専用。手で起動したサーバー (以前の next dev など) が使っていたら止める
+# (開発用は npm run dev で 3001 番。3001 番のサーバーには触れない)
+free_port_3000() {
+  local pid ppid
+  pid=$(ss -ltnpH 'sport = :3000' 2>/dev/null | grep -oE 'pid=[0-9]+' | head -n 1 | cut -d= -f2)
+  [[ -n "$pid" ]] || return 0
+  grep -q 'ichijoya.service' "/proc/$pid/cgroup" 2>/dev/null && return 0
+  echo "  3000 番を使っているサービス外のプロセスを止めます: PID $pid ($(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | cut -c1-80))"
+  ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+  # next dev は「next dev → next-server」の親子なので、親が next なら親ごと止める
+  if [[ -n "$ppid" ]] && tr '\0' ' ' < "/proc/$ppid/cmdline" 2>/dev/null | grep -q 'next'; then kill "$ppid" 2>/dev/null || true; fi
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 10); do
+    ss -ltnH 'sport = :3000' 2>/dev/null | grep -q . || return 0
+    sleep 1
+  done
+  echo "  まだ 3000 番が使われています (別のユーザーのプロセスなら sudo で止めてください)"
+}
+
 switch_to() {
-  # 手で起動した開発用サーバー (next dev) が 3000 番を使っていると本番のサービスが起動できないため止める
-  if pgrep -u "$(id -u)" -f "next dev" >/dev/null 2>&1; then
-    echo "  3000 番を使っている開発用サーバー (next dev) を止めます"
-    pkill -u "$(id -u)" -f "next dev" || true
-    sleep 2
-  fi
+  free_port_3000
   ln -sfn "$1" "$APP_DIR/current.new"
   mv -Tf "$APP_DIR/current.new" "$APP_DIR/current"
   sudo /usr/bin/systemctl restart ichijoya
