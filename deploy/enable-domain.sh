@@ -171,6 +171,8 @@ if command -v ufw >/dev/null; then
 fi
 
 log "アプリを再起動します"
+# サービスの定義ファイル (/etc/systemd/system/ichijoya.service) を読み直してから (更新のたびに出る「daemon-reload」の警告も消える)
+systemctl daemon-reload
 systemctl restart ichijoya
 ok=0
 for _ in $(seq 1 60); do
