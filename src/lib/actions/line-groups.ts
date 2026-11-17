@@ -10,6 +10,7 @@ import { findLineGroup, lineGroupName, touchLineGroups, LINE_GROUP_ID_RE } from 
 import { recordLineGroupMessage, type LineMediaJob } from "@/lib/notify/inbound";
 import { checkLine, saveLineMedia, setLineWebhook } from "@/lib/notify/line-api";
 import { checkChatwork } from "@/lib/notify/chatwork-api";
+import { verifyMail } from "@/lib/notify/channels";
 import { appBaseUrl } from "@/lib/notify/config";
 import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
@@ -104,14 +105,14 @@ export async function unlinkLineGroup(formData: FormData) {
 
 /* ---------------- 接続の確認 (設定 → 外部連携・AI) ---------------- */
 
-export async function checkMessagingConnections(): Promise<{ line: { ok: boolean; lines: string[] }; chatwork: { ok: boolean; lines: string[] } }> {
+export async function checkMessagingConnections(): Promise<{ mail: { ok: boolean; lines: string[] }; line: { ok: boolean; lines: string[] }; chatwork: { ok: boolean; lines: string[] } }> {
   const user = await requireActionUser();
   if (!canManageIntegrations(user)) {
     const denied = { ok: false, lines: ["この操作は管理者のみ実行できます。"] };
-    return { line: denied, chatwork: denied };
+    return { mail: denied, line: denied, chatwork: denied };
   }
-  const [line, chatwork] = await Promise.all([checkLine(), checkChatwork(getDb(), `${appBaseUrl()}/api/integrations/chatwork`)]);
-  return { line, chatwork };
+  const [mail, line, chatwork] = await Promise.all([verifyMail(), checkLine(), checkChatwork(getDb(), `${appBaseUrl()}/api/integrations/chatwork`)]);
+  return { mail, line, chatwork };
 }
 
 export async function connectLineWebhook(): Promise<{ ok: boolean; lines: string[] }> {

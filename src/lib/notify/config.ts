@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 /**
  * 外部への送信・外部からの受信の設定 (環境変数。値は画面に出さない)
  * ------------------------------------------------------------
- * メール:   RESEND_API_KEY (Resend) または SENDGRID_API_KEY (SendGrid) と MAIL_FROM (送信元。例: 一畳屋 <info@example.co.jp>)
+ * メール:   SMTP_HOST・SMTP_PORT (465)・SMTP_USER・SMTP_PASSWORD (会社のメールアカウント。優先)、
+ *           または RESEND_API_KEY (Resend) / SENDGRID_API_KEY (SendGrid)。MAIL_FROM (送信元。例: 株式会社一畳屋 <info@ichijoya.co.jp>)
  * LINE:     LINE_CHANNEL_ACCESS_TOKEN (送信) / LINE_CHANNEL_SECRET (受信の署名の確認)
  * Chatwork: CHATWORK_API_TOKEN (送信) / CHATWORK_ROOM_ID (社内通知のルーム) / CHATWORK_WEBHOOK_TOKEN (受信の署名の確認。ルームごとのトークンをカンマ区切り) / CHATWORK_SELF_ACCOUNT_ID (連携用アカウントの ID。自分の投稿を受信に数えない)
  * Web フォーム: WEBFORM_SECRET (受信の共有鍵)
@@ -15,9 +16,27 @@ import { createHash } from "node:crypto";
 
 const env = (name: string) => (process.env[name] ?? "").trim().replace(/^["']|["']$/g, "");
 
-export type MailProvider = "resend" | "sendgrid";
+export type MailProvider = "smtp" | "resend" | "sendgrid";
 
-export function mailConfig(): { provider: MailProvider; apiKey: string; from: string; base: string } | null {
+export type MailConfig =
+  | { provider: "smtp"; host: string; port: number; secure: boolean; user: string; pass: string; from: string }
+  | { provider: "resend" | "sendgrid"; apiKey: string; from: string; base: string };
+
+/**
+ * メールの送信設定。SMTP (会社のメールアカウント。例: Xserver の sv***.xserver.jp) があればそれを使い、
+ * なければ Resend → SendGrid の順。SMTP の送信元 (MAIL_FROM) は SMTP_USER と同じドメインにする (違うと届かないことがある)
+ */
+export function mailConfig(): MailConfig | null {
+  const host = env("SMTP_HOST");
+  const user = env("SMTP_USER");
+  const pass = env("SMTP_PASSWORD");
+  if (host && user && pass) {
+    const port = Number(env("SMTP_PORT")) || 465;
+    const secureEnv = env("SMTP_SECURE").toLowerCase();
+    // 465 は最初から SSL/TLS、587 は STARTTLS (secure=false のあとで暗号化する)
+    const secure = secureEnv ? !["false", "0", "off", "no"].includes(secureEnv) : port === 465;
+    return { provider: "smtp", host, port, secure, user, pass, from: env("MAIL_FROM") || user };
+  }
   const from = env("MAIL_FROM");
   const resend = env("RESEND_API_KEY");
   if (resend && from) return { provider: "resend", apiKey: resend, from, base: env("RESEND_API_BASE") || "https://api.resend.com" };
@@ -102,7 +121,7 @@ export function integrationStatuses(): IntegrationStatus[] {
       key: "email",
       name: "メール (見積書・請求書の送付・社内通知)",
       configured: Boolean(mail),
-      detail: mail ? `${mail.provider === "resend" ? "Resend" : "SendGrid"} · 送信元 ${mail.from}` : "RESEND_API_KEY または SENDGRID_API_KEY と MAIL_FROM を設定すると送信します",
+      detail: mail ? `${mail.provider === "smtp" ? `SMTP ${mail.host}:${mail.port} (${mail.user})` : mail.provider === "resend" ? "Resend" : "SendGrid"} · 送信元 ${mail.from}` : "SMTP_HOST・SMTP_USER・SMTP_PASSWORD (会社のメールアカウント) か、RESEND_API_KEY / SENDGRID_API_KEY と MAIL_FROM を設定すると送信します",
     },
     {
       key: "line",

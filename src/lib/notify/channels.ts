@@ -1,5 +1,6 @@
 import "server-only";
-import { chatworkConfig, lineConfig, mailConfig } from "./config";
+import nodemailer, { type Transporter } from "nodemailer";
+import { chatworkConfig, lineConfig, mailConfig, type MailConfig } from "./config";
 
 /**
  * 外部サービスへの送信 (メール・LINE・Chatwork)。ここでは送るだけで、記録は send.ts が行う
@@ -47,10 +48,80 @@ export function parseAddress(v: string): { email: string; name?: string } {
 
 export const isEmail = (v: string | undefined): v is string => Boolean(v && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(v.trim()));
 
+/* ---------------- SMTP (会社のメールアカウント) ---------------- */
+
+type SmtpConfig = Extract<MailConfig, { provider: "smtp" }>;
+const g = globalThis as typeof globalThis & { __ichijoyaSmtp?: { key: string; transporter: Transporter } };
+
+/** 接続を使い回す (設定が変わったら作り直す) */
+function smtpTransport(cfg: SmtpConfig): Transporter {
+  const key = `${cfg.host}:${cfg.port}:${cfg.secure}:${cfg.user}:${cfg.pass.length}`;
+  if (g.__ichijoyaSmtp?.key === key) return g.__ichijoyaSmtp.transporter;
+  g.__ichijoyaSmtp?.transporter.close();
+  const transporter = nodemailer.createTransport({
+    host: cfg.host,
+    port: cfg.port,
+    secure: cfg.secure,
+    // 587 (STARTTLS) のときも暗号化なしでは送らない
+    requireTLS: !cfg.secure,
+    auth: { user: cfg.user, pass: cfg.pass },
+    pool: true,
+    maxConnections: 2,
+    connectionTimeout: TIMEOUT_MS,
+    greetingTimeout: TIMEOUT_MS,
+    socketTimeout: 30_000,
+  });
+  g.__ichijoyaSmtp = { key, transporter };
+  return transporter;
+}
+
+function smtpError(err: unknown): string {
+  const e = err as { code?: string; responseCode?: number; response?: string; message?: string };
+  if (e.code === "EAUTH") return "SMTP の認証に失敗しました (SMTP_USER・SMTP_PASSWORD を確認してください)";
+  if (e.code === "ETIMEDOUT" || e.code === "ECONNECTION" || e.code === "ESOCKET" || e.code === "EDNS") return `SMTP サーバーに接続できませんでした (${e.code}: ${(e.message ?? "").slice(0, 120)})`;
+  if (e.responseCode) return `SMTP ${e.responseCode}: ${(e.response ?? e.message ?? "").slice(0, 200)}`;
+  return `送信できませんでした: ${(e.message ?? String(err)).slice(0, 200)}`;
+}
+
+async function sendSmtp(cfg: SmtpConfig, p: { to: string; subject: string; text: string; attachments?: MailAttachment[] }): Promise<SendResult> {
+  try {
+    const info = await smtpTransport(cfg).sendMail({
+      from: cfg.from,
+      to: p.to,
+      subject: p.subject,
+      text: p.text,
+      attachments: p.attachments?.map((a) => ({ filename: a.filename, content: Buffer.from(a.base64, "base64"), contentType: a.contentType })),
+    });
+    if (info.rejected?.length) return { ok: false, error: `受け付けられなかった宛先: ${info.rejected.map(String).join(", ")}` };
+    return { ok: true, providerId: info.messageId };
+  } catch (err) {
+    return { ok: false, error: smtpError(err) };
+  }
+}
+
+/** メールの接続の確認 (SMTP はログインまで。送信はしない) */
+export async function verifyMail(): Promise<{ ok: boolean; lines: string[] }> {
+  const cfg = mailConfig();
+  if (!cfg) return { ok: false, lines: ["メールの送信設定がありません (SMTP_HOST・SMTP_USER・SMTP_PASSWORD)。"] };
+  if (cfg.provider !== "smtp") return { ok: true, lines: [`${cfg.provider === "resend" ? "Resend" : "SendGrid"} · 送信元 ${cfg.from} (接続の確認はテスト送信で行ってください)`] };
+  const lines = [`SMTP: ${cfg.host}:${cfg.port} (${cfg.secure ? "SSL/TLS" : "STARTTLS"}) · アカウント ${cfg.user} · 送信元 ${cfg.from}`];
+  const fromAddr = parseAddress(cfg.from).email.toLowerCase();
+  if (fromAddr.split("@")[1] !== cfg.user.toLowerCase().split("@")[1]) lines.push(`⚠ 送信元 (${fromAddr}) のドメインがアカウントと違います。届かないことがあります。`);
+  try {
+    await smtpTransport(cfg).verify();
+    lines.push("ログインできました (送信の準備ができています)。届くかどうかは「テスト送信」で確かめてください。");
+    return { ok: true, lines };
+  } catch (err) {
+    lines.push(smtpError(err));
+    return { ok: false, lines };
+  }
+}
+
 export async function sendEmail(p: { to: string; subject: string; text: string; attachments?: MailAttachment[] }): Promise<SendResult> {
   const cfg = mailConfig();
   if (!cfg) return { ok: false, skipped: true };
   if (!isEmail(p.to)) return { ok: false, error: "メールアドレスの形が正しくありません" };
+  if (cfg.provider === "smtp") return sendSmtp(cfg, p);
   try {
     if (cfg.provider === "resend") {
       const res = await fetch(`${cfg.base}/emails`, {

@@ -188,7 +188,7 @@ scripts/
 | `SUPABASE_DB_PASSWORD` または `SUPABASE_DB_URL` | データベースへの直接接続。テーブル定義の自動反映 (`npm run build` の前に `scripts/import/migrate.mjs`) と ichijoya.sql の実行 (`setup-database.mjs`) に使う。アプリ本体では使わない |
 | `REVIEW_ACCESS_KEY` / `REVIEW_LOGIN` | 確認用ログインの鍵 (省略時は secret キーから導出) / `off` で確認用ログインを停止 |
 | `APP_TIME_ZONE` | 日付・時刻の基準 (省略時 `Asia/Tokyo`) |
-| `RESEND_API_KEY` または `SENDGRID_API_KEY` と `MAIL_FROM` | メールの送信 (見積書・請求書の送付、社内通知) |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` と `MAIL_FROM` | メールの送信 (見積書・請求書の送付、社内通知)。会社のメールアカウント (Xserver の SMTP) を使う。`RESEND_API_KEY` / `SENDGRID_API_KEY` も可 |
 | `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_CHANNEL_SECRET` | LINE の送信 / 受信 (Webhook の署名の確認) |
 | `CHATWORK_API_TOKEN` / `CHATWORK_ROOM_ID` / `CHATWORK_WEBHOOK_TOKEN` | Chatwork の送信 / 社内通知のルーム / 受信 (Webhook の署名の確認。ルームごとのトークンをカンマ区切り) |
 | `WEBFORM_SECRET` | Web サイトのお問い合わせフォームからの受信の共有鍵 |

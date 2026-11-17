@@ -411,7 +411,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           ))}
           {canManageIntegrations(user) && (
             <Card className="@2xl:col-span-2">
-              <CardHeader title="LINE・Chatwork の接続" description="ドメインを設定したら: ① APP_BASE_URL=https://<ドメイン> を設定して再起動 → ② 「LINE の Webhook URL をこのシステムに設定」→ ③ Chatwork は受信するルームごとに Webhook を作り (URL は下記、イベントは「メッセージ作成」)、トークンを CHATWORK_WEBHOOK_TOKEN にカンマ区切りで入れて再起動 → ④「接続を確認」" />
+              <CardHeader title="メール・LINE・Chatwork の接続" description="メールは SMTP (会社のメールアカウント) の設定でログインまで確かめます (届くかはテスト送信で)。ドメインを設定したら: ① APP_BASE_URL=https://<ドメイン> を設定して再起動 → ② 「LINE の Webhook URL をこのシステムに設定」→ ③ Chatwork は受信するルームごとに Webhook を作り (URL は下記、イベントは「メッセージ作成」)、トークンを CHATWORK_WEBHOOK_TOKEN にカンマ区切りで入れて再起動 → ④「接続を確認」" />
               <ul className="mb-3 space-y-1 text-xs text-ink-2">
                 <li><span className="inline-block w-20 text-ink-3">LINE</span><span className="font-mono text-[11px] break-all">{appBaseUrl()}/api/integrations/line</span></li>
                 <li><span className="inline-block w-20 text-ink-3">Chatwork</span><span className="font-mono text-[11px] break-all">{appBaseUrl()}/api/integrations/chatwork</span></li>
