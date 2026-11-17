@@ -17,7 +17,7 @@ import { fail, isKeyOf, requireActionUser, safeReturn, str, withMsg } from "./gu
  * ------------------------------------------------------------
  * - 管理者はすべてのアカウント、店長は自店舗の店舗スタッフを追加・変更・削除できる (permissions.ts の canManageUser)
  * - 新規登録 (ログイン画面から) は申請として受け付け、承認されるまでログインできない (signupStatus = pending・active = false)
- * - 顔写真は本人が プロフィール から登録する (Storage の avatars/<ユーザー ID>/<時刻>.jpg)
+ * - 顔写真は本人が プロフィール から登録する (VPS の保存先の avatars/<ユーザー ID>/<時刻>.jpg)
  */
 
 const USERS = "/settings?tab=users";
@@ -257,7 +257,7 @@ export async function updateOwnAvatar(formData: FormData) {
   const ext = type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
   const key = `avatars/${user.id.replace(/[^\w-]/g, "")}/${Date.now()}.${ext}`;
   try {
-    await putObject(key, body, type);
+    await putObject(key, body);
   } catch (err) {
     console.error("[accounts] avatar upload failed:", err);
     fail(back, "写真を保存できませんでした。時間をおいて再度お試しください。");

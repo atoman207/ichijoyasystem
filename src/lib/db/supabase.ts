@@ -1,7 +1,7 @@
 import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "./types";
-import { META_TABLE, TABLES, isTimestamp, loadOrder, snake, type TableDef } from "./schema";
+import { CHANGES_TABLE, META_TABLE, TABLES, isTimestamp, loadOrder, snake, type TableDef } from "./schema";
 
 /**
  * Supabase (PostgreSQL) との境界
@@ -33,7 +33,7 @@ function sb(): SupabaseClient {
   return client;
 }
 
-/** secret キーのクライアント (サーバー側のみ。ファイルの保存 src/lib/storage.ts でも使う) */
+/** secret キーのクライアント (サーバー側のみ。ファイルの本体は Supabase ではなく VPS に保存する: src/lib/storage.ts) */
 export function supabaseAdmin(): SupabaseClient {
   return sb();
 }
@@ -178,7 +178,87 @@ export async function writeToSupabase(changes: Changes): Promise<number> {
       if (error) throw failure(def.table, "delete", error);
     }
   }
-  return bumpRevision();
+  return recordChanges(changes);
+}
+
+/** 変更の記録の形 ({ 表: { u: 追加・変更した行の ID, d: 削除した行の ID } }) */
+export type ChangeLog = Record<string, { u?: string[]; d?: string[] }>;
+
+let recordFnMissing = false;
+
+/**
+ * 書き込んだ行の ID を記録してリビジョンを +1 する (record_changes)。
+ * 関数がまだデータベースにないとき (テーブル定義の反映前) は、記録なしで +1 する (他のインスタンスは全件を読み直す)
+ */
+export async function recordChanges(changes: Changes): Promise<number> {
+  if (recordFnMissing) return bumpRevision();
+  const log: ChangeLog = {};
+  for (const def of TABLES) {
+    const u = changes.upserts.get(def.collection)?.map((r) => r.id);
+    const d = changes.deletes.get(def.collection);
+    if (u?.length || d?.length) log[def.table] = { ...(u?.length ? { u } : {}), ...(d?.length ? { d } : {}) };
+  }
+  const { data, error } = await sb().rpc("record_changes", { p_changes: log });
+  if (error) {
+    if (error.code === "PGRST202" || /Could not find the function/i.test(error.message)) {
+      recordFnMissing = true;
+      console.warn("[supabase] function record_changes is missing (npm run db:migrate). Falling back to bump_revision");
+      return bumpRevision();
+    }
+    throw failure(META_TABLE, "record_changes", error);
+  }
+  return Number(data ?? 0);
+}
+
+/**
+ * リビジョン since より後 (until まで) の変更の記録。抜けがある (記録のないリビジョンがある・古くて消えた・
+ * 表がない) ときは null (= 全件を読み直す)
+ */
+export async function fetchChanges(since: number, until: number): Promise<{ revision: number; changes: ChangeLog; at: string }[] | null> {
+  if (until <= since) return [];
+  if (until - since > 500) return null;
+  const { data, error } = await sb().from(CHANGES_TABLE).select("revision, changes, at").gt("revision", since).lte("revision", until).order("revision", { ascending: true });
+  if (error) {
+    if (isMissingTable(error)) return null;
+    throw failure(CHANGES_TABLE, "select", error);
+  }
+  const rows = (data ?? []).map((r) => ({ revision: Number(r.revision), changes: (r.changes ?? {}) as ChangeLog, at: String(r.at) }));
+  if (rows.length !== until - since || rows.some((r, i) => r.revision !== since + 1 + i)) return null;
+  return rows;
+}
+
+/** あるリビジョンの変更の記録が書かれた時刻 (保存しておいたデータが、いまのデータベースと同じ流れのものかを確かめる) */
+export async function changeLoggedAt(revision: number): Promise<string | null> {
+  const { data, error } = await sb().from(CHANGES_TABLE).select("at").eq("revision", revision).maybeSingle();
+  if (error) {
+    if (isMissingTable(error)) return null;
+    throw failure(CHANGES_TABLE, "select", error);
+  }
+  return data?.at ? String(data.at) : null;
+}
+
+/** 指定した ID の行だけを読む (なくなった行は返らない) */
+export async function fetchRowsByIds(collection: string, ids: string[]): Promise<Entity[]> {
+  const def = TABLES.find((t) => t.collection === collection);
+  if (!def || !ids.length) return [];
+  const out: Entity[] = [];
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error } = await sb().from(def.table).select("*").in("id", ids.slice(i, i + 100));
+    if (error) throw failure(def.table, "select", error);
+    for (const r of data ?? []) out.push(fromRow(def, r as Row));
+  }
+  return out;
+}
+
+/** 1 つの表を全件読む (変わった行が多いとき) */
+export async function fetchCollection(collection: string): Promise<Entity[] | null> {
+  const def = TABLES.find((t) => t.collection === collection);
+  return def ? fetchTable(def) : null;
+}
+
+/** 表の名前 → コレクションの名前 */
+export function collectionOfTable(table: string): string | undefined {
+  return TABLES.find((t) => t.table === table)?.collection;
 }
 
 /** リビジョンを +1 して、他のインスタンスに読み直しを知らせる */

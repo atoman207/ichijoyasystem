@@ -14,7 +14,8 @@
 #
 #   行うこと: パッケージ (nginx・certbot・Node.js 24・PostgreSQL 17 クライアント)、実行ユーザー ichijoya、
 #   ディレクトリ、設定ファイルのひな形 (/etc/ichijoya/ichijoya.env)、systemd、nginx、ファイアウォール (ufw)、
-#   自動更新 (unattended-upgrades)、定期実行 (バックアップ・社内資料の同期・死活監視)、SSL 証明書 (DNS が向いていれば)
+#   自動更新 (unattended-upgrades。自動の再起動はしない)、定期実行 (バックアップ・社内資料の同期・死活監視)、
+#   サーバーを止めない設定 (harden-server.sh)、SSL 証明書 (DNS が向いていれば)
 #   行わないこと: 設定ファイルの値の入力 (秘密の値はこのあと手で入れる)、アプリのビルド (deploy.sh で行う)
 # ============================================================
 set -euo pipefail
@@ -209,6 +210,9 @@ cat > /etc/logrotate.d/ichijoya <<'EOF'
   copytruncate
 }
 EOF
+
+log "サーバーを止めない設定 (スリープしない・自動で再起動しない・止まっても自動で起動し直す)"
+bash "$SRC/harden-server.sh"
 
 log "SSL 証明書 (Let's Encrypt)"
 SERVER_IPS="$(hostname -I) $PUBLIC_IP"

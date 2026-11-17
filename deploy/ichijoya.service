@@ -6,6 +6,8 @@
 Description=Ichijoya business system (Next.js)
 After=network-online.target
 Wants=network-online.target
+# 何度失敗しても再起動を続ける (既定の「10 秒に 5 回失敗したら諦める」をなくす)
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -22,12 +24,15 @@ Environment=NEXT_TELEMETRY_DISABLED=1
 # ドメインがまだないあいだは、設定ファイルの BIND_HOST=0.0.0.0 で http://<IP アドレス>:3000 から開けるようにする
 Environment=BIND_HOST=127.0.0.1
 ExecStart=/bin/sh -c 'exec /srv/ichijoya/current/node_modules/.bin/next start -p 3000 -H "$BIND_HOST"'
+# 止まったら (異常終了・メモリ不足で止められた・手で止めた以外) 3 秒後に起動し直す。VPS の起動時にも自動で起動する (WantedBy)
 Restart=always
-RestartSec=5
+RestartSec=3
 # 起動時に全データ (約 6 万行) を読み込むため、待ち時間を長めにする
 TimeoutStartSec=180
 # メモリが不足したときにほかのサービスを巻き込まないよう上限を決める (VPS のメモリに合わせて調整)
 MemoryMax=3G
+# サーバー全体のメモリが足りなくなったとき、本番のアプリは最後に止められるようにする (開発用のサーバー・エディタが先)
+OOMScoreAdjust=-900
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

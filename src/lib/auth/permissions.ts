@@ -139,6 +139,11 @@ export function canResetData(user: User): boolean {
   return user.role === "admin";
 }
 
+/** バックアップ (データベース・添付ファイル・写真を VPS に保存) をいつでも実行する・一覧を見る */
+export function canRunBackup(user: User): boolean {
+  return user.role === "admin";
+}
+
 /** 予定表は全社で共有する (予定の重複防止・人員配置の調整・社内の情報共有のため、全ロールが全店舗の予定を閲覧) */
 export function canViewCompanySchedule(user: User): boolean {
   return user.active;

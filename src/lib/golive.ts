@@ -1,5 +1,6 @@
 import "server-only";
 import fs from "node:fs";
+import path from "node:path";
 import type { Database } from "@/lib/db/types";
 import { BACKEND } from "@/lib/db/store";
 import { missingTables } from "@/lib/db/supabase";
@@ -7,6 +8,8 @@ import { isDemoAccount } from "@/lib/auth/permissions";
 import { aiStatus } from "@/lib/ai/provider";
 import { integrationStatuses } from "@/lib/notify/config";
 import { knowledgeSources } from "@/lib/knowledge";
+import { backupDir, readBackupStatus } from "@/lib/backup";
+import { storageDir } from "@/lib/storage";
 
 /**
  * 本番運用の準備状況 (設定 → 本番運用の準備)
@@ -31,25 +34,6 @@ export interface CheckGroup {
 const env = (k: string) => (process.env[k] ?? "").trim();
 const digits = (v?: string) => (v ?? "").replace(/[^0-9]/g, "");
 
-export interface BackupStatus {
-  at: string;
-  status: "ok" | "failed";
-  dbBytes?: number;
-  kept?: number;
-  diskUsed?: string;
-  message?: string;
-}
-
-export function readBackupStatus(): BackupStatus | null {
-  const file = env("BACKUP_STATUS_FILE");
-  if (!file) return null;
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8")) as BackupStatus;
-  } catch {
-    return null;
-  }
-}
-
 export function goLiveChecks(db: Database, now = new Date()): CheckGroup[] {
   const groups: CheckGroup[] = [];
   const onVercel = env("VERCEL") === "1";
@@ -69,6 +53,7 @@ export function goLiveChecks(db: Database, now = new Date()): CheckGroup[] {
       missing.length
         ? { label: "データベースの表", status: "ng", detail: `足りない表: ${missing.join(", ")}`, fix: "デプロイ (npm run build) で表を追加するか、npm run db:migrate を実行してください" }
         : { label: "データベースの表", status: "ok", detail: "アプリの表がそろっています" },
+      storageCheck(db),
       { label: "タイムゾーン", status: Intl.DateTimeFormat().resolvedOptions().timeZone === "Asia/Tokyo" ? "ok" : "ng", detail: Intl.DateTimeFormat().resolvedOptions().timeZone, fix: "APP_TIME_ZONE=Asia/Tokyo を設定してください" },
       !baseUrl
         ? { label: "このシステムの URL (APP_BASE_URL)", status: onVercel ? "warn" : "ng", detail: "未設定 (通知・帳票のリンクと Webhook の受信先に使います)", fix: "APP_BASE_URL=https://<ドメイン> を設定してください" }
@@ -117,9 +102,11 @@ export function goLiveChecks(db: Database, now = new Date()): CheckGroup[] {
       ? [{ label: "バックアップ", status: "warn", detail: "Vercel では自動のバックアップを設定していません", fix: "サーバー (VPS) へ移行後、deploy/backup.sh が毎日実行されます。Supabase の有料プランでは自動バックアップも使えます" }]
       : [
           !b
-            ? { label: "最後のバックアップ", status: "ng", detail: "記録がありません", fix: "サーバーで sudo -u ichijoya bash /srv/ichijoya/current/deploy/backup.sh を実行してください (毎日 3:30 に自動実行)" }
-            : { label: "最後のバックアップ", status: b.status === "ok" && age <= 36 ? "ok" : "ng", detail: `${new Date(b.at).toLocaleString("ja-JP")} · ${b.status === "ok" ? "成功" : "失敗"} · ${b.message ?? ""}`, fix: "/var/log/ichijoya/backup.log を確認してください" },
-          ...(b ? [{ label: "保管・ディスク", status: (Number.parseInt(b.diskUsed ?? "0") >= 85 ? "warn" : "info") as CheckStatus, detail: `データベースのバックアップ ${b.kept ?? "-"} 日分 · ディスク使用 ${b.diskUsed ?? "-"}`, fix: "ディスクの空きを確保してください" }] : []),
+            ? { label: "最後のバックアップ", status: "ng", detail: "記録がありません", fix: "設定 → データ管理 の「今すぐバックアップ」を押してください (毎日 3:30 に自動実行)" }
+            : b.status === "running"
+              ? { label: "最後のバックアップ", status: "info", detail: `実行中 (${new Date(b.startedAt ?? b.at).toLocaleString("ja-JP")} から)` }
+              : { label: "最後のバックアップ", status: b.status === "ok" && age <= 36 ? "ok" : "ng", detail: `${new Date(b.at).toLocaleString("ja-JP")} · ${b.status === "ok" ? "成功" : "失敗"}${b.trigger === "manual" ? ` (手動${b.by ? `: ${b.by}` : ""})` : ""} · ${b.message ?? ""}`, fix: b.status === "ok" ? "毎日 3:30 の自動実行 (/etc/cron.d/ichijoya) を確認してください" : "/var/log/ichijoya/backup.log を確認し、設定 → データ管理 から実行し直してください" },
+          ...(b ? [{ label: "保管・ディスク", status: (Number.parseInt(b.diskUsed ?? "0") >= 85 ? "warn" : "info") as CheckStatus, detail: `保存先 ${backupDir()} (この VPS) · データベースのバックアップ ${b.kept ?? "-"} 件 · ディスク使用 ${b.diskUsed ?? "-"}`, fix: "ディスクの空きを確保してください" }] : []),
         ],
   });
   return groups;
@@ -159,4 +146,19 @@ export function migrationChecks(db: Database): DataCheck[] {
     { label: "担当者のいない未対応の問い合わせ", count: db.inquiries.filter((i) => i.status === "new" && !i.assignedUserId).length, total: db.inquiries.filter((i) => i.status === "new").length, status: "ok", note: "担当者を割り当ててください", href: "/inquiries?status=new" },
   ];
   return rows.map((r) => ({ ...r, status: r.count === 0 ? "ok" : r.status === "ok" ? "warn" : r.status }));
+}
+
+/** 添付ファイル・写真の保存先 (この VPS のディスク。Supabase にはパスだけ) */
+function storageCheck(db: Database): CheckItem {
+  const dir = storageDir();
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.accessSync(dir, fs.constants.W_OK);
+  } catch {
+    return { label: "ファイルの保存先", status: "ng", detail: `${dir} に書き込めません`, fix: "サーバーで所有者を ichijoya にしてください (sudo chown -R ichijoya:ichijoya /srv/ichijoya/data)" };
+  }
+  const missing = db.attachments.filter((a) => !fs.existsSync(path.join(dir, a.storageKey))).length;
+  return missing
+    ? { label: "ファイルの保存先", status: "ng", detail: `この VPS (${dir}) · 台帳 ${db.attachments.length} 件のうち ${missing} 件の本体がありません`, fix: "node scripts/ops/migrate-storage-to-vps.mjs で確かめてください" }
+    : { label: "ファイルの保存先", status: "ok", detail: `この VPS (${dir}) · ${db.attachments.length} 件 (Supabase には台帳の文字とパスだけ)` };
 }

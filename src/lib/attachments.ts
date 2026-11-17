@@ -197,10 +197,10 @@ export async function storeFile(opts: {
   const key = `${parent.type}/${month}/${id}.${t.ext}`;
   const useThumb = t.photo && opts.thumb && opts.thumb.bytes.length > 0 && opts.thumb.bytes.length <= MAX_THUMB_BYTES;
   const thumbKey = useThumb ? `${parent.type}/${month}/${id}_thumb.jpg` : undefined;
-  await putObject(key, file.bytes, t.contentType);
+  await putObject(key, file.bytes);
   if (thumbKey) {
     try {
-      await putObject(thumbKey, opts.thumb!.bytes, "image/jpeg");
+      await putObject(thumbKey, opts.thumb!.bytes);
     } catch (err) {
       await removeObjects([key]).catch(() => undefined);
       throw err;

@@ -97,12 +97,12 @@ SQL で登録するときは `supabase/ichijoya.sql` を使います (デモ用�
 
 `.env.local` (ローカル) または Vercel の Environment Variables に、`NEXT_PUBLIC_SUPABASE_URL` と `SUPABASE_SECRET_KEY` を設定します (`SESSION_SECRET` も推奨)。接続できたかどうかは `/api/health` で確認できます (`"db":"ok"`)。
 
-- アプリはサーバーの起動時に全データ (約 6 万行) を読み込み、その後は 2 秒ごとに更新の有無だけを確かめます。Vercel では、関数のリージョン (Project Settings → Functions → Function Region) を Supabase のプロジェクトと同じ地域にすると、起動と書き込みが速くなります
+- アプリはデータをメモリに持ちます。起動時はサーバーに保存した控えから読み、そのあとの変更だけを取り直します (控えがないときだけ全データ約 10 万行を読む)。その後は 5 秒ごと (画面を開いたとき) に更新の有無だけを確かめ、変わった行だけを変更の記録 (`app_changes`) から取り直します。Vercel では、関数のリージョン (Project Settings → Functions → Function Region) を Supabase のプロジェクトと同じ地域にすると、起動と書き込みが速くなります
 - テーブルには RLS を設定し、`anon` / `authenticated` (publishable キー) からは読み書きできません。アプリは secret キー (`service_role`) でだけアクセスします
 
 ## 資料・写真 (添付ファイル) を使うとき
 
-資料・写真の台帳は `attachments` テーブル、ファイルの本体は Storage の非公開バケット `attachments` に保存します。
+資料・写真の台帳は `attachments` テーブル (文字とファイルのパスだけ)、ファイルの本体はサーバー (VPS) のディスク `/srv/ichijoya/data/uploads` に保存します (Supabase Storage は使いません)。
 
 1. `attachments` テーブルは 2026-11-13 に作成済みです (テーブル定義の自動反映、または [`migrations/20261112000000_initial_schema.sql`](migrations/20261112000000_initial_schema.sql) の実行で作られます。既存のテーブル・データはそのまま)
 2. バケットはアプリが最初の登録時に自動で作成します (非公開。`public` にはしない)
@@ -110,7 +110,7 @@ SQL で登録するときは `supabase/ichijoya.sql` を使います (デモ用�
 
 - ファイルを直接開ける URL はありません。画面からは `/api/attachments/<ID>` を開き、権限を確かめたあとに 2 分間有効な URL へ転送します
 - 写真はブラウザで長辺 2048px の JPEG (1 枚 0.5〜1.5 MB 程度) に縮小してから保存します。PDF などは 1 ファイル 4 MB まで
-- Storage の容量はプランによって異なります (無料プランは 1 GB)。写真の保存期間・移行の方針 (Phase 1 の決定事項 D9) に合わせてプランを確認してください
+- ファイルは Supabase に置かないため、Supabase の Storage の容量は使いません。VPS のディスクの空きは 設定 → データ管理 で確認できます
 
 ## テーブル定義を変えたとき (自動で反映)
 

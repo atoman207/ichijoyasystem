@@ -1,23 +1,26 @@
 # 本番環境 (Xserver VPS) の構築・運用手順
 
-一畳屋 業務システムを Xserver VPS で公開・運用するための手順です。データベースとファイルの保存先は、これまでどおり Supabase を使います。
+一畳屋 業務システムを Xserver VPS で公開・運用するための手順です。データベース (文字とファイルのパス) は Supabase、ファイル (添付ファイル・写真・顔写真) の本体とバックアップはこの VPS のディスクに置きます。
 
 ```
-ブラウザ ──HTTPS──▶ nginx (443・証明書 Let's Encrypt) ──▶ Next.js (127.0.0.1:3000・systemd で常駐) ──▶ Supabase (PostgreSQL・Storage)
+ブラウザ ──HTTPS──▶ nginx (443・証明書 Let's Encrypt) ──▶ Next.js (127.0.0.1:3000・systemd で常駐) ──▶ Supabase (PostgreSQL: 文字とパスだけ)
+                                                         │
+                                                         ├─▶ VPS のディスク: /srv/ichijoya/data/uploads (ファイルの本体)・data/cache (データの控え)
                                                          ▲
-cron: バックアップ 3:30 / 社内資料の同期 毎時 / 死活監視 5 分ごと
+cron: バックアップ 3:30 (→ /var/backups/ichijoya) / 社内資料の同期 毎時 / 死活監視 5 分ごと
 ```
 
 | ファイル | 内容 |
 |---|---|
 | `setup-server.sh` | サーバーの初期設定 (1 回。何度実行しても同じ状態になる) |
 | `deploy.sh` | 更新 (公開) とロールバック |
-| `backup.sh` | バックアップ (データベース・添付ファイル) |
+| `backup.sh` | バックアップ (データベース・添付ファイル・写真・チャットボット。保存先はこの VPS。毎日 3:30 と、管理者の「今すぐバックアップ」) |
+| `harden-server.sh` | サーバーを止めない設定 (スリープしない・自動更新で再起動しない・止まっても自動で起動し直す) |
 | `run-task.sh` | 定期実行の処理 (社内資料の同期・死活監視) |
 | `ichijoya.env.example` | 設定ファイルのひな形 (`/etc/ichijoya/ichijoya.env`) |
 | `ichijoya.service` / `nginx-ichijoya.conf` / `ichijoya.cron` | systemd・nginx・cron の設定 |
 | `../scripts/ops/verify-production.mjs` | 公開後の動作確認 (読み取りだけ) |
-| `../scripts/ops/backup-storage.mjs` | 添付ファイルのバックアップ (backup.sh から使う) |
+| `../scripts/ops/migrate-storage-to-vps.mjs` | 以前 Supabase Storage に置いていたファイルを VPS へ移す (確認・削除つき) |
 
 ## 1. 事前に用意するもの (手作業)
 
@@ -143,26 +146,52 @@ sudo -u ichijoya bash /srv/ichijoya/repo/deploy/deploy.sh --rollback # 1 つ前�
 
 ## 4. バックアップと復元
 
+保存先はすべてこの VPS の `/var/backups/ichijoya` です。
+
 | 対象 | 方法 | 保管場所 | 保管期間 |
 |---|---|---|---|
-| データベース | `pg_dump` (public スキーマ・カスタム形式) | `/var/backups/ichijoya/db/ichijoya-<日時>.dump` | 14 日 (`BACKUP_KEEP_DAYS`) |
-| 添付ファイル (写真・PDF) | 新しいファイルだけ追加でコピー | `/var/backups/ichijoya/storage/` | 削除しない |
+| データベース | `pg_dump` (public スキーマ・カスタム形式) | `db/ichijoya-<日時>.dump` (手動は `-manual`) | 自動 14 日 (`BACKUP_KEEP_DAYS`)・手動 30 日 (`BACKUP_KEEP_MANUAL_DAYS`) |
+| 添付ファイル・写真・顔写真 | `/srv/ichijoya/data/uploads` から新しいファイルだけ追加でコピー (rsync) | `storage/` (同じパス) | 削除しない (アプリで消したファイルも残る) |
+| チャットボット | SQLite の `VACUUM INTO` | `chatbot/chatbot-<日時>.sqlite` | 14 日 |
 
-- 毎日 3:30 に自動で実行し、結果を `/var/log/ichijoya/backup.log` と 設定 → 本番運用の準備 に残します。
-- **サーバーの故障に備えて、バックアップを別の場所にも置いてください** (例: Xserver VPS の自動バックアップ機能、または `rsync` で別のサーバー・ストレージへ)。どこに置くかは貴社と決めます。
+- **自動**: 毎日 3:30 (`/etc/cron.d/ichijoya`)。結果は `/var/log/ichijoya/backup.log` と 設定 → データ管理・本番運用の準備 に出ます。
+- **手動 (管理者)**: 設定 → データ管理 の **「今すぐバックアップ」**。いつでも実行でき、1 分ほどで終わります (画面に結果が出ます。だれが実行したかは変更履歴に残ります)。同時に 2 つは動きません。
+- コマンドで: `sudo -u ichijoya bash /srv/ichijoya/current/deploy/backup.sh --manual "<名前>"`
+- **VPS そのものの故障に備えて、バックアップを別の場所にも置くことをおすすめします** (例: Xserver VPS の自動バックアップ機能 (イメージ保存)、または `rsync` で別のサーバー・ストレージへ)。
 
 **データベースの復元** (データベース全体を、バックアップの時点に戻します。戻す前に、いまの状態のバックアップを取ってください。root で実行: `sudo -i`):
 
 ```bash
-sudo -u ichijoya bash /srv/ichijoya/current/deploy/backup.sh          # いまの状態を残す
-sudo systemctl stop ichijoya
+sudo -u ichijoya bash /srv/ichijoya/current/deploy/backup.sh --manual "復元の前"   # いまの状態を残す
+sudo systemctl stop ichijoya            # 開発用 (3001 番) も止める
 . /srv/ichijoya/current/deploy/lib.sh && load_env /etc/ichijoya/ichijoya.env
 pg_restore --clean --if-exists --no-owner --dbname="$SUPABASE_DB_URL" /var/backups/ichijoya/db/ichijoya-<日時>.dump
 (cd /srv/ichijoya/current && node scripts/import/migrate.mjs)   # 表の権限 (RLS・service_role) をそろえ直す
 sudo systemctl start ichijoya
 ```
 
-一部の記録だけを戻すときは、バックアップを手元の PostgreSQL に復元して該当の行を取り出します (開発担当が行います)。添付ファイルは `storage/` から Supabase Storage の同じパスへアップロードし直します。
+アプリは起動時に、VPS に保存した控え (`/srv/ichijoya/data/cache`) がいまのデータベースと同じ流れのものかを確かめ (変更の記録 `app_changes` の時刻で照合)、違えば Supabase から全件を読み直します。復元のあとに控えを手で消す必要はありません。
+
+**ファイルの復元**: `sudo -u ichijoya rsync -a --ignore-existing /var/backups/ichijoya/storage/ /srv/ichijoya/data/uploads/` (足りないファイルだけを戻します)。
+
+一部の記録だけを戻すときは、バックアップを手元の PostgreSQL に復元して該当の行を取り出します (開発担当が行います)。
+
+## 4-A. サーバーを止めない (再起動しない・しても自動で戻る)
+
+1 回だけ実行します (何度実行しても同じ状態になります。`setup-server.sh` からも呼ばれます):
+
+```bash
+cd /home/ichijoya/Documents/ichijoyasistem && sudo bash deploy/harden-server.sh
+```
+
+- スリープ・休止をしない (画面の操作がなくても、ログイン画面のままでも止まらない)
+- OS のセキュリティ更新は自動で続けるが、**自動では再起動しない**。更新は夜 4:30 (バックアップの後) に行う
+- 本番のアプリ (`ichijoya`) と nginx は、止まっても 3 秒後に起動し直す (回数の上限なし)。VPS を起動すると自動で起動する。5 分ごとの死活監視が、応答しないアプリを再起動する
+- メモリが足りなくなったとき、本番のアプリは最後に止められる (開発用のサーバー・エディタが先)。スワップを 4 GB 足す
+- カーネルが致命的なエラーで止まったときは、止まったままにせず 10 秒後に起動し直す (アプリは自動で起動する)
+- 再起動のあとの起動は、VPS に保存した控えから読むので数秒で終わる (Supabase から全件を読まない)
+
+Xserver 側の保守 (ホストの障害・メンテナンス) による再起動は防げませんが、その場合もアプリは自動で起動します。カーネルの更新を使うには、業務時間外に `sudo reboot` してください。
 
 ## 5. 監視・ログ
 

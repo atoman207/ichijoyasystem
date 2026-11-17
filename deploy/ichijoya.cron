@@ -3,7 +3,8 @@ SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 TZ=Asia/Tokyo
 
-# バックアップ (データベース・添付ファイル) 毎日 3:30
+# バックアップ (データベース・添付ファイル・写真・チャットボット。保存先はこの VPS の /var/backups/ichijoya) 毎日 3:30
+# 管理者は 設定 → データ管理 の「今すぐバックアップ」からいつでも実行できる (同じスクリプト)
 30 3 * * * ichijoya bash /srv/ichijoya/current/deploy/backup.sh >> /var/log/ichijoya/backup.log 2>&1
 
 # 社内資料 (Google スプレッドシート) の同期 毎時 15 分

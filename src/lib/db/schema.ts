@@ -75,7 +75,7 @@ export const TABLES: TableDef[] = [
       ["notifyEmail", "text"],
       ["notifyByEmail", "boolean"],
       ["chatworkAccountId", "text"],
-      // アカウントの自己管理: 顔写真 (Storage のキー) と新規登録の申請 (承認されるまで active = false)
+      // アカウントの自己管理: 顔写真 (VPS のファイルのパス) と新規登録の申請 (承認されるまで active = false)
       ["avatarKey", "text"],
       ["avatarUpdatedAt", ts],
       ["signupStatus", "text check (signup_status in ('pending'))"],
@@ -722,7 +722,7 @@ export const TABLES: TableDef[] = [
   {
     collection: "attachments",
     table: "attachments",
-    label: "添付ファイル (資料・写真。本体は Storage の attachments バケット)",
+    label: "添付ファイル (資料・写真。本体は VPS のディスク。ここにはパスだけ)",
     columns: [
       ["id", "text primary key"],
       ["parentType", "text not null check (parent_type in ('customer','inquiry','quote','order','expense','purchase','document'))"],
@@ -822,6 +822,13 @@ export const RELAXED_NOT_NULL: [table: string, column: string][] = [["comm_logs"
 
 /** アプリ全体のメタ情報 (データ形式のバージョンと、インスタンス間の更新検知用のリビジョン) */
 export const META_TABLE = "app_meta";
+
+/**
+ * 変更の記録 (リビジョンごとに、どの表のどの行が変わったか。ID だけで中身は持たない)。
+ * 他のインスタンスは全件を読み直さず、変わった行だけを取り直す (src/lib/db/store.ts の catchUp)。
+ * 書き込みは関数 record_changes (リビジョンの +1 と同じトランザクション)。古い記録は自動で消す (新しい 5,000 件を残す)
+ */
+export const CHANGES_TABLE = "app_changes";
 
 export function snake(name: string): string {
   return name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);

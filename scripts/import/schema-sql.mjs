@@ -7,7 +7,7 @@
  * - すべてのテーブルで RLS を有効にし、ポリシーは作らない (= publishable キーからは読めない)。
  *   アプリはサーバー側で secret キーを使って読み書きする
  */
-import { META_TABLE, RELAXED_NOT_NULL, TABLES, loadOrder, snake } from "../../src/lib/db/schema.ts";
+import { CHANGES_TABLE, META_TABLE, RELAXED_NOT_NULL, TABLES, loadOrder, snake } from "../../src/lib/db/schema.ts";
 
 const q = (s) => s.replace(/'/g, "''");
 
@@ -35,6 +35,14 @@ export function buildSchemaSql({ header = true } = {}) {
   lines.push(");");
   lines.push(`insert into ${META_TABLE} (id) values (1) on conflict (id) do nothing;`);
   lines.push(`comment on table ${META_TABLE} is 'アプリ全体のメタ情報 (データ形式のバージョンと、インスタンス間の更新検知用リビジョン)';`);
+  lines.push("");
+  lines.push("-- 変更の記録 (リビジョンごとに変わった行の ID。他のインスタンスが全件を読み直さず、変わった行だけを取り直す)");
+  lines.push(`create table if not exists ${CHANGES_TABLE} (`);
+  lines.push("  revision bigint primary key,");
+  lines.push("  changes jsonb not null,");
+  lines.push("  at timestamptz not null default now()");
+  lines.push(");");
+  lines.push(`comment on table ${CHANGES_TABLE} is '変更の記録 (リビジョンごとの表と行の ID。中身は持たない。新しい 5,000 件を残す)';`);
   lines.push("");
 
   for (const t of TABLES) {
@@ -69,7 +77,7 @@ export function buildSchemaSql({ header = true } = {}) {
   lines.push("-- 行レベルセキュリティ: 有効化のみ (ポリシーなし)。publishable / anon キーからはアクセスできない");
   lines.push("-- アプリが使う secret キー (service_role) には読み書きの権限を明示的に付ける (プロジェクトの既定の権限に頼らない)");
   lines.push("grant usage on schema public to service_role;");
-  for (const t of [{ table: META_TABLE }, ...TABLES]) {
+  for (const t of [{ table: META_TABLE }, { table: CHANGES_TABLE }, ...TABLES]) {
     lines.push(`alter table ${t.table} enable row level security;`);
     lines.push(`revoke all on table ${t.table} from anon, authenticated;`);
     lines.push(`grant select, insert, update, delete on table ${t.table} to service_role;`);
@@ -83,6 +91,19 @@ export function buildSchemaSql({ header = true } = {}) {
   lines.push("revoke all on function public.bump_revision() from public, anon, authenticated;");
   lines.push("grant execute on function public.bump_revision() to service_role;");
   lines.push("");
+  lines.push("-- 書き込んだ表と行の ID を記録して、リビジョンを +1 (1 つのトランザクション。記録のないリビジョンは「全件を読み直す」の合図)");
+  lines.push("create or replace function public.record_changes(p_changes jsonb) returns bigint");
+  lines.push("language plpgsql security definer set search_path = public as $$");
+  lines.push("declare r bigint;");
+  lines.push("begin");
+  lines.push(`  update ${META_TABLE} set revision = revision + 1 where id = 1 returning revision into r;`);
+  lines.push(`  insert into ${CHANGES_TABLE} (revision, changes) values (r, p_changes);`);
+  lines.push(`  delete from ${CHANGES_TABLE} where revision <= r - 5000;`);
+  lines.push("  return r;");
+  lines.push("end $$;");
+  lines.push("revoke all on function public.record_changes(jsonb) from public, anon, authenticated;");
+  lines.push("grant execute on function public.record_changes(jsonb) to service_role;");
+  lines.push("");
   lines.push("commit;");
   lines.push("");
   lines.push("-- API (PostgREST) に新しいテーブル・列を知らせる");
@@ -91,4 +112,4 @@ export function buildSchemaSql({ header = true } = {}) {
   return lines.join("\n");
 }
 
-export const TABLE_COUNT = TABLES.length + 1;
+export const TABLE_COUNT = TABLES.length + 2;

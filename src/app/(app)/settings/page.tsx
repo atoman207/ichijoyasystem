@@ -1,6 +1,6 @@
 import { requireUser } from "@/lib/auth/session";
 import { BACKEND, getDb } from "@/lib/db/store";
-import { canExportData, canManageSettings } from "@/lib/auth/permissions";
+import { canExportData, canManageSettings, canRunBackup } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
 import { createProduct, updateDocumentSettings, updateOpsSettings, updateProduct, updateStore } from "@/lib/actions/settings";
 import { UsersTab } from "@/components/settings/UsersTab";
@@ -23,6 +23,7 @@ import { Badge, Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkT
 import { GoLivePanel } from "@/components/settings/GoLivePanel";
 import { LineGroupsCard } from "@/components/settings/LineGroupsCard";
 import { MessagingConnectionCheck } from "@/components/settings/MessagingConnectionCheck";
+import { BackupCard } from "@/components/settings/BackupCard";
 
 /** 「接続を確認」で AI の応答を待つ (最大 50 秒) ため */
 export const maxDuration = 60;
@@ -441,6 +442,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
 
       {tab === "data" && (
         <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-2">
+          {canRunBackup(user) && <BackupCard />}
           <Card>
             <CardHeader title="データのエクスポート" description="特定サービスに依存せず、いつでもデータを取り出せます" />
             {canExportData(user) ? (
@@ -454,7 +456,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               <p className="text-sm text-ink-3">データの書き出しは管理者・本部スタッフが行えます。</p>
             )}
             <p className="mt-3 text-[11px] text-ink-3">
-              保存先: {BACKEND === "supabase" ? "Supabase (PostgreSQL)" : `ローカルファイル data/${process.env.DATA_FILE_NAME ?? "db.json"}`}
+              保存先: {BACKEND === "supabase" ? "Supabase (PostgreSQL。文字とファイルのパスだけ。ファイルの本体はこの VPS)" : `ローカルファイル data/${process.env.DATA_FILE_NAME ?? "db.json"}`}
               {db.meta.importedAt ? ` · クライアント資料から取込 ${fmtDateTime(db.meta.importedAt)}` : ` · サンプル生成 ${fmtDateTime(db.meta.seededAt)}`} · 件数: 顧客 {db.customers.length} / 問い合わせ {db.inquiries.length} / 受注 {db.orders.length} / 予定 {db.schedule.length} / アンケート {db.surveys.length} / 資料 {db.sourceFiles.length} / 履歴 {db.auditLogs.length}
             </p>
           </Card>

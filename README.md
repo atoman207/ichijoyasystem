@@ -122,7 +122,7 @@ DATA_BACKEND=json npm run dev
 - Next.js 16 (App Router, Server Components, Server Actions, Turbopack) / React 19 / TypeScript
 - Tailwind CSS v4 (淡いブルーの背景に白いカード、アクセントは青紫 (インディゴ)。Web フォント Inter + Noto Sans JP はオフライン時にシステムフォントへフォールバック。本文の段組みはコンテナクエリ `@container` で、実際の表示幅に合わせて変わる)
 - データ: Supabase (PostgreSQL)。ローカル検証は `data/db.json` (JSON ファイル)。`src/lib/db/store.ts` が切り替えの境界、テーブル定義の正本は `src/lib/db/schema.ts`
-- ファイル (資料・写真・書類取込の元画像): Supabase Storage の非公開バケット `attachments` (初回に自動作成)。ローカル検証は `data/uploads/`。`src/lib/storage.ts` が切り替えの境界。閲覧は `/api/attachments/<ID>` が権限 (登録先の記録の店舗・ロール) を確かめてから期限つきの URL (2 分) へ転送する。写真はブラウザで長辺 2048px に縮小してから送る (Vercel の 1 回の送信は 4.5 MB まで)
+- ファイル (資料・写真・書類取込の元画像・顔写真): 本体はサーバー (VPS) のディスク `/srv/ichijoya/data/uploads` (`FILE_STORAGE_DIR`。手元の開発環境は `data/uploads/`) にだけ保存し、Supabase には台帳の文字とファイルのパスだけを持つ。`src/lib/storage.ts` が境界。閲覧は `/api/attachments/<ID>` が権限 (登録先の記録の店舗・ロール) を確かめてからファイルを返す。写真はブラウザで長辺 2048px に縮小してから送る (Vercel の 1 回の送信は 4.5 MB まで)
 - 認証: 署名付き Cookie セッション + scrypt でハッシュ化したパスワード (2 要素認証は次の段階)
 - AI: `src/lib/ai/provider.ts` が OpenAI (chat completions + JSON Schema) と Claude (`@anthropic-ai/sdk`、structured outputs) を同じ形で呼ぶ。キー未設定時はサンプル応答。接続は 設定 → 外部連携・AI の「接続を確認」で確かめられる
 - 帳票 PDF: `src/lib/pdf/` (pdf-lib + Noto Sans JP を埋め込み)。`/api/pdf/quotes/<ID>` (`?version=` で旧版)・`/api/pdf/invoices/<ID>`・`/api/pdf/receipts/<ID>`。会社情報・登録番号・振込先は 設定 → 帳票
@@ -153,7 +153,8 @@ src/
     db/master.ts           店舗・ユーザー・商品・仕入先マスタ
     db/seed.ts             サンプルデータ生成 (決定論的)
     db/store.ts            データストア (Supabase / JSON の切り替え境界)
-    storage.ts             ファイルの保存先 (Supabase Storage / data/uploads の切り替え境界)
+    storage.ts             ファイルの保存先 (VPS のディスク。Supabase にはパスだけ)
+    backup.ts              バックアップ (deploy/backup.sh の実行・結果の表示。設定 → データ管理)
     attachments.ts         添付ファイル (資料・写真) の登録先・権限・保存
     duplicates.ts          既存顧客との重複確認
     data-io.ts, data-io-spec.ts, csv.ts   CSV・Google スプレッドシートの取込と書き出し

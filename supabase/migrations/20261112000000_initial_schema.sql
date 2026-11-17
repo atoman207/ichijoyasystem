@@ -18,6 +18,14 @@ create table if not exists app_meta (
 insert into app_meta (id) values (1) on conflict (id) do nothing;
 comment on table app_meta is 'アプリ全体のメタ情報 (データ形式のバージョンと、インスタンス間の更新検知用リビジョン)';
 
+-- 変更の記録 (リビジョンごとに変わった行の ID。他のインスタンスが全件を読み直さず、変わった行だけを取り直す)
+create table if not exists app_changes (
+  revision bigint primary key,
+  changes jsonb not null,
+  at timestamptz not null default now()
+);
+comment on table app_changes is '変更の記録 (リビジョンごとの表と行の ID。中身は持たない。新しい 5,000 件を残す)';
+
 -- 店舗
 create table if not exists stores (
   id text primary key,
@@ -1228,6 +1236,9 @@ grant usage on schema public to service_role;
 alter table app_meta enable row level security;
 revoke all on table app_meta from anon, authenticated;
 grant select, insert, update, delete on table app_meta to service_role;
+alter table app_changes enable row level security;
+revoke all on table app_changes from anon, authenticated;
+grant select, insert, update, delete on table app_changes to service_role;
 alter table stores enable row level security;
 revoke all on table stores from anon, authenticated;
 grant select, insert, update, delete on table stores to service_role;
@@ -1326,6 +1337,19 @@ language sql security definer set search_path = public as $$
 $$;
 revoke all on function public.bump_revision() from public, anon, authenticated;
 grant execute on function public.bump_revision() to service_role;
+
+-- 書き込んだ表と行の ID を記録して、リビジョンを +1 (1 つのトランザクション。記録のないリビジョンは「全件を読み直す」の合図)
+create or replace function public.record_changes(p_changes jsonb) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare r bigint;
+begin
+  update app_meta set revision = revision + 1 where id = 1 returning revision into r;
+  insert into app_changes (revision, changes) values (r, p_changes);
+  delete from app_changes where revision <= r - 5000;
+  return r;
+end $$;
+revoke all on function public.record_changes(jsonb) from public, anon, authenticated;
+grant execute on function public.record_changes(jsonb) to service_role;
 
 commit;
 
