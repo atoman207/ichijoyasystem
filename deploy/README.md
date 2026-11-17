@@ -114,13 +114,19 @@ npm run env:apply
 
 ### ドメインを用意したら
 
-DNS に A レコード (`<ドメイン>` → VPS の IP アドレス) を設定し、反映されたら 1 回実行します。nginx・SSL 証明書・`APP_BASE_URL`・待ち受けのアドレスを切り替え、3000 番を閉じます。
+1. **Xserver VPS のパネル → パケットフィルター設定** で **「Web」(HTTP 80・HTTPS 443)** を許可する。
+   許可していないと、外 (利用者・Let's Encrypt・LINE) からは何も届きません (VPS の中からの確認では気づけないので注意)
+2. DNS に A レコード (`<ドメイン>` → VPS の IP アドレス) を設定し、1 回実行します。nginx・SSL 証明書・`APP_BASE_URL`・待ち受けのアドレスを切り替え、3000 番を閉じます。
 
 ```bash
-sudo bash /srv/ichijoya/repo/deploy/enable-domain.sh <ドメイン> <証明書の連絡先メール>
+sudo bash /srv/ichijoya/current/deploy/enable-domain.sh <ドメイン> <証明書の連絡先メール>
 ```
 
-そのあと 設定 → 外部連携・AI で「LINE の Webhook URL をこのシステムに設定」を押し、Chatwork・既存の AI システムの送信先を `https://<ドメイン>/api/integrations/...` にします。パネルのパケットフィルターで許可した 3000 番は削除します。
+- DNS の反映前やパケットフィルターの許可前に実行しても大丈夫です。失敗しても定期実行 (`/etc/cron.d/ichijoya-domain`) が約 10 分ごとに再試行し、届いた時点で自動で公開します (経過: `/var/log/ichijoya/domain.log`)。別のドメイン名で定期実行を置いていても、手動で実行したドメインに置き直します
+- 最後に、LINE のサーバーから `https://<ドメイン>` へ試しに送り (外から 443 番に届くかの確認)、`verify-production.mjs` で全体を確認します
+- この VPS は NAT の内側にあり、自分の公開 IP には接続できません (ヘアピン NAT なし)。そのため `/etc/hosts` にドメイン → `127.0.0.1` を追加し、VPS 上のブラウザー (リモート デスクトップ) からもドメインで開けるようにします
+
+そのあと Chatwork・既存の AI システムの送信先を `https://<ドメイン>/api/integrations/...` にします (LINE の Webhook URL は自動で設定されます。LINE Developers の「Webhook の利用」はオンにしてください)。パネルのパケットフィルターで許可した 3000 番は削除します。
 
 ## 3. 更新 (デプロイ) とロールバック
 

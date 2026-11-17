@@ -48,13 +48,52 @@ resolve() { { getent ahostsv4 "$1" 2>/dev/null || true; } | awk '{print $1}' | s
 # 確認は nginx (127.0.0.1:443) に本物のドメイン名で接続して行う
 local_https() { curl -fsS -m "${2:-20}" --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN$1"; }
 
+# 公開できるまで 5 分ごとに確かめる定期実行 (このドメインで置き直す。公開できたら最後に消す)
+install_watch() {
+  mkdir -p /var/log/ichijoya
+  cat > "$WATCH_CRON" <<EOF
+# 一畳屋 業務システム: https://$DOMAIN で公開できるまで確かめる (公開後に自動で削除される)
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+*/5 * * * * root bash $APP_DIR/current/deploy/enable-domain.sh --if-ready $DOMAIN $EMAIL >> /var/log/ichijoya/domain.log 2>&1
+EOF
+  chmod 644 "$WATCH_CRON"
+}
+
+# この VPS 自身 (リモート デスクトップで使うブラウザー・定期実行など) からもドメインで開けるようにする。
+# NAT の内側の VPS は自分の公開 IP に接続できない (ヘアピン NAT がない) ため、ドメインを 127.0.0.1 (この VPS の nginx) に向ける。
+# /etc/hosts はこの VPS の中だけで使われるので、外の利用者・LINE・Let's Encrypt には関係しない
+ensure_local_hosts() {
+  local pub="${1:-}" line="127.0.0.1 $DOMAIN www.$DOMAIN # ichijoya-domain"
+  [[ -n "$pub" ]] || return 0
+  # 公開 IP が VPS 自身に付いている (NAT でない) ときは不要
+  if ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -qxF "$pub"; then return 0; fi
+  grep -qxF "$line" /etc/hosts && return 0
+  sed -i '/# ichijoya-domain$/d' /etc/hosts
+  echo "$line" >> /etc/hosts
+  echo "  /etc/hosts: $DOMAIN → 127.0.0.1 (NAT のため。この VPS のブラウザーからもドメインで開けます)"
+}
+
+# 同時に 2 つ動かさない (手動の実行と定期実行が重なったとき、certbot と nginx の設定がぶつからないように)
+exec 9>/run/lock/ichijoya-enable-domain.lock
+if ! flock -n 9; then
+  [[ $IF_READY -eq 1 ]] && not_ready "別の enable-domain.sh が実行中です"
+  echo "別の enable-domain.sh (定期実行) が実行中です。終わるのを待ちます…"
+  flock -w 900 9 || die "待ちきれませんでした。しばらくしてから再実行してください"
+fi
+
 # ---- 公開済みなら何もしない ----
 if [[ "$(env_value APP_BASE_URL)" == "https://$DOMAIN" && -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]] && local_https /api/health 10 >/dev/null 2>&1; then
   rm -f "$WATCH_CRON" "$FAIL_MARK"
+  ensure_local_hosts "$(curl -fsS -m 5 https://api.ipify.org 2>/dev/null || true)"
   [[ $IF_READY -eq 1 ]] && exit 0
   echo "https://$DOMAIN で公開済みです。"
   exit 0
 fi
+
+# 手動で実行したとき: 定期実行をこのドメインで置き直す (前に別のドメイン名で置いていても直る)。
+# このあと DNS の確認や証明書の取得に失敗しても、5 分ごとに再試行し、できた時点で自動で公開する
+if [[ $IF_READY -eq 0 ]]; then install_watch; fi
 
 # ---- DNS の確認 ----
 PUBLIC_IP=$(curl -fsS -m 5 https://api.ipify.org 2>/dev/null || true)
@@ -69,9 +108,14 @@ NAMES=("$DOMAIN")
 WWW_IP=$(resolve "www.$DOMAIN")
 if [[ -n "$WWW_IP" && "$SERVER_IPS" == *" ${WWW_IP%% *} "* ]]; then NAMES+=("www.$DOMAIN"); fi
 
-# 証明書の取得に失敗した直後は、Let's Encrypt の回数制限にかからないよう 1 時間あける (定期実行のとき)
-if [[ $IF_READY -eq 1 && -f "$FAIL_MARK" && $(( $(date +%s) - $(stat -c %Y "$FAIL_MARK") )) -lt 3600 ]]; then
-  not_ready "前回の証明書の取得に失敗したため、1 時間後に再試行します ($(cat "$FAIL_MARK"))"
+# 証明書の確認・取得に失敗した直後は少しあける (定期実行のとき)。
+# 試験用 (dry-run・回数制限が緩い) の失敗は約 10 分、本番の取得の失敗は Let's Encrypt の回数制限にかからないよう 1 時間
+if [[ $IF_READY -eq 1 && -f "$FAIL_MARK" ]]; then
+  wait_s=3600
+  grep -q 'dry-run' "$FAIL_MARK" && wait_s=540
+  if (( $(date +%s) - $(stat -c %Y "$FAIL_MARK") < wait_s )); then
+    not_ready "前回の証明書の確認に失敗したため、少しあけて再試行します ($(cat "$FAIL_MARK"))"
+  fi
 fi
 
 log "ドメインで公開します: ${NAMES[*]} → この VPS ($PUBLIC_IP)"
@@ -95,7 +139,11 @@ mkdir -p "$(dirname "$FAIL_MARK")"
 # まず試験用 (回数制限が緩い) で、外から 80 番に届くかを確かめる
 if ! certbot certonly --nginx --dry-run "${CERT_ARGS[@]}" --non-interactive --agree-tos -m "$EMAIL"; then
   echo "$(date '+%F %T') dry-run failed" > "$FAIL_MARK"
-  die "証明書の確認 (試験用) に失敗しました。VPS のパネルのファイアウォール (パケットフィルター・セキュリティグループ) で HTTP (80)・HTTPS (443) を許可しているか、DNS が反映されているかを確認してください"
+  die "証明書の確認 (試験用) に失敗しました。主な原因は、外 (Let's Encrypt) から http://$DOMAIN (80 番) に届かないことです。
+   - VPS のパネルのファイアウォールで HTTP (80)・HTTPS (443) を許可してください
+     (Xserver VPS: VPS パネル → パケットフィルター設定 → フィルタールールを追加 → 「Web」)
+   - 許可したあとは何もしなくてかまいません。定期実行が約 10 分ごとに再試行し、届いた時点で自動で公開します
+     (経過: /var/log/ichijoya/domain.log)"
 fi
 if ! certbot --nginx "${CERT_ARGS[@]}" --non-interactive --agree-tos -m "$EMAIL" --redirect --keep-until-expiring --expand; then
   echo "$(date '+%F %T') issue failed" > "$FAIL_MARK"
@@ -134,6 +182,7 @@ echo "  $(local_https /api/health)"
 if [[ " ${NAMES[*]} " == *" www.$DOMAIN "* ]]; then
   echo "  www: $(curl -s -o /dev/null -m 10 -w '%{http_code} → %{redirect_url}' --resolve "www.$DOMAIN:443:127.0.0.1" "https://www.$DOMAIN/")"
 fi
+ensure_local_hosts "$PUBLIC_IP"
 
 # ---- LINE の Webhook URL をこのドメインにする (チャネルアクセストークンがあるとき) ----
 (
@@ -145,11 +194,21 @@ fi
   log "LINE の Webhook URL を $url にします"
   code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' -X PUT -H "Authorization: Bearer $LINE_CHANNEL_ACCESS_TOKEN" -H 'Content-Type: application/json' -d "{\"endpoint\":\"$url\"}" https://api.line.me/v2/bot/channel/webhook/endpoint || true)
   echo "  設定: HTTP $code"
-  # LINE のサーバーからこのドメインへ試しに送る (外から https で届くかの確認にもなる)
-  echo "  LINE からの疎通: $(curl -s -m 30 -X POST -H "Authorization: Bearer $LINE_CHANNEL_ACCESS_TOKEN" -H 'Content-Type: application/json' -d "{\"endpoint\":\"$url\"}" https://api.line.me/v2/bot/channel/webhook/test || echo '確認できませんでした')"
+  # LINE のサーバーからこのドメインへ試しに送る (外から https (443 番) で届くかの確認にもなる)
+  res=$(curl -s -m 40 -X POST -H "Authorization: Bearer $LINE_CHANNEL_ACCESS_TOKEN" -H 'Content-Type: application/json' -d "{\"endpoint\":\"$url\"}" https://api.line.me/v2/bot/channel/webhook/test || true)
+  if [[ "$res" == *'"success":true'* ]]; then
+    echo "  LINE のサーバーから $url に届きました (外から https で接続できています)"
+  else
+    echo "  LINE のサーバーから届きませんでした: ${res:-応答なし}"
+    echo "  → VPS のパネルのファイアウォール (パケットフィルター) で HTTPS (443) を許可しているか確認してください"
+  fi
 ) || true
 
 rm -f "$WATCH_CRON"
+if command -v node >/dev/null && [[ -f "$APP_DIR/current/scripts/ops/verify-production.mjs" ]]; then
+  log "動作確認 (verify-production)"
+  node "$APP_DIR/current/scripts/ops/verify-production.mjs" "https://$DOMAIN" || echo "  (確認できなかった項目があります。上の結果を確認してください)"
+fi
 log "完了: https://$DOMAIN"
 cat <<EOF
   - 証明書は自動で更新されます (certbot.timer)。確認: sudo certbot certificates

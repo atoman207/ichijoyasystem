@@ -27,6 +27,7 @@ AI コーディング支援 (Claude Code 等) がこのリポジトリで作業�
 
 ## 注意
 - Next.js 16 (App Router)。`params` / `searchParams` / `cookies()` は Promise。`middleware` ではなく `src/proxy.ts`
+- Route Handler (`route.ts`) の転送先を `req.url` から作らない。本番は nginx の内側 (`next start -H 0.0.0.0 / 127.0.0.1`) なので `req.url` のホストは `0.0.0.0:3000` などになる。同じサイト内への転送は相対パスの `Location` (例: `src/app/review/route.ts` の `seeOther("/login")`)、外に出すリンクは `APP_BASE_URL` (`appBaseUrl()`)。`req.url` は検索パラメーターを読むだけに使う
 - 本番データは Supabase。`.env.local` に `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SECRET_KEY` があれば Supabase、なければ (または `DATA_BACKEND=json`) `data/<DATA_FILE_NAME>` の JSON。テーブル定義の正本は `src/lib/db/schema.ts` (型 `types.ts` にフィールドを足したら schema.ts にも列を足し、`node scripts/import/generate-schema.mjs` で `supabase/migrations/20261112000000_initial_schema.sql` を、`node scripts/import/generate-data-sql.mjs` で `supabase/ichijoya.sql` (テーブル定義 + 全データの 1 ファイル。psql 用。コミットしない) を作り直す。SQL の組み立ては `scripts/import/schema-sql.mjs` に集約)。Supabase の SQL Editor は 1 回 0.98 MB まで (超えると "Query is too large to be run via the SQL Editor") なので、SQL Editor 用は `--split` の `supabase/data/*.sql` (各 900 KB 以下)
 - 書き込みは必ず `await mutate(...)`。読み込みは `requireUser` / `requireActionUser` が `syncDb()` で最新化した後の `getDb()`。認証前に DB を読む画面 (ログイン・API) は `await syncDb()` を使う
 - リポジトリは公開。`client-materials/` (共有資料)・`data/` (移行データ・初期パスワード・サンプル)・`supabase/ichijoya.sql`・`supabase/data/` (データの SQL)・`phase1/`・`docs/`・`scripts/import/extract-client-data.mjs` (社員名を含む) はコミットしない (.gitignore)。社員の実名・ログイン ID をコードに書かない。手順は supabase/README.md
