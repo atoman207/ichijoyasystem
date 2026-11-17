@@ -16,9 +16,10 @@ WorkingDirectory=/srv/ichijoya/current
 EnvironmentFile=/etc/ichijoya/ichijoya.env
 Environment=NODE_ENV=production
 Environment=PORT=3000
-Environment=HOSTNAME=127.0.0.1
-# 外部からは nginx (443) だけを公開し、アプリは 127.0.0.1:3000 で待ち受ける
-ExecStart=/srv/ichijoya/current/node_modules/.bin/next start -p 3000 -H 127.0.0.1
+# 待ち受けるアドレス。ドメインで公開した後は nginx (443) だけを公開し、アプリは 127.0.0.1:3000 で待ち受ける。
+# ドメインがまだないあいだは、設定ファイルの BIND_HOST=0.0.0.0 で http://<IP アドレス>:3000 から開けるようにする
+Environment=BIND_HOST=127.0.0.1
+ExecStart=/bin/sh -c 'exec /srv/ichijoya/current/node_modules/.bin/next start -p 3000 -H "$BIND_HOST"'
 Restart=always
 RestartSec=5
 # 起動時に全データ (約 6 万行) を読み込むため、待ち時間を長めにする

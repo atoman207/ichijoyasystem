@@ -7,7 +7,7 @@ import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
 import { DOCUMENT_SETTINGS_ID, documentSettings, validRegistrationNumber } from "@/lib/doc-settings";
 import { testConnection } from "@/lib/ai/provider";
 import { CUSTOMER_CREATOR_LABEL, OPS_SETTINGS_ID } from "@/lib/ops-settings";
-import type { Role, ServiceCategory, StoreId } from "@/lib/db/types";
+import type { Role, StoreId } from "@/lib/db/types";
 import { canManageSettings } from "@/lib/auth/permissions";
 import { CATEGORY_LABEL, ROLE_LABEL } from "@/lib/constants";
 import { hashPassword } from "@/lib/auth/password";

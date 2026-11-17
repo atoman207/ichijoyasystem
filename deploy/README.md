@@ -72,6 +72,32 @@ VPS に SSH で接続して実行します。各手順の「確認」で結果�
    LINE Developers の Webhook URL、Chatwork の Webhook、Web サイトのフォーム、既存の AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) の送信先を `https://<ドメイン>/api/integrations/...` に変更します。URL の一覧は 設定 → 外部連携・AI に表示されます。
 9. **Vercel の停止** (移行する場合): 新しいドメインで 1 週間ほど問題がないことを確かめてから、Vercel のプロジェクトを停止します。
 
+## 2-A. ドメインがまだないとき (IP アドレスで公開)
+
+ドメインを用意するまでは、`http://<VPS の IP アドレス>:3000` (と `http://<IP>`) で使えるようにします。証明書がないため通信は暗号化されません。社内の確認用としてください。
+
+1. **Xserver VPS のパネル → パケットフィルター設定** で **TCP 3000** と **HTTP (80)** を許可する (SSH 22 も許可したまま)
+2. **初期設定** (このサーバーで開発していた場合は、そのリポジトリと `.env.local` をそのまま使えます)
+   ```bash
+   sudo bash deploy/setup-server.sh --ip --repo "$PWD" --env-from "$PWD/.env.local"
+   ```
+   `--repo` に GitHub の URL を渡すと GitHub から取得します。`AI_INTAKE_SECRET` (既存の AI システムからの受信の鍵) は自動で作ります。
+3. **ビルドして起動** (手で動かしている `next dev` は自動で止まります)
+   ```bash
+   sudo -u ichijoya bash /srv/ichijoya/repo/deploy/deploy.sh
+   ```
+4. **確認**: 別の端末 (スマートフォンなど) で `http://<IP>:3000` を開き、ログイン画面が出ること
+
+### ドメインを用意したら
+
+DNS に A レコード (`<ドメイン>` → VPS の IP アドレス) を設定し、反映されたら 1 回実行します。nginx・SSL 証明書・`APP_BASE_URL`・待ち受けのアドレスを切り替え、3000 番を閉じます。
+
+```bash
+sudo bash /srv/ichijoya/repo/deploy/enable-domain.sh <ドメイン> <証明書の連絡先メール>
+```
+
+そのあと 設定 → 外部連携・AI で「LINE の Webhook URL をこのシステムに設定」を押し、Chatwork・既存の AI システムの送信先を `https://<ドメイン>/api/integrations/...` にします。パネルのパケットフィルターで許可した 3000 番は削除します。
+
 ## 3. 更新 (デプロイ) とロールバック
 
 ```bash

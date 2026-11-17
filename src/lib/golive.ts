@@ -72,7 +72,7 @@ export function goLiveChecks(db: Database, now = new Date()): CheckGroup[] {
       { label: "タイムゾーン", status: Intl.DateTimeFormat().resolvedOptions().timeZone === "Asia/Tokyo" ? "ok" : "ng", detail: Intl.DateTimeFormat().resolvedOptions().timeZone, fix: "APP_TIME_ZONE=Asia/Tokyo を設定してください" },
       !baseUrl
         ? { label: "このシステムの URL (APP_BASE_URL)", status: onVercel ? "warn" : "ng", detail: "未設定 (通知・帳票のリンクと Webhook の受信先に使います)", fix: "APP_BASE_URL=https://<ドメイン> を設定してください" }
-        : { label: "このシステムの URL (APP_BASE_URL)", status: baseUrl.startsWith("https://") ? "ok" : "warn", detail: baseUrl, fix: "https:// で始まる URL にしてください" },
+        : { label: "このシステムの URL (APP_BASE_URL)", status: baseUrl.startsWith("https://") ? "ok" : "warn", detail: baseUrl.startsWith("https://") ? baseUrl : `${baseUrl} (ドメインなし・IP アドレスで公開中)`, fix: "ドメインを用意して DNS を設定したら、サーバーで sudo bash /srv/ichijoya/repo/deploy/enable-domain.sh <ドメイン> <メール> を実行してください (https・証明書・URL を切り替えます)" },
     ],
   });
 
@@ -90,7 +90,7 @@ export function goLiveChecks(db: Database, now = new Date()): CheckGroup[] {
       demo.length ? { label: "デモ用アカウント", status: "ng", detail: `有効なデモ用アカウントが ${demo.length} 件あります (パスワードが公開されています)`, fix: "node scripts/import/seed-demo-accounts.mjs --off で無効にしてください" } : { label: "デモ用アカウント", status: "ok", detail: "有効なデモ用アカウントはありません" },
       admins.length ? { label: "管理者アカウント", status: "ok", detail: `${admins.length} 人 (${admins.map((u) => u.name).join("・")})` } : { label: "管理者アカウント", status: "ng", detail: "デモ用以外の管理者がいません", fix: "設定 → ユーザーと権限 で管理者を登録してください" },
       notChanged.length ? { label: "初期パスワードの変更", status: "warn", detail: `一度もパスワードを変更していない社員が ${notChanged.length} 人います`, fix: "各社員に、最初のログインでプロフィールからパスワードを変更してもらってください" } : { label: "初期パスワードの変更", status: "ok", detail: "全員が変更済み" },
-      { label: "HTTPS", status: baseUrl.startsWith("https://") ? "ok" : "warn", detail: baseUrl.startsWith("https://") ? "https で公開" : "未確認", fix: "サーバーで certbot --nginx を実行して証明書を設定してください" },
+      { label: "HTTPS", status: baseUrl.startsWith("https://") ? "ok" : "warn", detail: baseUrl.startsWith("https://") ? "https で公開" : "http で公開中 (ドメインの用意待ち)", fix: "ドメインを用意したら enable-domain.sh で証明書 (Let's Encrypt) を設定します。それまでは社内の確認用として使ってください" },
     ],
   });
 

@@ -1,6 +1,22 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // 使っているソフトの名前を応答に出さない
+  poweredByHeader: false,
+  // セキュリティのヘッダー (nginx を通さず IP アドレス:3000 で直接開いたときにも付ける。HSTS は HTTPS の nginx が付ける)
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(self), microphone=(), geolocation=()" },
+        ],
+      },
+    ];
+  },
   experimental: {
     // Server Action で受け取れる大きさ (既定 1 MB)。書類取込の画像・PDF と CSV の取込用。
     // Vercel の 1 回の送信の上限 (4.5 MB) に合わせる。写真は画面側で縮小してから送る

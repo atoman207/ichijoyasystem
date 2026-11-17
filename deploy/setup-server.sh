@@ -7,6 +7,11 @@
 #     sudo bash setup-server.sh <ドメイン> <証明書の連絡先メール> [リポジトリの URL] [ブランチ]
 #   例: sudo bash setup-server.sh system.example.co.jp admin@example.co.jp
 #
+#   ドメインがまだないとき (IP アドレスで公開: http://<IP>:3000 と http://<IP>):
+#     sudo bash setup-server.sh --ip [--repo <リポジトリの URL またはパス>] [--branch main] [--env-from <.env.local>]
+#     ドメインを用意したら: sudo bash /srv/ichijoya/repo/deploy/enable-domain.sh <ドメイン> <メール>
+#   --env-from: 既存の .env.local などから、設定ファイルで空の値を写す (秘密の値を手で貼り直さなくてよい)
+#
 #   行うこと: パッケージ (nginx・certbot・Node.js 24・PostgreSQL 17 クライアント)、実行ユーザー ichijoya、
 #   ディレクトリ、設定ファイルのひな形 (/etc/ichijoya/ichijoya.env)、systemd、nginx、ファイアウォール (ufw)、
 #   自動更新 (unattended-upgrades)、定期実行 (バックアップ・社内資料の同期・死活監視)、SSL 証明書 (DNS が向いていれば)
@@ -14,18 +19,60 @@
 # ============================================================
 set -euo pipefail
 
-DOMAIN="${1:-}"
-EMAIL="${2:-}"
-REPO="${3:-https://github.com/atoman207/ichijoyasystem.git}"
-BRANCH="${4:-main}"
+DOMAIN=""
+EMAIL=""
+REPO="https://github.com/atoman207/ichijoyasystem.git"
+BRANCH="main"
+ENV_FROM=""
+IP_MODE=0
+if [[ "${1:-}" == --* ]]; then
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --ip) IP_MODE=1 ;;
+      --domain) DOMAIN="$2"; shift ;;
+      --email) EMAIL="$2"; shift ;;
+      --repo) REPO="$2"; shift ;;
+      --branch) BRANCH="$2"; shift ;;
+      --env-from) ENV_FROM="$2"; shift ;;
+      *) echo "不明な指定: $1"; exit 1 ;;
+    esac
+    shift
+  done
+else
+  DOMAIN="${1:-}"
+  EMAIL="${2:-}"
+  REPO="${3:-$REPO}"
+  BRANCH="${4:-$BRANCH}"
+fi
+[[ -z "$DOMAIN" ]] && IP_MODE=1
 APP_USER=ichijoya
 APP_DIR=/srv/ichijoya
 ENV_FILE=/etc/ichijoya/ichijoya.env
 
 if [[ $EUID -ne 0 ]]; then echo "root で実行してください (sudo bash $0 ...)"; exit 1; fi
-if [[ -z "$DOMAIN" || -z "$EMAIL" ]]; then echo "使い方: sudo bash $0 <ドメイン> <証明書の連絡先メール> [リポジトリの URL] [ブランチ]"; exit 1; fi
+if [[ $IP_MODE -eq 0 && -z "$EMAIL" ]]; then echo "使い方: sudo bash $0 <ドメイン> <証明書の連絡先メール> [リポジトリの URL] [ブランチ]  /  ドメインなし: sudo bash $0 --ip"; exit 1; fi
+if [[ -n "$ENV_FROM" && ! -r "$ENV_FROM" ]]; then echo "$ENV_FROM を読めません"; exit 1; fi
 if ! grep -qiE 'ubuntu' /etc/os-release; then echo "Ubuntu 用のスクリプトです"; exit 1; fi
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
+# サーバーの公開 IP アドレス (ドメインがないときの URL)
+PUBLIC_IP=$(curl -fsS -m 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
+if [[ $IP_MODE -eq 1 ]]; then
+  BASE_URL="http://$PUBLIC_IP:3000"
+  echo "ドメインなし (IP アドレスで公開): $BASE_URL"
+else
+  BASE_URL="https://$DOMAIN"
+fi
+# 設定ファイルの KEY の値を変える (なければ足す)
+set_env() {
+  # 値に & / | \ などが入っていても壊れないよう awk (ENVIRON) で書き換える。所有者・権限を保つため cat で書き戻す
+  KEY="$1" VAL="$2" awk 'BEGIN { done = 0 }
+    !done && $0 ~ ("^#? ?" ENVIRON["KEY"] "=") { print ENVIRON["KEY"] "=" ENVIRON["VAL"]; done = 1; next }
+    { print }
+    END { if (!done) print ENVIRON["KEY"] "=" ENVIRON["VAL"] }' "$ENV_FILE" > "$ENV_FILE.tmp"
+  cat "$ENV_FILE.tmp" > "$ENV_FILE"
+  rm -f "$ENV_FILE.tmp"
+}
+env_value() { grep -E "^$1=" "$ENV_FILE" | tail -n 1 | cut -d= -f2-; }
 
 log "パッケージを更新・導入します"
 export DEBIAN_FRONTEND=noninteractive
@@ -73,13 +120,32 @@ SRC="$APP_DIR/repo/deploy"
 
 log "設定ファイル ($ENV_FILE)"
 if [[ ! -f "$ENV_FILE" ]]; then
-  sed "s/__DOMAIN__/$DOMAIN/g" "$SRC/ichijoya.env.example" > "$ENV_FILE"
+  sed "s|https://__DOMAIN__|$BASE_URL|g; s/__DOMAIN__/${DOMAIN:-$PUBLIC_IP}/g" "$SRC/ichijoya.env.example" > "$ENV_FILE"
   # ログインの署名の鍵と定期実行の鍵はここで作る (ほかの値は手で入れる)
   sed -i "s|^SESSION_SECRET=$|SESSION_SECRET=$(openssl rand -hex 32)|" "$ENV_FILE"
   sed -i "s|^CRON_SECRET=$|CRON_SECRET=$(openssl rand -hex 24)|" "$ENV_FILE"
   echo "  → 作成しました。Supabase・AI などの値を入れてください: sudo nano $ENV_FILE"
 else
-  echo "  → 既にあります (変更しません)"
+  echo "  → 既にあります (空の値だけ補います)"
+fi
+# 既存の AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) からの受信の共有鍵 (AI システムの完成後、送信先に設定する)
+[[ -n "$(env_value AI_INTAKE_SECRET)" ]] || set_env AI_INTAKE_SECRET "$(openssl rand -hex 24)"
+# 既存の .env.local などから、空の値を写す
+if [[ -n "$ENV_FROM" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^([A-Z][A-Z0-9_]*)=(.+)$ ]] || continue
+    key="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[2]}"
+    case "$key" in DATA_BACKEND|DATA_FILE_NAME|APP_BASE_URL|BIND_HOST|NODE_ENV|PORT) continue ;; esac
+    [[ -n "$(env_value "$key")" ]] || { set_env "$key" "$val"; echo "  $key ← $ENV_FROM"; }
+  done < "$ENV_FROM"
+fi
+# 待ち受けるアドレスと URL (IP アドレスで公開するあいだは 0.0.0.0:3000。ドメインにしたら enable-domain.sh が 127.0.0.1 に戻す)
+if [[ $IP_MODE -eq 1 ]]; then
+  set_env BIND_HOST 0.0.0.0
+  [[ "$(env_value APP_BASE_URL)" == https://* ]] || set_env APP_BASE_URL "$BASE_URL"
+else
+  set_env BIND_HOST 127.0.0.1
 fi
 chown root:"$APP_USER" "$ENV_FILE"
 chmod 640 "$ENV_FILE"
@@ -95,8 +161,13 @@ EOF
 chmod 440 /etc/sudoers.d/ichijoya
 visudo -cf /etc/sudoers.d/ichijoya >/dev/null
 
-log "nginx (https://$DOMAIN → 127.0.0.1:3000)"
-sed "s/__DOMAIN__/$DOMAIN/g" "$SRC/nginx-ichijoya.conf" > /etc/nginx/sites-available/ichijoya
+log "nginx (${DOMAIN:-IP アドレス} → 127.0.0.1:3000)"
+if [[ $IP_MODE -eq 1 ]]; then
+  # ドメインがないあいだは、どの名前・IP アドレスへの接続も受ける (http://<IP>/ → アプリ)
+  sed "s/server_name __DOMAIN__;/server_name _;/; s/listen 80;/listen 80 default_server;/; s/listen \[::\]:80;/listen [::]:80 default_server;/" "$SRC/nginx-ichijoya.conf" > /etc/nginx/sites-available/ichijoya
+else
+  sed "s/__DOMAIN__/$DOMAIN/g" "$SRC/nginx-ichijoya.conf" > /etc/nginx/sites-available/ichijoya
+fi
 ln -sf /etc/nginx/sites-available/ichijoya /etc/nginx/sites-enabled/ichijoya
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
@@ -105,6 +176,9 @@ systemctl reload nginx
 log "ファイアウォール (SSH・HTTP・HTTPS のみ)"
 ufw allow OpenSSH >/dev/null
 ufw allow 'Nginx Full' >/dev/null
+if [[ $IP_MODE -eq 1 ]]; then
+  ufw allow 3000/tcp >/dev/null   # http://<IP>:3000 (ドメインにしたら enable-domain.sh が閉じる)
+fi
 ufw --force enable >/dev/null
 ufw status | sed 's/^/  /'
 
@@ -125,9 +199,11 @@ cat > /etc/logrotate.d/ichijoya <<'EOF'
 EOF
 
 log "SSL 証明書 (Let's Encrypt)"
-SERVER_IPS=$(hostname -I)
-DNS_IP=$(getent ahostsv4 "$DOMAIN" | awk 'NR==1 {print $1}' || true)
-if [[ -n "$DNS_IP" && " $SERVER_IPS " == *" $DNS_IP "* ]]; then
+SERVER_IPS="$(hostname -I) $PUBLIC_IP"
+DNS_IP=$([[ -n "$DOMAIN" ]] && getent ahostsv4 "$DOMAIN" | awk 'NR==1 {print $1}' || true)
+if [[ $IP_MODE -eq 1 ]]; then
+  echo "  → ドメインがないため取得しません (ドメインを用意したら enable-domain.sh を実行)"
+elif [[ -n "$DNS_IP" && " $SERVER_IPS " == *" $DNS_IP "* ]]; then
   certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL" --redirect
   systemctl reload nginx
 else
@@ -140,6 +216,6 @@ log "完了。次の手順"
 cat <<EOF
   1. 設定ファイルに値を入れる:   sudo nano $ENV_FILE
   2. アプリをビルドして起動する:   sudo -u $APP_USER bash $APP_DIR/repo/deploy/deploy.sh
-  3. 動作を確認する:               cd $APP_DIR/current && node scripts/ops/verify-production.mjs https://$DOMAIN
+  3. 動作を確認する:               cd $APP_DIR/current && node scripts/ops/verify-production.mjs $BASE_URL$([[ $IP_MODE -eq 1 ]] && echo " --allow-http")
   4. バックアップを 1 回試す:      sudo -u $APP_USER bash $APP_DIR/current/deploy/backup.sh
 EOF

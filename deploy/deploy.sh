@@ -35,6 +35,12 @@ wait_healthy() {
 }
 
 switch_to() {
+  # 手で起動した開発用サーバー (next dev) が 3000 番を使っていると本番のサービスが起動できないため止める
+  if pgrep -u "$(id -u)" -f "next dev" >/dev/null 2>&1; then
+    echo "  3000 番を使っている開発用サーバー (next dev) を止めます"
+    pkill -u "$(id -u)" -f "next dev" || true
+    sleep 2
+  fi
   ln -sfn "$1" "$APP_DIR/current.new"
   mv -Tf "$APP_DIR/current.new" "$APP_DIR/current"
   sudo /usr/bin/systemctl restart ichijoya
