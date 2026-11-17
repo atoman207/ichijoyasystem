@@ -9,7 +9,7 @@ import { ROLE_LABEL } from "@/lib/constants";
 import { hashPassword } from "@/lib/auth/password";
 import { setSessionCookie } from "@/lib/auth/session";
 import { putObject, removeObjects } from "@/lib/storage";
-import { loginIdProblem } from "@/lib/account-rules";
+import { loginIdProblem, PASSWORD_AUDIT } from "@/lib/account-rules";
 import { fail, isKeyOf, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 /**
@@ -84,7 +84,7 @@ export async function resetUserPassword(formData: FormData) {
     const u = findManaged(db, actor, id, back);
     u.passwordHash = hashPassword(password);
     u.password = undefined;
-    addAudit(db, { userId: actor.id, action: "update", entity: "user", entityId: id, entityLabel: u.name, summary: "パスワードを再設定", storeId: u.storeId });
+    addAudit(db, { userId: actor.id, action: "update", entity: "user", entityId: id, entityLabel: u.name, summary: PASSWORD_AUDIT.reset, storeId: u.storeId });
     return { id: u.id, passwordHash: u.passwordHash };
   });
   // 再設定した人のログイン中のセッションは無効になる (自分自身を再設定したときはこの端末だけ継続)

@@ -9,7 +9,7 @@ import { addDays, fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
 import { APPROVAL_TYPE_LABEL, AUDIT_ACTION_LABEL, ENTITY_LABEL, INQUIRY_STATUS, ORDER_STATUS, ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import { Avatar, Badge, Button, Card, CardHeader, ChannelTag, Field, Flash, Input, LinkButton, Note, PageHeader, Stat, StatusBadge, StoreTag } from "@/components/ui";
 import { changeOwnLoginId, changeOwnPassword } from "@/lib/actions/auth";
-import { avatarUrl } from "@/lib/account-rules";
+import { avatarUrl, credentialStatus } from "@/lib/account-rules";
 import { AvatarUploader } from "@/components/settings/AvatarUploader";
 import { updateOwnNotify } from "@/lib/actions/settings-ops";
 import { approvalSettings } from "@/lib/approval-rules";
@@ -42,6 +42,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
   const myLogs = db.auditLogs.filter((l) => l.userId === user.id && l.entity !== "session").slice(-10).reverse();
   const myCustomers = db.customers.filter((c) => c.assignedUserId === user.id).length;
   const loginCount = db.auditLogs.filter((l) => l.userId === user.id && l.action === "login").length;
+  const initialPassword = !isDemoAccount(user) && credentialStatus(db.auditLogs, user.id).password === "initial";
 
   const permissions: { ok: boolean; label: string }[] = [
     { ok: true, label: allStores ? "全店舗の顧客・問い合わせ・見積・案件・請求を閲覧" : `${storeName(user.storeId)} の顧客・問い合わせ・見積・案件・請求を閲覧` },
@@ -65,6 +66,15 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
     <div>
       <Flash msg={msg} err={err} />
       <PageHeader title="プロフィール" />
+
+      {initialPassword && (
+        <div className="mb-6">
+          <Note tone="warn">
+            <span className="font-medium">初期パスワードのままです。</span>
+            配られたパスワードはほかの人も知っているため、下の <a href="#password" className="font-medium underline">パスワードの変更</a> で、自分だけが知っているパスワード (8 文字以上) に変更してください。ログイン ID (メールアドレス) もこの画面で変えられます。
+          </Note>
+        </div>
+      )}
 
       <Card className="mb-6 overflow-hidden" padded={false}>
         <div className="grid grid-cols-1 gap-6 p-5 @xl:p-6 @3xl:grid-cols-5">
@@ -260,7 +270,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
         </Card>
       </div>
 
-      <Card className="mb-6">
+      <Card className="mb-6" id="password">
         <CardHeader title="パスワードの変更" description="初期パスワードでログインした場合は、ここで自分だけが知っているパスワードに変更してください" icon={<KeyRound />} />
         <form action={changeOwnPassword} className="grid grid-cols-1 gap-3 @xl:grid-cols-3">
           <Field label="現在のパスワード" required>

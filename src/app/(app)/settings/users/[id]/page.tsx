@@ -4,7 +4,7 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { assignableRoles, assignableStore, canManageUser, canManageUsers, canSeeAllStores, isDemoAccount } from "@/lib/auth/permissions";
 import { deleteUser, resetUserPassword, toggleUserActive, updateUserProfile, updateUserRole } from "@/lib/actions/accounts";
-import { avatarUrl } from "@/lib/account-rules";
+import { avatarUrl, credentialStatus } from "@/lib/account-rules";
 import { updateUserNotify } from "@/lib/actions/settings-ops";
 import { NotifyPrefsForm } from "@/components/settings/NotifyPrefsForm";
 import { fmtDateTime } from "@/lib/format";
@@ -31,6 +31,12 @@ export default async function UserAccountPage({ params, searchParams }: { params
   const returnTo = `/settings/users/${u.id}`;
   const logs = db.auditLogs.filter((l) => l.userId === u.id).slice(-20).reverse();
   const lastLogin = [...db.auditLogs].reverse().find((l) => l.userId === u.id && l.action === "login");
+  const cred = credentialStatus(db.auditLogs, u.id);
+  const passwordLabel =
+    cred.password === "initial" ? <span className="text-warn-ink">初期パスワードのまま ({cred.passwordAt ? fmtDateTime(cred.passwordAt) : "-"} に設定。本人はまだ変更していません)</span>
+    : cred.password === "own" ? `本人が設定 (${cred.passwordAt ? fmtDateTime(cred.passwordAt) : "-"})`
+    : u.passwordHash ? "設定済み" : u.password ? "サンプルデータ (平文)" : "未設定";
+  const loginIdLabel = cred.loginIdChangedAt ? `${cred.loginIdChangedBySelf ? "本人" : "管理者・店長"}が ${fmtDateTime(cred.loginIdChangedAt)} に変更${cred.loginIdBefore ? ` (変更前: ${cred.loginIdBefore})` : ""}` : "変更なし";
   const scope = canSeeAllStores(u) ? "全店舗の情報を閲覧・登録・編集できます" : `${store?.name ?? u.storeId} の情報だけを閲覧・登録・編集できます (予定表は全店舗を閲覧)`;
 
   return (
@@ -100,7 +106,8 @@ export default async function UserAccountPage({ params, searchParams }: { params
               <Avatar name={u.name} id={u.id} size={56} src={avatarUrl(u)} />
               <p className="text-[11px] leading-relaxed text-ink-3">顔写真は本人がプロフィールで登録します。</p>
             </div>
-            <Dl columns={1} items={[["状態", u.active ? "有効 (ログインできます)" : "無効 (ログインできません)"], ["最終ログイン", lastLogin ? fmtDateTime(lastLogin.at) : "-"], ["パスワード", u.passwordHash ? "設定済み (ハッシュで保存)" : u.password ? "サンプルデータ (平文)" : "未設定"]]} />
+            <Dl columns={1} items={[["状態", u.active ? "有効 (ログインできます)" : "無効 (ログインできません)"], ["ログイン ID", <span key="id" className="font-mono text-[13px]">{u.email}</span>], ["ログイン ID の変更", loginIdLabel], ["最終ログイン", lastLogin ? fmtDateTime(lastLogin.at) : "-"], ["パスワード", passwordLabel]]} />
+            <p className="mt-2 text-[11px] leading-relaxed text-ink-3">パスワードは暗号化 (ハッシュ) して保存しているため、管理者を含め誰も中身を見られません。忘れたときは下の「パスワードの再設定」で新しいパスワードを決めて本人に伝えます。</p>
             <form action={toggleUserActive.bind(null, u.id)} className="mt-4">
               <input type="hidden" name="returnTo" value={returnTo} />
               <Button type="submit" size="sm" variant={u.active ? "danger" : "secondary"} disabled={u.id === user.id}>{u.active ? "無効にする (ログインを止める)" : "有効にする"}</Button>

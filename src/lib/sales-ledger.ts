@@ -300,8 +300,12 @@ function matchStaff(users: User[], slips: SalesSlip[]): Map<string, User> {
   for (const s of slips) for (const st of s.staff) if (st && !dir.has(st.code)) dir.set(st.code, compact(st.name));
   const names = [...dir.values()];
   const out = new Map<string, User>();
+  // 有効なアカウントだけで照合する (作り直した社員は同じ名前の無効なアカウントが残っており、両方を候補にすると一致が 2 件になって照合できない)。
+  // 有効な社員がいないデータ (古い控えなど) のときだけ全員で照合する
+  const active = users.filter((u) => u.active);
+  const pool = active.length > 0 ? active : users;
   for (const [code, name] of dir) {
-    const cands = users.map((u) => ({ u, n: compact(u.name) })).filter(({ n }) => n.length >= 2);
+    const cands = pool.map((u) => ({ u, n: compact(u.name) })).filter(({ n }) => n.length >= 2);
     const exact = cands.find(({ n }) => n === name);
     const given = cands.filter(({ n }) => n.length >= 3 && name.endsWith(n));
     const family = cands.filter(({ n }) => name.startsWith(n) && names.filter((x) => x.startsWith(n)).length === 1);

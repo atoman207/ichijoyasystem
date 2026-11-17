@@ -2,7 +2,7 @@ import type { Database, Role, User } from "@/lib/db/types";
 import { assignableRoles, assignableStore, canApproveSignup, canManageUser, canManageUsers } from "@/lib/auth/permissions";
 import { ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import { approveSignup, createUser, rejectSignup, resetUserPassword, toggleUserActive, updateUserRole } from "@/lib/actions/accounts";
-import { avatarUrl } from "@/lib/account-rules";
+import { avatarUrl, credentialStatus } from "@/lib/account-rules";
 import { fmtDateTime } from "@/lib/format";
 import { Avatar, Badge, Button, Card, CardHeader, Field, Input, Note, Select, StoreTag } from "@/components/ui";
 import Link from "@/components/ui/Link";
@@ -17,8 +17,11 @@ export function UsersTab({ db, user }: { db: Database; user: User }) {
   const storeName = (id: string) => db.stores.find((s) => s.id === id)?.name ?? id;
   const signups = db.users.filter((u) => u.signupStatus === "pending" && canApproveSignup(user, u));
   const otherSignups = manager ? db.users.filter((u) => u.signupStatus === "pending" && !canApproveSignup(user, u)).length : 0;
-  const members = db.users.filter((u) => u.signupStatus !== "pending");
+  // 有効なアカウントを先に並べる (移行時のアカウントを無効にして作り直した社員は、同じ名前が有効・無効の 2 行になるため)
+  const members = db.users.filter((u) => u.signupStatus !== "pending").sort((a, b) => Number(b.active) - Number(a.active));
   const managed = members.filter((u) => canManageUser(user, u));
+  const initialPw = new Set(manager ? managed.filter((u) => u.active && credentialStatus(db.auditLogs, u.id).password === "initial").map((u) => u.id) : []);
+  const inactive = (u: User) => (u.active ? "" : " · 無効");
   const roleOptions = (list: Role[]) => list.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>);
 
   return (
@@ -107,7 +110,12 @@ export function UsersTab({ db, user }: { db: Database; user: User }) {
                       <td className="px-3 py-2 text-xs">{ROLE_LABEL[u.role]}</td>
                       <td className="px-3 py-2"><StoreTag store={db.stores.find((s) => s.id === u.storeId)} short /></td>
                       {manager && <td className="px-3 py-2 font-mono text-[11px] text-ink-2">{can || u.id === user.id ? u.email : ""}</td>}
-                      <td className="px-3 py-2"><Badge tone={u.active ? "good" : "neutral"}>{u.active ? "有効" : "無効"}</Badge></td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-1">
+                          <Badge tone={u.active ? "good" : "neutral"}>{u.active ? "有効" : "無効"}</Badge>
+                          {initialPw.has(u.id) && <Badge tone="warn" dot={false}>初期パスワード</Badge>}
+                        </div>
+                      </td>
                       {manager && (
                         <td className="px-4 py-2 text-right">
                           {can && u.id !== user.id && (
@@ -159,7 +167,7 @@ export function UsersTab({ db, user }: { db: Database; user: User }) {
                 <Field label="ユーザー">
                   <Select name="userId" required defaultValue="">
                     <option value="" disabled>選択してください</option>
-                    {members.map((u) => <option key={u.id} value={u.id}>{u.name} ({ROLE_LABEL[u.role]} / {storeName(u.storeId)})</option>)}
+                    {members.map((u) => <option key={u.id} value={u.id}>{u.name} ({ROLE_LABEL[u.role]} / {storeName(u.storeId)}{inactive(u)})</option>)}
                   </Select>
                 </Field>
                 <div className="grid grid-cols-2 gap-2">

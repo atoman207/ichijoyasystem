@@ -8,7 +8,7 @@ import { headers } from "next/headers";
 import { canResetData, DEMO_EMAIL_DOMAIN } from "@/lib/auth/permissions";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { hasReviewAccess, REVIEW_ACCOUNTS } from "@/lib/auth/review";
-import { loginIdProblem, reservedLoginId } from "@/lib/account-rules";
+import { loginIdProblem, PASSWORD_AUDIT, reservedLoginId } from "@/lib/account-rules";
 import { ROLE_LABEL } from "@/lib/constants";
 import type { Role, StoreId, User } from "@/lib/db/types";
 import crypto from "node:crypto";
@@ -130,7 +130,7 @@ export async function changeOwnPassword(formData: FormData) {
     if (!u) fail(back, "ユーザーが見つかりません。");
     u.passwordHash = hashPassword(next);
     u.password = undefined;
-    addAudit(d, { userId: user.id, action: "update", entity: "user", entityId: user.id, entityLabel: user.name, summary: "パスワードを変更" });
+    addAudit(d, { userId: user.id, action: "update", entity: "user", entityId: user.id, entityLabel: user.name, summary: PASSWORD_AUDIT.changed });
     return { id: u.id, passwordHash: u.passwordHash };
   });
   // 他の端末のセッションは無効になる。この端末は新しいパスワードでログインし直した扱いにする
