@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3001",
-    "prebuild": "node scripts/import/migrate.mjs --if-configured",
+    "prebuild": "node scripts/chatbot/extract-ui.mjs && node scripts/import/migrate.mjs --if-configured",
     "build": "next build",
     "start": "next start",
     "deploy": "bash deploy/deploy.sh",
@@ -14,7 +14,8 @@
     "db:sql": "node scripts/import/generate-data-sql.mjs",
     "db:setup": "node scripts/import/generate-data-sql.mjs && node scripts/import/setup-database.mjs",
     "db:migrate": "node scripts/import/generate-schema.mjs && node scripts/import/migrate.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "chatbot:catalog": "node scripts/chatbot/extract-ui.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.7.0",

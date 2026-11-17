@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // 使っているソフトの名前を応答に出さない
   poweredByHeader: false,
+  // 開発中の表示 (左下の N) は、左下のチャットボットのボタンと重なるので出さない
+  devIndicators: false,
   // セキュリティのヘッダー (nginx を通さず IP アドレス:3000 で直接開いたときにも付ける。HSTS は HTTPS の nginx が付ける)
   async headers() {
     return [

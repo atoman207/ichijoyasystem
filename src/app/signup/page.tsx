@@ -15,9 +15,9 @@ export default async function SignupPage() {
   const stores = db.stores.map((s) => ({ id: s.id, name: s.name, color: s.color }));
   return (
     <PublicShell current="signup">
-      <div className="mx-auto grid max-w-5xl grid-cols-1 gap-8 px-4 py-10 sm:px-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:py-14">
+      <div className="mx-auto grid max-w-5xl grid-cols-1 gap-8 px-4 py-10 wa-accent sm:px-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:py-14">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-ink sm:text-3xl">新規登録</h1>
+          <h1 className="font-maru text-2xl tracking-tight text-wa-deep sm:text-3xl">新規登録</h1>
           <p className="mt-3 text-sm leading-relaxed text-ink-2">
             一畳屋の社員の方は、ここからアカウントを申請できます。自分の役割 (ロール) と所属を選んでください。
           </p>

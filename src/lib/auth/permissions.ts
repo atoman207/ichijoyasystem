@@ -95,6 +95,11 @@ export function canManageSettings(user: User): boolean {
   return user.role === "admin";
 }
 
+/** チャットボットの回答の修正・追加・削除、学習の実行、利用状況の確認 */
+export function canManageChatbot(user: User): boolean {
+  return user.role === "admin";
+}
+
 /**
  * アカウント管理 (社員の追加・変更・パスワードの再設定・有効と無効・削除・新規登録の承認)
  * - 管理者: すべてのアカウント (ロール・所属も変更できる)

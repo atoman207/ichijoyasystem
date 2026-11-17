@@ -5,7 +5,12 @@ import { DRAFT_FORMAT_LABEL, DRAFT_TEMPLATES } from "@/lib/ai/draft";
 import { AiChat } from "@/components/features/AiChat";
 import { DraftForm } from "@/components/features/DraftForm";
 import Link from "@/components/ui/Link";
-import { Badge, Card, CardHeader, LinkTabs, PageHeader } from "@/components/ui";
+import { Badge, Card, CardHeader, Flash, LinkTabs, PageHeader } from "@/components/ui";
+import { ChatbotAdmin } from "@/components/chatbot/ChatbotAdmin";
+import { canManageChatbot } from "@/lib/auth/permissions";
+import { ensureChatbotData } from "@/lib/chatbot/build";
+import { chatbotStats, listQa } from "@/lib/chatbot/store";
+import { pendingDocs, trainState } from "@/lib/chatbot/train";
 
 /** AI の応答待ち (最大 50 秒) のため、処理時間の上限を 60 秒にする */
 export const maxDuration = 60;
@@ -16,13 +21,20 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<R
   const db = getDb();
   const status = aiStatus();
   const enabled = status.enabled;
-  const tab = sp.tab === "draft" ? "draft" : "chat";
+  const manage = canManageChatbot(user);
+  const tab = sp.tab === "draft" ? "draft" : sp.tab === "bot" && manage ? "bot" : "chat";
   const knowledgeCount = db.knowledge.filter((k) => k.active).length;
   return (
     <div>
       <PageHeader title="AI アシスタント" badge={<Badge tone={enabled ? "good" : "neutral"}>{enabled ? `${status.label} 接続中 (${status.model})` : "サンプルモード"}</Badge>} />
-      <LinkTabs current={tab === "draft" ? "/ai?tab=draft" : "/ai"} items={[{ href: "/ai", label: "質問・検索" }, { href: "/ai?tab=draft", label: "文書の作成" }]} />
-      {tab === "draft" ? (
+      <LinkTabs
+        current={tab === "chat" ? "/ai" : `/ai?tab=${tab}`}
+        items={[{ href: "/ai", label: "質問・検索" }, { href: "/ai?tab=draft", label: "文書の作成" }, ...(manage ? [{ href: "/ai?tab=bot", label: "チャットボットの管理" }] : [])]}
+      />
+      <Flash msg={sp.msg} err={sp.err} />
+      {tab === "bot" ? (
+        <BotTab sp={sp} enabled={enabled} db={db} />
+      ) : tab === "draft" ? (
         <DraftForm templates={Object.entries(DRAFT_TEMPLATES).map(([id, t]) => ({ id, ...t }))} formats={Object.entries(DRAFT_FORMAT_LABEL).map(([id, label]) => ({ id, label }))} defaultRef={sp.ref} aiEnabled={enabled} />
       ) : (
         <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-4">
@@ -56,4 +68,13 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<R
       )}
     </div>
   );
+}
+
+const PAGE_SIZE = 50;
+
+function BotTab({ sp, enabled, db }: { sp: Record<string, string | undefined>; enabled: boolean; db: ReturnType<typeof getDb> }) {
+  ensureChatbotData(db);
+  const page = Math.max(1, Number(sp.page) || 1);
+  const { rows, total } = listQa({ q: sp.q, origin: sp.origin, flagged: sp.flagged === "1", limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
+  return <ChatbotAdmin stats={chatbotStats()} train={trainState()} pending={pendingDocs().length} aiEnabled={enabled} list={{ rows, total, page, size: PAGE_SIZE }} sp={sp} />;
 }

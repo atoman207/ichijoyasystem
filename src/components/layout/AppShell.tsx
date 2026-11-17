@@ -50,6 +50,8 @@ import {
 } from "lucide-react";
 import { Avatar, Badge } from "@/components/ui";
 import { IchijoyaLogo } from "@/components/brand/Logo";
+import { ChatbotWidget } from "@/components/chatbot/ChatbotWidget";
+import { ScrollTopButton } from "./ScrollTopButton";
 
 export type NavIcon =
   | "dashboard"
@@ -705,9 +707,11 @@ export function AppShell({
         </div>
       )}
 
-      <main id="main-content" className="px-3 pt-5 pb-12 sm:px-4 lg:px-6 lg:pt-7">
+      <main id="main-content" className="px-3 pt-5 pb-24 sm:px-4 lg:px-6 lg:pt-7">
         <div className="@container mx-auto w-full max-w-[1680px] animate-fade">{children}</div>
       </main>
+      <ChatbotWidget userName={user.name} />
+      <ScrollTopButton />
     </div>
   );
 }

@@ -28,7 +28,17 @@
   --color-accent-hover: #3b4ad4;
   --color-accent-soft: #eef0fe;
   --color-accent-ink: #3340b8;
-  --color-accent-strong: #2a338f; /* ブランド面 (ログイン) */
+  --color-accent-strong: #2a338f; /* ブランド面 */
+
+  /* 公式サイト (ichijoya.co.jp) の色: ログイン前の画面 (トップ・新規登録) に使う */
+  --color-wa-deep: #1c4911; /* 深い畳の緑 */
+  --color-wa-green: #488837; /* 畳の緑 */
+  --color-wa-leaf: #6aa84f;
+  --color-wa-red: #a72126; /* ロゴの赤 */
+  --color-wa-yellow: #fdd000;
+  --color-wa-cream: #f7f5f2;
+  --color-wa-paper: #fffdf4;
+  --font-maru: "Kiwi Maru", "Hiragino Maru Gothic ProN", "BIZ UDPGothic", "Hiragino Sans", Meiryo, sans-serif;
 
   /* ステータス色 (アイコン・ラベルと必ず併用し、色のみに意味を持たせない) */
   --color-good: #12a150;
@@ -175,6 +185,26 @@ body {
   background-image:
     repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.06) 0 1px, transparent 1px 7px),
     repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 3px);
+}
+
+/* 公式サイトの畳の目 (斜めの編み目) */
+/* 公開ページ (ログイン・新規登録) の部品を公式サイトの緑にする */
+.wa-accent {
+  --color-accent: var(--color-wa-green);
+  --color-accent-hover: var(--color-wa-deep);
+  --color-accent-soft: #eef5ea;
+  --color-accent-ink: var(--color-wa-deep);
+  --color-accent-strong: var(--color-wa-deep);
+}
+.tatami-weave {
+  background-image:
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.07) 0 2px, transparent 2px 14px),
+    repeating-linear-gradient(-45deg, rgba(0, 0, 0, 0.06) 0 2px, transparent 2px 14px);
+}
+
+/* 畳の縁 (へり) のような帯 */
+.tatami-heri {
+  background-image: repeating-linear-gradient(90deg, #1c4911 0 10px, #24581a 10px 14px);
 }
 
 /* 細いスクロールバー */
