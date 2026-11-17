@@ -56,6 +56,10 @@
   --animate-pop: pop 0.14s ease-out both;
   --animate-fade: fade 0.2s ease-out both;
   --animate-drop: drop 0.18s ease-out both;
+  /* 予定表のボタン (ヘッダー左上) を目立たせる: 光の輪・光の帯・アイコンの揺れ */
+  --animate-pin-glow: pin-glow 2.4s ease-out infinite;
+  --animate-pin-shine: pin-shine 3.6s ease-in-out infinite;
+  --animate-pin-wiggle: pin-wiggle 4.8s ease-in-out infinite;
 
   @keyframes pop {
     from {
@@ -85,6 +89,48 @@
     to {
       opacity: 1;
       transform: translateY(0);
+    }
+  }
+  @keyframes pin-glow {
+    0% {
+      box-shadow:
+        0 8px 18px -10px rgba(74, 90, 232, 0.95),
+        0 0 0 0 rgba(74, 90, 232, 0.45);
+    }
+    70%,
+    100% {
+      box-shadow:
+        0 8px 18px -10px rgba(74, 90, 232, 0.95),
+        0 0 0 9px rgba(74, 90, 232, 0);
+    }
+  }
+  @keyframes pin-shine {
+    0%,
+    55% {
+      transform: translateX(-120%) skewX(-20deg);
+    }
+    85%,
+    100% {
+      transform: translateX(260%) skewX(-20deg);
+    }
+  }
+  @keyframes pin-wiggle {
+    0%,
+    82%,
+    100% {
+      transform: rotate(0deg) scale(1);
+    }
+    85% {
+      transform: rotate(-12deg) scale(1.12);
+    }
+    89% {
+      transform: rotate(10deg) scale(1.12);
+    }
+    93% {
+      transform: rotate(-6deg) scale(1.06);
+    }
+    97% {
+      transform: rotate(3deg) scale(1);
     }
   }
 }

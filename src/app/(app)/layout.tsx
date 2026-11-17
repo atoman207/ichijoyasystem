@@ -23,7 +23,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     { href: "/quotes", label: "見積", icon: "quotes", group: "営業・施工" },
     { href: "/orders", label: "受注・施工", icon: "orders", group: "営業・施工" },
     { href: "/cases", label: "案件の進捗 (問い合わせ〜入金・全処理完了)", short: "案件進捗", icon: "cases", group: "営業・施工" },
-    { href: "/schedule", label: "予定表", icon: "schedule", group: "営業・施工", badge: n.myConflicts || undefined },
+    { href: "/schedule", label: "予定表", icon: "schedule", group: "営業・施工", badge: n.myConflicts || undefined, pinned: true },
     { href: "/invoices", label: "請求・入金", icon: "invoices", group: "経理", badge: n.overdueInvoices || undefined },
     { href: "/finance", label: "入出金の予定 (未入金・支払待ち)", short: "入出金予定", icon: "finance", group: "経理" },
     { href: "/expenses", label: "経費精算", icon: "expenses", group: "経理" },

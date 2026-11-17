@@ -118,6 +118,8 @@ export interface NavItem {
   icon: NavIcon;
   badge?: number;
   group?: string;
+  /** ヘッダー左上 (ロゴの右) に常に表示する重要な機能。タブの列には出さない */
+  pinned?: boolean;
 }
 
 export interface ShellUser {
@@ -205,6 +207,33 @@ function TabInner({ icon: Icon, label, badge, active }: { icon: LucideIcon; labe
   );
 }
 
+/** ヘッダー左上に常に表示する重要な機能のボタン (光の輪・光の帯・アイコンの揺れで目立たせる) */
+function PinnedButton({ item, active, onClick }: { item: NavItem; active: boolean; onClick: () => void }) {
+  const Icon = ICONS[item.icon];
+  return (
+    <Link
+      href={item.href}
+      prefetch={false}
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      aria-label={item.badge ? `${item.label}（${item.badge} 件）` : item.label}
+      title={item.label}
+      className={clsx(
+        "group relative inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-linear-to-br from-accent to-info px-2.5 text-sm font-semibold text-white outline-none transition-transform duration-200 hover:-translate-y-px focus-visible:ring-4 focus-visible:ring-accent/30 sm:h-10 sm:px-3.5",
+        "animate-pin-glow motion-reduce:animate-none motion-reduce:shadow-[0_8px_18px_-10px_rgba(74,90,232,0.95)]",
+        active && "ring-2 ring-white ring-offset-2 ring-offset-accent/40",
+      )}
+    >
+      <span className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl" aria-hidden>
+        <span className="absolute inset-y-0 left-0 w-1/3 bg-linear-to-r from-transparent via-white/45 to-transparent animate-pin-shine motion-reduce:hidden" />
+      </span>
+      <Icon className="relative h-[18px] w-[18px] animate-pin-wiggle motion-reduce:animate-none sm:h-5 sm:w-5" strokeWidth={2.2} aria-hidden />
+      <span className="relative max-[400px]:hidden">{item.short ?? item.label}</span>
+      {item.badge ? <CountBubble n={item.badge} className="absolute -top-1.5 -right-1.5" /> : null}
+    </Link>
+  );
+}
+
 function SearchBox({ autoFocus }: { autoFocus?: boolean }) {
   return (
     <form action="/customers" method="get" role="search" className="relative">
@@ -247,7 +276,9 @@ export function AppShell({
   const [drawer, setDrawer] = useState(false);
   const [menu, setMenu] = useState<MenuId>(null);
   const [lastPath, setLastPath] = useState(pathname);
-  const [visibleCount, setVisibleCount] = useState(nav.length);
+  const pinned = nav.find((it) => it.pinned);
+  const tabs = nav.filter((it) => !it.pinned);
+  const [visibleCount, setVisibleCount] = useState(tabs.length);
   const headerRef = useRef<HTMLElement>(null);
   const navRef = useRef<HTMLElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
@@ -336,8 +367,8 @@ export function AppShell({
   };
 
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`));
-  const shown = nav.slice(0, visibleCount);
-  const overflow = nav.slice(visibleCount);
+  const shown = tabs.slice(0, visibleCount);
+  const overflow = tabs.slice(visibleCount);
   const overflowActive = overflow.some((it) => isActive(it.href));
   const overflowBadge = overflow.reduce((a, it) => a + (it.badge ?? 0), 0);
 
@@ -419,6 +450,9 @@ export function AppShell({
             <IchijoyaLogo title="" className="h-6 w-auto sm:h-7" />
           </Link>
 
+          {/* 重要な機能 (予定表): ロゴの右に常に表示し、アニメーションで目立たせる */}
+          {pinned && <PinnedButton item={pinned} active={isActive(pinned.href)} onClick={closeAll} />}
+
           {/* PC: メニューのタブ */}
           <nav ref={navRef} aria-label="メインメニュー" className="relative hidden min-w-0 flex-1 items-center justify-center lg:flex">
             <div className="flex min-w-0 items-center gap-0.5 overflow-hidden">
@@ -460,7 +494,7 @@ export function AppShell({
             {/* 計測用 (非表示): すべてのタブ + 「その他」。外側で切り取り、ページの横幅に影響させない */}
             <div aria-hidden inert className="pointer-events-none invisible absolute inset-0 overflow-hidden">
               <div ref={measureRef} className="flex w-max gap-0.5">
-                {nav.map((item) => (
+                {tabs.map((item) => (
                   <span key={item.href} className={TAB}>
                     <TabInner icon={ICONS[item.icon]} label={item.short ?? item.label} badge={item.badge} active={false} />
                   </span>
