@@ -1,14 +1,16 @@
 import Link from "@/components/ui/Link";
 import type { Metadata } from "next";
-import { Building, CalendarDays, ClipboardCheck, Hammer, Inbox, KeyRound, Mail, Phone, Shield, ShieldCheck, Users } from "lucide-react";
+import { AtSign, Building, CalendarDays, Camera, ClipboardCheck, Hammer, Inbox, KeyRound, Mail, Phone, Shield, ShieldCheck, Users } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canApprove, canApproveAll, canManageCompanyEvents, canManageFinance, canManageSettings, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
+import { canApprove, canApproveAll, canManageCompanyEvents, canManageFinance, canManageSettings, canManageUsers, canSeeAllStores, isDemoAccount, isManagerOrAbove } from "@/lib/auth/permissions";
 import { customerName, storeById, storeName, userName } from "@/lib/db/queries";
 import { addDays, fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
 import { APPROVAL_TYPE_LABEL, AUDIT_ACTION_LABEL, ENTITY_LABEL, INQUIRY_STATUS, ORDER_STATUS, ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import { Avatar, Badge, Button, Card, CardHeader, ChannelTag, Field, Flash, Input, LinkButton, Note, PageHeader, Stat, StatusBadge, StoreTag } from "@/components/ui";
-import { changeOwnPassword } from "@/lib/actions/auth";
+import { changeOwnLoginId, changeOwnPassword } from "@/lib/actions/auth";
+import { avatarUrl } from "@/lib/account-rules";
+import { AvatarUploader } from "@/components/settings/AvatarUploader";
 import { updateOwnNotify } from "@/lib/actions/settings-ops";
 import { approvalSettings } from "@/lib/approval-rules";
 import { NotifyPrefsForm } from "@/components/settings/NotifyPrefsForm";
@@ -53,7 +55,8 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
     { ok: canManageFinance(user) || isManagerOrAbove(user), label: `請求書の発行 (${allStores ? "全店舗" : "自店舗"})` },
     { ok: true, label: `入金の登録 (${allStores ? "全店舗" : "自店舗"})` },
     { ok: canManageFinance(user), label: "請求書の無効化、仕入請求書 (買掛) の登録・支払処理" },
-    { ok: canManageSettings(user), label: "ユーザー・店舗・商品マスタの変更、サンプルデータの初期化" },
+    { ok: canManageUsers(user), label: canManageSettings(user) ? "すべてのアカウントの追加・削除・権限の変更、新規登録の申請の承認" : `${storeName(user.storeId)} の店舗スタッフのアカウントの追加・削除、新規登録の申請の承認` },
+    { ok: canManageSettings(user), label: "店舗・商品マスタ・運用ルールの変更、サンプルデータの初期化" },
     { ok: true, label: `予定表で全社員・全店舗の予定を閲覧し、${allStores ? "全店舗" : storeName(user.storeId)}の予定を登録・変更 (担当になった他店舗の予定も変更可)` },
     { ok: canManageCompanyEvents(user), label: "全社共通の予定 (社内行事・全社会議など全店舗のカレンダーに載る予定) の登録" },
   ];
@@ -67,7 +70,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
         <div className="grid grid-cols-1 gap-6 p-5 @xl:p-6 @3xl:grid-cols-5">
           <div className="@3xl:col-span-3">
             <div className="flex items-start gap-4">
-              <Avatar name={user.name} id={user.id} size={64} ring />
+              <Avatar name={user.name} id={user.id} size={64} ring src={avatarUrl(user)} />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-xl font-semibold tracking-tight text-ink">{user.name}</h2>
@@ -81,7 +84,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
             <dl className="mt-5 grid grid-cols-1 gap-x-6 gap-y-3 text-sm @xl:grid-cols-2">
               <div className="flex items-start gap-2.5">
                 <Mail className="mt-0.5 h-4 w-4 shrink-0 text-ink-3" aria-hidden />
-                <div className="min-w-0"><dt className="text-xs text-ink-3">メールアドレス</dt><dd className="truncate font-mono text-[13px] text-ink">{user.email}</dd></div>
+                <div className="min-w-0"><dt className="text-xs text-ink-3">ログイン ID (メールアドレス)</dt><dd className="truncate font-mono text-[13px] text-ink">{user.email}</dd></div>
               </div>
               <div className="flex items-start gap-2.5">
                 <Phone className="mt-0.5 h-4 w-4 shrink-0 text-ink-3" aria-hidden />
@@ -232,6 +235,31 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
         <NotifyPrefsForm u={user} action={updateOwnNotify} />
       </Card>
 
+      <div className="mb-6 grid grid-cols-1 gap-4 @3xl:grid-cols-2">
+        <Card>
+          <CardHeader title="顔写真" description="社内の画面で、あなたの名前の横に表示されます" icon={<Camera />} />
+          <AvatarUploader name={user.name} id={user.id} src={avatarUrl(user)} />
+        </Card>
+        <Card>
+          <CardHeader title="ログイン ID (メールアドレス) の変更" description="次回のログインから新しい ID を使います。確認のため現在のパスワードを入力してください" icon={<AtSign />} />
+          {isDemoAccount(user) ? (
+            <p className="text-xs text-ink-3">デモ用アカウントのログイン ID は変更できません。</p>
+          ) : (
+            <form action={changeOwnLoginId} className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+              <Field label="新しいログイン ID" required>
+                <Input name="email" required defaultValue={user.email} autoCapitalize="none" spellCheck={false} autoComplete="username" />
+              </Field>
+              <Field label="現在のパスワード" required>
+                <Input name="current" type="password" required autoComplete="current-password" />
+              </Field>
+              <div className="@xl:col-span-2">
+                <Button type="submit" size="sm">ログイン ID を変更する</Button>
+              </div>
+            </form>
+          )}
+        </Card>
+      </div>
+
       <Card className="mb-6">
         <CardHeader title="パスワードの変更" description="初期パスワードでログインした場合は、ここで自分だけが知っているパスワードに変更してください" icon={<KeyRound />} />
         <form action={changeOwnPassword} className="grid grid-cols-1 gap-3 @xl:grid-cols-3">
@@ -251,8 +279,8 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
       </Card>
 
       <Note>
-        アカウント情報 (氏名・ログイン ID・ロール・所属) の変更は管理者が「設定 → ユーザーと権限」から行います。多要素認証は次の段階 (Phase 2) で認証基盤とあわせて提供します。
-        {canManageSettings(user) && <span className="ml-2"><LinkButton href="/settings?tab=users" variant="secondary" size="sm">ユーザー設定を開く</LinkButton></span>}
+        ログイン ID・パスワード・顔写真・通知の受け取り方は、この画面で本人が変更できます。氏名・ロール・所属の変更は管理者 (店舗スタッフは所属店舗の店長も) が「設定 → ユーザーと権限」から行います。多要素認証は次の段階 (Phase 2) で認証基盤とあわせて提供します。
+        {canManageUsers(user) && <span className="ml-2"><LinkButton href="/settings?tab=users" variant="secondary" size="sm">ユーザー設定を開く</LinkButton></span>}
       </Note>
     </div>
   );

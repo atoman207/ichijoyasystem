@@ -75,6 +75,12 @@ export const TABLES: TableDef[] = [
       ["notifyEmail", "text"],
       ["notifyByEmail", "boolean"],
       ["chatworkAccountId", "text"],
+      // アカウントの自己管理: 顔写真 (Storage のキー) と新規登録の申請 (承認されるまで active = false)
+      ["avatarKey", "text"],
+      ["avatarUpdatedAt", ts],
+      ["signupStatus", "text check (signup_status in ('pending'))"],
+      ["signupRequestedAt", ts],
+      ["signupNote", "text"],
     ],
     orderBy: ["id"],
   },

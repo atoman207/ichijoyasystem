@@ -2,7 +2,8 @@ import { requireUser } from "@/lib/auth/session";
 import { BACKEND, getDb } from "@/lib/db/store";
 import { canExportData, canManageSettings } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
-import { createProduct, createUser, resetUserPassword, toggleUserActive, updateDocumentSettings, updateOpsSettings, updateProduct, updateStore, updateUserRole } from "@/lib/actions/settings";
+import { createProduct, updateDocumentSettings, updateOpsSettings, updateProduct, updateStore } from "@/lib/actions/settings";
+import { UsersTab } from "@/components/settings/UsersTab";
 import { resetSampleData } from "@/lib/actions/auth";
 import { aiStatus } from "@/lib/ai/provider";
 import { documentSettings } from "@/lib/doc-settings";
@@ -10,17 +11,15 @@ import { AiConnectionCheck } from "@/components/settings/AiConnectionCheck";
 import { KpiSettingsCard } from "@/components/settings/KpiSettingsCard";
 import { CUSTOMER_CREATOR_LABEL, opsSettings } from "@/lib/ops-settings";
 import { fmtDateTime, yen } from "@/lib/format";
-import { CATEGORY_LABEL, CHANNEL_LABEL, DELIVERY_CHANNEL_LABEL, DELIVERY_STATUS, ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
+import { CATEGORY_LABEL, CHANNEL_LABEL, DELIVERY_CHANNEL_LABEL, DELIVERY_STATUS } from "@/lib/constants";
 import { approvalSettings } from "@/lib/approval-rules";
 import { sendTestMessage, updateAiIntakeSettings, updateApprovalSettings, updateNotifySettings } from "@/lib/actions/settings-ops";
 import { HANDOFF_MODE_LABEL, aiIntakeSettings, type HandoffMode } from "@/lib/ai-intake";
 import { appBaseUrl, chatworkConfig, integrationStatuses } from "@/lib/notify/config";
 import { NOTIFY_EVENT_LABEL, notifySettings, type NotifyEvent } from "@/lib/notify/events";
 import { canManageIntegrations } from "@/lib/auth/permissions";
-import type { Role, ServiceCategory } from "@/lib/db/types";
+import type { ServiceCategory } from "@/lib/db/types";
 import { Badge, Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select, StoreTag, Textarea } from "@/components/ui";
-import Link from "@/components/ui/Link";
-import { PermissionTableCard } from "@/components/settings/PermissionTableCard";
 import { GoLivePanel } from "@/components/settings/GoLivePanel";
 import { LineGroupsCard } from "@/components/settings/LineGroupsCard";
 import { MessagingConnectionCheck } from "@/components/settings/MessagingConnectionCheck";
@@ -42,11 +41,11 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title={admin ? "設定" : "設定 (閲覧のみ)"} badge={!admin && <Badge tone="neutral">変更は管理者のみ</Badge>} />
+      <PageHeader title={admin ? "設定" : "設定 (閲覧のみ)"} badge={!admin && <Badge tone="neutral">{user.role === "store_manager" ? "変更は管理者のみ (自店舗のスタッフのアカウントは店長も管理)" : "変更は管理者のみ"}</Badge>} />
       <LinkTabs
         current={`${base}?tab=${tab}`}
         items={[
-          { href: `${base}?tab=users`, label: "ユーザーと権限", count: db.users.length },
+          { href: `${base}?tab=users`, label: "ユーザーと権限", count: db.users.filter((u) => u.signupStatus !== "pending").length },
           { href: `${base}?tab=stores`, label: "店舗" },
           { href: `${base}?tab=products`, label: "商品マスタ", count: db.products.length },
           { href: `${base}?tab=documents`, label: "帳票 (見積書・請求書)" },
@@ -59,105 +58,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         ]}
       />
 
-      {tab === "users" && (
-        <div className="space-y-4">
-        <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-3">
-          <Card className="@4xl:col-span-2" padded={false}>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] text-sm">
-                <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-4 py-2 text-left font-medium">氏名</th><th className="px-3 py-2 text-left font-medium">ロール</th><th className="px-3 py-2 text-left font-medium">所属</th>{admin && <th className="px-3 py-2 text-left font-medium">ログイン ID</th>}<th className="px-3 py-2 text-left font-medium">状態</th>{admin && <th className="px-4 py-2" />}</tr></thead>
-                <tbody>
-                  {db.users.map((u) => (
-                    <tr key={u.id} className="border-t border-line">
-                      <td className="px-4 py-2"><div className="font-medium">{admin ? <Link href={`/settings/users/${u.id}`} className="text-accent hover:underline">{u.name}</Link> : u.name}</div><div className="text-[11px] text-ink-3">{u.title}</div></td>
-                      <td className="px-3 py-2 text-xs">{ROLE_LABEL[u.role]}</td>
-                      <td className="px-3 py-2"><StoreTag store={db.stores.find((s) => s.id === u.storeId)} short /></td>
-                      {admin && <td className="px-3 py-2 font-mono text-[11px] text-ink-2">{u.email}</td>}
-                      <td className="px-3 py-2"><Badge tone={u.active ? "good" : "neutral"}>{u.active ? "有効" : "無効"}</Badge></td>
-                      {admin && <td className="px-4 py-2 text-right"><form action={toggleUserActive.bind(null, u.id)}><Button type="submit" size="sm" variant="ghost" disabled={u.id === user.id}>{u.active ? "無効化" : "有効化"}</Button></form></td>}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-          <div className="space-y-4">
-            <Card>
-              <CardHeader title="ロールと権限" />
-              <ul className="space-y-2 text-xs text-ink-2">
-                {(Object.keys(ROLE_LABEL) as Role[]).map((r) => <li key={r}><span className="font-medium text-ink">{ROLE_LABEL[r]}</span>: {ROLE_DESCRIPTION[r]}</li>)}
-              </ul>
-            </Card>
-            {admin && (
-              <Card>
-                <CardHeader title="ユーザーを追加" />
-                <form action={createUser} className="space-y-2">
-                  <Field label="氏名" required><Input name="name" required /></Field>
-                  <Field label="フリガナ"><Input name="kana" /></Field>
-                  <Field label="ログイン ID (メールアドレス可)" required><Input name="email" required autoCapitalize="none" /></Field>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field label="ロール"><Select name="role" defaultValue="store_staff">{(Object.keys(ROLE_LABEL) as Role[]).map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}</Select></Field>
-                    <Field label="所属"><Select name="storeId" defaultValue="koshi">{db.stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></Field>
-                  </div>
-                  <Field label="役職・担当"><Input name="title" placeholder="例: 営業・受付" /></Field>
-                  <Field label="初期パスワード (8 文字以上)" required><Input name="password" type="password" required minLength={8} autoComplete="new-password" /></Field>
-                  <Button type="submit" size="sm">追加する</Button>
-                </form>
-              </Card>
-            )}
-            {admin && (
-              <Card>
-                <CardHeader title="ロール・所属の変更" description="移行時にロール・所属を推定で設定しています。実際と異なる場合はここで直します (空欄の項目は変更しません)" />
-                <form action={updateUserRole} className="space-y-2">
-                  <Field label="ユーザー">
-                    <Select name="userId" required defaultValue="">
-                      <option value="" disabled>
-                        選択してください
-                      </option>
-                      {db.users.map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {u.name} ({ROLE_LABEL[u.role]} / {db.stores.find((s) => s.id === u.storeId)?.name ?? u.storeId})
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field label="新しいロール"><Select name="role" defaultValue=""><option value="">変更しない</option>{(Object.keys(ROLE_LABEL) as Role[]).map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}</Select></Field>
-                    <Field label="新しい所属"><Select name="storeId" defaultValue=""><option value="">変更しない</option>{db.stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></Field>
-                  </div>
-                  <Field label="役職・担当 (空欄なら変更しない)"><Input name="title" placeholder="例: 店長" /></Field>
-                  <Button type="submit" size="sm" variant="secondary">変更する</Button>
-                </form>
-              </Card>
-            )}
-            {admin && (
-              <Card>
-                <CardHeader title="パスワードの再設定" description="パスワードを忘れた社員の代わりに管理者が設定します" />
-                <form action={resetUserPassword} className="space-y-2">
-                  <Field label="ユーザー">
-                    <Select name="userId" required defaultValue="">
-                      <option value="" disabled>
-                        選択してください
-                      </option>
-                      {db.users
-                        .filter((u) => u.active)
-                        .map((u) => (
-                          <option key={u.id} value={u.id}>
-                            {u.name} ({u.email})
-                          </option>
-                        ))}
-                    </Select>
-                  </Field>
-                  <Field label="新しいパスワード (8 文字以上)" required><Input name="password" type="password" required minLength={8} autoComplete="new-password" /></Field>
-                  <Button type="submit" size="sm" variant="secondary">再設定する</Button>
-                </form>
-              </Card>
-            )}
-          </div>
-        </div>
-        <PermissionTableCard />
-        </div>
-      )}
+      {tab === "users" && <UsersTab db={db} user={user} />}
 
       {tab === "stores" && (
         <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-2">

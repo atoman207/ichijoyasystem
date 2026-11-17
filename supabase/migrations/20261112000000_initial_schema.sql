@@ -49,7 +49,12 @@ create table if not exists users (
   hired_on date,
   notify_email text,
   notify_by_email boolean,
-  chatwork_account_id text
+  chatwork_account_id text,
+  avatar_key text,
+  avatar_updated_at timestamptz,
+  signup_status text check (signup_status in ('pending')),
+  signup_requested_at timestamptz,
+  signup_note text
 );
 comment on table users is '社員 (ログインユーザー)';
 
@@ -692,6 +697,11 @@ alter table users add column if not exists hired_on date;
 alter table users add column if not exists notify_email text;
 alter table users add column if not exists notify_by_email boolean;
 alter table users add column if not exists chatwork_account_id text;
+alter table users add column if not exists avatar_key text;
+alter table users add column if not exists avatar_updated_at timestamptz;
+alter table users add column if not exists signup_status text check (signup_status in ('pending'));
+alter table users add column if not exists signup_requested_at timestamptz;
+alter table users add column if not exists signup_note text;
 alter table customers add column if not exists code text not null unique;
 alter table customers add column if not exists name text not null;
 alter table customers add column if not exists kana text not null default '';

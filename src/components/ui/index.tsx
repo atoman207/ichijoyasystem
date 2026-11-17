@@ -234,8 +234,8 @@ export function Delta({ value, label, className }: { value: number; label?: stri
 /* Card / Page header / Stat                                           */
 /* ------------------------------------------------------------------ */
 
-export function Card({ className, children, padded = true }: { className?: string; children: ReactNode; padded?: boolean }) {
-  return <div className={clsx("rounded-2xl border border-line/70 bg-panel shadow-card", padded && "p-5", className)}>{children}</div>;
+export function Card({ className, children, padded = true, id }: { className?: string; children: ReactNode; padded?: boolean; id?: string }) {
+  return <div id={id} className={clsx("rounded-2xl border border-line/70 bg-panel shadow-card", padded && "p-5", id && "scroll-mt-20", className)}>{children}</div>;
 }
 
 export function CardHeader({
@@ -502,9 +502,15 @@ export function avatarColor(key: string): string {
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
 
-export function Avatar({ name, id, size = 28, ring = false }: { name: string; id?: string; size?: number; ring?: boolean }) {
+export function Avatar({ name, id, size = 28, ring = false, src }: { name: string; id?: string; size?: number; ring?: boolean; src?: string }) {
   const bg = avatarColor(id ?? name);
   const initial = name.trim().charAt(0);
+  if (src) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- ログインが必要な API から配信するため next/image の最適化は使わない
+      <img src={src} alt="" width={size} height={size} className={clsx("inline-block shrink-0 rounded-full bg-subtle object-cover", ring && "ring-2 ring-panel")} style={{ width: size, height: size }} aria-hidden />
+    );
+  }
   return (
     <span
       className={clsx("inline-flex shrink-0 items-center justify-center rounded-full font-semibold text-white shadow-[inset_0_-2px_0_rgba(0,0,0,0.1)]", ring && "ring-2 ring-panel")}

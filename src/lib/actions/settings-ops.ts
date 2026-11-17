@@ -2,10 +2,10 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { BACKEND, addAudit, diffChanges, mutate } from "@/lib/db/store";
+import { BACKEND, addAudit, diffChanges, getDb, mutate } from "@/lib/db/store";
 import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
 import type { Database } from "@/lib/db/types";
-import { canExportAccounting, canManageIntegrations, canManageSettings } from "@/lib/auth/permissions";
+import { canExportAccounting, canManageIntegrations, canManageSettings, canManageUser } from "@/lib/auth/permissions";
 import { APPROVAL_SETTINGS_ID, approvalSettings, manYen } from "@/lib/approval-rules";
 import { ACCOUNTING_LABEL, ACCOUNTING_SETTINGS_ID, accountingSettings } from "@/lib/accounting";
 import { NOTIFY_EVENT_LABEL, NOTIFY_SETTINGS_ID, notifySettings, type NotifyEvent } from "@/lib/notify/events";
@@ -135,7 +135,8 @@ export async function updateOwnNotify(formData: FormData) {
 export async function updateUserNotify(userId: string, formData: FormData) {
   const back = `/settings/users/${userId}`;
   const user = await requireActionUser();
-  if (!canManageSettings(user)) fail(back, "この操作は管理者のみ実行できます。");
+  const target = getDb().users.find((u) => u.id === userId);
+  if (!target || !canManageUser(user, target)) fail(back, "このアカウントを管理する権限がありません (店長は自店舗の店舗スタッフのみ)。");
   await saveNotify(user.id, userId, formData, back);
   redirect(withMsg(back, "通知の受け取り方を保存しました。"));
 }

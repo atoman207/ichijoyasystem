@@ -42,6 +42,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  UserPlus,
   Users,
   Wallet,
   X,
@@ -132,10 +133,11 @@ export interface ShellUser {
   storeColor: string;
   /** 閲覧範囲の説明 (例: 全店舗の情報を閲覧 / 合志店の情報のみ) */
   scopeLabel: string;
+  avatarSrc?: string;
 }
 
 export interface NotificationItem {
-  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict" | "task";
+  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict" | "task" | "signup";
   title: string;
   detail?: string;
   href: string;
@@ -150,6 +152,7 @@ const NOTIFICATION_STYLE: Record<NotificationItem["kind"], { icon: LucideIcon; c
   schedule: { icon: CalendarPlus, cls: "bg-info-soft text-info-ink" },
   conflict: { icon: CalendarX2, cls: "bg-critical-soft text-critical-ink" },
   task: { icon: ListTodo, cls: "bg-warn-soft text-warn-ink" },
+  signup: { icon: UserPlus, cls: "bg-accent-soft text-accent-ink" },
 };
 
 const CREATE_ITEMS: { href: string; label: string; desc: string; icon: LucideIcon }[] = [
@@ -613,7 +616,7 @@ export function AppShell({
                 )}
               >
                 <span className={clsx("inline-flex", ICON_ZOOM, "group-hover:scale-110 group-focus-visible:scale-110")}>
-                  <Avatar name={user.name} id={user.id} size={32} ring />
+                  <Avatar name={user.name} id={user.id} size={32} ring src={user.avatarSrc} />
                 </span>
                 <ChevronDown className={clsx("hidden h-4 w-4 text-ink-3 transition-transform sm:block", menu === "user" && "rotate-180")} />
               </button>
@@ -621,7 +624,7 @@ export function AppShell({
                 <div role="menu" aria-label="ユーザーメニュー" className={clsx(MENU_PANEL, "w-80")}>
                   <div className="bg-linear-to-br from-accent-soft to-panel px-4 pt-4 pb-3">
                     <div className="flex items-center gap-3">
-                      <Avatar name={user.name} id={user.id} size={48} ring />
+                      <Avatar name={user.name} id={user.id} size={48} ring src={user.avatarSrc} />
                       <div className="min-w-0">
                         <div className="truncate text-[15px] font-semibold text-ink">{user.name}</div>
                         <div className="truncate text-xs text-ink-2">{user.title}</div>

@@ -48,6 +48,14 @@ export interface User {
   notifyByEmail?: boolean;
   /** Chatwork のアカウント ID (社内ルームへの通知で [To] に使う) */
   chatworkAccountId?: string;
+  /** 顔写真 (Storage のキー)。画面では /api/avatars/<ID>?v=<avatarUpdatedAt> で表示する */
+  avatarKey?: string;
+  avatarUpdatedAt?: string;
+  /** 新規登録の申請中 (承認されるまで active = false。承認すると消える) */
+  signupStatus?: "pending";
+  signupRequestedAt?: string;
+  /** 申請時の連絡事項 (所属・入社予定など) */
+  signupNote?: string;
 }
 
 /** 情報の入口 / 出口 */

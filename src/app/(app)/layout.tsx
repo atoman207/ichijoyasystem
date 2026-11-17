@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
 import { requireUser } from "@/lib/auth/session";
 import { notificationsFor, storeById, storeName } from "@/lib/db/queries";
-import { canExportAccounting, canExportData, canManageSettings, canRegisterPurchase, canSeeAllStores, canViewReports, canViewSuppliers } from "@/lib/auth/permissions";
+import { canApproveSignup, canExportAccounting, canExportData, canManageSettings, canManageUsers, canRegisterPurchase, canSeeAllStores, canViewReports, canViewSuppliers } from "@/lib/auth/permissions";
+import { getDb } from "@/lib/db/store";
+import { avatarUrl } from "@/lib/account-rules";
 import { ROLE_LABEL, APPROVAL_TYPE_LABEL } from "@/lib/constants";
 import { AppShell, type NavItem, type NotificationItem } from "@/components/layout/AppShell";
 import { logout } from "@/lib/actions/auth";
@@ -14,6 +16,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const n = notificationsFor(user);
   const allStores = canSeeAllStores(user);
   const store = storeById(user.storeId);
+  const signups = canManageUsers(user) ? getDb().users.filter((u) => u.signupStatus === "pending" && canApproveSignup(user, u)) : [];
 
   // short: ヘッダーのタブに表示する短い名前 (正式名はツールチップに表示)
   const nav: NavItem[] = [
@@ -55,7 +58,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     nav.push({ href: "/data", label: "データ入出力 (CSV・スプレッドシート)", short: "入出力", icon: "dataio", group: "管理" });
   }
   nav.push({ href: "/audit", label: "変更履歴", icon: "audit", group: "管理" });
-  nav.push({ href: "/settings", label: canManageSettings(user) ? "設定" : "設定 (閲覧)", short: "設定", icon: "settings", group: "管理" });
+  nav.push({ href: "/settings", label: canManageSettings(user) ? "設定" : canManageUsers(user) ? "設定 (閲覧・自店舗のアカウント管理)" : "設定 (閲覧)", short: "設定", icon: "settings", group: "管理", badge: signups.length || undefined });
   nav.push({ href: "/help", label: "使い方 (操作説明)", short: "使い方", icon: "help", group: "管理" });
 
   const notifications: NotificationItem[] = [
@@ -92,6 +95,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   if (n.overdueInvoices > 0) {
     notifications.push({ kind: "overdue", title: `支払期日超過の請求 ${n.overdueInvoices} 件`, detail: "入金確認・督促が必要です", href: "/invoices?status=overdue" });
   }
+  if (signups.length > 0) {
+    notifications.push({ kind: "signup", title: `新規登録の申請 ${signups.length} 件`, detail: `${signups.slice(0, 3).map((u) => `${u.name} (${ROLE_LABEL[u.role]})`).join("・")}${signups.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/settings?tab=users#signups" });
+  }
 
   return (
     <AppShell
@@ -104,6 +110,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         storeLabel: allStores ? "全店舗" : storeName(user.storeId),
         storeColor: allStores ? "#4a5ae8" : (store?.color ?? "#4a5ae8"),
         scopeLabel: allStores ? "全店舗の情報を閲覧できます" : `${storeName(user.storeId)} の情報のみ閲覧できます`,
+        avatarSrc: avatarUrl(user),
       }}
       nav={nav}
       notifications={notifications}

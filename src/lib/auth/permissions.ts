@@ -6,7 +6,8 @@ import type { Approval, Attachment, AuditLog, CashEntry, Expense, PurchaseInvoic
  * - 管理者 / 本部スタッフ: 全店舗の情報を閲覧
  * - 店長 / 店舗スタッフ: 自店舗の情報のみ
  * - 承認: 店長は自店舗の「店長承認」案件、管理者は全案件
- * - 設定 (ユーザー・商品・承認ルール): 管理者のみ
+ * - 設定 (商品・承認ルール): 管理者のみ
+ * - アカウント: 管理者は全員、店長は自店舗の店舗スタッフ (追加・変更・削除・新規登録の承認)。自分のログイン ID・パスワード・顔写真は本人
  * - 請求書の発行: 管理者・本部スタッフ・店長。入金の登録: 自店舗のメンバー (店舗スタッフも可)
  * - 仕入: 登録と支払依頼は店長 (自店舗)・本部スタッフ・管理者、支払の承認は管理者、支払完了と経費の精算は本部スタッフ・管理者
  * - 現金出納帳: 全員が自店舗 (全店舗ロールは全店舗)。会計データの出力: 本部スタッフ・管理者
@@ -92,6 +93,37 @@ export function isManagerOrAbove(user: User): boolean {
 
 export function canManageSettings(user: User): boolean {
   return user.role === "admin";
+}
+
+/**
+ * アカウント管理 (社員の追加・変更・パスワードの再設定・有効と無効・削除・新規登録の承認)
+ * - 管理者: すべてのアカウント (ロール・所属も変更できる)
+ * - 店長: 自店舗の店舗スタッフ (ロールは店舗スタッフ・所属は自店舗に固定)
+ */
+export function canManageUsers(user: User): boolean {
+  return user.role === "admin" || user.role === "store_manager";
+}
+
+/** そのアカウントを管理できるか (自分自身は プロフィール から変更する) */
+export function canManageUser(user: User, target: Pick<User, "id" | "role" | "storeId">): boolean {
+  if (user.role === "admin") return true;
+  return user.role === "store_manager" && target.id !== user.id && target.role === "store_staff" && target.storeId === user.storeId;
+}
+
+/** アカウントに設定できるロール */
+export function assignableRoles(user: User): Role[] {
+  if (user.role === "admin") return [...ROLE_ORDER];
+  return user.role === "store_manager" ? ["store_staff"] : [];
+}
+
+/** アカウントに設定できる所属 (店長は自店舗のみ) */
+export function assignableStore(user: User, storeId: StoreId): boolean {
+  return user.role === "admin" || (user.role === "store_manager" && storeId === user.storeId);
+}
+
+/** 新規登録の申請 (希望のロール・所属) を承認・却下できるか */
+export function canApproveSignup(user: User, req: Pick<User, "id" | "role" | "storeId">): boolean {
+  return canManageUser(user, req);
 }
 
 export function canManageFinance(user: User): boolean {
