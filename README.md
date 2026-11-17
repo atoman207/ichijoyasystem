@@ -190,7 +190,7 @@ scripts/
 | `APP_TIME_ZONE` | 日付・時刻の基準 (省略時 `Asia/Tokyo`) |
 | `RESEND_API_KEY` または `SENDGRID_API_KEY` と `MAIL_FROM` | メールの送信 (見積書・請求書の送付、社内通知) |
 | `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_CHANNEL_SECRET` | LINE の送信 / 受信 (Webhook の署名の確認) |
-| `CHATWORK_API_TOKEN` / `CHATWORK_ROOM_ID` / `CHATWORK_WEBHOOK_TOKEN` | Chatwork の送信 / 社内通知のルーム / 受信 (Webhook の署名の確認) |
+| `CHATWORK_API_TOKEN` / `CHATWORK_ROOM_ID` / `CHATWORK_WEBHOOK_TOKEN` | Chatwork の送信 / 社内通知のルーム / 受信 (Webhook の署名の確認。ルームごとのトークンをカンマ区切り) |
 | `WEBFORM_SECRET` | Web サイトのお問い合わせフォームからの受信の共有鍵 |
 | `APP_BASE_URL` | 通知・送付文に入れる画面の URL (省略時は Vercel の URL。VPS では必須) |
 | `AI_INTAKE_SECRET` | 既存の AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) からの受信の共有鍵 (`POST /api/integrations/ai-intake?source=chat|voice|phone`) |

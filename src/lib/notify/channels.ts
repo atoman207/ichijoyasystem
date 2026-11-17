@@ -89,11 +89,14 @@ export async function sendEmail(p: { to: string; subject: string; text: string; 
   }
 }
 
+/** LINE の送り先: ユーザー ID (U…)・グループ ID (C…)・複数人トーク ID (R…) */
+export const isLineTarget = (v: string | undefined): v is string => Boolean(v && /^[UCR][0-9a-f]{32}$/.test(v));
+
 /** LINE のプッシュメッセージ (テキスト 1 通。5,000 文字まで) */
 export async function sendLine(p: { to: string; text: string }): Promise<SendResult> {
   const cfg = lineConfig();
   if (!cfg) return { ok: false, skipped: true };
-  if (!/^U[0-9a-f]{32}$/.test(p.to)) return { ok: false, error: "LINE のユーザー ID (U で始まる 33 文字) が正しくありません" };
+  if (!isLineTarget(p.to)) return { ok: false, error: "LINE の送り先 (U で始まるユーザー ID、または C・R で始まるグループの ID。33 文字) が正しくありません" };
   try {
     const res = await fetch(`${cfg.base}/v2/bot/message/push`, {
       method: "POST",

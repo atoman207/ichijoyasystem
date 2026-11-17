@@ -31,6 +31,7 @@ export function ContactLogForm({
   suppliers,
   defaultChannel = "phone",
   canSend,
+  lineGroups,
 }: {
   returnTo: string;
   customerId?: string;
@@ -40,6 +41,8 @@ export function ContactLogForm({
   suppliers?: { id: string; label: string }[];
   defaultChannel?: (typeof CHANNELS)[number];
   canSend: boolean;
+  /** この案件にひも付いた LINE グループ (手段が LINE で送信するとき、グループに送れる) */
+  lineGroups?: { id: string; label: string }[];
 }) {
   return (
     <form action={createContactLog} className="space-y-3">
@@ -85,6 +88,14 @@ export function ContactLogForm({
         <Field label="件名"><Input name="subject" placeholder="例: 施工日の調整" /></Field>
         <Field label="案件番号 (紐付け・任意)" hint="INQ- / Q- / O- / INV- / AP- で始まる番号"><Input name="caseRef" defaultValue={caseRef} placeholder="例: O-2026-0012" /></Field>
       </div>
+      {canSend && lineGroups && lineGroups.length > 0 && (
+        <Field label="LINE の送り先" hint="手段が LINE で「相手に送信する」のとき。グループを選ぶと、現場のグループに投稿します">
+          <Select name="lineGroupId" defaultValue="">
+            <option value="">相手 (お客様・協力業者) の LINE</option>
+            {lineGroups.map((g) => <option key={g.id} value={g.id}>グループ: {g.label}</option>)}
+          </Select>
+        </Field>
+      )}
       <Field label="内容" required><Textarea name="body" required rows={3} placeholder="やりとりの内容" /></Field>
       <div className="flex flex-wrap items-center gap-3">
         <Button type="submit" size="sm">記録する</Button>

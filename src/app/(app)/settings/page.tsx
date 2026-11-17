@@ -22,6 +22,8 @@ import { Badge, Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkT
 import Link from "@/components/ui/Link";
 import { PermissionTableCard } from "@/components/settings/PermissionTableCard";
 import { GoLivePanel } from "@/components/settings/GoLivePanel";
+import { LineGroupsCard } from "@/components/settings/LineGroupsCard";
+import { MessagingConnectionCheck } from "@/components/settings/MessagingConnectionCheck";
 
 /** 「接続を確認」で AI の応答を待つ (最大 50 秒) ため */
 export const maxDuration = 60;
@@ -407,6 +409,17 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               </div>
             </Card>
           ))}
+          {canManageIntegrations(user) && (
+            <Card className="@2xl:col-span-2">
+              <CardHeader title="LINE・Chatwork の接続" description="ドメインを設定したら: ① APP_BASE_URL=https://<ドメイン> を設定して再起動 → ② 「LINE の Webhook URL をこのシステムに設定」→ ③ Chatwork は受信するルームごとに Webhook を作り (URL は下記、イベントは「メッセージ作成」)、トークンを CHATWORK_WEBHOOK_TOKEN にカンマ区切りで入れて再起動 → ④「接続を確認」" />
+              <ul className="mb-3 space-y-1 text-xs text-ink-2">
+                <li><span className="inline-block w-20 text-ink-3">LINE</span><span className="font-mono text-[11px] break-all">{appBaseUrl()}/api/integrations/line</span></li>
+                <li><span className="inline-block w-20 text-ink-3">Chatwork</span><span className="font-mono text-[11px] break-all">{appBaseUrl()}/api/integrations/chatwork</span></li>
+              </ul>
+              <MessagingConnectionCheck webhookReady={/^https:\/\//.test(appBaseUrl()) && !/localhost|127\.0\.0\.1/.test(appBaseUrl())} />
+            </Card>
+          )}
+          <LineGroupsCard db={db} admin={canManageIntegrations(user)} />
           {[
             { name: "Google スプレッドシート", status: "取込・書き出しに対応", ok: true, desc: "リンクで共有したシートから顧客・問い合わせを取込 (データ入出力の画面)。書き出した CSV はシートでインポート。非公開シートの直接連携はサービスアカウントの準備後。" },
             { name: "会計ソフト (弥生・freee・マネーフォワードなど)", status: "CSV で出力", ok: true, desc: "売上・入金・経費・仕入・現金出納の仕訳と明細を、会計データの出力 (/accounting) から CSV で出力します (汎用・弥生会計のインポート形式)。" },

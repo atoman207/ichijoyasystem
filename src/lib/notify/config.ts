@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
  * ------------------------------------------------------------
  * メール:   RESEND_API_KEY (Resend) または SENDGRID_API_KEY (SendGrid) と MAIL_FROM (送信元。例: 一畳屋 <info@example.co.jp>)
  * LINE:     LINE_CHANNEL_ACCESS_TOKEN (送信) / LINE_CHANNEL_SECRET (受信の署名の確認)
- * Chatwork: CHATWORK_API_TOKEN (送信) / CHATWORK_ROOM_ID (社内通知のルーム) / CHATWORK_WEBHOOK_TOKEN (受信の署名の確認)
+ * Chatwork: CHATWORK_API_TOKEN (送信) / CHATWORK_ROOM_ID (社内通知のルーム) / CHATWORK_WEBHOOK_TOKEN (受信の署名の確認。ルームごとのトークンをカンマ区切り) / CHATWORK_SELF_ACCOUNT_ID (連携用アカウントの ID。自分の投稿を受信に数えない)
  * Web フォーム: WEBFORM_SECRET (受信の共有鍵)
  * 画面へのリンク: APP_BASE_URL (例: https://ichijoyasystem.vercel.app)。未設定なら Vercel の URL
  * 接続先の URL (*_API_BASE) は検証用に差し替えられる (通常は設定しない)
@@ -35,13 +35,31 @@ export function lineSecret(): string | null {
   return env("LINE_CHANNEL_SECRET") || null;
 }
 
+/** LINE の写真・ファイルの本体を取得する接続先 */
+export function lineDataBase(): string {
+  return env("LINE_DATA_API_BASE") || "https://api-data.line.me";
+}
+
+/** LINE の Webhook URL (このシステムの受信先) */
+export function lineWebhookUrl(): string {
+  return `${appBaseUrl()}/api/integrations/line`;
+}
+
 export function chatworkConfig(): { token: string; roomId: string; base: string } | null {
   const token = env("CHATWORK_API_TOKEN");
   return token ? { token, roomId: env("CHATWORK_ROOM_ID"), base: env("CHATWORK_API_BASE") || "https://api.chatwork.com/v2" } : null;
 }
 
+/**
+ * Chatwork の Webhook のトークン。Chatwork の Webhook はルームごとに作り、トークンもルームごとに違うため、
+ * 複数のルームを受信するときはカンマ (または空白) で区切って並べる
+ */
+export function chatworkWebhookTokens(): string[] {
+  return [...new Set(env("CHATWORK_WEBHOOK_TOKEN").split(/[\s,]+/).filter(Boolean))];
+}
+
 export function chatworkWebhookToken(): string | null {
-  return env("CHATWORK_WEBHOOK_TOKEN") || null;
+  return chatworkWebhookTokens()[0] ?? null;
 }
 
 export function webformSecret(): string | null {
@@ -91,14 +109,14 @@ export function integrationStatuses(): IntegrationStatus[] {
       name: "LINE 公式アカウント (Messaging API)",
       configured: Boolean(line),
       detail: line ? "送信の設定あり (LINE_CHANNEL_ACCESS_TOKEN)" : "LINE_CHANNEL_ACCESS_TOKEN を設定すると、お客様・協力業者へ LINE で送れます (相手の LINE ユーザー ID が必要)",
-      inbound: { configured: Boolean(lineSecret()), path: "/api/integrations/line", detail: lineSecret() ? "受信の署名確認の設定あり (LINE_CHANNEL_SECRET)" : "LINE_CHANNEL_SECRET を設定すると、受信したメッセージをやりとり履歴・問い合わせに登録します" },
+      inbound: { configured: Boolean(lineSecret()), path: "/api/integrations/line", detail: lineSecret() ? "受信の署名確認の設定あり (LINE_CHANNEL_SECRET)。1 対 1 のメッセージ・現場のグループのメッセージ・写真・資料を登録します" : "LINE_CHANNEL_SECRET を設定すると、受信したメッセージ (1 対 1・グループ) をやりとり履歴・問い合わせに登録します" },
     },
     {
       key: "chatwork",
       name: "Chatwork",
       configured: Boolean(cw),
       detail: cw ? `送信の設定あり${cw.roomId ? ` · 社内通知のルーム ${cw.roomId}` : " · 社内通知のルーム (CHATWORK_ROOM_ID) は未設定"}` : "CHATWORK_API_TOKEN を設定すると、協力業者のルームへの連絡と社内ルームへの通知を送ります",
-      inbound: { configured: Boolean(chatworkWebhookToken()), path: "/api/integrations/chatwork", detail: chatworkWebhookToken() ? "受信の署名確認の設定あり (CHATWORK_WEBHOOK_TOKEN)" : "CHATWORK_WEBHOOK_TOKEN を設定すると、協力業者のルームの投稿をやりとり履歴に登録します" },
+      inbound: { configured: chatworkWebhookTokens().length > 0, path: "/api/integrations/chatwork", detail: chatworkWebhookTokens().length ? `受信の署名確認の設定あり (CHATWORK_WEBHOOK_TOKEN: Webhook ${chatworkWebhookTokens().length} 件)` : "CHATWORK_WEBHOOK_TOKEN を設定すると、協力業者のルームの投稿をやりとり履歴に登録します (Webhook はルームごと。トークンはカンマ区切りで複数)" },
     },
     {
       key: "webform",

@@ -6,7 +6,8 @@ import { addAudit, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Channel, CommLog, Database, RelatedType, StoreId, User } from "@/lib/db/types";
 import { CHANNEL_LABEL, DELIVERY_STATUS } from "@/lib/constants";
 import { canAccessStore, canSeeAllStores, canViewPurchase } from "@/lib/auth/permissions";
-import { isEmail } from "@/lib/notify/channels";
+import { isEmail, isLineTarget } from "@/lib/notify/channels";
+import { lineGroupName, lineGroups } from "@/lib/line-groups";
 import { sendAndRecord, type Outgoing } from "@/lib/notify/send";
 import { choice, fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
@@ -48,7 +49,7 @@ function destination(db: Database, channel: Channel, customerId?: string, suppli
   }
   if (channel === "line") {
     const to = s?.lineId ?? c?.lineId;
-    return to && /^U[0-9a-f]{32}$/.test(to) ? { to, label } : { error: `${label || "相手"}の LINE ユーザー ID (U で始まる 33 文字) が登録されていません。` };
+    return to && isLineTarget(to) ? { to, label } : { error: `${label || "相手"}の LINE ユーザー ID (U で始まる 33 文字) が登録されていません。` };
   }
   if (channel === "chatwork") {
     const to = s?.chatworkRoomId;
@@ -93,8 +94,12 @@ export async function createContactLog(formData: FormData) {
   let deliveryNote = "";
   let deliveryId: string | undefined;
   if (send) {
-    // 協力業者・仕入先を選んだときはそちらへ、お客様だけのときはお客様へ送る
-    const dest = destination(db0, channel, customer?.id, supplier?.id);
+    // LINE グループを選んだときはグループへ、協力業者・仕入先を選んだときはそちらへ、お客様だけのときはお客様へ送る
+    const groupId = channel === "line" ? str(formData, "lineGroupId") : "";
+    const group = groupId ? lineGroups(db0).find((g) => g.id === groupId && g.status === "joined") : undefined;
+    if (groupId && !group) fail(back, "LINE グループが見つかりません (公式アカウントがグループから退出した可能性があります)。");
+    if (group && !((caseRef?.type === "order" && group.orderId === caseRef.id) || (supplier && group.supplierId === supplier.id))) fail(back, "この案件・協力業者にひも付いていない LINE グループには送れません。");
+    const dest = group ? { to: group.id, label: `LINE グループ「${lineGroupName(group)}」` } : destination(db0, channel, customer?.id, supplier?.id);
     if ("error" in dest) fail(back, `${dest.error} 記録だけ残すときは「相手に送信する」のチェックを外してください。`);
     const out: Outgoing = { channel: channel as Outgoing["channel"], to: dest.to, toLabel: dest.label, subject: channel === "email" ? subject : undefined, body, purpose: "message", relatedType: caseRef?.type ?? (supplier ? "supplier" : "customer"), relatedId: caseRef?.id ?? supplier?.id ?? customer?.id };
     const [d] = await sendAndRecord([out], user.id);

@@ -1,7 +1,8 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { mutate, syncDb } from "@/lib/db/store";
 import { lineSecret } from "@/lib/notify/config";
 import { recordLineEvents, verifyHmac, type LineEvent } from "@/lib/notify/inbound";
+import { afterLineWebhook } from "@/lib/notify/line-api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,7 +10,8 @@ export const dynamic = "force-dynamic";
 /**
  * LINE 公式アカウント (Messaging API) の Webhook
  * LINE Developers の Webhook URL に https://<このシステム>/api/integrations/line を設定する。
- * 署名 (x-line-signature = チャネルシークレットで本文を HMAC-SHA256 → base64) が合う受信だけを登録する
+ * 署名 (x-line-signature = チャネルシークレットで本文を HMAC-SHA256 → base64) が合う受信だけを登録する。
+ * 写真・資料の取得とグループ名の取得は、LINE への応答のあとで行う (LINE は応答が遅いと再送・エラーにする)
  */
 export async function POST(req: Request) {
   const secret = lineSecret();
@@ -27,6 +29,7 @@ export async function POST(req: Request) {
   // 接続の確認 (events が空) にも 200 を返す
   if (!events.length) return NextResponse.json({ ok: true, recorded: 0 });
   await syncDb();
-  const recorded = await mutate((db) => recordLineEvents(db, events));
-  return NextResponse.json({ ok: true, recorded });
+  const result = await mutate((db) => recordLineEvents(db, events));
+  if (result.media.length || result.groupsToName.length) after(() => afterLineWebhook(result.media, result.groupsToName));
+  return NextResponse.json({ ok: true, recorded: result.recorded });
 }

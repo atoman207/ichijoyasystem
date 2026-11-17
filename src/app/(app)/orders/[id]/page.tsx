@@ -22,6 +22,8 @@ import { QUALITY_CATEGORIES, QUALITY_KIND_HELP, QUALITY_KIND_LABEL, kpiSettings 
 import { SCORE_QUESTIONS, SCORE_LABEL } from "@/lib/survey";
 import { deliveryOf } from "@/lib/kpi";
 import { AiSummary } from "@/components/features/AiSummary";
+import { lineGroupName, lineGroups } from "@/lib/line-groups";
+import { linkLineGroup, unlinkLineGroup } from "@/lib/actions/line-groups";
 
 const STEPS = ["pending_approval", "confirmed", "scheduled", "in_progress", "completed", "invoiced", "paid"] as const;
 
@@ -48,6 +50,10 @@ export default async function OrderDetailPage({ params, searchParams }: { params
     .map((s) => ({ id: s.id, label: `${s.kind === "partner" ? "[協力業者] " : "[仕入先] "}${s.name}` }));
   const orderPurchases = db.purchases.filter((p) => p.orderId === o.id);
   const returnTo = `/orders/${id}`;
+  // この案件の LINE グループ (現場のグループ) と、まだひも付けていないグループ
+  const allGroups = lineGroups(db).filter((g) => g.status === "joined");
+  const orderGroups = allGroups.filter((g) => g.orderId === o.id);
+  const freeGroups = allGroups.filter((g) => !g.orderId && !g.supplierId);
   const active = ["confirmed", "scheduled", "in_progress"].includes(o.status);
   const main = db.schedule.find((e) => e.orderId === o.id && e.source === "order");
   const today = toDateKey(new Date());
@@ -330,8 +336,35 @@ export default async function OrderDetailPage({ params, searchParams }: { params
 
           <Card>
             <CardHeader title="やりとりの記録 (お客様・協力業者)" description="この案件のお客様・協力業者・仕入先とのやりとりを残します。見積・請求・仕入に紐付いた記録もここに集まります" />
-            {o.status !== "cancelled" && <ContactLogForm returnTo={returnTo} customerId={o.customerId} caseRef={o.number} suppliers={partners} defaultChannel={customer?.preferredChannel === "line" ? "line" : "phone"} canSend />}
+            {o.status !== "cancelled" && <ContactLogForm returnTo={returnTo} customerId={o.customerId} caseRef={o.number} suppliers={partners} defaultChannel={customer?.preferredChannel === "line" || orderGroups.length ? "line" : "phone"} canSend lineGroups={orderGroups.map((g) => ({ id: g.id, label: lineGroupName(g) }))} />}
             <p className="mt-1 text-[11px] text-ink-3">協力業者を選ぶと協力業者とのやりとりとして、選ばないとお客様とのやりとりとして記録します。</p>
+            {(orderGroups.length > 0 || (freeGroups.length > 0 && o.status !== "cancelled")) && (
+              <div className="mt-3 space-y-2 rounded-lg bg-subtle px-3 py-2 text-xs text-ink-2">
+                <div className="font-medium text-ink">LINE グループ (現場のグループ)</div>
+                {orderGroups.map((g) => (
+                  <form key={g.id} action={unlinkLineGroup} className="flex flex-wrap items-center gap-2">
+                    <input type="hidden" name="groupId" value={g.id} />
+                    <input type="hidden" name="returnTo" value={returnTo} />
+                    <Badge tone="good">ひも付け済み</Badge>
+                    <span className="text-ink">{lineGroupName(g)}</span>
+                    {g.lastMessageAt && <span className="text-ink-3">最後のメッセージ {fmtDateTime(g.lastMessageAt)}</span>}
+                    <Button type="submit" size="sm" variant="secondary">外す</Button>
+                  </form>
+                ))}
+                {freeGroups.length > 0 && o.status !== "cancelled" && (
+                  <form action={linkLineGroup} className="flex flex-wrap items-center gap-2">
+                    <input type="hidden" name="orderRef" value={o.number} />
+                    <input type="hidden" name="returnTo" value={returnTo} />
+                    <Select name="groupId" defaultValue="" className="h-8 w-56 text-xs" aria-label="ひも付ける LINE グループ" required>
+                      <option value="" disabled>未登録のグループを選ぶ</option>
+                      {freeGroups.map((g) => <option key={g.id} value={g.id}>{lineGroupName(g)}{g.pending.length ? ` (保留 ${g.pending.length} 件)` : ""}</option>)}
+                    </Select>
+                    <Button type="submit" size="sm">この案件にひも付ける</Button>
+                  </form>
+                )}
+                <p className="text-[11px] text-ink-3">ひも付けたグループのメッセージはこの履歴に、写真・資料は「現場写真・資料」に自動で残ります。上のフォームで手段を LINE にすると、グループへ送れます。</p>
+              </div>
+            )}
             <div className="mt-3 border-t border-line pt-3">
               <ContactList db={db} logs={contactLogs} returnTo={returnTo} empty="この案件のやりとりの記録はありません" />
             </div>
