@@ -7,6 +7,12 @@
  *
  *   npm run build && npm start -- -p 3100   (別ターミナル)
  *   BASE_URL=http://localhost:3100 npm run smoke
+ *
+ * - 記録を作る操作 (顧客登録・承認・入金など) は JSON のサンプルデータのときだけ行う。
+ *   接続先が Supabase (本番のデータ。3001 番も同じ) なら画面を開く確認だけにする (登録すると通知も本当に送られるため)
+ * - ログインはデモ用アカウント (ID とパスワード)。デモ用アカウントを無効にした後は、
+ *   確認用リンクの鍵 SMOKE_REVIEW_KEY (/review?key=… の値) を渡すと確認用アカウントでログインする
+ * - ブラウザは CHROME_PATH、なければ /usr/bin/google-chrome、どちらもなければ Playwright のもの
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +21,15 @@ import { chromium } from "playwright";
 const BASE = process.env.BASE_URL ?? "http://localhost:3100";
 const OUT = process.env.SHOT_DIR ?? path.join(process.cwd(), ".smoke-shots");
 fs.mkdirSync(OUT, { recursive: true });
+const REVIEW_KEY = process.env.SMOKE_REVIEW_KEY?.trim();
+const DEMO_PASSWORD = process.env.SMOKE_PASSWORD ?? "demo1234";
+
+const health = await fetch(`${BASE}/api/health`).then((r) => r.json()).catch((e) => {
+  console.error(`${BASE}/api/health に接続できません: ${e.message}`);
+  process.exit(1);
+});
+const WRITE = health.backend !== "supabase";
+console.log(WRITE ? "mode: 記録を作る操作も確認します (サンプルデータ)" : "mode: 画面を開く確認だけ (接続先は Supabase の本番データ)");
 
 const results = [];
 // 結果は記録するたびに表示する (途中でブラウザが落ちても、そこまでの結果が残るように)
@@ -26,7 +41,8 @@ const results = [];
   };
 }
 const errors = [];
-const browser = await chromium.launch();
+const chromePath = process.env.CHROME_PATH ?? (fs.existsSync("/usr/bin/google-chrome") ? "/usr/bin/google-chrome" : undefined);
+const browser = await chromium.launch(chromePath ? { executablePath: chromePath } : {});
 const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, locale: "ja-JP" });
 const page = await ctx.newPage();
 page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
@@ -48,13 +64,27 @@ async function visit(url, name) {
   return page;
 }
 
-async function login(roleRegex, storeName, staffRegex) {
+// ロールごとのログイン: デモ用アカウント (架空の社員) / 確認用アカウントのボタン名
+const ACCOUNTS = {
+  admin: { email: "yamada@ichijoya.example", review: "管理者" },
+  hq: { email: "yamamoto@ichijoya.example", review: "本部スタッフ" },
+  manager: { email: "tanaka@ichijoya.example", review: "店長" },
+  staff: { email: "nakamura@ichijoya.example", review: "店舗スタッフ" },
+};
+
+async function login(kind) {
+  const a = ACCOUNTS[kind];
   await ctx.clearCookies();
-  await page.goto(`${BASE}/login`, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: roleRegex }).first().click();
-  if (storeName) await page.getByRole("button", { name: storeName, exact: true }).click();
-  if (staffRegex) await page.getByRole("button", { name: staffRegex }).first().click();
-  await page.getByRole("button", { name: /としてログイン/ }).click();
+  if (REVIEW_KEY) {
+    await page.goto(`${BASE}/review?key=${encodeURIComponent(REVIEW_KEY)}`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: new RegExp(`^${a.review}.*としてログイン`) }).first().click();
+  } else {
+    await page.goto(`${BASE}/login`, { waitUntil: "networkidle" });
+    const form = page.locator('form:has(input[name="password"])');
+    await form.locator('input[name="email"]').fill(a.email);
+    await form.locator('input[name="password"]').fill(DEMO_PASSWORD);
+    await form.locator('button[type="submit"]').click();
+  }
   await page.waitForURL(`${BASE}/`, { timeout: 90000 });
   await page.waitForLoadState("networkidle");
 }
@@ -77,7 +107,9 @@ results.push({ url: "/customers (未ログイン)", status: r0?.status(), ok: pa
 await shot("00-login");
 
 // ---------------- 管理者: 顧客の新規登録 (初期設定では事務担当・本部・管理者のみ) ----------------
-await login(/^管理者/);
+let inquiryUrl = null;
+if (WRITE) {
+await login("admin");
 await visit("/customers/new", null);
 await page.fill('input[name="name"]', "テスト 太郎");
 await page.fill('input[name="kana"]', "テスト タロウ");
@@ -93,22 +125,24 @@ await visit("/inquiries?status=new", null);
 await page.getByRole("link", { name: /AI電話受付: 和室8畳/ }).first().click();
 await page.waitForURL(/\/inquiries\/inq_/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
-const inquiryUrl = page.url();
+inquiryUrl = page.url();
 const registerBtn = page.getByRole("button", { name: "顧客として登録する" });
 if (await registerBtn.isVisible().catch(() => false)) {
   await registerBtn.click();
   await page.waitForURL(/\/customers\/.*\/edit/, { timeout: 90000 });
   await expectText(/顧客として登録しました/, "action: 問い合わせから顧客登録");
 }
+}
 
-// ---------------- 店舗スタッフ (合志店 中村 花子) ----------------
-await login(/^店舗スタッフ/, "合志店", /^中村 花子/);
+// ---------------- 店舗スタッフ ----------------
+await login("staff");
 await shot("10-staff-dashboard");
 for (const [u, n] of [["/inquiries", "11-staff-inquiries"], ["/customers", null], ["/quotes", null], ["/orders", null], ["/schedule", "12-staff-schedule"], ["/invoices", null], ["/expenses", null], ["/capture", null], ["/approvals", null], ["/messages", null], ["/ai", null], ["/audit", null], ["/settings", null], ["/profile", "13-staff-profile"], ["/finance", null], ["/cashbook", null], ["/contacts", null], ["/messages?tab=tasks", null], ["/expenses/new", null], ["/knowledge", null], ["/help", null], ["/ai?tab=draft", null]]) await visit(u, n);
 // 顧客の新規登録は事務担当に依頼する (初期設定)
 await visit("/customers/new", null);
 await expectText(/事務担当が行います/, "権限: 店舗スタッフは顧客を新規登録しない (初期設定)");
 // 問い合わせ (管理者が顧客を登録済み) → 見積作成 → 承認申請
+if (inquiryUrl) {
 await page.goto(inquiryUrl, { waitUntil: "networkidle" });
 await shot("14-staff-inquiry-ai-phone");
 await page.getByRole("link", { name: "見積を作成" }).first().click();
@@ -120,19 +154,22 @@ await page.waitForURL(/\/quotes\/q_/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 await expectText(/承認を申請しました/, "action: 見積作成 + 承認申請");
 await shot("16-staff-quote-pending");
+}
 
-// ---------------- 店長 (合志店 田中 健一) ----------------
-await login(/^店長/, "合志店");
+// ---------------- 店長 ----------------
+await login("manager");
 await shot("20-manager-dashboard");
 await visit("/approvals?tab=mine", "21-manager-approvals");
-const approveBtn = page.getByRole("button", { name: "承認", exact: true }).first();
-if (await approveBtn.isVisible().catch(() => false)) {
-  await approveBtn.click();
-  await page.waitForLoadState("networkidle");
-  await expectText(/承認しました/, "action: 店長が承認");
-  await shot("22-manager-approved");
-} else {
-  errors.push("店長の承認待ちが見つかりません");
+if (WRITE) {
+  const approveBtn = page.getByRole("button", { name: "承認", exact: true }).first();
+  if (await approveBtn.isVisible().catch(() => false)) {
+    await approveBtn.click();
+    await page.waitForLoadState("networkidle");
+    await expectText(/承認しました/, "action: 店長が承認");
+    await shot("22-manager-approved");
+  } else {
+    errors.push("店長の承認待ちが見つかりません");
+  }
 }
 await visit("/reports", "23-manager-reports");
 await visit("/reports?period=this_month", null);
@@ -144,14 +181,14 @@ if (await firstApproved.isVisible().catch(() => false)) {
   await page.waitForURL(/\/quotes\/q_/, { timeout: 90000 });
   await page.waitForLoadState("networkidle");
   const sendBtn = page.getByRole("button", { name: /送付を記録/ }).first();
-  if (await sendBtn.isVisible().catch(() => false)) {
+  if (WRITE && (await sendBtn.isVisible().catch(() => false))) {
     await sendBtn.click();
     await page.waitForLoadState("networkidle");
     await expectText(/送付した記録を残しました/, "action: 見積送付記録");
   }
   await shot("24-manager-quote-detail");
   const orderBtn = page.getByRole("button", { name: /受注登録/ }).first();
-  if (await orderBtn.isVisible().catch(() => false)) {
+  if (WRITE && (await orderBtn.isVisible().catch(() => false))) {
     await orderBtn.click();
     await page.waitForURL(/\/orders\/o_/, { timeout: 90000 });
     await page.waitForLoadState("networkidle");
@@ -167,8 +204,8 @@ if (await firstApproved.isVisible().catch(() => false)) {
   }
 }
 
-// ---------------- 本部スタッフ (山本 恵) ----------------
-await login(/^本部スタッフ/, null, /^山本 恵/);
+// ---------------- 本部スタッフ ----------------
+await login("hq");
 await shot("30-hq-dashboard");
 await visit("/invoices?status=overdue", "31-hq-invoices-overdue");
 const firstInvoice = page.locator("tbody a[href^='/invoices/']").first();
@@ -178,7 +215,7 @@ if (await firstInvoice.isVisible().catch(() => false)) {
   await page.waitForLoadState("networkidle");
   await shot("32-hq-invoice-detail");
   const payBtn = page.getByRole("button", { name: "入金を登録する" });
-  if (await payBtn.isVisible().catch(() => false)) {
+  if (WRITE && (await payBtn.isVisible().catch(() => false))) {
     await payBtn.click();
     await page.waitForLoadState("networkidle");
     await expectText(/入金を登録しました/, "action: 入金登録");
@@ -193,7 +230,7 @@ if (await firstCompleted.isVisible().catch(() => false)) {
   await page.waitForURL(/\/orders\/o_/, { timeout: 90000 });
   await page.waitForLoadState("networkidle");
   const invBtn = page.getByRole("button", { name: /請求書を発行/ });
-  if (await invBtn.isVisible().catch(() => false)) {
+  if (WRITE && (await invBtn.isVisible().catch(() => false))) {
     await invBtn.click();
     await page.waitForURL(/\/invoices\/inv_/, { timeout: 90000 });
     await page.waitForLoadState("networkidle");
@@ -203,12 +240,18 @@ if (await firstCompleted.isVisible().catch(() => false)) {
 }
 await visit("/expenses", "36-hq-expenses");
 
-// ---------------- 管理者 (山田 太郎) ----------------
-await login(/^管理者/);
+// ---------------- 管理者 ----------------
+await login("admin");
 await shot("40-admin-dashboard");
-for (const [u, n] of [["/approvals", "41-admin-approvals"], ["/reports?months=6", "42-admin-reports"], ["/audit", "43-admin-audit"], ["/settings?tab=users", "44-admin-settings-users"], ["/settings?tab=products", "45-admin-settings-products"], ["/settings?tab=rules", null], ["/settings?tab=integrations", null], ["/settings?tab=documents", null], ["/settings?tab=kpi", null], ["/settings?tab=data", null], ["/kpi", null], ["/kpi/surveys", null], ["/kpi/voice", null], ["/kpi/quality", null], ["/kpi/reviews", null], ["/kpi/incentives", null], ["/settings/users/u06", "44b-admin-user-account"], ["/data", "50-admin-data-io"], ["/messages", "46-admin-messages"], ["/customers", "47-admin-customers"], ["/orders", "48-admin-orders"], ["/schedule", "49-admin-schedule"], ["/profile", null], ["/customers?q=%E7%94%B0%E4%B8%AD", null], ["/finance", null], ["/finance?tab=payables", null], ["/cashbook", null], ["/suppliers", null], ["/purchases?view=suppliers", null], ["/purchases?view=schedule", null], ["/purchases/new", null], ["/accounting", null], ["/accounting?tab=settings", null], ["/contacts", null], ["/invoices?view=customers&only=open", null], ["/approvals?tab=history", null], ["/messages?tab=alltasks", null], ["/audit?changed=1", null], ["/reports?period=custom&from=2026-01-01&to=2026-06-30&store=koshi", null], ["/knowledge", null], ["/help", null], ["/ai?tab=draft", null], ["/settings?tab=golive", null]]) await visit(u, n);
-// 書類取込 (サンプル読取)
+for (const [u, n] of [["/approvals", "41-admin-approvals"], ["/reports?months=6", "42-admin-reports"], ["/audit", "43-admin-audit"], ["/settings?tab=users", "44-admin-settings-users"], ["/settings?tab=products", "45-admin-settings-products"], ["/settings?tab=rules", null], ["/settings?tab=integrations", null], ["/settings?tab=documents", null], ["/settings?tab=kpi", null], ["/settings?tab=data", null], ["/kpi", null], ["/kpi/surveys", null], ["/kpi/voice", null], ["/kpi/quality", null], ["/kpi/reviews", null], ["/kpi/incentives", null], ["/data", "50-admin-data-io"], ["/messages", "46-admin-messages"], ["/customers", "47-admin-customers"], ["/orders", "48-admin-orders"], ["/schedule", "49-admin-schedule"], ["/profile", null], ["/customers?q=%E7%94%B0%E4%B8%AD", null], ["/finance", null], ["/finance?tab=payables", null], ["/cashbook", null], ["/suppliers", null], ["/purchases?view=suppliers", null], ["/purchases?view=schedule", null], ["/purchases/new", null], ["/accounting", null], ["/accounting?tab=settings", null], ["/contacts", null], ["/invoices?view=customers&only=open", null], ["/approvals?tab=history", null], ["/messages?tab=alltasks", null], ["/audit?changed=1", null], ["/reports?period=custom&from=2026-01-01&to=2026-06-30&store=koshi", null], ["/knowledge", null], ["/help", null], ["/ai?tab=draft", null], ["/settings?tab=golive", null]]) await visit(u, n);
+// 個別アカウントの画面 (一覧の先頭の社員)
+await visit("/settings?tab=users", null);
+const userHref = await page.locator("a[href^='/settings/users/']").first().getAttribute("href").catch(() => null);
+if (userHref) await visit(userHref, "44b-admin-user-account");
+else errors.push("ユーザー一覧に個別アカウントへのリンクがありません");
+// 書類取込 (サンプル読取) → 経費の登録
 await visit("/capture?kind=receipt", null);
+if (WRITE) {
 await page.getByRole("button", { name: /サンプル画像で読み取りを試す/ }).click();
 await page.waitForURL(/\/capture\?doc=/, { timeout: 60000 });
 await page.waitForLoadState("networkidle");
@@ -222,6 +265,7 @@ await page.getByRole("button", { name: "承認を申請" }).click();
 await page.waitForURL(/\/expenses\/exp_/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 await expectText(/経費を登録し/, "action: 経費登録 (レシートから)");
+}
 // AI アシスタント
 await visit("/ai", null);
 await page.fill('input[placeholder^="質問や依頼を入力"]', "今月の売上は？");
@@ -230,12 +274,12 @@ await page.getByText(/社内データからの自動回答|Claude による回�
 await shot("52-admin-ai");
 // 印刷書式
 await visit("/quotes", null);
-const href = await page.locator("tbody a[href^='/quotes/']").first().getAttribute("href");
+const href = await page.locator("tbody a[href^='/quotes/']").first().getAttribute("href", { timeout: 10000 }).catch(() => null);
 if (href) await visit(`/print${href}`, "53-print-quote");
 // 社内連絡 返信
 await visit("/messages", null);
 const firstThread = page.locator("a[href^='/messages/th_']").first();
-if (await firstThread.isVisible().catch(() => false)) {
+if (WRITE && (await firstThread.isVisible().catch(() => false))) {
   await firstThread.click();
   await page.waitForURL(/\/messages\/th_/, { timeout: 90000 });
   await page.waitForLoadState("networkidle");
@@ -314,7 +358,7 @@ results.push({ url: "header: ユーザーメニューからログアウト", sta
 await shot("58-logged-out");
 
 // タブレット表示: ヘッダーのボタンでメニューを開き、画面を移動すると閉じる
-await login(/^管理者/);
+await login("admin");
 await page.setViewportSize({ width: 768, height: 1024 });
 await visit("/", "59-tablet-dashboard");
 await page.getByRole("button", { name: "メニューを開く" }).click();
