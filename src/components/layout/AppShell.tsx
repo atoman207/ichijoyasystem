@@ -5,6 +5,25 @@ import Link from "@/components/ui/Link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import {
+  ACCENT_BUTTON,
+  CountBubble,
+  DRAWER_BACKDROP,
+  DRAWER_PANEL,
+  HEADER_BAR,
+  HEADER_WRAP,
+  ICON_BUTTON,
+  ICON_ZOOM,
+  LOGO_LINK,
+  MAIN_INNER,
+  MAIN_PAD,
+  MENU_PANEL,
+  TAB,
+  TabInner,
+  TILE_LINK,
+  tileIcon,
+  tileLabel,
+} from "./header-parts";
+import {
   Award,
   BookOpen,
   Calculator,
@@ -173,47 +192,6 @@ const CREATE_ITEMS: { href: string; label: string; desc: string; icon: LucideIco
 ];
 
 type MenuId = "notif" | "user" | "create" | "search" | "more" | null;
-
-/** アイコンボタンの共通スタイル */
-const ICON_BUTTON =
-  "group inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-ink-2 transition-colors outline-none hover:bg-subtle hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:w-10";
-/** ヘッダーのアイコンを少し拡大するホバー効果 */
-const ICON_ZOOM = "transition-transform duration-200 ease-[cubic-bezier(.34,1.56,.64,1)] group-hover:scale-125 group-focus-visible:scale-125 motion-reduce:transition-none";
-/** ヘッダーのタブ (アイコン + 名前) */
-const TAB =
-  "group relative flex h-14 shrink-0 flex-col items-center justify-center gap-[5px] rounded-xl px-2.5 text-[11px] leading-none font-medium whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-inset";
-/** ヘッダーから開くメニュー。スマートフォンではヘッダーの下に全幅で表示する */
-const MENU_PANEL =
-  "absolute top-full right-0 z-50 mt-3 overflow-hidden rounded-2xl border border-line/80 bg-panel shadow-pop animate-pop max-sm:fixed max-sm:inset-x-3 max-sm:top-[84px] max-sm:mt-0 max-sm:w-auto";
-
-function CountBubble({ n, className }: { n: number; className?: string }) {
-  return (
-    <span
-      className={clsx(
-        "flex h-4 min-w-4 items-center justify-center rounded-full bg-critical px-1 text-[10px] leading-none font-semibold text-white ring-2 ring-panel tnum",
-        className,
-      )}
-      aria-hidden
-    >
-      {n > 99 ? "99+" : n}
-    </span>
-  );
-}
-
-/** タブの中身 (アイコン + 短い名前 + 件数) */
-function TabInner({ icon: Icon, label, badge, active }: { icon: LucideIcon; label: string; badge?: number; active: boolean }) {
-  return (
-    <>
-      <span className="relative">
-        <Icon className={clsx("h-5 w-5", ICON_ZOOM)} strokeWidth={active ? 2.2 : 1.9} aria-hidden />
-        {badge ? <CountBubble n={badge} className="absolute -top-1.5 -right-2.5" /> : null}
-      </span>
-      <span>{label}</span>
-      {badge ? <span className="sr-only">（{badge} 件）</span> : null}
-      {active && <span className="absolute inset-x-3 bottom-0.5 h-[3px] rounded-full bg-accent" aria-hidden />}
-    </>
-  );
-}
 
 /** ヘッダー左上に常に表示する重要な機能のボタン (光の輪・光の帯・アイコンの揺れで目立たせる) */
 function PinnedButton({ item, active, onClick }: { item: NavItem; active: boolean; onClick: () => void }) {
@@ -404,18 +382,13 @@ export function AppShell({
         onClick={closeAll}
         aria-current={active ? "page" : undefined}
         title={item.label}
-        className="group flex min-w-0 flex-col items-center gap-1.5 rounded-xl px-1 py-2.5 text-center outline-none transition-colors hover:bg-subtle focus-visible:ring-2 focus-visible:ring-accent/40"
+        className={TILE_LINK}
       >
-        <span
-          className={clsx(
-            "relative flex h-11 w-11 items-center justify-center rounded-2xl",
-            active ? "bg-accent text-white shadow-[0_8px_16px_-8px_rgba(74,90,232,0.9)]" : "bg-subtle text-ink-2 group-hover:text-ink",
-          )}
-        >
+        <span className={tileIcon(active)}>
           <Icon className={clsx("h-5 w-5", ICON_ZOOM)} aria-hidden />
           {item.badge ? <CountBubble n={item.badge} className="absolute -top-1 -right-1" /> : null}
         </span>
-        <span className={clsx("w-full truncate text-[11px] leading-tight", active ? "font-semibold text-accent-ink" : "text-ink-2")}>{item.short ?? item.label}</span>
+        <span className={tileLabel(active)}>{item.short ?? item.label}</span>
         {item.badge ? <span className="sr-only">（{item.badge} 件）</span> : null}
       </Link>
     );
@@ -431,8 +404,8 @@ export function AppShell({
       </a>
 
       {/* ヘッダー (上部に浮かぶカード) */}
-      <header ref={headerRef} className="pointer-events-none sticky top-0 z-40 px-3 pt-3 sm:px-4 lg:px-6">
-        <div className="pointer-events-auto mx-auto flex h-16 max-w-[1680px] items-center gap-1 rounded-2xl border border-white/80 bg-panel/85 px-2 shadow-header backdrop-blur-xl sm:gap-2 sm:px-3 xl:gap-4 xl:px-4">
+      <header ref={headerRef} className={HEADER_WRAP}>
+        <div className={HEADER_BAR}>
           {/* タブレット・スマートフォン: メニューの開閉 */}
           <button
             type="button"
@@ -454,7 +427,7 @@ export function AppShell({
             prefetch={false}
             onClick={closeAll}
             aria-label="一畳屋 統合業務システム (ダッシュボード)"
-            className="flex shrink-0 items-center rounded-xl px-1.5 py-2 outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/40"
+            className={LOGO_LINK}
           >
             <IchijoyaLogo title="" className="h-6 w-auto sm:h-7" />
           </Link>
@@ -544,7 +517,7 @@ export function AppShell({
                 aria-label="新規作成"
                 aria-haspopup="menu"
                 aria-expanded={menu === "create"}
-                className="group inline-flex h-9 items-center gap-1.5 rounded-xl bg-accent px-2.5 text-sm font-medium text-white sm:h-10 shadow-[0_8px_18px_-10px_rgba(74,90,232,0.95)] transition-colors outline-none hover:bg-accent-hover focus-visible:ring-4 focus-visible:ring-accent/25 sm:px-3"
+                className={ACCENT_BUTTON}
               >
                 <Plus className={clsx("h-4 w-4", ICON_ZOOM)} />
                 <span className="hidden sm:inline">新規</span>
@@ -691,11 +664,11 @@ export function AppShell({
       {/* タブレット・スマートフォン: ヘッダーの下に開くメニュー (アイコンの一覧) */}
       {drawer && (
         <div className="fixed inset-0 z-30 lg:hidden">
-          <div className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]" onClick={() => setDrawer(false)} aria-hidden />
+          <div className={DRAWER_BACKDROP} onClick={() => setDrawer(false)} aria-hidden />
           <nav
             id="app-drawer"
             aria-label="メインメニュー"
-            className="absolute inset-x-3 top-[84px] max-h-[calc(100dvh-96px)] overflow-y-auto rounded-2xl border border-line/80 bg-panel p-3 shadow-pop animate-drop sm:inset-x-4"
+            className={DRAWER_PANEL}
           >
             {groups.map((g) => (
               <div key={g.name || "_top"} className="mb-1 last:mb-0">
@@ -712,8 +685,8 @@ export function AppShell({
         </div>
       )}
 
-      <main id="main-content" className="px-3 pt-5 pb-24 sm:px-4 lg:px-6 lg:pt-7">
-        <div className="@container mx-auto w-full max-w-[1680px] animate-fade">{children}</div>
+      <main id="main-content" className={MAIN_PAD}>
+        <div className={MAIN_INNER}>{children}</div>
       </main>
       <ChatbotWidget userName={user.name} />
       <ScrollTopButton />

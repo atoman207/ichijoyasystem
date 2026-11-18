@@ -33,6 +33,8 @@ import {
   UserPlus,
   UserRound,
   Users,
+  LayoutGrid,
+  Route,
   Wallet,
 } from "lucide-react";
 import { redirect } from "next/navigation";
@@ -42,6 +44,7 @@ import { ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import type { Role, StoreId } from "@/lib/db/types";
 import { PublicShell } from "@/components/brand/PublicShell";
 import { HeroCarousel, type HeroSlide } from "@/components/brand/HeroCarousel";
+import { Badge, Card, CardHeader, IconTile, LinkButton, PageHeader } from "@/components/ui";
 import Link from "@/components/ui/Link";
 
 export const metadata: Metadata = { title: { absolute: "一畳屋 統合業務システム" } };
@@ -202,316 +205,294 @@ export default async function HomePage() {
 
   return (
     <PublicShell current="home">
-      <HeroCarousel
-        slides={heroSlides}
-        intro={
-          <>
-            <p className="font-maru text-xs tracking-[0.2em] text-white/80 drop-shadow-sm sm:text-sm">株式会社一畳屋</p>
-            <h1 className="mt-3 font-maru text-[2rem] leading-[1.15] tracking-tight drop-shadow-sm sm:text-5xl">
-              統合業務システム
-            </h1>
-            <p className="mt-3 max-w-md text-sm leading-relaxed text-white/85 drop-shadow-sm sm:text-base">
-              問い合わせから入金まで、ひとつの画面で。
-            </p>
-          </>
-        }
+      {/* ログイン後の画面と同じ構成: ページの見出し → カード */}
+      <PageHeader
+        eyebrow="株式会社一畳屋 · 社員専用"
+        title="一畳屋 統合業務システム"
+        description="問い合わせから入金まで、ひとつの画面で。4 店舗と本社の社員が、お客様・見積・工事の予定・請求を同じ最新の情報で扱います。"
       />
 
+      <HeroCarousel slides={heroSlides} />
+
       {/* 店舗 (公式サイトの写真) */}
-      <section id="stores" className="scroll-mt-20 border-t border-neutral-100 bg-white">
-        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
-          <SectionTitle eyebrow="対象拠点" title="熊本の 4 店舗と本社が、同じ情報でつながります">
-            どの店舗で受けたお問い合わせも、ほかの店舗・本社からすぐに確認できます。予定表は全店舗で共有しています。
-          </SectionTitle>
-          <ul className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {shops.map((s) => (
-              <li key={s.id} className="group overflow-hidden rounded-2xl bg-white ring-1 ring-neutral-200/80">
-                <div className="relative aspect-[2.4/1] overflow-hidden bg-neutral-100">
-                  {STORE_PHOTO[s.id] && (
-                    // eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル (最適化済みの WebP)
-                    <img src={STORE_PHOTO[s.id]} alt={`${s.name}の外観`} loading="lazy" className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
-                  )}
-                  <div className="absolute inset-0 bg-linear-to-t from-black/45 via-transparent to-transparent" aria-hidden />
-                  <span className="absolute bottom-3 left-4 font-maru text-sm text-white drop-shadow-sm">{s.name}</span>
-                  <span className="absolute top-3 right-3 h-2.5 w-2.5 rounded-full ring-2 ring-white/80" style={{ background: s.color }} title="グラフ・予定表での店舗の色" aria-hidden />
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-ink-2">
-                  <span>〒{s.postalCode} {s.address}</span>
-                  <a href={`tel:${s.phone.replace(/[^0-9]/g, "")}`} className="inline-flex items-center gap-1 font-medium text-wa-green hover:underline">
-                    <Phone className="h-3.5 w-3.5" aria-hidden /> {s.phone}
-                  </a>
-                </div>
-              </li>
-            ))}
-          </ul>
-          {hq && (
-            <div className="mt-4 grid grid-cols-1 overflow-hidden rounded-2xl bg-wa-deep text-white ring-1 ring-black/10 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-              <div className="relative aspect-[2.4/1] sm:aspect-auto">
-                {/* eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル */}
-                <img src={STORE_PHOTO.hq} alt={`${hq.name}の外観`} loading="lazy" className="h-full w-full object-cover" />
+      <Card id="stores" className="mt-6 scroll-mt-24">
+        <CardHeader icon={<Store />} title="熊本の 4 店舗と本社が、同じ情報でつながります" description="どの店舗で受けたお問い合わせも、ほかの店舗・本社からすぐに確認できます。予定表は全店舗で共有しています。" />
+        <ul className="grid grid-cols-1 gap-3 @3xl:grid-cols-2">
+          {shops.map((s) => (
+            <li key={s.id} className="group overflow-hidden rounded-xl border border-line/70 bg-panel">
+              <div className="relative aspect-[2.4/1] overflow-hidden bg-subtle">
+                {STORE_PHOTO[s.id] && (
+                  // eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル (最適化済みの WebP)
+                  <img src={STORE_PHOTO[s.id]} alt={`${s.name}の外観`} loading="lazy" className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
+                )}
+                <div className="absolute inset-0 bg-linear-to-t from-ink/45 via-transparent to-transparent" aria-hidden />
+                <span className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full bg-white/95 px-2.5 py-0.5 text-xs font-semibold text-ink shadow-xs">
+                  <span className="h-2 w-2 rounded-full" style={{ background: s.color }} aria-hidden />
+                  {s.name}
+                </span>
               </div>
-              <div className="relative p-6 sm:p-8">
-                <div className="tatami-weave absolute inset-0 opacity-25" aria-hidden />
-                <div className="relative">
-                  <div className="font-maru text-[11px] tracking-[0.15em] text-white/70">本部</div>
-                  <h3 className="mt-1.5 font-maru text-lg tracking-tight">{hq.name}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-white/80">
-                    経理・承認・経営の数字を全店舗まとめて確認します。各店舗の見積・請求・入金も、本社からリアルタイムで見えます。
-                  </p>
-                  <p className="mt-4 text-xs text-white/55">
-                    〒{hq.postalCode} {hq.address} · TEL {hq.phone}
-                  </p>
-                </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-ink-2">
+                <span>〒{s.postalCode} {s.address}</span>
+                <a href={`tel:${s.phone.replace(/[^0-9]/g, "")}`} className="inline-flex items-center gap-1 font-medium text-accent hover:underline">
+                  <Phone className="h-3.5 w-3.5" aria-hidden /> {s.phone}
+                </a>
               </div>
+            </li>
+          ))}
+        </ul>
+        {hq && (
+          <div className="mt-3 grid grid-cols-1 overflow-hidden rounded-xl border border-line/70 @3xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+            <div className="relative aspect-[2.4/1] @3xl:aspect-auto">
+              {/* eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル */}
+              <img src={STORE_PHOTO.hq} alt={`${hq.name}の外観`} loading="lazy" className="h-full w-full object-cover" />
             </div>
-          )}
-        </div>
-      </section>
+            <div className="bg-subtle/60 p-5 sm:p-6">
+              <Badge tone="accent" dot={false}>
+                本部
+              </Badge>
+              <h3 className="mt-2 text-[15px] font-semibold tracking-tight text-ink">{hq.name}</h3>
+              <p className="mt-1.5 text-sm leading-relaxed text-ink-2">
+                経理・承認・経営の数字を全店舗まとめて確認します。各店舗の見積・請求・入金も、本社からリアルタイムで見えます。
+              </p>
+              <p className="mt-3 text-xs text-ink-3">
+                〒{hq.postalCode} {hq.address} · TEL {hq.phone}
+              </p>
+            </div>
+          </div>
+        )}
+      </Card>
 
       {/* 解決する課題 */}
-      <section id="issues" className="scroll-mt-20 border-t border-neutral-100 bg-neutral-50/60">
-        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
-          <SectionTitle eyebrow="このシステムが解決すること" title="毎日の「困った」を、仕組みで解決します">
-            これまで人の記憶や電話・紙に頼っていた仕事を、データベースと自動の仕組みに置き換えました。左が「これまで」、右が「これから」です。
-          </SectionTitle>
-          <ul className="mt-10 grid grid-cols-1 gap-3 lg:grid-cols-2">
-            {ISSUES.map((it) => (
-              <li key={it.before} className="overflow-hidden rounded-2xl bg-white ring-1 ring-neutral-200/80">
-                <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-                  <div className="p-4 sm:p-5">
-                    <div className="text-[10px] font-medium tracking-[0.12em] text-neutral-400">これまで</div>
-                    <p className="mt-1.5 text-sm leading-relaxed text-neutral-600">{it.before}</p>
-                  </div>
-                  <div className="flex items-center justify-center px-1 max-sm:pb-1" aria-hidden>
-                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-wa-green text-white">
-                      <it.icon className="h-4 w-4" />
-                    </span>
-                  </div>
-                  <div className="border-t border-neutral-100 bg-white p-4 sm:border-t-0 sm:border-l sm:p-5">
-                    <div className="text-[10px] font-medium tracking-[0.12em] text-wa-green">これから</div>
-                    <p className="mt-1.5 text-sm leading-relaxed text-neutral-800">{it.after}</p>
-                  </div>
+      <Card id="issues" className="mt-6 scroll-mt-24">
+        <CardHeader
+          icon={<Layers />}
+          title="毎日の「困った」を、仕組みで解決します"
+          description="これまで人の記憶や電話・紙に頼っていた仕事を、データベースと自動の仕組みに置き換えました。左が「これまで」、右が「これから」です。"
+        />
+        <ul className="grid grid-cols-1 gap-3 @4xl:grid-cols-2">
+          {ISSUES.map((it) => (
+            <li key={it.before} className="overflow-hidden rounded-xl border border-line/70">
+              <div className="grid grid-cols-1 @xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+                <div className="bg-subtle/60 p-4">
+                  <div className="text-[11px] font-semibold tracking-wide text-ink-3">これまで</div>
+                  <p className="mt-1 text-sm leading-relaxed text-ink-2">{it.before}</p>
                 </div>
-                <div className="flex items-center gap-2 border-t border-neutral-100 px-4 py-2 text-[11px] text-neutral-400 sm:px-5">
-                  <span className="font-mono text-[10px] tracking-wide text-neutral-500">仕組み</span>
-                  {it.tech}
+                <div className="flex items-center justify-center px-3 py-2">
+                  <IconTile size="sm">
+                    <it.icon />
+                  </IconTile>
                 </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </section>
+                <div className="p-4">
+                  <div className="text-[11px] font-semibold tracking-wide text-accent-ink">これから</div>
+                  <p className="mt-1 text-sm leading-relaxed text-ink">{it.after}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 border-t border-line/70 px-4 py-2 text-[11px] text-ink-3">
+                <span className="font-semibold text-ink-2">仕組み</span>
+                {it.tech}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </Card>
 
       {/* 仕組みと強み */}
-      <section id="about" className="relative scroll-mt-20 overflow-hidden bg-wa-deep text-white">
-        <div className="tatami-weave absolute inset-0 opacity-30" aria-hidden />
-        <div className="relative mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
-          <SectionTitle eyebrow="仕組みと強み" title="入口はいろいろ、情報はひとつに" dark>
-            電話・LINE・紙の書類など、どこから入った情報も 1 つのデータベースに集まり、必要な人の画面・帳票・会計データとして取り出せます。
-          </SectionTitle>
-
-          <div className="mt-10 grid grid-cols-1 items-stretch gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)]">
-            <DiagramColumn title="入口" items={INPUTS} />
-            <div className="relative rounded-2xl bg-white p-5 text-ink ring-1 ring-neutral-200/80 sm:p-6">
-              <div className="flex items-center gap-3">
-                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-wa-green/10 text-wa-green">
-                  <Database className="h-4.5 w-4.5" aria-hidden />
-                </span>
-                <div>
-                  <div className="font-maru text-sm text-wa-deep">一畳屋 統合データベース</div>
-                  <div className="text-[11px] text-ink-3">すべての記録を ID でつなぎ、権限と履歴で守る</div>
-                </div>
+      <Card id="about" className="mt-6 scroll-mt-24">
+        <CardHeader
+          icon={<Database />}
+          title="入口はいろいろ、情報はひとつに"
+          description="電話・LINE・紙の書類など、どこから入った情報も 1 つのデータベースに集まり、必要な人の画面・帳票・会計データとして取り出せます。"
+        />
+        <div className="grid grid-cols-1 items-stretch gap-3 @4xl:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)]">
+          <DiagramColumn title="入口" items={INPUTS} />
+          <div className="relative rounded-xl border border-accent/25 bg-accent-soft/60 p-4 sm:p-5">
+            <div className="flex items-center gap-3">
+              <IconTile size="sm">
+                <Database />
+              </IconTile>
+              <div>
+                <div className="text-sm font-semibold tracking-tight text-ink">一畳屋 統合データベース</div>
+                <div className="text-[11px] text-ink-3">すべての記録を ID でつなぎ、権限と履歴で守る</div>
               </div>
-              <ul className="mt-4 grid grid-cols-3 gap-1.5">
-                {CORE.map((c) => (
-                  <li key={c} className="rounded-md bg-neutral-50 px-2 py-1.5 text-center text-[11px] text-wa-deep ring-1 ring-neutral-100">
-                    {c}
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-4 flex flex-wrap gap-1.5 text-[10px]">
-                {["権限の確認", "承認", "変更の記録", "毎日のバックアップ"].map((t) => (
-                  <span key={t} className="inline-flex items-center gap-1 rounded-full bg-wa-green/10 px-2 py-0.5 text-wa-deep/90">
-                    <CircleCheck className="h-3 w-3 text-wa-green" aria-hidden /> {t}
-                  </span>
-                ))}
-              </div>
-              <ArrowRight className="absolute top-1/2 -left-3.5 hidden h-4 w-4 -translate-y-1/2 text-white/50 lg:block" aria-hidden />
-              <ArrowRight className="absolute top-1/2 -right-3.5 hidden h-4 w-4 -translate-y-1/2 text-white/50 lg:block" aria-hidden />
             </div>
-            <DiagramColumn title="使う場面" items={OUTPUTS} />
-          </div>
-
-          <ul className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {STRENGTHS.map((s) => (
-              <li key={s.title} className="rounded-2xl bg-white/6 p-5 ring-1 ring-white/10">
-                <div className="flex items-center justify-between">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white">
-                    <s.icon className="h-4.5 w-4.5" aria-hidden />
-                  </span>
-                  <span className="font-maru text-xl text-white/90">{s.big}</span>
-                </div>
-                <h3 className="mt-4 font-maru text-sm tracking-tight">{s.title}</h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-white/70">{s.desc}</p>
-                <p className="mt-3 font-mono text-[10px] tracking-wide text-white/40 uppercase">{s.tech}</p>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </section>
-
-      {/* 業務の流れ */}
-      <section id="flow" className="scroll-mt-20 border-t border-neutral-100 bg-neutral-50/60">
-        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
-          <SectionTitle eyebrow="業務の流れ" title="ひとつのお仕事を、最初から最後までつなげて管理">
-            お客様からのお問い合わせを受けてから、工事を終えて代金をいただくまでの記録を、すべて同じ番号 (ID) でつなげています。
-            担当が替わっても、店舗が違っても、前後の経緯をすぐにたどれます。
-          </SectionTitle>
-          <ol className="mt-10 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
-            {FLOW.map((f, i) => (
-              <li key={f.title} className="relative rounded-2xl bg-white p-4 ring-1 ring-neutral-200/80">
-                <div className="flex items-center gap-2">
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-wa-green font-maru text-[11px] text-white">{i + 1}</span>
-                  <f.icon className="h-4 w-4 text-wa-green" aria-hidden />
-                </div>
-                <div className="mt-3 font-maru text-sm text-neutral-900">{f.title}</div>
-                <p className="mt-1 text-sm leading-relaxed text-neutral-500">{f.desc}</p>
-                {i < FLOW.length - 1 && <ArrowRight className="absolute top-1/2 -right-2.5 hidden h-4 w-4 -translate-y-1/2 text-neutral-300 lg:block" aria-hidden />}
-              </li>
-            ))}
-          </ol>
-        </div>
-      </section>
-
-      {/* 主な機能 */}
-      <section id="features" className="scroll-mt-20 border-t border-neutral-100 bg-white">
-        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
-          <SectionTitle eyebrow="主な機能" title="現場・店舗・本社の仕事を、それぞれの画面で">
-            スマートフォンでも使えます。現場では写真と予定、店舗では見積と顧客対応、本社では承認と経営数値を中心に使います。
-          </SectionTitle>
-          <ul className="mt-10 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {FEATURES.map((f) => (
-              <li key={f.title} className="rounded-2xl bg-white p-5 ring-1 ring-neutral-200/80">
-                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-wa-green/10 text-wa-green">
-                  <f.icon className="h-4.5 w-4.5" aria-hidden />
-                </span>
-                <h3 className="mt-4 font-maru text-sm tracking-tight text-wa-deep">{f.title}</h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-ink-2">{f.desc}</p>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </section>
-
-      {/* 権限と新規登録 */}
-      <section id="roles" className="scroll-mt-20 bg-white">
-        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
-          <SectionTitle eyebrow="権限" title="役割に合わせて、見える情報とできる操作を分けています">
-            新規登録のときに自分の役割を選んで申請します。管理者 (店舗スタッフは所属店舗の店長も) が承認すると使えるようになります。
-            店舗ごとの担当者・顔写真つきの詳しい案内は{" "}
-            <Link href="/roles" className="font-medium text-wa-green hover:underline">
-              権限と担当
-            </Link>
-            のページで確認できます。
-          </SectionTitle>
-          <ul className="mt-10 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {(["admin", "hq_staff", "store_manager", "store_staff"] as Role[]).map((r) => {
-              const Icon = ROLE_ICON[r];
-              return (
-                <li key={r} className="rounded-2xl bg-white p-5 ring-1 ring-neutral-200/80">
-                  <div className="flex items-center gap-2.5">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-wa-green/10 text-wa-green">
-                      <Icon className="h-4.5 w-4.5" aria-hidden />
-                    </span>
-                    <h3 className="font-maru text-sm tracking-tight text-wa-deep">{ROLE_LABEL[r]}</h3>
-                  </div>
-                  <p className="mt-3 text-sm leading-relaxed text-ink-2">{ROLE_DESCRIPTION[r]}</p>
-                  <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-ink-3">
-                    <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-wa-green" aria-hidden />
-                    アカウント: {ROLE_ACCOUNT[r]}
-                  </p>
-                </li>
-              );
-            })}
-          </ul>
-
-          <div className="mt-10 grid grid-cols-1 gap-4 rounded-2xl border border-neutral-200 bg-neutral-50/80 p-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-            <div>
-              <h3 className="font-maru text-sm tracking-tight text-wa-deep">新規登録の流れ</h3>
-              <ol className="mt-3 grid grid-cols-1 gap-3 text-sm text-ink sm:grid-cols-3">
-                {[
-                  ["申請", "氏名・ログイン ID・パスワード・希望する役割と所属を入力"],
-                  ["承認", "管理者 (店舗スタッフは所属店舗の店長も) が内容を確かめて承認"],
-                  ["ログイン", "登録したログイン ID とパスワードで使い始める"],
-                ].map(([t, d], i) => (
-                  <li key={t} className="flex items-start gap-2.5">
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-wa-green/90 font-maru text-[11px] text-white">{i + 1}</span>
-                    <span>
-                      <span className="block font-medium">{t}</span>
-                      <span className="block text-sm text-ink-2">{d}</span>
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-            <Link href="/signup" className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-wa-green px-6 font-maru text-sm text-white transition hover:bg-wa-deep">
-              <UserPlus className="h-4 w-4" /> 新規登録を申請する
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* 安全性 */}
-      <section className="border-t border-neutral-100 bg-white">
-        <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-10 px-4 py-16 sm:px-6 sm:py-20 lg:grid-cols-2">
-          <div>
-            <SectionTitle eyebrow="安心して使うために" title="大切なお客様の情報を守ります" />
-            <ul className="mt-6 space-y-2.5">
-              {SECURITY.map((s) => (
-                <li key={s.title} className="flex items-start gap-3 rounded-2xl bg-white p-4 ring-1 ring-neutral-200/80">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-wa-green/10 text-wa-green">
-                    <s.icon className="h-4.5 w-4.5" aria-hidden />
-                  </span>
-                  <span>
-                    <span className="block font-maru text-sm tracking-tight text-wa-deep">{s.title}</span>
-                    <span className="mt-0.5 block text-sm leading-relaxed text-ink-2">{s.desc}</span>
-                  </span>
+            <ul className="mt-4 grid grid-cols-3 gap-1.5">
+              {CORE.map((c) => (
+                <li key={c} className="rounded-lg bg-panel px-2 py-1.5 text-center text-[11px] font-medium text-ink-2 ring-1 ring-line/70">
+                  {c}
                 </li>
               ))}
             </ul>
+            <div className="mt-4 flex flex-wrap gap-1.5">
+              {["権限の確認", "承認", "変更の記録", "毎日のバックアップ"].map((t) => (
+                <Badge key={t} tone="accent">
+                  {t}
+                </Badge>
+              ))}
+            </div>
+            <ArrowRight className="absolute top-1/2 -left-3 hidden h-4 w-4 -translate-y-1/2 text-ink-3 @4xl:block" aria-hidden />
+            <ArrowRight className="absolute top-1/2 -right-3 hidden h-4 w-4 -translate-y-1/2 text-ink-3 @4xl:block" aria-hidden />
           </div>
-          <figure className="overflow-hidden rounded-2xl bg-white ring-1 ring-neutral-200/80">
-            {/* eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル */}
-            <img src="/brand/intro.webp" alt="張り替えた畳の和室で遊ぶ子どもたち" loading="lazy" className="aspect-[1.43/1] w-full object-cover" />
-            <figcaption className="px-5 py-3 font-maru text-xs text-wa-deep/80">いい畳で、お客様の暮らしを豊かに。その仕事を支える仕組みです。</figcaption>
-          </figure>
+          <DiagramColumn title="使う場面" items={OUTPUTS} />
         </div>
-      </section>
-    </PublicShell>
-  );
-}
 
-function SectionTitle({ eyebrow, title, children, dark = false }: { eyebrow: string; title: string; children?: React.ReactNode; dark?: boolean }) {
-  return (
-    <div className="max-w-2xl">
-      <div className={`inline-flex items-center gap-2 font-maru text-[11px] tracking-[0.16em] ${dark ? "text-white/65" : "text-neutral-400"}`}>
-        <span className={`h-px w-5 ${dark ? "bg-white/40" : "bg-neutral-300"}`} aria-hidden />
-        {eyebrow}
+        <ul className="mt-4 grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-3">
+          {STRENGTHS.map((s) => (
+            <li key={s.title} className="rounded-xl border border-line/70 p-4">
+              <div className="flex items-center justify-between">
+                <IconTile size="sm">
+                  <s.icon />
+                </IconTile>
+                <span className="text-lg font-bold tracking-tight text-accent-ink">{s.big}</span>
+              </div>
+              <h3 className="mt-3 text-sm font-semibold tracking-tight text-ink">{s.title}</h3>
+              <p className="mt-1 text-sm leading-relaxed text-ink-2">{s.desc}</p>
+              <p className="mt-2 font-mono text-[10px] tracking-wide text-ink-3 uppercase">{s.tech}</p>
+            </li>
+          ))}
+        </ul>
+      </Card>
+
+      {/* 業務の流れ */}
+      <Card id="flow" className="mt-6 scroll-mt-24">
+        <CardHeader
+          icon={<Route />}
+          title="ひとつのお仕事を、最初から最後までつなげて管理"
+          description="お客様からのお問い合わせを受けてから、工事を終えて代金をいただくまでの記録を、すべて同じ番号 (ID) でつなげています。担当が替わっても、店舗が違っても、前後の経緯をすぐにたどれます。"
+        />
+        <ol className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @5xl:grid-cols-6">
+          {FLOW.map((f, i) => (
+            <li key={f.title} className="relative rounded-xl border border-line/70 p-4">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-white tnum">{i + 1}</span>
+                <f.icon className="h-4 w-4 text-accent" aria-hidden />
+              </div>
+              <div className="mt-3 text-sm font-semibold tracking-tight text-ink">{f.title}</div>
+              <p className="mt-1 text-sm leading-relaxed text-ink-2">{f.desc}</p>
+              {i < FLOW.length - 1 && <ArrowRight className="absolute top-1/2 -right-2.5 hidden h-4 w-4 -translate-y-1/2 text-ink-3 @5xl:block" aria-hidden />}
+            </li>
+          ))}
+        </ol>
+      </Card>
+
+      {/* 主な機能 */}
+      <Card id="features" className="mt-6 scroll-mt-24">
+        <CardHeader
+          icon={<LayoutGrid />}
+          title="現場・店舗・本社の仕事を、それぞれの画面で"
+          description="スマートフォンでも使えます。現場では写真と予定、店舗では見積と顧客対応、本社では承認と経営数値を中心に使います。"
+        />
+        <ul className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-4">
+          {FEATURES.map((f) => (
+            <li key={f.title} className="rounded-xl border border-line/70 p-4">
+              <IconTile size="sm">
+                <f.icon />
+              </IconTile>
+              <h3 className="mt-3 text-sm font-semibold tracking-tight text-ink">{f.title}</h3>
+              <p className="mt-1 text-sm leading-relaxed text-ink-2">{f.desc}</p>
+            </li>
+          ))}
+        </ul>
+      </Card>
+
+      {/* 権限と新規登録 */}
+      <Card id="roles" className="mt-6 scroll-mt-24">
+        <CardHeader
+          icon={<ShieldCheck />}
+          title="役割に合わせて、見える情報とできる操作を分けています"
+          description={
+            <>
+              新規登録のときに自分の役割を選んで申請します。管理者 (店舗スタッフは所属店舗の店長も) が承認すると使えるようになります。店舗ごとの担当者・顔写真つきの詳しい案内は{" "}
+              <Link href="/roles" className="font-medium text-accent hover:underline">
+                権限と担当
+              </Link>
+              のページで確認できます。
+            </>
+          }
+        />
+        <ul className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-4">
+          {(["admin", "hq_staff", "store_manager", "store_staff"] as Role[]).map((r) => {
+            const Icon = ROLE_ICON[r];
+            return (
+              <li key={r} className="rounded-xl border border-line/70 p-4">
+                <div className="flex items-center gap-2.5">
+                  <IconTile size="sm">
+                    <Icon />
+                  </IconTile>
+                  <h3 className="text-sm font-semibold tracking-tight text-ink">{ROLE_LABEL[r]}</h3>
+                </div>
+                <p className="mt-3 text-sm leading-relaxed text-ink-2">{ROLE_DESCRIPTION[r]}</p>
+                <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-ink-3">
+                  <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
+                  アカウント: {ROLE_ACCOUNT[r]}
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 rounded-xl border border-line/70 bg-subtle/60 p-4 sm:p-5 @4xl:grid-cols-[minmax(0,1fr)_auto] @4xl:items-center">
+          <div>
+            <h3 className="text-sm font-semibold tracking-tight text-ink">新規登録の流れ</h3>
+            <ol className="mt-3 grid grid-cols-1 gap-3 text-sm text-ink @3xl:grid-cols-3">
+              {[
+                ["申請", "氏名・ログイン ID・パスワード・希望する役割と所属を入力"],
+                ["承認", "管理者 (店舗スタッフは所属店舗の店長も) が内容を確かめて承認"],
+                ["ログイン", "登録したログイン ID とパスワードで使い始める"],
+              ].map(([t, d], i) => (
+                <li key={t} className="flex items-start gap-2.5">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-white tnum">{i + 1}</span>
+                  <span>
+                    <span className="block font-medium">{t}</span>
+                    <span className="block text-sm text-ink-2">{d}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </div>
+          <LinkButton href="/signup">
+            <UserPlus className="h-4 w-4" aria-hidden /> 新規登録を申請する
+          </LinkButton>
+        </div>
+      </Card>
+
+      {/* 安全性 */}
+      <div className="mt-6 grid grid-cols-1 gap-6 @4xl:grid-cols-2">
+        <Card>
+          <CardHeader icon={<LockKeyhole />} title="大切なお客様の情報を守ります" description="安心して使うために" />
+          <ul className="space-y-2.5">
+            {SECURITY.map((s) => (
+              <li key={s.title} className="flex items-start gap-3 rounded-xl border border-line/70 p-4">
+                <IconTile size="sm">
+                  <s.icon />
+                </IconTile>
+                <span>
+                  <span className="block text-sm font-semibold tracking-tight text-ink">{s.title}</span>
+                  <span className="mt-0.5 block text-sm leading-relaxed text-ink-2">{s.desc}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+        <Card padded={false} className="overflow-hidden">
+          <figure className="flex h-full flex-col">
+            {/* eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル */}
+            <img src="/brand/intro.webp" alt="張り替えた畳の和室で遊ぶ子どもたち" loading="lazy" className="aspect-[1.43/1] w-full flex-1 object-cover" />
+            <figcaption className="px-5 py-3 text-xs text-ink-2">いい畳で、お客様の暮らしを豊かに。その仕事を支える仕組みです。</figcaption>
+          </figure>
+        </Card>
       </div>
-      <h2 className={`mt-2.5 font-maru text-xl leading-snug tracking-tight sm:text-2xl ${dark ? "text-white" : "text-neutral-900"}`}>{title}</h2>
-      {children && <p className={`mt-3 text-sm leading-relaxed ${dark ? "text-white/70" : "text-neutral-500"}`}>{children}</p>}
-    </div>
+    </PublicShell>
   );
 }
 
 function DiagramColumn({ title, items }: { title: string; items: { icon: React.ComponentType<{ className?: string }>; label: string }[] }) {
   return (
-    <div className="rounded-2xl bg-white/6 p-4 ring-1 ring-white/10">
-      <div className="font-maru text-[11px] tracking-[0.14em] text-white/65">{title}</div>
+    <div className="rounded-xl border border-line/70 bg-subtle/60 p-4">
+      <div className="text-[11px] font-semibold tracking-wide text-ink-3">{title}</div>
       <ul className="mt-3 space-y-1.5">
         {items.map((it) => (
-          <li key={it.label} className="flex items-center gap-2.5 rounded-lg bg-white/8 px-3 py-2 text-sm text-white/90">
-            <it.icon className="h-4 w-4 shrink-0 text-white/70" aria-hidden />
+          <li key={it.label} className="flex items-center gap-2.5 rounded-lg bg-panel px-3 py-2 text-sm text-ink ring-1 ring-line/70">
+            <it.icon className="h-4 w-4 shrink-0 text-accent" aria-hidden />
             {it.label}
           </li>
         ))}

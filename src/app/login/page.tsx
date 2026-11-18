@@ -7,6 +7,8 @@ import { reviewLogin } from "@/lib/actions/auth";
 import { ROLE_LABEL } from "@/lib/constants";
 import { LoginForm, PlainLoginForm, type LoginAccount } from "@/components/features/LoginForm";
 import { PublicShell } from "@/components/brand/PublicShell";
+import { LogIn } from "lucide-react";
+import { Card, PageHeader } from "@/components/ui";
 import Link from "@/components/ui/Link";
 
 export const metadata: Metadata = { title: "ログイン" };
@@ -28,17 +30,14 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
 
   return (
     <PublicShell current="login">
-      <div className="mx-auto flex max-w-md flex-col px-4 py-12 sm:px-6 sm:py-16">
-        <div className="text-center">
-          <h1 className="font-maru text-2xl tracking-tight text-wa-deep sm:text-3xl">ログイン</h1>
-          <p className="mt-2 text-sm leading-relaxed text-ink-2">
-            {demo
-              ? "テスト用: ロールと店舗を選ぶと、ログイン ID とパスワードが自動で入ります。"
-              : "社員のログイン ID とパスワードを入力してください。"}
-          </p>
-        </div>
+      <div className="mx-auto flex max-w-md flex-col pt-2 sm:pt-6">
+        <PageHeader
+          icon={<LogIn />}
+          title="ログイン"
+          description={demo ? "テスト用: ロールと店舗を選ぶと、ログイン ID とパスワードが自動で入ります。" : "社員のログイン ID とパスワードを入力してください。"}
+        />
 
-        <div className="mt-8 rounded-2xl bg-panel p-5 shadow-card ring-1 ring-black/5 sm:p-6">
+        <Card className="sm:p-6">
           {err && (
             <p role="alert" className="mb-4 rounded-xl border border-critical/30 bg-critical/5 px-4 py-3 text-sm text-critical-ink">
               {err}
@@ -71,15 +70,15 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
             <p>パスワードを忘れた場合は、管理者または店長にお問い合わせください。</p>
             <p>
               アカウントをお持ちでない方は{" "}
-              <Link href="/signup" className="font-medium text-wa-green hover:underline">
+              <Link href="/signup" className="font-medium text-accent hover:underline">
                 新規登録
               </Link>
             </p>
           </div>
-        </div>
+        </Card>
 
         {demo && (
-          <details className="group mt-4 rounded-2xl bg-panel text-ink shadow-card ring-1 ring-black/5">
+          <details className="group mt-4 rounded-2xl border border-line/70 bg-panel text-ink shadow-card">
             <summary className="flex cursor-pointer flex-wrap items-center justify-between gap-x-3 gap-y-1 px-5 py-3 text-sm font-medium select-none">
               <span className="whitespace-nowrap">テスト用アカウント一覧 ({accounts.length} 名)</span>
               <span className="text-xs text-ink-3">
@@ -113,7 +112,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         )}
 
         <p className="mt-8 text-center text-xs text-ink-3">
-          <Link href="/home" className="hover:text-wa-deep hover:underline">
+          <Link href="/home" className="hover:text-ink hover:underline">
             ← ホームに戻る
           </Link>
         </p>
