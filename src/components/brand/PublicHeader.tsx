@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import clsx from "clsx";
-import { House, LogIn, Menu, ShieldCheck, Store, UserPlus, X, type LucideIcon } from "lucide-react";
+import { House, Layers, LayoutGrid, LogIn, Menu, ShieldCheck, Store, UserPlus, X, type LucideIcon } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { IchijoyaLogo } from "@/components/brand/Logo";
 import {
@@ -35,6 +35,8 @@ interface Item {
 const ITEMS: Item[] = [
   { href: "/home", label: "ホーム", icon: House, page: "home" },
   { href: "/home#stores", label: "店舗", icon: Store },
+  { href: "/home#issues", label: "解決すること", icon: Layers },
+  { href: "/home#features", label: "機能", icon: LayoutGrid },
   { href: "/roles", label: "権限と担当", icon: ShieldCheck, page: "roles" },
 ];
 

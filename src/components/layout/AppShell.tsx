@@ -263,6 +263,7 @@ export function AppShell({
   const [drawer, setDrawer] = useState(false);
   const [menu, setMenu] = useState<MenuId>(null);
   const [lastPath, setLastPath] = useState(pathname);
+  const [readNotifications, setReadNotifications] = useState<Set<string>>(new Set());
   const pinned = nav.find((it) => it.pinned);
   const tabs = nav.filter((it) => !it.pinned);
   const [visibleCount, setVisibleCount] = useState(tabs.length);
@@ -351,6 +352,46 @@ export function AppShell({
   const closeAll = () => {
     setMenu(null);
     setDrawer(false);
+  };
+  const notifKey = (n: NotificationItem) => `${n.kind}|${n.href}|${n.title}|${n.detail ?? ""}`;
+  const storageKey = `ichijoya:read-notifications:${user.id}`;
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const arr = raw ? (JSON.parse(raw) as string[]) : [];
+      if (!Array.isArray(arr)) return;
+      setReadNotifications(new Set(arr));
+    } catch {
+      // localStorage が使えない環境では既読の保持を省略する
+    }
+  }, [storageKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify([...readNotifications]));
+    } catch {
+      // 保存できない場合も表示は続行する
+    }
+  }, [readNotifications, storageKey]);
+
+  useEffect(() => {
+    const current = new Set(notifications.map(notifKey));
+    setReadNotifications((prev) => {
+      const next = new Set([...prev].filter((id) => current.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [notifications]);
+
+  const unreadCount = notifications.reduce((sum, n) => (readNotifications.has(notifKey(n)) ? sum : sum + 1), 0);
+  const markRead = (n: NotificationItem) => {
+    const key = notifKey(n);
+    setReadNotifications((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
   };
 
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`));
@@ -551,20 +592,29 @@ export function AppShell({
                 aria-expanded={menu === "notif"}
               >
                 <Bell className={clsx("h-5 w-5", ICON_ZOOM)} />
-                {notifications.length > 0 && <CountBubble n={notifications.length} className="absolute top-1 right-1" />}
+                {unreadCount > 0 && <CountBubble n={unreadCount} className="absolute top-1 right-1" />}
               </button>
               {menu === "notif" && (
                 <div role="menu" aria-label="通知" className={clsx(MENU_PANEL, "w-[360px]")}>
                   <div className="flex items-center justify-between border-b border-line px-4 py-3">
                     <span className="text-sm font-semibold text-ink">通知</span>
-                    <span className="text-xs text-ink-3">{notifications.length} 件</span>
+                    <span className="text-xs text-ink-3">{unreadCount} 件</span>
                   </div>
                   <div className="max-h-[min(420px,calc(100dvh-7rem))] overflow-y-auto p-1.5">
                     {notifications.length === 0 && <div className="px-4 py-10 text-center text-xs text-ink-3">新しい通知はありません</div>}
                     {notifications.map((n, i) => {
                       const st = NOTIFICATION_STYLE[n.kind];
                       return (
-                        <Link key={i} href={n.href} role="menuitem" onClick={closeAll} className="flex items-start gap-3 rounded-xl px-2.5 py-2 transition hover:bg-subtle">
+                        <Link
+                          key={i}
+                          href={n.href}
+                          role="menuitem"
+                          onClick={() => {
+                            markRead(n);
+                            closeAll();
+                          }}
+                          className={clsx("flex items-start gap-3 rounded-xl px-2.5 py-2 transition hover:bg-subtle", readNotifications.has(notifKey(n)) && "opacity-70")}
+                        >
                           <span className={clsx("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", st.cls)}>
                             <st.icon className="h-4 w-4" />
                           </span>

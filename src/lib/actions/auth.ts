@@ -9,6 +9,7 @@ import { canResetData, DEMO_EMAIL_DOMAIN } from "@/lib/auth/permissions";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { hasReviewAccess, REVIEW_ACCOUNTS } from "@/lib/auth/review";
 import { accountEditLocked, loginIdProblem, PASSWORD_AUDIT, PASSWORD_LOCK_MESSAGE, reservedLoginId } from "@/lib/account-rules";
+import { putObject, removeObjects } from "@/lib/storage";
 import { ROLE_LABEL } from "@/lib/constants";
 import type { Role, StoreId, User } from "@/lib/db/types";
 import crypto from "node:crypto";
@@ -178,8 +179,16 @@ export interface SignupState {
 const SIGNUP_WINDOW_MS = 60 * 60 * 1000;
 const SIGNUP_PER_IP = 5;
 const SIGNUP_PENDING_MAX = 30;
+const SIGNUP_AVATAR_MAX_BYTES = 512 * 1024;
 const gs = globalThis as typeof globalThis & { __ichijoyaSignups?: Map<string, number[]> };
 const signups = (gs.__ichijoyaSignups ??= new Map());
+
+function imageType(buf: Buffer): "image/jpeg" | "image/png" | "image/webp" | undefined {
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.length > 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (buf.length > 12 && buf.subarray(0, 4).toString("ascii") === "RIFF" && buf.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  return undefined;
+}
 
 /**
  * ログイン画面からの新規登録。希望するロール・所属を選んで申請し、承認されるまでログインできない。
@@ -220,17 +229,38 @@ export async function signup(_prev: SignupState, formData: FormData): Promise<Si
   if (signups.size > 5000) signups.clear();
 
   const id = `u_${crypto.randomBytes(8).toString("hex")}`;
+  const avatar = formData.get("avatar");
+  let avatarKey: string | undefined;
+  let avatarBody: Buffer | undefined;
+  if (avatar instanceof File && avatar.size > 0) {
+    if (avatar.size > SIGNUP_AVATAR_MAX_BYTES) return { error: "顔写真が大きすぎます (512 KB まで)。別の写真を選んでください。" };
+    avatarBody = Buffer.from(await avatar.arrayBuffer());
+    const type = imageType(avatarBody);
+    if (!type) return { error: "顔写真は JPEG・PNG・WebP を選んでください。" };
+    const ext = type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
+    avatarKey = `avatars/${id.replace(/[^\w-]/g, "")}/${Date.now()}.${ext}`;
+    try {
+      await putObject(avatarKey, avatarBody);
+    } catch (err) {
+      console.error("[signup] avatar upload failed:", err);
+      return { error: "顔写真を保存できませんでした。時間をおいて再度お試しください。" };
+    }
+  }
+
   try {
     await mutate((d) => {
       if (d.users.some((u) => u.email.toLowerCase() === email)) throw new Error("duplicate");
       d.users.push({
         id, name, kana, email, passwordHash: hashPassword(password),
         role: role as Role, storeId: storeId as StoreId, title: "申請中", active: false,
+        avatarKey,
+        avatarUpdatedAt: avatarKey ? new Date().toISOString() : undefined,
         signupStatus: "pending", signupRequestedAt: new Date().toISOString(), signupNote: note || undefined,
       });
       addAudit(d, { userId: id, action: "create", entity: "user", entityId: id, entityLabel: name, summary: `新規登録を申請 (希望: ${ROLE_LABEL[role as Role]} / ${d.stores.find((s) => s.id === storeId)?.name ?? storeId})`, storeId: storeId as StoreId });
     });
   } catch (err) {
+    if (avatarKey) await removeObjects([avatarKey]).catch((e) => console.error("[signup] avatar cleanup failed:", e));
     if (err instanceof Error && err.message === "duplicate") return { error: "このログイン ID はすでに使われています。" };
     console.error("[signup] save failed:", err);
     return { error: "申請を保存できませんでした。時間をおいて再度お試しください。" };

@@ -51,7 +51,7 @@ export function SignupForm({ stores }: { stores: { id: StoreId; name: string; co
   }
 
   return (
-    <form action={formAction} className="space-y-5">
+    <form action={formAction} encType="multipart/form-data" className="space-y-5">
       <div className="hidden" aria-hidden>
         <label>
           ウェブサイト <input name="website" tabIndex={-1} autoComplete="off" />
@@ -135,6 +135,16 @@ export function SignupForm({ stores }: { stores: { id: StoreId; name: string; co
         <label className="block sm:col-span-2">
           <span className="label">承認する人へのメモ (任意)</span>
           <textarea name="note" maxLength={400} rows={2} className="field" placeholder="例: 4 月入社の営業です。店長の〇〇さんに確認済み" />
+        </label>
+        <label className="block sm:col-span-2">
+          <span className="label">顔写真 (任意)</span>
+          <input
+            name="avatar"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            className="field h-auto py-2"
+          />
+          <span className="mt-1 block text-[11px] text-ink-3">JPEG / PNG / WebP、512 KB まで。申請時に登録しておくと、承認後すぐに顔写真が表示されます。</span>
         </label>
       </div>
 
