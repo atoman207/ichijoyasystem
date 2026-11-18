@@ -10,8 +10,11 @@
   - チャートの系列色は店舗ごとに固定 (src/lib/db/master.ts)
 */
 @theme {
-  --font-sans: "Inter", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", "Yu Gothic UI", Meiryo, "Noto Sans JP",
+  --font-sans: "Noto Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", "Yu Gothic UI", Meiryo,
     "Noto Sans CJK JP", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif CJK JP", serif;
+  /* 見出し用 (既存の font-maru クラス = セリフ)。本文は font-sans */
+  --font-maru: "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif CJK JP", serif;
   --font-mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
 
   --color-canvas: #f3f5fb; /* ページ背景 */
@@ -38,7 +41,6 @@
   --color-wa-yellow: #fdd000;
   --color-wa-cream: #f7f5f2;
   --color-wa-paper: #fffdf4;
-  --font-maru: "Kiwi Maru", "Hiragino Maru Gothic ProN", "BIZ UDPGothic", "Hiragino Sans", Meiryo, sans-serif;
 
   /* ステータス色 (アイコン・ラベルと必ず併用し、色のみに意味を持たせない) */
   --color-good: #12a150;

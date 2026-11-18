@@ -206,11 +206,11 @@ export default async function HomePage() {
         slides={heroSlides}
         intro={
           <>
-            <p className="font-maru text-base tracking-wide text-white/90 drop-shadow-sm sm:text-lg">株式会社一畳屋</p>
-            <h1 className="mt-2 font-maru text-[2.5rem] leading-tight tracking-tight drop-shadow-sm sm:text-6xl">
+            <p className="font-maru text-xs tracking-[0.2em] text-white/80 drop-shadow-sm sm:text-sm">株式会社一畳屋</p>
+            <h1 className="mt-3 font-maru text-[2rem] leading-[1.15] tracking-tight drop-shadow-sm sm:text-5xl">
               統合業務システム
             </h1>
-            <p className="mt-4 max-w-lg text-base leading-relaxed text-white/95 drop-shadow-sm sm:text-xl">
+            <p className="mt-3 max-w-md text-sm leading-relaxed text-white/85 drop-shadow-sm sm:text-base">
               問い合わせから入金まで、ひとつの画面で。
             </p>
           </>
@@ -218,24 +218,24 @@ export default async function HomePage() {
       />
 
       {/* 店舗 (公式サイトの写真) */}
-      <section id="stores" className="scroll-mt-20 bg-wa-paper">
-        <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+      <section id="stores" className="scroll-mt-20 border-t border-neutral-100 bg-white">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
           <SectionTitle eyebrow="対象拠点" title="熊本の 4 店舗と本社が、同じ情報でつながります">
             どの店舗で受けたお問い合わせも、ほかの店舗・本社からすぐに確認できます。予定表は全店舗で共有しています。
           </SectionTitle>
-          <ul className="mt-10 grid grid-cols-1 gap-5 sm:grid-cols-2">
+          <ul className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2">
             {shops.map((s) => (
-              <li key={s.id} className="group overflow-hidden rounded-3xl bg-white shadow-card ring-1 ring-black/5 transition hover:-translate-y-0.5 hover:shadow-lift">
-                <div className="relative aspect-[2.4/1] overflow-hidden bg-wa-cream">
+              <li key={s.id} className="group overflow-hidden rounded-2xl bg-white ring-1 ring-neutral-200/80">
+                <div className="relative aspect-[2.4/1] overflow-hidden bg-neutral-100">
                   {STORE_PHOTO[s.id] && (
                     // eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル (最適化済みの WebP)
-                    <img src={STORE_PHOTO[s.id]} alt={`${s.name}の外観`} loading="lazy" className="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
+                    <img src={STORE_PHOTO[s.id]} alt={`${s.name}の外観`} loading="lazy" className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
                   )}
-                  <div className="absolute inset-0 bg-linear-to-t from-black/55 via-black/0 to-transparent" aria-hidden />
-                  <span className="absolute bottom-3 left-4 rounded-full bg-white px-3.5 py-1 font-maru text-base text-wa-deep shadow-md">{s.name}</span>
-                  <span className="absolute top-3 right-3 h-3 w-3 rounded-full ring-2 ring-white" style={{ background: s.color }} title="グラフ・予定表での店舗の色" aria-hidden />
+                  <div className="absolute inset-0 bg-linear-to-t from-black/45 via-transparent to-transparent" aria-hidden />
+                  <span className="absolute bottom-3 left-4 font-maru text-sm text-white drop-shadow-sm">{s.name}</span>
+                  <span className="absolute top-3 right-3 h-2.5 w-2.5 rounded-full ring-2 ring-white/80" style={{ background: s.color }} title="グラフ・予定表での店舗の色" aria-hidden />
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 text-xs text-ink-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-ink-2">
                   <span>〒{s.postalCode} {s.address}</span>
                   <a href={`tel:${s.phone.replace(/[^0-9]/g, "")}`} className="inline-flex items-center gap-1 font-medium text-wa-green hover:underline">
                     <Phone className="h-3.5 w-3.5" aria-hidden /> {s.phone}
@@ -245,20 +245,20 @@ export default async function HomePage() {
             ))}
           </ul>
           {hq && (
-            <div className="mt-5 grid grid-cols-1 overflow-hidden rounded-3xl bg-wa-deep text-white shadow-card sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+            <div className="mt-4 grid grid-cols-1 overflow-hidden rounded-2xl bg-wa-deep text-white ring-1 ring-black/10 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
               <div className="relative aspect-[2.4/1] sm:aspect-auto">
                 {/* eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル */}
                 <img src={STORE_PHOTO.hq} alt={`${hq.name}の外観`} loading="lazy" className="h-full w-full object-cover" />
               </div>
-              <div className="relative p-6">
-                <div className="tatami-weave absolute inset-0 opacity-50" aria-hidden />
+              <div className="relative p-6 sm:p-8">
+                <div className="tatami-weave absolute inset-0 opacity-25" aria-hidden />
                 <div className="relative">
-                  <div className="font-maru text-xs text-wa-yellow">本部</div>
-                  <h3 className="mt-1 font-maru text-xl">{hq.name}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-white/85">
+                  <div className="font-maru text-[11px] tracking-[0.15em] text-white/70">本部</div>
+                  <h3 className="mt-1.5 font-maru text-lg tracking-tight">{hq.name}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-white/80">
                     経理・承認・経営の数字を全店舗まとめて確認します。各店舗の見積・請求・入金も、本社からリアルタイムで見えます。
                   </p>
-                  <p className="mt-3 text-xs text-white/70">
+                  <p className="mt-4 text-xs text-white/55">
                     〒{hq.postalCode} {hq.address} · TEL {hq.phone}
                   </p>
                 </div>
@@ -269,31 +269,31 @@ export default async function HomePage() {
       </section>
 
       {/* 解決する課題 */}
-      <section id="issues" className="scroll-mt-20 border-y border-black/5 bg-white">
-        <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+      <section id="issues" className="scroll-mt-20 border-t border-neutral-100 bg-neutral-50/60">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
           <SectionTitle eyebrow="このシステムが解決すること" title="毎日の「困った」を、仕組みで解決します">
             これまで人の記憶や電話・紙に頼っていた仕事を、データベースと自動の仕組みに置き換えました。左が「これまで」、右が「これから」です。
           </SectionTitle>
-          <ul className="mt-10 grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <ul className="mt-10 grid grid-cols-1 gap-3 lg:grid-cols-2">
             {ISSUES.map((it) => (
-              <li key={it.before} className="overflow-hidden rounded-3xl bg-wa-cream ring-1 ring-black/5">
+              <li key={it.before} className="overflow-hidden rounded-2xl bg-white ring-1 ring-neutral-200/80">
                 <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-                  <div className="p-5">
-                    <div className="text-[11px] font-semibold tracking-wide text-wa-red">これまで</div>
-                    <p className="mt-1.5 text-sm leading-relaxed text-ink-2">{it.before}</p>
+                  <div className="p-4 sm:p-5">
+                    <div className="text-[10px] font-medium tracking-[0.12em] text-neutral-400">これまで</div>
+                    <p className="mt-1.5 text-sm leading-relaxed text-neutral-600">{it.before}</p>
                   </div>
                   <div className="flex items-center justify-center px-1 max-sm:pb-1" aria-hidden>
-                    <span className="flex h-10 w-10 items-center justify-center rounded-full bg-wa-green text-white shadow-md">
-                      <it.icon className="h-5 w-5" />
+                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-wa-green text-white">
+                      <it.icon className="h-4 w-4" />
                     </span>
                   </div>
-                  <div className="bg-white p-5">
-                    <div className="text-[11px] font-semibold tracking-wide text-wa-green">これから</div>
-                    <p className="mt-1.5 text-sm leading-relaxed font-medium text-ink">{it.after}</p>
+                  <div className="border-t border-neutral-100 bg-white p-4 sm:border-t-0 sm:border-l sm:p-5">
+                    <div className="text-[10px] font-medium tracking-[0.12em] text-wa-green">これから</div>
+                    <p className="mt-1.5 text-sm leading-relaxed text-neutral-800">{it.after}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 border-t border-black/5 bg-white/60 px-5 py-2 text-[11px] text-ink-3">
-                  <span className="rounded bg-wa-deep px-1.5 py-0.5 font-mono text-[10px] text-white">仕組み</span>
+                <div className="flex items-center gap-2 border-t border-neutral-100 px-4 py-2 text-[11px] text-neutral-400 sm:px-5">
+                  <span className="font-mono text-[10px] tracking-wide text-neutral-500">仕組み</span>
                   {it.tech}
                 </div>
               </li>
@@ -304,56 +304,56 @@ export default async function HomePage() {
 
       {/* 仕組みと強み */}
       <section id="about" className="relative scroll-mt-20 overflow-hidden bg-wa-deep text-white">
-        <div className="tatami-weave absolute inset-0 opacity-70" aria-hidden />
-        <div className="relative mx-auto max-w-6xl px-4 py-14 sm:px-6">
+        <div className="tatami-weave absolute inset-0 opacity-30" aria-hidden />
+        <div className="relative mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
           <SectionTitle eyebrow="仕組みと強み" title="入口はいろいろ、情報はひとつに" dark>
             電話・LINE・紙の書類など、どこから入った情報も 1 つのデータベースに集まり、必要な人の画面・帳票・会計データとして取り出せます。
           </SectionTitle>
 
-          <div className="mt-10 grid grid-cols-1 items-stretch gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)]">
+          <div className="mt-10 grid grid-cols-1 items-stretch gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)]">
             <DiagramColumn title="入口" items={INPUTS} />
-            <div className="relative rounded-3xl bg-white p-5 text-ink shadow-xl">
-              <div className="flex items-center gap-2">
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-wa-green text-white">
-                  <Database className="h-5 w-5" aria-hidden />
+            <div className="relative rounded-2xl bg-white p-5 text-ink ring-1 ring-neutral-200/80 sm:p-6">
+              <div className="flex items-center gap-3">
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-wa-green/10 text-wa-green">
+                  <Database className="h-4.5 w-4.5" aria-hidden />
                 </span>
                 <div>
-                  <div className="font-maru text-base text-wa-deep">一畳屋 統合データベース</div>
+                  <div className="font-maru text-sm text-wa-deep">一畳屋 統合データベース</div>
                   <div className="text-[11px] text-ink-3">すべての記録を ID でつなぎ、権限と履歴で守る</div>
                 </div>
               </div>
-              <ul className="mt-4 grid grid-cols-3 gap-2">
+              <ul className="mt-4 grid grid-cols-3 gap-1.5">
                 {CORE.map((c) => (
-                  <li key={c} className="rounded-xl bg-wa-cream px-2 py-2 text-center text-[11px] font-medium text-wa-deep ring-1 ring-wa-green/15">
+                  <li key={c} className="rounded-md bg-neutral-50 px-2 py-1.5 text-center text-[11px] text-wa-deep ring-1 ring-neutral-100">
                     {c}
                   </li>
                 ))}
               </ul>
               <div className="mt-4 flex flex-wrap gap-1.5 text-[10px]">
                 {["権限の確認", "承認", "変更の記録", "毎日のバックアップ"].map((t) => (
-                  <span key={t} className="inline-flex items-center gap-1 rounded-full bg-wa-green/10 px-2 py-0.5 text-wa-deep">
+                  <span key={t} className="inline-flex items-center gap-1 rounded-full bg-wa-green/10 px-2 py-0.5 text-wa-deep/90">
                     <CircleCheck className="h-3 w-3 text-wa-green" aria-hidden /> {t}
                   </span>
                 ))}
               </div>
-              <ArrowRight className="absolute top-1/2 -left-4 hidden h-5 w-5 -translate-y-1/2 text-wa-yellow lg:block" aria-hidden />
-              <ArrowRight className="absolute top-1/2 -right-4 hidden h-5 w-5 -translate-y-1/2 text-wa-yellow lg:block" aria-hidden />
+              <ArrowRight className="absolute top-1/2 -left-3.5 hidden h-4 w-4 -translate-y-1/2 text-white/50 lg:block" aria-hidden />
+              <ArrowRight className="absolute top-1/2 -right-3.5 hidden h-4 w-4 -translate-y-1/2 text-white/50 lg:block" aria-hidden />
             </div>
             <DiagramColumn title="使う場面" items={OUTPUTS} />
           </div>
 
-          <ul className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <ul className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {STRENGTHS.map((s) => (
-              <li key={s.title} className="rounded-3xl bg-white/8 p-5 ring-1 ring-white/15 backdrop-blur-sm">
+              <li key={s.title} className="rounded-2xl bg-white/6 p-5 ring-1 ring-white/10">
                 <div className="flex items-center justify-between">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-wa-yellow text-wa-deep">
-                    <s.icon className="h-5 w-5" aria-hidden />
+                  <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-white">
+                    <s.icon className="h-4.5 w-4.5" aria-hidden />
                   </span>
-                  <span className="font-maru text-2xl text-wa-yellow">{s.big}</span>
+                  <span className="font-maru text-xl text-white/90">{s.big}</span>
                 </div>
-                <h3 className="mt-4 font-maru text-base">{s.title}</h3>
-                <p className="mt-1.5 text-xs leading-relaxed text-white/80">{s.desc}</p>
-                <p className="mt-3 font-mono text-[10px] tracking-wide text-white/50 uppercase">{s.tech}</p>
+                <h3 className="mt-4 font-maru text-sm tracking-tight">{s.title}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-white/70">{s.desc}</p>
+                <p className="mt-3 font-mono text-[10px] tracking-wide text-white/40 uppercase">{s.tech}</p>
               </li>
             ))}
           </ul>
@@ -361,22 +361,22 @@ export default async function HomePage() {
       </section>
 
       {/* 業務の流れ */}
-      <section id="flow" className="scroll-mt-20 bg-white">
-        <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+      <section id="flow" className="scroll-mt-20 border-t border-neutral-100 bg-neutral-50/60">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
           <SectionTitle eyebrow="業務の流れ" title="ひとつのお仕事を、最初から最後までつなげて管理">
             お客様からのお問い合わせを受けてから、工事を終えて代金をいただくまでの記録を、すべて同じ番号 (ID) でつなげています。
             担当が替わっても、店舗が違っても、前後の経緯をすぐにたどれます。
           </SectionTitle>
           <ol className="mt-10 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
             {FLOW.map((f, i) => (
-              <li key={f.title} className="relative rounded-2xl border border-black/5 bg-wa-cream p-4">
+              <li key={f.title} className="relative rounded-2xl bg-white p-4 ring-1 ring-neutral-200/80">
                 <div className="flex items-center gap-2">
                   <span className="flex h-6 w-6 items-center justify-center rounded-full bg-wa-green font-maru text-[11px] text-white">{i + 1}</span>
                   <f.icon className="h-4 w-4 text-wa-green" aria-hidden />
                 </div>
-                <div className="mt-3 font-maru text-sm text-wa-deep">{f.title}</div>
-                <p className="mt-1 text-xs leading-relaxed text-ink-2">{f.desc}</p>
-                {i < FLOW.length - 1 && <ArrowRight className="absolute top-1/2 -right-2.5 hidden h-4 w-4 -translate-y-1/2 text-wa-green/50 lg:block" aria-hidden />}
+                <div className="mt-3 font-maru text-sm text-neutral-900">{f.title}</div>
+                <p className="mt-1 text-sm leading-relaxed text-neutral-500">{f.desc}</p>
+                {i < FLOW.length - 1 && <ArrowRight className="absolute top-1/2 -right-2.5 hidden h-4 w-4 -translate-y-1/2 text-neutral-300 lg:block" aria-hidden />}
               </li>
             ))}
           </ol>
@@ -384,19 +384,19 @@ export default async function HomePage() {
       </section>
 
       {/* 主な機能 */}
-      <section id="features" className="scroll-mt-20">
-        <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+      <section id="features" className="scroll-mt-20 border-t border-neutral-100 bg-white">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
           <SectionTitle eyebrow="主な機能" title="現場・店舗・本社の仕事を、それぞれの画面で">
             スマートフォンでも使えます。現場では写真と予定、店舗では見積と顧客対応、本社では承認と経営数値を中心に使います。
           </SectionTitle>
-          <ul className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <ul className="mt-10 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {FEATURES.map((f) => (
-              <li key={f.title} className="rounded-3xl bg-white p-5 shadow-card ring-1 ring-black/5">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-wa-green/10 text-wa-green">
-                  <f.icon className="h-5 w-5" aria-hidden />
+              <li key={f.title} className="rounded-2xl bg-white p-5 ring-1 ring-neutral-200/80">
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-wa-green/10 text-wa-green">
+                  <f.icon className="h-4.5 w-4.5" aria-hidden />
                 </span>
-                <h3 className="mt-4 font-maru text-sm text-wa-deep">{f.title}</h3>
-                <p className="mt-1.5 text-xs leading-relaxed text-ink-2">{f.desc}</p>
+                <h3 className="mt-4 font-maru text-sm tracking-tight text-wa-deep">{f.title}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-ink-2">{f.desc}</p>
               </li>
             ))}
           </ul>
@@ -404,8 +404,8 @@ export default async function HomePage() {
       </section>
 
       {/* 権限と新規登録 */}
-      <section id="roles" className="scroll-mt-20 border-y border-black/5 bg-white">
-        <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+      <section id="roles" className="scroll-mt-20 bg-white">
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
           <SectionTitle eyebrow="権限" title="役割に合わせて、見える情報とできる操作を分けています">
             新規登録のときに自分の役割を選んで申請します。管理者 (店舗スタッフは所属店舗の店長も) が承認すると使えるようになります。
             店舗ごとの担当者・顔写真つきの詳しい案内は{" "}
@@ -414,18 +414,18 @@ export default async function HomePage() {
             </Link>
             のページで確認できます。
           </SectionTitle>
-          <ul className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <ul className="mt-10 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {(["admin", "hq_staff", "store_manager", "store_staff"] as Role[]).map((r) => {
               const Icon = ROLE_ICON[r];
               return (
-                <li key={r} className="rounded-3xl border border-black/5 bg-wa-cream p-5">
+                <li key={r} className="rounded-2xl bg-white p-5 ring-1 ring-neutral-200/80">
                   <div className="flex items-center gap-2.5">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-wa-green shadow-xs">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-wa-green/10 text-wa-green">
                       <Icon className="h-4.5 w-4.5" aria-hidden />
                     </span>
-                    <h3 className="font-maru text-sm text-wa-deep">{ROLE_LABEL[r]}</h3>
+                    <h3 className="font-maru text-sm tracking-tight text-wa-deep">{ROLE_LABEL[r]}</h3>
                   </div>
-                  <p className="mt-3 text-xs leading-relaxed text-ink-2">{ROLE_DESCRIPTION[r]}</p>
+                  <p className="mt-3 text-sm leading-relaxed text-ink-2">{ROLE_DESCRIPTION[r]}</p>
                   <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-ink-3">
                     <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-wa-green" aria-hidden />
                     アカウント: {ROLE_ACCOUNT[r]}
@@ -435,9 +435,9 @@ export default async function HomePage() {
             })}
           </ul>
 
-          <div className="mt-10 grid grid-cols-1 gap-4 rounded-3xl bg-wa-green/10 p-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <div className="mt-10 grid grid-cols-1 gap-4 rounded-2xl border border-neutral-200 bg-neutral-50/80 p-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
             <div>
-              <h3 className="font-maru text-base text-wa-deep">新規登録の流れ</h3>
+              <h3 className="font-maru text-sm tracking-tight text-wa-deep">新規登録の流れ</h3>
               <ol className="mt-3 grid grid-cols-1 gap-3 text-sm text-ink sm:grid-cols-3">
                 {[
                   ["申請", "氏名・ログイン ID・パスワード・希望する役割と所属を入力"],
@@ -445,16 +445,16 @@ export default async function HomePage() {
                   ["ログイン", "登録したログイン ID とパスワードで使い始める"],
                 ].map(([t, d], i) => (
                   <li key={t} className="flex items-start gap-2.5">
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-wa-green font-maru text-[11px] text-white">{i + 1}</span>
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-wa-green/90 font-maru text-[11px] text-white">{i + 1}</span>
                     <span>
                       <span className="block font-medium">{t}</span>
-                      <span className="block text-xs text-ink-2">{d}</span>
+                      <span className="block text-sm text-ink-2">{d}</span>
                     </span>
                   </li>
                 ))}
               </ol>
             </div>
-            <Link href="/signup" className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-wa-green px-6 font-maru text-sm text-white shadow-md hover:bg-wa-deep">
+            <Link href="/signup" className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-wa-green px-6 font-maru text-sm text-white transition hover:bg-wa-deep">
               <UserPlus className="h-4 w-4" /> 新規登録を申請する
             </Link>
           </div>
@@ -462,28 +462,28 @@ export default async function HomePage() {
       </section>
 
       {/* 安全性 */}
-      <section>
-        <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-8 px-4 py-14 sm:px-6 lg:grid-cols-2">
+      <section className="border-t border-neutral-100 bg-white">
+        <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-10 px-4 py-16 sm:px-6 sm:py-20 lg:grid-cols-2">
           <div>
             <SectionTitle eyebrow="安心して使うために" title="大切なお客様の情報を守ります" />
-            <ul className="mt-6 space-y-3">
+            <ul className="mt-6 space-y-2.5">
               {SECURITY.map((s) => (
-                <li key={s.title} className="flex items-start gap-3 rounded-2xl bg-white p-4 shadow-card ring-1 ring-black/5">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-wa-green/10 text-wa-green">
+                <li key={s.title} className="flex items-start gap-3 rounded-2xl bg-white p-4 ring-1 ring-neutral-200/80">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-wa-green/10 text-wa-green">
                     <s.icon className="h-4.5 w-4.5" aria-hidden />
                   </span>
                   <span>
-                    <span className="block font-maru text-sm text-wa-deep">{s.title}</span>
-                    <span className="mt-0.5 block text-xs leading-relaxed text-ink-2">{s.desc}</span>
+                    <span className="block font-maru text-sm tracking-tight text-wa-deep">{s.title}</span>
+                    <span className="mt-0.5 block text-sm leading-relaxed text-ink-2">{s.desc}</span>
                   </span>
                 </li>
               ))}
             </ul>
           </div>
-          <figure className="overflow-hidden rounded-3xl bg-white shadow-card ring-1 ring-black/5">
+          <figure className="overflow-hidden rounded-2xl bg-white ring-1 ring-neutral-200/80">
             {/* eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル */}
             <img src="/brand/intro.webp" alt="張り替えた畳の和室で遊ぶ子どもたち" loading="lazy" className="aspect-[1.43/1] w-full object-cover" />
-            <figcaption className="px-5 py-3 font-maru text-xs text-wa-deep">いい畳で、お客様の暮らしを豊かに。その仕事を支える仕組みです。</figcaption>
+            <figcaption className="px-5 py-3 font-maru text-xs text-wa-deep/80">いい畳で、お客様の暮らしを豊かに。その仕事を支える仕組みです。</figcaption>
           </figure>
         </div>
       </section>
@@ -493,25 +493,25 @@ export default async function HomePage() {
 
 function SectionTitle({ eyebrow, title, children, dark = false }: { eyebrow: string; title: string; children?: React.ReactNode; dark?: boolean }) {
   return (
-    <div className="max-w-3xl">
-      <div className={`inline-flex items-center gap-2 font-maru text-xs ${dark ? "text-wa-yellow" : "text-wa-green"}`}>
-        <span className={`h-px w-6 ${dark ? "bg-wa-yellow" : "bg-wa-green"}`} aria-hidden />
+    <div className="max-w-2xl">
+      <div className={`inline-flex items-center gap-2 font-maru text-[11px] tracking-[0.16em] ${dark ? "text-white/65" : "text-neutral-400"}`}>
+        <span className={`h-px w-5 ${dark ? "bg-white/40" : "bg-neutral-300"}`} aria-hidden />
         {eyebrow}
       </div>
-      <h2 className={`mt-2 font-maru text-2xl tracking-tight sm:text-[30px] ${dark ? "text-white" : "text-wa-deep"}`}>{title}</h2>
-      {children && <p className={`mt-3 text-sm leading-relaxed ${dark ? "text-white/80" : "text-ink-2"}`}>{children}</p>}
+      <h2 className={`mt-2.5 font-maru text-xl leading-snug tracking-tight sm:text-2xl ${dark ? "text-white" : "text-neutral-900"}`}>{title}</h2>
+      {children && <p className={`mt-3 text-sm leading-relaxed ${dark ? "text-white/70" : "text-neutral-500"}`}>{children}</p>}
     </div>
   );
 }
 
 function DiagramColumn({ title, items }: { title: string; items: { icon: React.ComponentType<{ className?: string }>; label: string }[] }) {
   return (
-    <div className="rounded-3xl bg-white/8 p-4 ring-1 ring-white/15">
-      <div className="font-maru text-xs text-wa-yellow">{title}</div>
-      <ul className="mt-3 space-y-2">
+    <div className="rounded-2xl bg-white/6 p-4 ring-1 ring-white/10">
+      <div className="font-maru text-[11px] tracking-[0.14em] text-white/65">{title}</div>
+      <ul className="mt-3 space-y-1.5">
         {items.map((it) => (
-          <li key={it.label} className="flex items-center gap-2.5 rounded-xl bg-white/10 px-3 py-2 text-sm">
-            <it.icon className="h-4 w-4 shrink-0 text-wa-yellow" aria-hidden />
+          <li key={it.label} className="flex items-center gap-2.5 rounded-lg bg-white/8 px-3 py-2 text-sm text-white/90">
+            <it.icon className="h-4 w-4 shrink-0 text-white/70" aria-hidden />
             {it.label}
           </li>
         ))}

@@ -27,24 +27,24 @@ export default async function RolesPage() {
     <PublicShell current="roles">
       <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-12">
         <header className="max-w-3xl">
-          <p className="inline-flex items-center gap-2 font-maru text-xs text-wa-green">
-            <span className="h-px w-6 bg-wa-green" aria-hidden />
+          <p className="inline-flex items-center gap-2 font-maru text-[11px] tracking-[0.16em] text-neutral-400">
+            <span className="h-px w-5 bg-neutral-300" aria-hidden />
             権限と担当
           </p>
-          <h1 className="mt-2 font-maru text-2xl tracking-tight text-wa-deep sm:text-3xl">自分の権限と、日々の仕事を確認する</h1>
-          <p className="mt-3 text-sm leading-relaxed text-ink-2">
+          <h1 className="mt-2.5 font-maru text-2xl tracking-tight text-neutral-900 sm:text-3xl">自分の権限と、日々の仕事を確認する</h1>
+          <p className="mt-3 text-sm leading-relaxed text-neutral-500">
             ロール (役割) ごとに見える情報とできる操作が分かれています。下の店舗ごとの顔写真から、自分がどの店舗のどの役割かを確かめ、権限と業務の目安を把握してください。
           </p>
         </header>
 
         {/* ロールの概要 */}
         <section className="mt-10" aria-labelledby="role-overview">
-          <h2 id="role-overview" className="font-maru text-lg text-wa-deep">
+          <h2 id="role-overview" className="font-maru text-lg tracking-tight text-neutral-900">
             4 つの役割
           </h2>
           <ul className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             {ROLES.map((role) => (
-              <li key={role} className="rounded-2xl bg-panel p-5 shadow-card ring-1 ring-black/5">
+              <li key={role} className="rounded-2xl bg-white p-5 ring-1 ring-neutral-200/80">
                 <div className="flex items-center gap-2">
                   <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-wa-green/10 text-wa-green">
                     <Shield className="h-4 w-4" aria-hidden />
@@ -63,10 +63,10 @@ export default async function RolesPage() {
 
         {/* 店舗ごとの社員 */}
         <section className="mt-14" aria-labelledby="people-by-store">
-          <h2 id="people-by-store" className="font-maru text-lg text-wa-deep">
+          <h2 id="people-by-store" className="font-maru text-lg tracking-tight text-neutral-900">
             店舗・本社の担当
           </h2>
-          <p className="mt-1 text-sm text-ink-2">顔写真と役職から、どの店舗の誰かを確認できます。自分のカードのロール説明を読んでください。</p>
+          <p className="mt-1 text-sm text-neutral-500">顔写真と役職から、どの店舗の誰かを確認できます。自分のカードのロール説明を読んでください。</p>
 
           <div className="mt-8 space-y-10">
             {stores.map((store) => {
@@ -74,8 +74,8 @@ export default async function RolesPage() {
               if (!people.length) return null;
               const photo = STORE_PHOTO[store.id];
               return (
-                <section key={store.id} className="overflow-hidden rounded-3xl bg-panel shadow-card ring-1 ring-black/5">
-                  <div className="relative aspect-[2.8/1] min-h-[7.5rem] bg-wa-cream sm:aspect-[3.2/1]">
+                <section key={store.id} className="overflow-hidden rounded-2xl bg-white ring-1 ring-neutral-200/80">
+                  <div className="relative aspect-[2.8/1] min-h-[7.5rem] bg-neutral-100 sm:aspect-[3.2/1]">
                     {photo && (
                       // eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル
                       <img src={photo} alt={`${store.name}の外観`} className="h-full w-full object-cover" />
@@ -145,7 +145,7 @@ function DutyBlock({ icon: Icon, title, items }: { icon: typeof CheckCircle2; ti
 
 function MemberCard({ user, storeName }: { user: User; storeName: string }) {
   return (
-    <li className="flex flex-col rounded-2xl border border-line/80 bg-wa-cream/50 p-4">
+    <li className="flex flex-col rounded-2xl border border-neutral-200/80 bg-neutral-50/50 p-4">
       <div className="flex items-start gap-3">
         <Avatar name={user.name} id={user.id} size={56} ring src={avatarUrl(user)} />
         <div className="min-w-0 flex-1">
