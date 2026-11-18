@@ -4,33 +4,39 @@ import { IchijoyaLogo } from "@/components/brand/Logo";
 import { ScrollTopButton } from "@/components/layout/ScrollTopButton";
 
 /**
- * ログイン前の画面 (トップ・新規登録) の枠: ヘッダー (ロゴ・ログイン・新規登録) とフッター。
+ * ログイン前の画面 (ホーム・ログイン・新規登録) の枠: ヘッダー (ロゴ・案内・ログイン・新規登録) とフッター。
  * 色と見出しの書体は公式サイト (ichijoya.co.jp) に合わせる (畳の緑・ロゴの赤・丸みのある見出し)。
  * 見出しの書体 (Kiwi Maru) はこの画面だけで読み込む (業務の画面は端末のフォントで軽くする)
  */
 const MARU_FONT = "https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@500&display=swap";
 
-export function PublicShell({ children, current }: { children: ReactNode; current: "login" | "signup" }) {
+export function PublicShell({ children, current }: { children: ReactNode; current: "home" | "login" | "signup" }) {
   return (
     <div className="min-h-screen bg-wa-cream">
       <link rel="stylesheet" href={MARU_FONT} precedence="default" />
       <header className="sticky top-0 z-30 border-b border-black/5 bg-white/95 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-6xl items-center gap-3 px-4 sm:px-6">
-          <Link href="/login" className="flex items-center gap-3" aria-label="一畳屋 統合業務システム トップ">
+          <Link href="/home" className="flex items-center gap-3" aria-label="一畳屋 統合業務システム ホーム">
             <IchijoyaLogo title="株式会社一畳屋" className="h-8 w-auto" />
             <span className="hidden border-l border-black/15 pl-3 font-maru text-xs leading-tight text-wa-deep sm:block">
               統合業務システム
             </span>
           </Link>
           <nav className="ml-auto flex items-center gap-1 text-sm">
-            <a href="/login#issues" className="hidden rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep lg:block">解決すること</a>
-            <a href="/login#stores" className="hidden rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep lg:block">店舗</a>
-            <a href="/login#features" className="hidden rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep md:block">機能</a>
-            <a href="/login#roles" className="hidden rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep md:block">権限</a>
-            <Link href="/login#login" className={current === "login" ? "rounded-lg bg-wa-cream px-3 py-1.5 font-maru font-medium text-wa-deep" : "rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream"}>
+            <a href="/home#issues" className="hidden rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep lg:block">解決すること</a>
+            <a href="/home#stores" className="hidden rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep lg:block">店舗</a>
+            <a href="/home#features" className="hidden rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep md:block">機能</a>
+            <a href="/home#roles" className="hidden rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep md:block">権限</a>
+            <Link
+              href="/login"
+              className={current === "login" ? "rounded-lg bg-wa-cream px-3 py-1.5 font-maru font-medium text-wa-deep" : "rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream"}
+            >
               ログイン
             </Link>
-            <Link href="/signup" className="rounded-full bg-wa-green px-4 py-1.5 font-maru font-medium text-white shadow-sm hover:bg-wa-deep">
+            <Link
+              href="/signup"
+              className={current === "signup" ? "rounded-full bg-wa-deep px-4 py-1.5 font-maru font-medium text-white shadow-sm" : "rounded-full bg-wa-green px-4 py-1.5 font-maru font-medium text-white shadow-sm hover:bg-wa-deep"}
+            >
               新規登録
             </Link>
           </nav>
