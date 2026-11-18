@@ -153,6 +153,14 @@ export function canRunBackup(user: User): boolean {
   return user.role === "admin";
 }
 
+/**
+ * バックアップのダウンロード (データベース・添付ファイル・写真・チャットボット。社外に保管するため): 管理者。
+ * お客様の個人情報をすべて含むため、初期パスワードのままの管理者はダウンロードできない (api/backups/download で確かめる)
+ */
+export function canDownloadBackup(user: User): boolean {
+  return user.role === "admin";
+}
+
 /** 予定表は全社で共有する (予定の重複防止・人員配置の調整・社内の情報共有のため、全ロールが全店舗の予定を閲覧) */
 export function canViewCompanySchedule(user: User): boolean {
   return user.active;

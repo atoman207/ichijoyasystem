@@ -24,6 +24,7 @@ import { GoLivePanel } from "@/components/settings/GoLivePanel";
 import { LineGroupsCard } from "@/components/settings/LineGroupsCard";
 import { MessagingConnectionCheck } from "@/components/settings/MessagingConnectionCheck";
 import { BackupCard } from "@/components/settings/BackupCard";
+import { credentialStatus } from "@/lib/account-rules";
 
 /** 「接続を確認」で AI の応答を待つ (最大 50 秒) ため */
 export const maxDuration = 60;
@@ -442,7 +443,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
 
       {tab === "data" && (
         <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-2">
-          {canRunBackup(user) && <BackupCard />}
+          {canRunBackup(user) && <BackupCard downloadBlocked={credentialStatus(db.auditLogs, user.id).password === "initial" ? "初期パスワードのままでは、バックアップをダウンロードできません (お客様の個人情報をすべて含むため)。" : undefined} />}
           <Card>
             <CardHeader title="データのエクスポート" description="特定サービスに依存せず、いつでもデータを取り出せます" />
             {canExportData(user) ? (

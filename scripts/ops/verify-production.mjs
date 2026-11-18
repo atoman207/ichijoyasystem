@@ -89,7 +89,7 @@ try {
 }
 
 // 4. ログインしていない人の締め出し
-for (const p of ["/customers", "/reports", "/settings", "/api/export?type=customers"]) {
+for (const p of ["/customers", "/reports", "/settings", "/api/export?type=customers", "/api/backups/download?kind=files"]) {
   try {
     const { res } = await req(p);
     const loc = res.headers.get("location") ?? "";

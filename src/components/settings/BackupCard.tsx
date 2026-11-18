@@ -1,4 +1,4 @@
-import { backupAvailable, backupDir, backupDisk, backupHistory, listBackups, readBackupStatus, type BackupStatus } from "@/lib/backup";
+import { backupAvailable, backupDir, backupDisk, backupHistory, listBackups, listChatbotBackups, readBackupStatus, storageBackupStats, type BackupStatus } from "@/lib/backup";
 import { storageStats } from "@/lib/storage";
 import { runBackupNow } from "@/lib/actions/backup";
 import { fmtDateTime } from "@/lib/format";
@@ -14,12 +14,20 @@ function StatusBadge({ s }: { s: BackupStatus }) {
 
 const triggerLabel = (s: BackupStatus) => (s.trigger === "manual" ? `手動${s.by ? ` (${s.by})` : ""}` : "自動 (毎日 3:30)");
 
-/** 設定 → データ管理: バックアップ (管理者)。保存先はすべてこの VPS */
-export async function BackupCard() {
+const dl = (q: string) => `/api/backups/download?${q}`;
+const LINK = "font-medium text-accent hover:underline";
+
+/**
+ * 設定 → データ管理: バックアップ (管理者)。保存先はすべてこの VPS。
+ * ファイルはダウンロードして社外にも保管できる (api/backups/download)。downloadBlocked = ダウンロードできない理由 (初期パスワードのままなど)
+ */
+export async function BackupCard({ downloadBlocked }: { downloadBlocked?: string } = {}) {
   const avail = backupAvailable();
   const status = readBackupStatus();
   const running = status?.status === "running";
   const files = listBackups();
+  const chatbot = listChatbotBackups()[0];
+  const stored = storageBackupStats();
   const history = backupHistory(6);
   const disk = backupDisk();
   const stats = await storageStats();
@@ -59,6 +67,7 @@ export async function BackupCard() {
                     <th className="px-2 py-1.5 text-left font-medium">日時</th>
                     <th className="px-2 py-1.5 text-left font-medium">種類</th>
                     <th className="px-2 py-1.5 text-right font-medium">大きさ</th>
+                    <th className="px-2 py-1.5 text-right font-medium">社外に保管</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -67,6 +76,7 @@ export async function BackupCard() {
                       <td className="px-2 py-1.5 tnum">{fmtDateTime(f.at)}</td>
                       <td className="px-2 py-1.5">{f.manual ? "手動" : "自動"}</td>
                       <td className="px-2 py-1.5 text-right tnum">{mb(f.bytes)}</td>
+                      <td className="px-2 py-1.5 text-right">{downloadBlocked ? <span className="text-ink-3">-</span> : <a href={dl(`kind=db&name=${encodeURIComponent(f.name)}`)} download className={LINK}>ダウンロード</a>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -103,6 +113,31 @@ export async function BackupCard() {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-line bg-subtle/60 px-4 py-3 text-xs text-ink-2">
+        <div className="font-medium text-ink">バックアップを社外にも保管する (ダウンロード)</div>
+        <p className="mt-0.5 text-[11px] text-ink-3">このサーバー (VPS) が故障すると、ここにあるバックアップも失われます。定期的に (例: 週に 1 回) ダウンロードして、会社のパソコン・外付けディスク・クラウドなど別の場所に保管してください。</p>
+        {downloadBlocked ? (
+          <p className="mt-2 text-warn-ink">
+            {downloadBlocked} <a href="/profile#password" className={LINK}>パスワードを変更する</a>
+          </p>
+        ) : (
+          <ul className="mt-2 space-y-1">
+            <li>データベース: 上の一覧の「ダウンロード」(最新のものを保管すれば十分です)</li>
+            <li>
+              添付ファイル・写真・顔写真 (一式): {stored ? `${stored.files.toLocaleString("ja-JP")} ファイル · ${mb(stored.bytes)} · ` : ""}
+              {stored ? <a href={dl("kind=files")} download className={LINK}>まとめてダウンロード (tar.gz)</a> : <span className="text-ink-3">まだありません</span>}
+            </li>
+            <li>
+              チャットボット (最新): {chatbot ? <>{fmtDateTime(chatbot.at)} · {mb(chatbot.bytes)} · <a href={dl(`kind=chatbot&name=${encodeURIComponent(chatbot.name)}`)} download className={LINK}>ダウンロード</a></> : <span className="text-ink-3">まだありません</span>}
+            </li>
+          </ul>
+        )}
+        <p className="mt-2 text-[11px] text-ink-3">
+          ファイルにはお客様の個人情報がすべて含まれます。パスワードや鍵で守られた場所に保管し、メールに添付しないでください。ダウンロードはだれが何を取ったか変更履歴に残ります。
+          データベースは pg_dump の形式 (.dump) で、復元は技術担当が行います (手順は deploy/README.md の「バックアップと復元」)。
+        </p>
       </div>
     </Card>
   );

@@ -116,6 +116,66 @@ export function listBackups(): BackupFile[] {
   }
 }
 
+/** 保存してあるチャットボットのバックアップ (新しい順) */
+export function listChatbotBackups(): BackupFile[] {
+  const dir = path.join(backupDir(), "chatbot");
+  try {
+    return fs
+      .readdirSync(dir)
+      .filter((n) => /^chatbot-[\w-]+\.sqlite$/.test(n))
+      .map((name) => {
+        const st = fs.statSync(path.join(dir, name));
+        return { name, bytes: st.size, at: st.mtime.toISOString(), manual: false };
+      })
+      .sort((a, b) => b.at.localeCompare(a.at));
+  } catch {
+    return [];
+  }
+}
+
+/** 添付ファイル・写真のバックアップ (storage/) のファイル数と大きさ */
+export function storageBackupStats(): { files: number; bytes: number } | null {
+  const root = path.join(backupDir(), "storage");
+  if (!fs.existsSync(root)) return null;
+  let files = 0;
+  let bytes = 0;
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile()) {
+        files += 1;
+        bytes += fs.statSync(p).size;
+      }
+    }
+  };
+  try {
+    walk(root);
+    return { files, bytes };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ダウンロードできるバックアップのファイル (データベース・チャットボット)。
+ * 一覧にある名前と完全に一致するものだけを返す (../ などでほかのファイルを指定されないように)
+ */
+export function backupFileFor(kind: "db" | "chatbot", name: string): { path: string; name: string; bytes: number } | null {
+  const f = (kind === "db" ? listBackups() : listChatbotBackups()).find((x) => x.name === name);
+  // バックアップの保存先 (BACKUP_DIR) はアプリの外。ビルドのファイルの追跡 (トレース) の対象にしない
+  return f ? { path: path.join(/*turbopackIgnore: true*/ backupDir(), kind, f.name), name: f.name, bytes: f.bytes } : null;
+}
+
+/** 添付ファイル・写真のバックアップ (storage/) 一式を tar.gz にして流す (その場で作る。サーバーには残さない) */
+export function storageArchive(): { stream: NodeJS.ReadableStream; name: string } | null {
+  const dir = path.join(backupDir(), "storage");
+  if (!fs.existsSync(dir)) return null;
+  const child = spawn("tar", ["-czf", "-", "-C", dir, "."], { stdio: ["ignore", "pipe", "ignore"] });
+  const d = new Date(Date.now() + 9 * 3600_000).toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+  return { stream: child.stdout, name: `ichijoya-files-${d}.tar.gz` };
+}
+
 /** ディスクの空き (バックアップの保存先) */
 export function backupDisk(): { freeBytes: number; totalBytes: number } | null {
   try {
