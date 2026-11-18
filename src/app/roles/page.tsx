@@ -7,7 +7,7 @@ import { ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import { ROLE_ACCESS, ROLE_DUTIES, STORE_ORDER, STORE_PHOTO } from "@/lib/role-guide";
 import type { Role, User } from "@/lib/db/types";
 import { PublicShell } from "@/components/brand/PublicShell";
-import { Avatar, Badge, Card, CardHeader, IconTile, PageHeader } from "@/components/ui";
+import { Avatar, Badge, Card, CardHeader, PageHeader } from "@/components/ui";
 import Link from "@/components/ui/Link";
 
 export const metadata: Metadata = { title: "権限と担当" };
@@ -38,12 +38,7 @@ export default async function RolesPage() {
         <ul className="grid grid-cols-1 gap-3 @3xl:grid-cols-2">
           {ROLES.map((role) => (
             <li key={role} className="rounded-xl border border-line/70 p-4">
-              <div className="flex items-center gap-2.5">
-                <IconTile size="sm">
-                  <Shield />
-                </IconTile>
-                <h3 className="text-[15px] font-semibold tracking-tight text-ink">{ROLE_LABEL[role]}</h3>
-              </div>
+              <h3 className="text-[15px] font-semibold tracking-tight text-ink">{ROLE_LABEL[role]}</h3>
               <p className="mt-2 text-xs leading-relaxed text-ink-2">{ROLE_DESCRIPTION[role]}</p>
               <div className="mt-4 space-y-3">
                 <DutyBlock icon={CheckCircle2} title="アクセスできること" items={ROLE_ACCESS[role]} />
@@ -68,7 +63,7 @@ export default async function RolesPage() {
             const photo = STORE_PHOTO[store.id];
             return (
               <Card key={store.id} padded={false} className="overflow-hidden">
-                <div className="relative aspect-[2.8/1] min-h-[7.5rem] bg-subtle @3xl:aspect-[4/1]">
+                <div className="relative aspect-[4.6/1] min-h-[5rem] bg-subtle @3xl:aspect-[5.8/1]">
                   {photo && (
                     // eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル
                     <img src={photo} alt={`${store.name}の外観`} className="h-full w-full object-cover" />
@@ -76,8 +71,7 @@ export default async function RolesPage() {
                   <div className="absolute inset-0 bg-linear-to-t from-ink/55 via-ink/10 to-transparent" aria-hidden />
                   <div className="absolute right-3 bottom-3 left-3 flex flex-wrap items-end justify-between gap-2 sm:right-5 sm:bottom-4 sm:left-5">
                     <div>
-                      <p className="inline-flex items-center gap-1.5 rounded-full bg-white/95 px-3 py-1 text-sm font-semibold text-ink shadow-xs">
-                        <span className="h-2 w-2 rounded-full" style={{ background: store.color }} aria-hidden />
+                      <p className="inline-flex items-center rounded-full bg-white/95 px-3 py-1 text-sm font-semibold text-ink shadow-xs">
                         {store.name}
                       </p>
                       <p className="mt-1.5 text-xs text-white/90 drop-shadow-sm">
@@ -125,9 +119,7 @@ function DutyBlock({ icon: Icon, title, items }: { icon: typeof CheckCircle2; ti
       </p>
       <ul className="mt-1.5 space-y-1">
         {items.map((t) => (
-          <li key={t} className="text-xs leading-relaxed text-ink-2">
-            · {t}
-          </li>
+          <li key={t} className="text-xs leading-relaxed text-ink-2">{t}</li>
         ))}
       </ul>
     </div>
@@ -135,6 +127,7 @@ function DutyBlock({ icon: Icon, title, items }: { icon: typeof CheckCircle2; ti
 }
 
 function MemberCard({ user, storeName }: { user: User; storeName: string }) {
+  const permissions = permissionLines(user, storeName);
   return (
     <li className="flex flex-col rounded-xl border border-line/70 bg-panel p-4">
       <div className="flex items-start gap-3">
@@ -150,23 +143,48 @@ function MemberCard({ user, storeName }: { user: User; storeName: string }) {
         </div>
       </div>
       <div className="mt-3 border-t border-line/70 pt-3">
-        <p className="text-[11px] font-semibold text-ink-3">この役割でできること</p>
+        <p className="text-[11px] font-semibold text-ink-3">この人の権限 (具体)</p>
         <ul className="mt-1.5 space-y-1">
-          {ROLE_ACCESS[user.role].slice(0, 3).map((t) => (
-            <li key={t} className="text-xs leading-relaxed text-ink-2">
-              · {t}
-            </li>
-          ))}
-        </ul>
-        <p className="mt-2.5 text-[11px] font-semibold text-ink-3">日々の業務</p>
-        <ul className="mt-1.5 space-y-1">
-          {ROLE_DUTIES[user.role].slice(0, 3).map((t) => (
-            <li key={t} className="text-xs leading-relaxed text-ink-2">
-              · {t}
-            </li>
+          {permissions.map((t) => (
+            <li key={t} className="text-xs leading-relaxed text-ink-2">{t}</li>
           ))}
         </ul>
       </div>
     </li>
   );
+}
+
+function permissionLines(user: User, storeName: string): string[] {
+  switch (user.role) {
+    case "admin":
+      return [
+        "全店舗の顧客・問い合わせ・見積・受注・請求・経費・仕入を閲覧/更新できます。",
+        "承認は店長承認/管理者承認の両方を決裁できます。",
+        "アカウント追加・削除・ロール変更、各種設定変更を実行できます。",
+        "変更履歴・経営レポート・会計データを全社分で確認/出力できます。",
+      ];
+    case "hq_staff":
+      return [
+        "全店舗の情報を閲覧できます (本部の横断確認)。",
+        "請求・入金・仕入・経費処理を全店舗分で実行できます。",
+        "設定変更やロール変更、承認決裁はできません。",
+        "アカウントは自分の設定のみ変更できます。",
+      ];
+    case "store_manager":
+      return [
+        `${storeName}の顧客・問い合わせ・見積・受注・請求・経費を登録/更新できます。`,
+        `${storeName}の承認依頼 (見積・契約・経費) を店長として決裁できます。`,
+        `${storeName}の店舗スタッフの申請承認とアカウント管理ができます。`,
+        "予定表は全店舗を閲覧でき、担当または自店舗予定を変更できます。",
+      ];
+    case "store_staff":
+      return [
+        `${storeName}の顧客・問い合わせ・見積・施工進捗を登録/更新できます。`,
+        "金額が関わる変更は承認申請し、店長/管理者の決裁後に反映されます。",
+        "承認決裁、他社員のアカウント管理、設定変更はできません。",
+        "予定表は全店舗を閲覧でき、担当または自店舗予定を変更できます。",
+      ];
+    default:
+      return [];
+  }
 }
