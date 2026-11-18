@@ -10,11 +10,16 @@ import type {
   DocumentStatus,
   ExpensePaymentMethod,
   ExpenseStatus,
+  FaxAiLabel,
+  FaxNumberKind,
+  FaxStatus,
+  FaxTriage,
   InquiryStatus,
   InvoiceStatus,
   OrderStatus,
   PaymentMethod,
   ProgressKind,
+  PurchaseOrderStatus,
   PurchasePayMethod,
   PurchaseStatus,
   QuoteStatus,
@@ -132,6 +137,47 @@ export const PURCHASE_STATUS: Record<PurchaseStatus, { label: string; tone: Tone
   paid: { label: "支払完了", tone: "good" },
   disputed: { label: "差戻し (照会中)", tone: "serious" },
   rejected: { label: "支払却下", tone: "critical" },
+};
+
+/** 発注書の状態 */
+export const PURCHASE_ORDER_STATUS: Record<PurchaseOrderStatus, { label: string; tone: Tone }> = {
+  draft: { label: "下書き", tone: "neutral" },
+  issued: { label: "発行済み (送信待ち)", tone: "warn" },
+  sent: { label: "送信済み", tone: "accent" },
+  completed: { label: "完了", tone: "good" },
+  cancelled: { label: "取消", tone: "critical" },
+};
+
+/** FAX の状態 (送信: 受付済み → 処理中 → 成功 / 失敗) */
+export const FAX_STATUS: Record<FaxStatus, { label: string; tone: Tone }> = {
+  queued: { label: "受付済み", tone: "neutral" },
+  sending: { label: "処理中", tone: "info" },
+  sent: { label: "送信成功", tone: "good" },
+  failed: { label: "送信失敗", tone: "critical" },
+  unknown: { label: "要確認 (送信できたか不明)", tone: "serious" },
+  manual: { label: "FAX 機で送信", tone: "good" },
+  received: { label: "受信", tone: "accent" },
+};
+
+/** 受信 FAX の仕分け */
+export const FAX_TRIAGE: Record<FaxTriage, { label: string; tone: Tone }> = {
+  auto: { label: "登録済みの番号", tone: "accent" },
+  review: { label: "要確認", tone: "warn" },
+  accepted: { label: "取り込み済み", tone: "good" },
+  junk: { label: "不要", tone: "neutral" },
+};
+
+/** AI の判定 */
+export const FAX_AI_LABEL: Record<FaxAiLabel, { label: string; tone: Tone }> = {
+  business: { label: "業務関連", tone: "accent" },
+  ad: { label: "広告・営業", tone: "serious" },
+  unknown: { label: "判定不能", tone: "neutral" },
+};
+
+export const FAX_NUMBER_KIND_LABEL: Record<FaxNumberKind, string> = {
+  blocked: "不要な番号",
+  customer: "顧客の FAX",
+  supplier: "仕入先の FAX",
 };
 
 export const PURCHASE_PAY_METHOD_LABEL: Record<PurchasePayMethod, string> = {

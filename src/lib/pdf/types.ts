@@ -49,3 +49,28 @@ export interface ReceiptPdfData {
   /** e.g. "畳工事代として" */ purpose: string; paymentMethod?: string; invoiceNumber?: string;
   company: PdfCompany; reissue?: boolean;
 }
+
+/**
+ * 発注書 (一畳屋の手書きの発注書の様式: 店舗名・仕入先 御中・発注日・担当・FAX、品名・数量・現場名・着日・備考の表)。
+ * FAX の標準に合わせて A4 縦。返信 FAX の照合のため、発注番号と受注確認欄を加えている
+ */
+export interface PurchaseOrderPdfLine {
+  name: string; code?: string; spec?: string; qty: number; unit: string;
+  /** 現場名 (既定は「名字 様」。showCustomer のときは氏名・住所・電話) と案件番号 */
+  site?: string; orderNumber?: string;
+  /** 着日 (希望納期 YYYY-MM-DD) */
+  arrival?: string;
+  notes?: string; unitPrice?: number;
+}
+
+export interface PurchaseOrderPdfData {
+  number: string; version: number; /** 例: "第2版 (訂正)" */ revisionLabel?: string; issuedOn: string;
+  /** 発注元: 会社名・店舗名・担当者・住所・電話・返信先 FAX */
+  companyName: string; storeName: string; staffName?: string; storeAddress?: string; storeTel?: string; replyFax?: string;
+  supplierName: string; supplierFax?: string; supplierContact?: string;
+  deliveryPlace: string; deliveryAddress?: string;
+  lines: PurchaseOrderPdfLine[];
+  notes?: string;
+  /** 下書き → 透かし「下書き」/ 取消 → 透かし「取消」 */
+  draft?: boolean; cancelled?: boolean;
+}

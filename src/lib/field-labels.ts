@@ -44,6 +44,9 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   schedule: { kind: "種別", startTime: "開始時刻", endTime: "終了時刻", endDate: "終了日", assigneeIds: "担当者", location: "場所", memo: "メモ" },
   user: { role: "ロール", title: "役職", active: "有効", notifyEmail: "通知用メール", notifyByEmail: "メール通知", chatworkAccountId: "Chatwork アカウント ID", email: "ログイン ID", kana: "フリガナ", phone: "電話", avatarKey: "顔写真", signupStatus: "新規登録の申請" },
   thread: { assigneeIds: "依頼先", dueDate: "期限", taskStatus: "依頼の状態" },
+  purchase_order: { supplierId: "仕入先", issuedOn: "発注日", desiredDate: "希望納期", deliveryPlace: "納品先", deliveryAddress: "納品先の住所", faxTo: "送信先の FAX", showCustomer: "お客様の情報を載せる", lines: "明細", version: "版" },
+  fax: { triage: "仕分け", supplierId: "仕入先", customerId: "顧客", purchaseOrderId: "発注書", orderIds: "案件", assignedUserId: "担当者" },
+  fax_number: { kind: "種類", label: "名前" },
 };
 
 export function fieldLabel(entity: string, field: string): string {
@@ -61,6 +64,7 @@ const VALUE_LABEL: Record<string, Record<string, string>> = {
   type: { individual: "個人", corporate: "法人" },
   direction: { in: "入金", out: "出金" },
   storeId: { koshi: "合志店", chuo: "中央店", nishi: "西店", tamana: "玉名店", hq: "本社" },
+  triage: { auto: "登録済みの番号", review: "要確認", accepted: "取り込み済み", junk: "不要" },
 };
 
 /** 値の表示 (空・配列・金額・真偽値・選択肢のラベル) */

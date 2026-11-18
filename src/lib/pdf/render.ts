@@ -14,7 +14,7 @@ import {
   fmtYen,
   type Watermark,
 } from "./layout";
-import type { InvoicePdfData, PdfBankAccount, PdfCompany, PdfLine, QuotePdfData, ReceiptPdfData } from "./types";
+import type { InvoicePdfData, PdfBankAccount, PdfCompany, PdfLine, PurchaseOrderPdfData, QuotePdfData, ReceiptPdfData } from "./types";
 
 /**
  * 帳票 PDF (御見積書・請求書・領収書)
@@ -725,4 +725,181 @@ export async function renderReceiptPdf(data: ReceiptPdfData): Promise<Uint8Array
   s.rect(LEFT, top, CONTENT_W, bottom - top, { stroke: C.ink, lineWidth: 1.2 });
   s.rect(LEFT + 3.5, top + 3.5, CONTENT_W - 7, bottom - top - 7, { stroke: C.ink, lineWidth: 0.4 });
   return s.finish();
+}
+
+// ---------------------------------------------------------------- 発注書
+
+interface GridColumn {
+  label: string;
+  width: number;
+  align: "left" | "right" | "center";
+  /** 数値・日付など、縮めて 1 行に収める欄 */
+  fit?: boolean;
+}
+
+/**
+ * 罫線つきの表 (見出しの行をページごとに繰り返す)。cells は列ごとの文字。
+ * plain: 背景の色を使わない (FAX は白黒 2 値のため、灰色の塗りは網点になって読みにくい)。minRowH: 行の高さの最小 (手書きの追記の余白)
+ */
+function gridTable(s: Sheet, columns: GridColumn[], rows: string[][], empty: string, opts: { plain?: boolean; minRowH?: number } = {}): void {
+  const layouts = (rows.length ? rows : [[empty]]).map((cells) => {
+    const wrapped = columns.map((col, ci) => (col.fit ? [s.ts.clean(cells[ci] ?? "")] : s.ts.wrap(cells[ci] ?? "", BODY_SIZE, col.width - PAD_X * 2, { multiline: true, maxLines: MAX_CELL_LINES })));
+    const lines = Math.max(1, ...wrapped.map((w) => w.length));
+    return { wrapped, height: Math.max(opts.minRowH ?? 0, lines * LINE_H + PAD_Y * 2) };
+  });
+  const head = (top: number) => {
+    if (!opts.plain) s.rect(LEFT, top, CONTENT_W, HEAD_H, { fill: C.fill });
+    let x = LEFT;
+    for (const col of columns) {
+      s.text(col.label, x + col.width / 2, centerBaseline(top, HEAD_H, 8.2), { size: 8.2, weight: "bold", align: "center", maxWidth: col.width - 4, shrinkTo: 6 });
+      x += col.width;
+    }
+  };
+  const grid = (top: number, bottom: number) => {
+    let x = LEFT;
+    for (const col of columns.slice(0, -1)) {
+      x += col.width;
+      s.line(x, top, x, bottom, { width: opts.plain ? 0.5 : 0.4, color: opts.plain ? C.ink : C.ruleLight });
+    }
+    s.hline(LEFT, RIGHT, top + HEAD_H, { width: 0.8, color: C.ink });
+    s.rect(LEFT, top, CONTENT_W, bottom - top, { stroke: C.ink, lineWidth: 0.8 });
+  };
+  let segmentTop = s.y;
+  const open = (h: number) => {
+    if (!s.fits(HEAD_H + h)) s.addPage();
+    segmentTop = s.y;
+    head(segmentTop);
+    s.y += HEAD_H;
+  };
+  open(layouts[0].height);
+  layouts.forEach((row, i) => {
+    if (!s.fits(row.height)) {
+      grid(segmentTop, s.y);
+      s.addPage();
+      open(row.height);
+    }
+    const top = s.y;
+    if (!opts.plain && i % 2 === 1) s.rect(LEFT, top, CONTENT_W, row.height, { fill: C.zebra });
+    let x = LEFT;
+    const pad = opts.minRowH ? Math.max(PAD_Y, (row.height - row.wrapped.reduce((m, w) => Math.max(m, w.length), 1) * LINE_H) / 2) : PAD_Y;
+    columns.forEach((col, ci) => {
+      const inner = col.width - PAD_X * 2;
+      const ax = col.align === "right" ? x + col.width - PAD_X : col.align === "center" ? x + col.width / 2 : x + PAD_X;
+      row.wrapped[ci].forEach((line, li) => {
+        const bl = top + pad + li * LINE_H + LINE_H / 2 + BODY_SIZE * 0.36;
+        s.text(line, ax, bl, { size: BODY_SIZE, align: col.align, maxWidth: inner, shrinkTo: col.fit ? 5.5 : undefined });
+      });
+      x += col.width;
+    });
+    s.hline(LEFT, RIGHT, top + row.height, { width: opts.plain ? 0.5 : 0.35, color: opts.plain ? C.ink : C.ruleLight });
+    s.y += row.height;
+  });
+  grid(segmentTop, s.y);
+}
+
+const PO_DRAFT_MARK: Watermark = { text: "下書き", size: 120, color: C.watermarkGrey, opacity: 0.14 };
+const PO_CANCEL_MARK: Watermark = { text: "取消", size: 190, color: C.watermarkRed, opacity: 0.18 };
+/** 手書きの発注書と同じ 10 行 (明細が多いときは行を足して次のページへ続ける) */
+const PO_MIN_ROWS = 10;
+const WEEKDAY = ["日", "月", "火", "水", "木", "金", "土"];
+
+/** "2026-11-19" → "令和8年11月19日" (令和より前・形が違うときは西暦の表記) */
+function fmtWareki(s?: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s ?? "");
+  if (!m) return fmtJpDate(s);
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (`${m[1]}-${m[2]}-${m[3]}` < "2019-05-01") return fmtJpDate(s);
+  const n = y - 2018;
+  return `令和${n === 1 ? "元" : n}年${mo}月${d}日`;
+}
+
+/** 着日: "2026-12-05" → "12/5(土)" */
+function fmtArrival(s?: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s ?? "");
+  if (!m) return "";
+  const w = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay();
+  return `${Number(m[2])}/${Number(m[3])}(${WEEKDAY[w]})`;
+}
+
+/** 受注確認欄 (仕入先が記入して FAX で返信する。発注番号を載せ、返信 FAX の照合に使う)。下端を返す */
+function poReplyBox(s: Sheet, data: PurchaseOrderPdfData): void {
+  const h = 58;
+  s.y += 14;
+  s.ensure(h + 4);
+  const top = s.y;
+  const head = 18;
+  s.rect(LEFT, top, CONTENT_W, h, { stroke: C.ink, lineWidth: 0.8 });
+  s.hline(LEFT, RIGHT, top + head, { width: 0.5, color: C.ink });
+  s.text(joinText([`受注確認 (ご記入のうえ、この用紙を FAX でご返信ください${data.replyFax ? `　返信先 FAX ${data.replyFax}` : ""})`, `発注番号 ${data.number}`], "　　"), LEFT + 8, centerBaseline(top, head, 8.4), { size: 8.4, weight: "bold", maxWidth: CONTENT_W - 16, shrinkTo: 6.5 });
+  const rowH = (h - head) / 2;
+  s.text("□ お受けします　　□ 一部お受けします　　□ お受けできません", LEFT + 10, centerBaseline(top + head, rowH, 9), { size: 9, maxWidth: CONTENT_W / 2 + 40 });
+  s.text("納品予定日　　　月　　　日", RIGHT - 10, centerBaseline(top + head, rowH, 9), { size: 9, align: "right" });
+  s.hline(LEFT, RIGHT, top + head + rowH, { width: 0.5, color: C.ink });
+  s.text("貴社名・ご担当", LEFT + 10, centerBaseline(top + head + rowH, rowH, 8.4), { size: 8.4, color: C.sub });
+  s.text("※ 発注番号は消さずにご返信ください", RIGHT - 10, centerBaseline(top + head + rowH, rowH, 7.6), { size: 7.6, color: C.sub, align: "right" });
+  s.y = top + h;
+}
+
+export async function renderPurchaseOrderPdf(data: PurchaseOrderPdfData): Promise<Uint8Array> {
+  const version = Math.max(1, Math.floor(num(data.version)) || 1);
+  const s = await Sheet.create({ title: `発注書 ${data.number}${version > 1 ? ` 第${version}版` : ""}`, subject: "発注書", author: data.companyName });
+  s.onNewPage = () => continuationHeader(s, "発注書", `発注番号 ${data.number}`, `${data.supplierName} 御中`);
+  s.addPage();
+
+  // 上: 表題 (中央)・発注番号と発注日 (右上)
+  titleBlock(s, "発注書", MARGIN + 24, 18, version > 1 ? "訂正版" : undefined);
+  const meta: [string, string][] = [["発注番号", data.number]];
+  if (version > 1) meta.push(["", data.revisionLabel?.trim() || `第${version}版 (訂正)`]);
+  meta.push(["発注日", fmtWareki(data.issuedOn)]);
+  metaBlock(s, meta, MARGIN, RIGHT, 148);
+
+  // 左: 発注元の店舗 (大きく)・仕入先 御中 / 右: 会社・店舗・担当・連絡先 (手書きの発注書と同じ並び)
+  const top = MARGIN + 62;
+  const leftW = 280;
+  s.text(data.storeName, LEFT, top + 22, { size: 22, weight: "bold", maxWidth: leftW, shrinkTo: 14 });
+  let lt = customerBlock(s, LEFT, top + 34, leftW, data.supplierName, "御中", joinText([data.supplierFax && `FAX ${data.supplierFax}`, data.supplierContact && `ご担当 ${data.supplierContact} 様`], "　"));
+  const rx = RIGHT - 210;
+  let rt = top + 4;
+  const line = (text: string, size: number, weight: "regular" | "bold" = "regular", color = C.ink) => {
+    rt += size + 5;
+    s.text(text, rx, rt, { size, weight, color, maxWidth: 210, shrinkTo: size - 2 });
+  };
+  line(`${data.companyName}　${data.storeName}`, 10.5, "bold");
+  line(`担当：${data.staffName ?? ""}`, 10);
+  if (data.replyFax) line(`FAX　${data.replyFax}`, 10.5, "bold");
+  if (data.storeTel) line(`TEL　${data.storeTel}`, 9);
+  for (const l of s.ts.wrap(data.storeAddress, 8, 210, { maxLines: 2 })) line(l, 8, "regular", C.sub);
+  lt += 16;
+  s.text("下記のとおり発注いたします。", LEFT, lt, { size: 9.5 });
+  s.y = Math.max(lt, rt) + 10;
+
+  // 明細の表: 品名・数量・現場名・着日・備考 (手書きの発注書と同じ列。品番・仕様は品名の下、案件番号は現場名の下)
+  const cols: GridColumn[] = [
+    { label: "", width: 22, align: "center", fit: true },
+    { label: "品名", width: 188, align: "left" },
+    { label: "数量", width: 54, align: "right" },
+    { label: "現場名", width: 116, align: "left" },
+    { label: "着日", width: 50, align: "center", fit: true },
+    { label: "備考", width: CONTENT_W - 22 - 188 - 54 - 116 - 50, align: "left" },
+  ];
+  const rows = data.lines.map((l, i) => [
+    String(i + 1),
+    [l.name, [l.code && `品番 ${l.code}`, l.spec].filter((x) => x && s.ts.clean(x)).join("　")].filter(Boolean).join("\n"),
+    `${fmtQty(l.qty)}${s.ts.clean(l.unit) ? ` ${s.ts.clean(l.unit)}` : ""}`,
+    [l.site, l.orderNumber].filter((x) => x && s.ts.clean(x)).join("\n"),
+    fmtArrival(l.arrival),
+    [l.notes, typeof l.unitPrice === "number" ? `単価 ${fmtYen(l.unitPrice)}` : ""].filter((x) => x && s.ts.clean(x)).join("\n"),
+  ]);
+  for (let i = rows.length; i < PO_MIN_ROWS; i++) rows.push([String(i + 1), "", "", "", "", ""]);
+  gridTable(s, cols, rows, "", { plain: true, minRowH: 26 });
+
+  // 納品先・備考・受注確認
+  s.y += 10;
+  s.ensure(18);
+  s.text("納品先", LEFT, s.y + 11, { size: 8.5, color: C.sub });
+  s.text(joinText([data.deliveryPlace, data.deliveryAddress], "　"), LEFT + 40, s.y + 11, { size: 9.5, maxWidth: CONTENT_W - 40, shrinkTo: 7.5 });
+  s.y += 16;
+  textSection(s, "備考", data.notes);
+  poReplyBox(s, data);
+  return s.finish(data.cancelled ? PO_CANCEL_MARK : data.draft ? PO_DRAFT_MARK : undefined);
 }

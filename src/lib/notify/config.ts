@@ -1,5 +1,6 @@
 import "server-only";
 import { createHash } from "node:crypto";
+import { faxConnection, faxLocalNumber, faxWebhookSecret } from "@/lib/fax/adapter";
 
 /**
  * 外部への送信・外部からの受信の設定 (環境変数。値は画面に出さない)
@@ -103,7 +104,7 @@ export function linkSecret(): string {
 }
 
 export interface IntegrationStatus {
-  key: "email" | "line" | "chatwork" | "webform" | "ai_intake";
+  key: "email" | "line" | "chatwork" | "webform" | "ai_intake" | "fax";
   name: string;
   configured: boolean;
   detail: string;
@@ -151,5 +152,19 @@ export function integrationStatuses(): IntegrationStatus[] {
       detail: aiIntakeSecret() ? "受信の共有鍵の設定あり (AI_INTAKE_SECRET)" : "AI_INTAKE_SECRET を設定すると、各 AI システムの受付を問い合わせとして登録し、担当者に引き継ぎます",
       inbound: { configured: Boolean(aiIntakeSecret()), path: "/api/integrations/ai-intake?source=phone", detail: "POST (JSON)。ヘッダー Authorization: Bearer <AI_INTAKE_SECRET>。source は chat / voice / phone" },
     },
+    faxStatusItem(),
   ];
+}
+
+/** クラウド FAX (src/lib/fax/adapter.ts) */
+function faxStatusItem(): IntegrationStatus {
+  const c = faxConnection();
+  const local = faxLocalNumber();
+  return {
+    key: "fax",
+    name: "クラウド FAX (発注書の送信・受信 FAX の取り込み)",
+    configured: c.mode === "live" || c.mode === "mock",
+    detail: `${c.label}${local ? ` · 自社の FAX 番号 ${local}` : ""} · ${c.detail}`,
+    inbound: { configured: (c.mode === "live" || c.mode === "mock") && Boolean(faxWebhookSecret()), path: "/api/integrations/fax", detail: "FAX サービスからの受信・送信の状態の通知 (形式と署名は FAX サービスごと。FAX_WEBHOOK_SECRET)" },
+  };
 }

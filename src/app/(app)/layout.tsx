@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { requireUser } from "@/lib/auth/session";
 import { notificationsFor, storeById, storeName } from "@/lib/db/queries";
-import { canApproveSignup, canExportAccounting, canExportData, canManageSettings, canManageUsers, canRegisterPurchase, canSeeAllStores, canViewReports, canViewSuppliers } from "@/lib/auth/permissions";
+import { canApproveSignup, canExportAccounting, canExportData, canManageSettings, canManageUsers, canRegisterPurchase, canSeeAllStores, canTriageFax, canViewFax, canViewReports, canViewSuppliers } from "@/lib/auth/permissions";
 import { getDb } from "@/lib/db/store";
 import { avatarUrl } from "@/lib/account-rules";
 import { ROLE_LABEL, APPROVAL_TYPE_LABEL } from "@/lib/constants";
@@ -17,6 +17,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const allStores = canSeeAllStores(user);
   const store = storeById(user.storeId);
   const signups = canManageUsers(user) ? getDb().users.filter((u) => u.signupStatus === "pending" && canApproveSignup(user, u)) : [];
+  // FAX: 要確認の受信 (仕分けをする本部・管理者)、自分が担当の未確認の返信、自分が送って失敗した送信
+  const faxes = getDb().faxMessages;
+  const faxReview = canTriageFax(user) ? faxes.filter((f) => f.direction === "inbound" && f.triage === "review").length : 0;
+  const faxReplies = faxes.filter((f) => f.direction === "inbound" && f.assignedUserId === user.id && f.purchaseOrderId && !f.checkedAt && (f.triage === "auto" || f.triage === "accepted") && canViewFax(user, f)).length;
+  const faxFailed = faxes.filter((f) => f.direction === "outbound" && f.userId === user.id && (f.status === "failed" || f.status === "unknown") && !f.nextRetryAt).length;
 
   // short: ヘッダーのタブに表示する短い名前 (正式名はツールチップに表示)
   const nav: NavItem[] = [
@@ -35,6 +40,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   if (canRegisterPurchase(user)) {
     nav.push({ href: "/purchases", label: "仕入・買掛 (支払依頼)", short: "仕入・買掛", icon: "purchases", group: "経理" });
   }
+  nav.push({ href: "/purchase-orders", label: "発注書 (仕入先への発注・FAX 送信)", short: "発注書", icon: "purchaseOrders", group: "経理" });
   if (canViewSuppliers(user)) {
     nav.push({ href: "/suppliers", label: "仕入先・協力業者", short: "取引先", icon: "suppliers", group: "経理" });
   }
@@ -45,6 +51,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     { href: "/capture", label: "書類取込 (紙→データ)", short: "書類取込", icon: "capture", group: "業務支援" },
     { href: "/approvals", label: "承認", icon: "approvals", group: "業務支援", badge: n.pendingApprovals.length || undefined },
     { href: "/messages", label: "社内連絡・業務依頼", short: "社内連絡", icon: "messages", group: "業務支援", badge: n.mentions.length + n.taskCount || undefined },
+    { href: "/fax", label: "FAX 送受信 (受信の仕分け・発注書の送信の記録)", short: "FAX", icon: "fax", group: "業務支援", badge: faxReview + faxReplies + faxFailed || undefined },
     { href: "/contacts", label: "連絡履歴 (お客様・協力業者)", short: "連絡履歴", icon: "contacts", group: "業務支援" },
     { href: "/ai", label: "AIアシスタント (質問・検索・文書の作成)", short: "AI", icon: "ai", group: "業務支援" },
     { href: "/knowledge", label: "社内資料 (ナレッジ・AI の回答の根拠)", short: "社内資料", icon: "knowledge", group: "業務支援" },
@@ -94,6 +101,15 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   }
   if (n.overdueInvoices > 0) {
     notifications.push({ kind: "overdue", title: `支払期日超過の請求 ${n.overdueInvoices} 件`, detail: "入金確認・督促が必要です", href: "/invoices?status=overdue" });
+  }
+  if (faxReview > 0) {
+    notifications.push({ kind: "fax", title: `要確認の受信 FAX ${faxReview} 件`, detail: "未登録の番号からの FAX です。「取り込む」か「不要」を選んでください", href: "/fax?tab=review" });
+  }
+  if (faxReplies > 0) {
+    notifications.push({ kind: "fax", title: `発注書への返信 FAX ${faxReplies} 件`, detail: "仕入先からの返信を確認してください (納期・数量の回答など)", href: "/fax?tab=inbox&unchecked=1" });
+  }
+  if (faxFailed > 0) {
+    notifications.push({ kind: "fax", title: `FAX の送信に失敗 ${faxFailed} 件`, detail: "理由を確認して再送してください", href: "/fax?tab=outbox" });
   }
   if (signups.length > 0) {
     notifications.push({ kind: "signup", title: `新規登録の申請 ${signups.length} 件`, detail: `${signups.slice(0, 3).map((u) => `${u.name} (${ROLE_LABEL[u.role]})`).join("・")}${signups.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/staff#signups" });

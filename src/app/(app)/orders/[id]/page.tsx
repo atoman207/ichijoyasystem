@@ -2,7 +2,7 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canManageFinance, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
+import { canAccessStore, canManageFinance, canManagePurchaseOrders, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
 import { orderChain, userName } from "@/lib/db/queries";
 import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, requestOrderChange, resubmitOrder, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
@@ -24,6 +24,7 @@ import { deliveryOf } from "@/lib/kpi";
 import { AiSummary } from "@/components/features/AiSummary";
 import { lineGroupName, lineGroups } from "@/lib/line-groups";
 import { linkLineGroup, unlinkLineGroup } from "@/lib/actions/line-groups";
+import { FaxHistoryCard, PurchaseOrderTable } from "@/components/fax/FaxParts";
 
 const STEPS = ["pending_approval", "confirmed", "scheduled", "in_progress", "completed", "invoiced", "paid"] as const;
 
@@ -51,6 +52,9 @@ export default async function OrderDetailPage({ params, searchParams }: { params
     .sort((a, b) => Number(b.kind === "partner") - Number(a.kind === "partner") || a.name.localeCompare(b.name, "ja"))
     .map((s) => ({ id: s.id, label: `${s.kind === "partner" ? "[協力業者] " : "[仕入先] "}${s.name}` }));
   const orderPurchases = db.purchases.filter((p) => p.orderId === o.id);
+  // この案件の明細を含む発注書と、この案件にひも付いた FAX (送信・返信)
+  const orderPos = db.purchaseOrders.filter((p) => p.orderIds.includes(o.id)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const orderFaxes = db.faxMessages.filter((f) => f.orderIds.includes(o.id));
   const returnTo = `/orders/${id}`;
   // この案件の LINE グループ (現場のグループ) と、まだひも付けていないグループ
   const allGroups = lineGroups(db).filter((g) => g.status === "joined");
@@ -389,6 +393,19 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               )}
             </Card>
           )}
+
+          <Card padded={false}>
+            <div className="p-5 pb-0">
+              <CardHeader
+                title="発注書 (仕入先への発注)"
+                description={orderPos.length ? `${orderPos.length} 件 · 同じ仕入先への別の案件の材料と 1 枚にまとめた発注書も含みます` : "この案件の材料を仕入先へ発注し、FAX で送れます"}
+                action={canManagePurchaseOrders(user) && o.status !== "cancelled" ? <LinkButton href={`/purchase-orders/new?orderId=${o.id}`} size="sm">発注書を作成</LinkButton> : undefined}
+              />
+            </div>
+            <div className="px-2 pb-2"><PurchaseOrderTable db={db} user={user} rows={orderPos} /></div>
+          </Card>
+
+          <FaxHistoryCard db={db} user={user} faxes={orderFaxes} title="この案件の FAX (発注書の送信・仕入先の返信)" />
 
           {active && (
             <Card>

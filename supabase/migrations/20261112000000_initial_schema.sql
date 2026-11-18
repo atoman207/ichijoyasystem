@@ -603,7 +603,7 @@ create table if not exists settings (
 );
 comment on table settings is '設定 (帳票の会社情報・登録番号・振込先など)';
 
--- 添付ファイル (資料・写真。本体は Storage の attachments バケット)
+-- 添付ファイル (資料・写真。本体は VPS のディスク。ここにはパスだけ)
 create table if not exists attachments (
   id text primary key,
   parent_type text not null check (parent_type in ('customer','inquiry','quote','order','expense','purchase','document')),
@@ -623,7 +623,7 @@ create table if not exists attachments (
   uploaded_by text not null references users(id),
   uploaded_at timestamptz not null
 );
-comment on table attachments is '添付ファイル (資料・写真。本体は Storage の attachments バケット)';
+comment on table attachments is '添付ファイル (資料・写真。本体は VPS のディスク。ここにはパスだけ)';
 
 -- 現金出納 (店舗の手元現金の入出金)
 create table if not exists cash_entries (
@@ -679,6 +679,95 @@ create table if not exists knowledge (
   updated_at timestamptz not null
 );
 comment on table knowledge is '社内資料 (ナレッジ・AI の回答の根拠)';
+
+-- 発注書 (仕入先への発注。明細ごとに案件 (受注) を持つ)
+create table if not exists purchase_orders (
+  id text primary key,
+  number text not null unique,
+  supplier_id text not null references suppliers(id),
+  store_id text not null references stores(id),
+  status text not null check (status in ('draft','issued','sent','completed','cancelled')),
+  issued_on date not null,
+  desired_date date,
+  delivery_place text not null default '',
+  delivery_address text,
+  lines jsonb not null default '[]',
+  order_ids text[] not null default '{}',
+  notes text,
+  show_customer boolean,
+  fax_to text,
+  version integer not null default 1 check (version >= 1),
+  copied_from text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz not null,
+  issued_at timestamptz,
+  sent_at timestamptz,
+  completed_at timestamptz,
+  cancelled_at timestamptz,
+  cancel_reason text
+);
+comment on table purchase_orders is '発注書 (仕入先への発注。明細ごとに案件 (受注) を持つ)';
+
+-- FAX の送受信履歴 (PDF の本体は VPS のディスク。ここにはパスだけ)
+create table if not exists fax_messages (
+  id text primary key,
+  number text not null unique,
+  direction text not null check (direction in ('inbound','outbound')),
+  status text not null check (status in ('queued','sending','sent','failed','unknown','manual','received')),
+  triage text check (triage in ('auto','review','accepted','junk')),
+  remote_number text not null default '',
+  remote_name text,
+  local_number text,
+  at timestamptz not null,
+  completed_at timestamptz,
+  pages integer,
+  file_key text,
+  file_name text not null default '',
+  size integer,
+  content_type text not null default 'application/pdf',
+  provider text not null,
+  provider_id text,
+  provider_ref text unique,
+  idempotency_key text unique,
+  supplier_id text references suppliers(id) on delete set null,
+  customer_id text references customers(id) on delete set null,
+  purchase_order_id text references purchase_orders(id) on delete set null,
+  po_version integer,
+  order_ids text[] not null default '{}',
+  store_id text not null references stores(id),
+  assigned_user_id text references users(id) on delete set null,
+  user_id text not null,
+  ai jsonb,
+  ai_pending boolean,
+  attempts integer not null default 0,
+  next_retry_at timestamptz,
+  last_error text,
+  events jsonb not null default '[]',
+  decided_by text,
+  decided_at timestamptz,
+  checked_by text,
+  checked_at timestamptz,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+comment on table fax_messages is 'FAX の送受信履歴 (PDF の本体は VPS のディスク。ここにはパスだけ)';
+
+-- FAX 番号の台帳 (不要な番号・顧客と仕入先の FAX 番号)
+create table if not exists fax_numbers (
+  id text primary key,
+  number text not null unique,
+  kind text not null check (kind in ('blocked','customer','supplier')),
+  customer_id text references customers(id) on delete set null,
+  supplier_id text references suppliers(id) on delete set null,
+  label text not null default '',
+  note text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+comment on table fax_numbers is 'FAX 番号の台帳 (不要な番号・顧客と仕入先の FAX 番号)';
 
 -- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)
 -- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する
@@ -1156,6 +1245,77 @@ alter table knowledge add column if not exists created_by text not null;
 alter table knowledge add column if not exists created_at timestamptz not null;
 alter table knowledge add column if not exists updated_by text;
 alter table knowledge add column if not exists updated_at timestamptz not null;
+alter table purchase_orders add column if not exists number text not null unique;
+alter table purchase_orders add column if not exists supplier_id text not null references suppliers(id);
+alter table purchase_orders add column if not exists store_id text not null references stores(id);
+alter table purchase_orders add column if not exists status text not null check (status in ('draft','issued','sent','completed','cancelled'));
+alter table purchase_orders add column if not exists issued_on date not null;
+alter table purchase_orders add column if not exists desired_date date;
+alter table purchase_orders add column if not exists delivery_place text not null default '';
+alter table purchase_orders add column if not exists delivery_address text;
+alter table purchase_orders add column if not exists lines jsonb not null default '[]';
+alter table purchase_orders add column if not exists order_ids text[] not null default '{}';
+alter table purchase_orders add column if not exists notes text;
+alter table purchase_orders add column if not exists show_customer boolean;
+alter table purchase_orders add column if not exists fax_to text;
+alter table purchase_orders add column if not exists version integer not null default 1 check (version >= 1);
+alter table purchase_orders add column if not exists copied_from text;
+alter table purchase_orders add column if not exists created_by text not null;
+alter table purchase_orders add column if not exists created_at timestamptz not null;
+alter table purchase_orders add column if not exists updated_by text;
+alter table purchase_orders add column if not exists updated_at timestamptz not null;
+alter table purchase_orders add column if not exists issued_at timestamptz;
+alter table purchase_orders add column if not exists sent_at timestamptz;
+alter table purchase_orders add column if not exists completed_at timestamptz;
+alter table purchase_orders add column if not exists cancelled_at timestamptz;
+alter table purchase_orders add column if not exists cancel_reason text;
+alter table fax_messages add column if not exists number text not null unique;
+alter table fax_messages add column if not exists direction text not null check (direction in ('inbound','outbound'));
+alter table fax_messages add column if not exists status text not null check (status in ('queued','sending','sent','failed','unknown','manual','received'));
+alter table fax_messages add column if not exists triage text check (triage in ('auto','review','accepted','junk'));
+alter table fax_messages add column if not exists remote_number text not null default '';
+alter table fax_messages add column if not exists remote_name text;
+alter table fax_messages add column if not exists local_number text;
+alter table fax_messages add column if not exists at timestamptz not null;
+alter table fax_messages add column if not exists completed_at timestamptz;
+alter table fax_messages add column if not exists pages integer;
+alter table fax_messages add column if not exists file_key text;
+alter table fax_messages add column if not exists file_name text not null default '';
+alter table fax_messages add column if not exists size integer;
+alter table fax_messages add column if not exists content_type text not null default 'application/pdf';
+alter table fax_messages add column if not exists provider text not null;
+alter table fax_messages add column if not exists provider_id text;
+alter table fax_messages add column if not exists provider_ref text unique;
+alter table fax_messages add column if not exists idempotency_key text unique;
+alter table fax_messages add column if not exists supplier_id text references suppliers(id) on delete set null;
+alter table fax_messages add column if not exists customer_id text references customers(id) on delete set null;
+alter table fax_messages add column if not exists purchase_order_id text references purchase_orders(id) on delete set null;
+alter table fax_messages add column if not exists po_version integer;
+alter table fax_messages add column if not exists order_ids text[] not null default '{}';
+alter table fax_messages add column if not exists store_id text not null references stores(id);
+alter table fax_messages add column if not exists assigned_user_id text references users(id) on delete set null;
+alter table fax_messages add column if not exists user_id text not null;
+alter table fax_messages add column if not exists ai jsonb;
+alter table fax_messages add column if not exists ai_pending boolean;
+alter table fax_messages add column if not exists attempts integer not null default 0;
+alter table fax_messages add column if not exists next_retry_at timestamptz;
+alter table fax_messages add column if not exists last_error text;
+alter table fax_messages add column if not exists events jsonb not null default '[]';
+alter table fax_messages add column if not exists decided_by text;
+alter table fax_messages add column if not exists decided_at timestamptz;
+alter table fax_messages add column if not exists checked_by text;
+alter table fax_messages add column if not exists checked_at timestamptz;
+alter table fax_messages add column if not exists created_at timestamptz not null;
+alter table fax_messages add column if not exists updated_at timestamptz not null;
+alter table fax_numbers add column if not exists number text not null unique;
+alter table fax_numbers add column if not exists kind text not null check (kind in ('blocked','customer','supplier'));
+alter table fax_numbers add column if not exists customer_id text references customers(id) on delete set null;
+alter table fax_numbers add column if not exists supplier_id text references suppliers(id) on delete set null;
+alter table fax_numbers add column if not exists label text not null default '';
+alter table fax_numbers add column if not exists note text;
+alter table fax_numbers add column if not exists created_by text not null;
+alter table fax_numbers add column if not exists created_at timestamptz not null;
+alter table fax_numbers add column if not exists updated_at timestamptz not null;
 
 -- 索引 (検索・読み込みの並び順)
 create index if not exists stores_load_order_idx on stores (code, id);
@@ -1226,6 +1386,14 @@ create index if not exists deliveries_related_type_related_id_idx on deliveries 
 create index if not exists deliveries_load_order_idx on deliveries (created_at, id);
 create index if not exists knowledge_source_ref_idx on knowledge (source_ref);
 create index if not exists knowledge_load_order_idx on knowledge (created_at, id);
+create index if not exists purchase_orders_supplier_id_idx on purchase_orders (supplier_id);
+create index if not exists purchase_orders_store_id_idx on purchase_orders (store_id);
+create index if not exists purchase_orders_load_order_idx on purchase_orders (created_at, id);
+create index if not exists fax_messages_supplier_id_idx on fax_messages (supplier_id);
+create index if not exists fax_messages_purchase_order_id_idx on fax_messages (purchase_order_id);
+create index if not exists fax_messages_remote_number_idx on fax_messages (remote_number);
+create index if not exists fax_messages_load_order_idx on fax_messages (at, id);
+create index if not exists fax_numbers_load_order_idx on fax_numbers (created_at, id);
 
 -- 後から not null を外した列 (データは変えない。外した後に実行しても変化なし)
 alter table comm_logs alter column customer_id drop not null;
@@ -1329,6 +1497,15 @@ grant select, insert, update, delete on table deliveries to service_role;
 alter table knowledge enable row level security;
 revoke all on table knowledge from anon, authenticated;
 grant select, insert, update, delete on table knowledge to service_role;
+alter table purchase_orders enable row level security;
+revoke all on table purchase_orders from anon, authenticated;
+grant select, insert, update, delete on table purchase_orders to service_role;
+alter table fax_messages enable row level security;
+revoke all on table fax_messages from anon, authenticated;
+grant select, insert, update, delete on table fax_messages to service_role;
+alter table fax_numbers enable row level security;
+revoke all on table fax_numbers from anon, authenticated;
+grant select, insert, update, delete on table fax_numbers to service_role;
 
 -- 書き込みのたびにリビジョンを +1 (他のサーバーインスタンスが変更を検知して読み直す)
 create or replace function public.bump_revision() returns bigint

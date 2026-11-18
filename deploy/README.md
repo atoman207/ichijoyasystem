@@ -202,12 +202,23 @@ Xserver 側の保守 (ホストの障害・メンテナンス) による再起�
 | アプリのログ | `journalctl -u ichijoya -n 200 --no-pager` (`-f` で追跡) |
 | 死活監視 (止まったら自動で再起動) | `/var/log/ichijoya/health.log` |
 | バックアップ | `/var/log/ichijoya/backup.log` |
-| 社内資料の同期 | `/var/log/ichijoya/cron.log` |
+| 社内資料の同期・FAX の定期処理 | `/var/log/ichijoya/cron.log` |
 | nginx | `/var/log/nginx/access.log` / `error.log` |
 | 証明書の期限 | `sudo certbot certificates` (自動更新: `systemctl list-timers \| grep certbot`) |
 | ディスク | `df -h /` |
 
 OS のセキュリティ更新は自動 (unattended-upgrades) です。カーネルの更新で再起動が必要なときは、業務時間外に `sudo reboot` してください (アプリは自動で起動します)。
+
+## 5-A. 発注書・クラウド FAX
+
+- 発注書・FAX のテーブル (`purchase_orders`・`fax_messages`・`fax_numbers`) は、デプロイ (`npm run deploy` の build) で自動で作られます。作られるまでは画面から保存できません (分かる言葉で断ります)。
+- FAX の定期処理 (2 分ごと。送信の状態の確認・通信エラーの自動の再送・AI の判定待ちの読み直し) を cron に加えたため、このリポジトリの `deploy/ichijoya.cron` を入れ直してください:
+  `sudo install -m 644 /srv/ichijoya/current/deploy/ichijoya.cron /etc/cron.d/ichijoya`
+- 設定 (`.env.local` の「外部連携」→ `npm run env:apply`):
+  - `FAX_NUMBER=096-348-3177` (自社の FAX 番号。発注書の返信先に載ります)
+  - `FAX_PROVIDER` … FAX サービスを契約し、そのアダプター (`src/lib/fax/adapter.ts` の `LIVE_ADAPTERS`) を加えてから設定します。未設定のあいだは送信せず、「PDF を印刷して FAX 機で送る → 送信の記録」と「受信した FAX の PDF を登録」で運用できます。`mock` は検証環境 (`DATA_BACKEND=json`) 専用で、本番のデータベースでは動きません。
+  - `FAX_WEBHOOK_SECRET` … FAX サービスからの通知 (`https://<ドメイン>/api/integrations/fax`) の署名の鍵。
+- 送受信した FAX の PDF は添付ファイルと同じ場所 (`/srv/ichijoya/data/uploads/fax/`) に保存し、毎日のバックアップに含まれます。
 
 ## 6. Supabase (データベース) の本番の設定
 

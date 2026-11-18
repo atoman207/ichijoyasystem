@@ -28,7 +28,9 @@ import {
   BookOpen,
   Calculator,
   CircleHelp,
+  ClipboardList,
   Coins,
+  Printer,
   Landmark,
   ListTodo,
   PhoneCall,
@@ -100,6 +102,8 @@ export type NavIcon =
   | "contacts"
   | "suppliers"
   | "knowledge"
+  | "purchaseOrders"
+  | "fax"
   | "help";
 
 const ICONS: Record<NavIcon, LucideIcon> = {
@@ -129,6 +133,8 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   contacts: PhoneCall,
   suppliers: Truck,
   knowledge: BookOpen,
+  purchaseOrders: ClipboardList,
+  fax: Printer,
   help: CircleHelp,
 };
 
@@ -161,7 +167,7 @@ export interface ShellUser {
 }
 
 export interface NotificationItem {
-  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict" | "task" | "signup";
+  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict" | "task" | "signup" | "fax";
   title: string;
   detail?: string;
   href: string;
@@ -177,6 +183,7 @@ const NOTIFICATION_STYLE: Record<NotificationItem["kind"], { icon: LucideIcon; c
   conflict: { icon: CalendarX2, cls: "bg-critical-soft text-critical-ink" },
   task: { icon: ListTodo, cls: "bg-warn-soft text-warn-ink" },
   signup: { icon: UserPlus, cls: "bg-accent-soft text-accent-ink" },
+  fax: { icon: Printer, cls: "bg-warn-soft text-warn-ink" },
 };
 
 const CREATE_ITEMS: { href: string; label: string; desc: string; icon: LucideIcon }[] = [

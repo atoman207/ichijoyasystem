@@ -2,7 +2,7 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canEditSuppliers, canViewPurchase, canViewSuppliers } from "@/lib/auth/permissions";
+import { canEditSuppliers, canManagePurchaseOrders, canViewPurchase, canViewSuppliers } from "@/lib/auth/permissions";
 import { updateSupplier } from "@/lib/actions/suppliers";
 import { fmtDate, yen } from "@/lib/format";
 import { PURCHASE_STATUS, SUPPLIER_KIND_LABEL } from "@/lib/constants";
@@ -11,6 +11,7 @@ import { Badge, Button, Card, CardHeader, Dl, EmptyRow, Flash, LinkButton, PageH
 import { SupplierFields } from "@/components/features/SupplierFields";
 import { ContactList, ContactLogForm } from "@/components/features/Contacts";
 import { HistoryCard } from "@/components/features/History";
+import { FaxHistoryCard, PurchaseOrderTable } from "@/components/fax/FaxParts";
 
 export default async function SupplierDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -23,6 +24,8 @@ export default async function SupplierDetailPage({ params, searchParams }: { par
   const purchases = db.purchases.filter((p) => p.supplierId === s.id && canViewPurchase(user, p)).sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate));
   const open = purchases.filter(isOpenPurchase);
   const logs = db.commLogs.filter((c) => c.supplierId === s.id);
+  const pos = db.purchaseOrders.filter((p) => p.supplierId === s.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const faxes = db.faxMessages.filter((f) => f.supplierId === s.id);
   const returnTo = `/suppliers/${id}`;
   const kind = supplierKindOf(s);
 
@@ -34,7 +37,7 @@ export default async function SupplierDetailPage({ params, searchParams }: { par
         badge={<><Badge tone={kind === "partner" ? "accent" : "neutral"} dot={false}>{SUPPLIER_KIND_LABEL[kind]}</Badge>{s.active === false && <Badge tone="neutral">取引終了</Badge>}</>}
         description={`${s.category} · ${termsLabel(s)}`}
         back={{ href: "/suppliers", label: "仕入先・協力業者" }}
-        actions={<LinkButton href={`/purchases/new?supplierId=${s.id}`} size="sm">この取引先の請求書を登録</LinkButton>}
+        actions={<>{canManagePurchaseOrders(user) && s.active !== false && <LinkButton href={`/purchase-orders/new?supplierId=${s.id}`} size="sm" variant="secondary">発注書を作成</LinkButton>}<LinkButton href={`/purchases/new?supplierId=${s.id}`} size="sm">この取引先の請求書を登録</LinkButton></>}
       />
       <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-3">
         <div className="space-y-4 @4xl:col-span-2">
@@ -60,6 +63,11 @@ export default async function SupplierDetailPage({ params, searchParams }: { par
               </tbody>
             </Table>
           </Card>
+          <Card padded={false}>
+            <div className="p-5 pb-0"><CardHeader title="発注書" description={`${pos.length} 件 · 複数の案件をまとめた発注書を含みます`} action={<LinkButton href={`/purchase-orders?status=all&supplier=${s.id}`} variant="ghost" size="sm">一覧で見る</LinkButton>} /></div>
+            <div className="px-2 pb-2"><PurchaseOrderTable db={db} user={user} rows={pos.slice(0, 20)} /></div>
+          </Card>
+          <FaxHistoryCard db={db} user={user} faxes={faxes} title="FAX の送受信" />
           <Card>
             <CardHeader title="やりとりの記録" description="電話・メール・LINE・Chatwork・対面のやりとりを、案件 (受注番号など) に紐付けて残します。LINE ID・Chatwork ルーム・メールを登録すると、ここから送信もできます" />
             <ContactLogForm returnTo={returnTo} supplierId={s.id} defaultChannel={s.chatworkRoomId ? "chatwork" : "phone"} canSend />

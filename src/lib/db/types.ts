@@ -1078,6 +1078,211 @@ export interface PhotoAlbum {
   sampleFiles: string[];
 }
 
+/* ---------------- 発注書・FAX (仕入先への発注と、クラウド FAX の送受信) ---------------- */
+
+/**
+ * 発注書の状態
+ * draft = 下書き / issued = 発行済み (送信待ち。印刷して FAX 機で送ることもできる) / sent = 送信済み /
+ * completed = 完了 (納品・回答まで済み。返信 FAX のひも付け候補から外れる) / cancelled = 取消
+ */
+export type PurchaseOrderStatus = "draft" | "issued" | "sent" | "completed" | "cancelled";
+
+/** 発注書の明細。1 枚の発注書に、別の案件 (受注) の明細を混ぜられる */
+export interface PurchaseOrderLine {
+  id: string;
+  /** 案件 (受注) の ID と番号 (番号は明細を作ったときの控え。発注書・返信 FAX の照合に使う) */
+  orderId?: string;
+  orderNumber?: string;
+  /** 商品マスタから選んだとき */
+  productId?: string;
+  /** 商品名 */
+  name: string;
+  /** 品番 */
+  code?: string;
+  /** 仕様 (等級・サイズ・色など) */
+  spec?: string;
+  qty: number;
+  unit: string;
+  /** 希望納期 (明細ごと。空のときは発注書の希望納期) */
+  dueDate?: string;
+  notes?: string;
+  /** 単価 (任意。入れた明細があるときだけ、発注書に単価・金額を載せる) */
+  unitPrice?: number;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  /** 発注番号 (例: PO-2026-0001)。返信 FAX の照合に使うため、発注書の上部に大きく載せる */
+  number: string;
+  supplierId: string;
+  /** 発注元の店舗 (閲覧・操作の範囲) */
+  storeId: StoreId;
+  status: PurchaseOrderStatus;
+  /** 発注日 */
+  issuedOn: string;
+  /** 希望納期 (発注書全体) */
+  desiredDate?: string;
+  /** 納品先 (名称。例: 合志店 / 現場直送) と住所 */
+  deliveryPlace: string;
+  deliveryAddress?: string;
+  lines: PurchaseOrderLine[];
+  /** 明細の案件 (受注) の ID (明細から自動で作る。検索・FAX のひも付け用) */
+  orderIds: string[];
+  notes?: string;
+  /** お客様の氏名・電話番号を発注書に載せる (現場直送などで必要なときだけ。既定は載せない) */
+  showCustomer?: boolean;
+  /** 送信先の FAX 番号 (空のときは仕入先の FAX 番号) */
+  faxTo?: string;
+  /** 版 (送信したあとに内容を直すたびに +1。発注書に「第2版 (訂正)」と載せる) */
+  version: number;
+  /** 複製元の発注書 */
+  copiedFrom?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedBy?: string;
+  updatedAt: string;
+  issuedAt?: string;
+  sentAt?: string;
+  completedAt?: string;
+  cancelledAt?: string;
+  cancelReason?: string;
+}
+
+export type FaxDirection = "inbound" | "outbound";
+
+/**
+ * FAX の状態
+ * - 送信: queued = 受付済み / sending = 処理中 / sent = 成功 / failed = 失敗 /
+ *         unknown = 要確認 (通信が途中で切れ、FAX サービスが受け付けたか分からない。自動では再送しない) / manual = FAX 機で送信 (記録のみ)
+ * - 受信: received
+ */
+export type FaxStatus = "queued" | "sending" | "sent" | "failed" | "unknown" | "manual" | "received";
+
+/**
+ * 受信 FAX の仕分け
+ * auto = 登録済みの番号 (仕入先・顧客) からの FAX。自動で業務の一覧に入る /
+ * review = 要確認 (未登録の番号。担当者が「取り込む」「不要」を選ぶ) / accepted = 担当者が取り込んだ /
+ * junk = 不要 (通常の一覧から外す。削除はしない。「戻す」で復旧できる)
+ */
+export type FaxTriage = "auto" | "review" | "accepted" | "junk";
+
+/** AI の判定: business = 業務関連 / ad = 広告・営業 / unknown = 判定不能 */
+export type FaxAiLabel = "business" | "ad" | "unknown";
+
+/** 受信 FAX の AI 判定・読み取りの結果 (担当者の判断で上書きしない。判断は triage・decidedBy に残す) */
+export interface FaxAiResult {
+  label: FaxAiLabel;
+  /** 信頼度 0〜1 */
+  confidence: number;
+  reason: string;
+  /** 書類に書かれた送信元の名前・FAX 番号 */
+  senderName?: string;
+  senderFax?: string;
+  /** 書類の種類 (例: 注文請書・納期回答・請求書・広告) */
+  documentType?: string;
+  summary?: string;
+  /** 読み取った発注番号・案件番号 (書かれたとおりを正規化したもの。システムにない番号も含む) */
+  poNumbers: string[];
+  orderNumbers: string[];
+  provider: string;
+  model?: string;
+  at: string;
+  error?: string;
+}
+
+/** FAX の処理の記録 (送信の受付・状態の変化・再送・エラー・AI 判定・ひも付け・仕分け) */
+export interface FaxEvent {
+  at: string;
+  kind: "queued" | "submit" | "accepted" | "status" | "retry" | "error" | "received" | "ai" | "link" | "triage" | "manual" | "check";
+  status?: FaxStatus;
+  note: string;
+  userId?: string;
+}
+
+/** FAX の送受信履歴。PDF の本体は VPS のディスク (src/lib/storage.ts) に置き、ここにはパスだけを持つ */
+export interface FaxMessage {
+  id: string;
+  /** 番号 (例: FX-2026-0001) */
+  number: string;
+  direction: FaxDirection;
+  status: FaxStatus;
+  /** 受信の仕分け (送信は持たない) */
+  triage?: FaxTriage;
+  /** 相手の FAX 番号 (数字だけ。受信は送信元、送信は送信先) */
+  remoteNumber: string;
+  /** 相手の名前 (送信時の宛先・受信の発信元の表示) */
+  remoteName?: string;
+  /** 自社の FAX 番号 */
+  localNumber?: string;
+  /** 受信日時・送信の操作日時 */
+  at: string;
+  /** 送信が完了した日時 */
+  completedAt?: string;
+  pages?: number;
+  /** PDF (または画像) のパス・ファイル名 */
+  fileKey?: string;
+  fileName: string;
+  size?: number;
+  contentType: string;
+  /** mock = 模擬 (サンプルデータの検証環境のみ) / upload = 画面から登録 / manual = FAX 機で送信 / ほかは FAX サービスの名前 */
+  provider: string;
+  /** FAX サービスでの ID と、重複登録を防ぐ一意の参照 (provider:ID) */
+  providerId?: string;
+  providerRef?: string;
+  /** 送信の操作ごとのキー (二重送信の防止。同じキーの送信は 1 回だけ) */
+  idempotencyKey?: string;
+  supplierId?: string;
+  customerId?: string;
+  purchaseOrderId?: string;
+  /** 送信した発注書の版 */
+  poVersion?: number;
+  /** 関連する案件 (受注)。発注書の明細の案件・読み取った案件番号 */
+  orderIds: string[];
+  /** 閲覧範囲の店舗 (発注書・案件・顧客の店舗。未確定の受信 FAX は本社) */
+  storeId: StoreId;
+  /** 担当者 */
+  assignedUserId?: string;
+  /** 送信した人・登録した人 (FAX サービスからの受信は system) */
+  userId: string;
+  ai?: FaxAiResult;
+  /** AI の判定待ち (受信の直後。失敗したときは定期実行で読み直す) */
+  aiPending?: boolean;
+  /** 送信を試みた回数と、次の自動再送の時刻 (通信エラーのとき) */
+  attempts: number;
+  nextRetryAt?: string;
+  lastError?: string;
+  events: FaxEvent[];
+  /** 仕分け (取り込む・不要・戻す) をした人と日時 */
+  decidedBy?: string;
+  decidedAt?: string;
+  /** 担当者が内容を確認した (返信 FAX の確認) */
+  checkedBy?: string;
+  checkedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * FAX 番号の台帳: blocked = 不要 (届いた FAX を自動で「不要」にする) / customer・supplier = 顧客・仕入先の FAX 番号
+ * (仕入先は仕入先の台帳の FAX 番号でも判別する。ここには仕入先の 2 つ目以降の番号・顧客の FAX 番号を登録する)
+ */
+export type FaxNumberKind = "blocked" | "customer" | "supplier";
+
+export interface FaxNumber {
+  id: string;
+  /** 数字だけ (一意) */
+  number: string;
+  kind: FaxNumberKind;
+  customerId?: string;
+  supplierId?: string;
+  /** 名前 (例: ○○不動産 (広告)) */
+  label: string;
+  note?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Database {
   meta: { version: number; seededAt: string; source?: string; importedAt?: string; revision?: number };
   stores: Store[];
@@ -1110,6 +1315,9 @@ export interface Database {
   cashEntries: CashEntry[];
   deliveries: Delivery[];
   knowledge: KnowledgeEntry[];
+  purchaseOrders: PurchaseOrder[];
+  faxMessages: FaxMessage[];
+  faxNumbers: FaxNumber[];
 }
 
 export type CollectionName = Exclude<keyof Database, "meta">;

@@ -1,4 +1,4 @@
-import type { Approval, Attachment, AuditLog, CashEntry, Expense, PurchaseInvoice, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
+import type { Approval, Attachment, AuditLog, CashEntry, Expense, FaxMessage, PurchaseInvoice, PurchaseOrder, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
 
 /**
  * 権限ルール
@@ -16,6 +16,10 @@ import type { Approval, Attachment, AuditLog, CashEntry, Expense, PurchaseInvoic
  * - 社内連絡: 参加しているスレッド・自店舗のスレッド・全社向け (店舗指定なし) のスレッド。全店舗ロールは全件
  * - 予定表 (全社カレンダー): 全ロールが全店舗・全社員の予定を閲覧。登録は自店舗 (全店舗ロールは全店舗)、
  *   変更・削除は登録者・担当者・その店舗のメンバー。全社共通の予定は店長以上と本部スタッフ
+ * - 発注書: 閲覧・作成・変更・FAX 送信は自店舗 (全店舗ロールは全件)。手書きの発注書と同じく、店舗の担当者が自店舗の名前で発注する
+ * - FAX: 全店舗ロールは全件。店長・店舗スタッフは自店舗の FAX と、自分が送った・担当の FAX。
+ *   受信 FAX の仕分け (要確認・不要の番号) は本部スタッフ・管理者。ひも付けの修正は本部スタッフ・管理者・自店舗の FAX の店長と、担当・登録した本人。
+ *   不要に仕分けた FAX の完全な削除は管理者だけ (AI の判定だけでは削除しない)
  */
 
 export function canSeeAllStores(user: User): boolean {
@@ -281,7 +285,7 @@ export function canExportAccounting(user: User): boolean {
 }
 
 /** 店舗スタッフが自店舗の履歴を見られる対象 (案件・顧客・予定・請求など。経費・承認・設定などは見ない) */
-const STAFF_AUDIT_ENTITIES = new Set(["customer", "inquiry", "quote", "order", "invoice", "payment", "schedule", "document", "attachment", "survey", "quality", "review", "comm", "cash", "thread"]);
+const STAFF_AUDIT_ENTITIES = new Set(["customer", "inquiry", "quote", "order", "invoice", "payment", "schedule", "document", "attachment", "survey", "quality", "review", "comm", "cash", "thread", "purchase_order", "fax"]);
 
 /**
  * 変更履歴 (監査ログ) の閲覧範囲
@@ -334,4 +338,58 @@ export function canEditKnowledge(user: User): boolean {
 /** 社内資料の取込元 (Google スプレッドシート) の登録・同期: 本部スタッフ・管理者 */
 export function canManageKnowledgeSources(user: User): boolean {
   return user.role === "admin" || user.role === "hq_staff";
+}
+
+/* ---------------- 発注書・FAX ---------------- */
+
+/**
+ * 発注書を作成・変更し、FAX で送れる: 全員 (店舗のロールは自店舗の名前で発注する。手書きの発注書と同じく店舗の担当者が発注するため。
+ * 店長のいない店舗 (合志店) でも発注できる)。どの発注書を扱えるかは canEditPurchaseOrder (店舗の範囲)
+ */
+export function canManagePurchaseOrders(user: User): boolean {
+  return user.active;
+}
+
+/** 発注書を見る: 自店舗 (全店舗ロールは全件)。店舗スタッフも自店舗の発注を確認できる */
+export function canViewPurchaseOrder(user: User, po: Pick<PurchaseOrder, "storeId">): boolean {
+  return canAccessStore(user, po.storeId);
+}
+
+/** その発注書を変更・送信・取消できる */
+export function canEditPurchaseOrder(user: User, po: Pick<PurchaseOrder, "storeId">): boolean {
+  return canManagePurchaseOrders(user) && canAccessStore(user, po.storeId);
+}
+
+/** 受信 FAX の仕分け (要確認の FAX の「取り込む」「不要」・不要な番号の台帳・送信元を仕入先として登録): 本部スタッフ・管理者 */
+export function canTriageFax(user: User): boolean {
+  return canSeeAllStores(user);
+}
+
+/**
+ * FAX を見る (PDF を含む)
+ * - 全店舗ロール: すべて
+ * - 店長・店舗スタッフ: 自店舗の FAX (送信と、取り込んだ受信) と、自分が送った・担当の FAX。要確認・不要の受信 FAX は見えない
+ */
+export function canViewFax(user: User, f: Pick<FaxMessage, "storeId" | "direction" | "triage" | "userId" | "assignedUserId">): boolean {
+  if (canSeeAllStores(user)) return true;
+  if (f.userId === user.id || f.assignedUserId === user.id) return true;
+  if (f.storeId !== user.storeId) return false;
+  return f.direction === "outbound" || f.triage === "auto" || f.triage === "accepted";
+}
+
+/** FAX のひも付け (仕入先・発注書・案件・担当者) の修正: 本部スタッフ・管理者、自店舗の FAX の店長、自店舗の FAX のうち担当・登録した本人 */
+export function canEditFaxLinks(user: User, f: Pick<FaxMessage, "storeId" | "assignedUserId" | "userId">): boolean {
+  if (canSeeAllStores(user)) return true;
+  if (user.storeId !== f.storeId) return f.assignedUserId === user.id || f.userId === user.id;
+  return user.role === "store_manager" || f.assignedUserId === user.id || f.userId === user.id;
+}
+
+/** FAX 番号の台帳に登録する (次から自動で判別される。全社に効くため): 本部スタッフ・管理者・店長 */
+export function canRegisterFaxNumber(user: User): boolean {
+  return canSeeAllStores(user) || user.role === "store_manager";
+}
+
+/** 不要に仕分けた FAX の完全な削除 (PDF を含む): 管理者 */
+export function canDeleteFax(user: User): boolean {
+  return user.role === "admin";
 }
