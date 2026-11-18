@@ -41,9 +41,10 @@ import { getSessionUser, safeNext } from "@/lib/auth/session";
 import { hasReviewAccess, REVIEW_ACCOUNTS } from "@/lib/auth/review";
 import { reviewLogin } from "@/lib/actions/auth";
 import { ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
-import type { Role } from "@/lib/db/types";
+import type { Role, StoreId } from "@/lib/db/types";
 import { LoginForm, PlainLoginForm, type LoginAccount } from "@/components/features/LoginForm";
 import { PublicShell } from "@/components/brand/PublicShell";
+import { HeroCarousel, type HeroSlide } from "@/components/brand/HeroCarousel";
 import Link from "@/components/ui/Link";
 
 export const metadata: Metadata = { title: { absolute: "一畳屋 統合業務システム" } };
@@ -164,6 +165,35 @@ const STORE_PHOTO: Record<string, string> = {
   hq: "/brand/stores/hq.webp",
 };
 
+/** ヒーローの背景 (4 店舗と本社の写真) と、写真ごとに表示するこのシステムの強み。5 秒ごとに切り替わる (HeroCarousel) */
+const HERO_ADVANTAGES: { store: StoreId; title: string; text: string }[] = [
+  {
+    store: "koshi",
+    title: "問い合わせから入金まで、ひとつながり",
+    text: "電話・LINE・来店のお問い合わせから、見積・工事・請求・入金までを同じ番号でつなぎます。案件がいま、どこまで進んでいるかがすぐに分かります。",
+  },
+  {
+    store: "chuo",
+    title: "4 店舗と本社で、同じ最新の情報",
+    text: "どの店舗で受けたお問い合わせも、ほかの店舗や本社からすぐに確認できます。電話での確認や、同じ内容の二重の入力がなくなります。",
+  },
+  {
+    store: "nishi",
+    title: "紙の見積書も、撮るだけで登録",
+    text: "手書きの見積書・レシート・アンケートはがきを、スマートフォンで撮影するだけ。AI が読み取って、入力を手伝います。",
+  },
+  {
+    store: "tamana",
+    title: "全員の予定を、ひとつの予定表で",
+    text: "工事・現地調査・社内の予定を全店舗で共有します。担当者の予定が重なると、自動でお知らせします。",
+  },
+  {
+    store: "hq",
+    title: "承認と記録で、安心して任せられる",
+    text: "金額に関わる変更は承認を経て反映し、だれが・いつ・何を変えたかをすべて記録します。見られる範囲も役割ごとに決まっています。",
+  },
+];
+
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string; err?: string }> }) {
   const { next: rawNext, err } = await searchParams;
   const next = safeNext(rawNext);
@@ -181,17 +211,15 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const storeMap = new Map(db.stores.map((s) => [s.id, s.name]));
   const shops = db.stores.filter((s) => s.kind === "store");
   const hq = db.stores.find((s) => s.kind === "hq");
+  const heroSlides: HeroSlide[] = HERO_ADVANTAGES.map((a) => ({ src: STORE_PHOTO[a.store], place: storeMap.get(a.store) ?? "", title: a.title, text: a.text }));
 
   return (
     <PublicShell current="login">
-      {/* ヒーロー: システムの説明とログイン (公式サイトの畳の緑) */}
-      <section className="relative overflow-hidden bg-wa-green text-white">
-        <div className="tatami-weave absolute inset-0" aria-hidden />
-        <div className="absolute -top-40 left-1/3 h-[34rem] w-[34rem] rounded-full bg-wa-leaf/40 blur-3xl" aria-hidden />
-        {/* eslint-disable-next-line @next/next/no-img-element -- 飾りの画像 (public の静的ファイル) */}
-        <img src="/brand/tatami.webp" alt="" aria-hidden className="pointer-events-none absolute -right-16 -bottom-14 hidden w-64 rotate-[12deg] opacity-90 drop-shadow-2xl xl:block" />
-        <div className="relative mx-auto grid max-w-6xl grid-cols-1 gap-10 px-4 py-10 sm:px-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,30rem)] lg:py-16">
-          <div className="max-w-xl self-center">
+      {/* ヒーロー: 4 店舗と本社の写真を 5 秒ごとに切り替え、写真ごとにこのシステムの強みを表示する (HeroCarousel)。右はログイン */}
+      <HeroCarousel
+        slides={heroSlides}
+        intro={
+          <>
             <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 font-maru text-xs text-wa-deep shadow-sm">
               <span className="h-1.5 w-1.5 rounded-full bg-wa-red" aria-hidden />
               株式会社一畳屋 · 社員専用の業務システム
@@ -211,6 +239,10 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
               一畳屋 統合業務システムは、合志・中央・西・玉名の各店舗と本社の社員が、お客様の情報・見積・工事の予定・請求を、みんなで同じ最新の状態で扱うための仕組みです。
               誰が見ても「いま、どの案件が、どこまで進んでいるか」が分かります。
             </p>
+          </>
+        }
+        actions={
+          <>
             <div className="mt-6 flex flex-wrap gap-3">
               <a href="#login" className="inline-flex h-11 items-center gap-2 rounded-full bg-white px-6 font-maru text-sm text-wa-deep shadow-md hover:bg-wa-paper">
                 ログイン <ArrowRight className="h-4 w-4" />
@@ -232,9 +264,10 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
                 </div>
               ))}
             </dl>
-          </div>
-
-          {/* ログイン */}
+          </>
+        }
+        aside={
+          /* ログイン */
           <div id="login" className="wa-accent relative scroll-mt-20">
             <div className="rounded-2xl bg-panel p-5 text-ink shadow-2xl ring-1 ring-black/5 sm:p-6">
               <h2 className="text-xl font-semibold tracking-tight">ログイン</h2>
@@ -309,8 +342,8 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
               </details>
             )}
           </div>
-        </div>
-      </section>
+        }
+      />
 
       {/* 店舗 (公式サイトの写真) */}
       <section id="stores" className="scroll-mt-20 bg-wa-paper">
