@@ -24,6 +24,7 @@ interface Msg {
 
 const STORAGE = "ichijoya-chatbot";
 const STARTERS = ["見積の作り方を教えて", "経費の承認は誰がする？", "今日の予定は？", "パスワードを変えたい"];
+const GUEST_STARTERS = ["このシステムは何ができる？", "ログインの仕方は？", "新規登録の流れは？", "見積の作り方を教えて"];
 
 const SOURCE_LABEL: Partial<Record<Source, { label: string; icon: ReactNode; className: string }>> = {
   database: { label: "データベースから回答", icon: <Database className="h-3 w-3" aria-hidden />, className: "bg-good-soft text-good-ink" },
@@ -67,7 +68,8 @@ function RichText({ text }: { text: string }) {
   );
 }
 
-export function ChatbotWidget({ userName }: { userName: string }) {
+/** guest: ログイン前の公開ページ用 (個人データは答えず、使い方の案内に限る) */
+export function ChatbotWidget({ userName, guest = false }: { userName?: string; guest?: boolean }) {
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -135,7 +137,8 @@ export function ChatbotWidget({ userName }: { userName: string }) {
     void rateChatbotAnswer(msg.qaId, good);
   };
 
-  const first = userName.split(/[\s　]/)[0] || userName;
+  const first = (userName ?? "").split(/[\s　]/)[0] || userName;
+  const starters = guest ? GUEST_STARTERS : STARTERS;
 
   return (
     <>
@@ -170,7 +173,9 @@ export function ChatbotWidget({ userName }: { userName: string }) {
             </span>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold">システム案内</p>
-              <p className="truncate text-[11px] text-white/75">使い方・画面の場所・権限・データの確認にお答えします</p>
+              <p className="truncate text-[11px] text-white/75">
+                {guest ? "使い方・画面の場所・ログインについてお答えします" : "使い方・画面の場所・権限・データの確認にお答えします"}
+              </p>
             </div>
             {msgs.length > 0 && (
               <button type="button" onClick={() => setMsgs([])} className="grid h-8 w-8 place-items-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white" aria-label="会話を消す" title="会話を消す">
@@ -188,14 +193,24 @@ export function ChatbotWidget({ userName }: { userName: string }) {
                 <Bot className="h-4 w-4" aria-hidden />
               </span>
               <div className="max-w-[85%] rounded-2xl rounded-tl-sm border border-line bg-panel px-3 py-2 text-sm leading-relaxed text-ink">
-                {first} さん、お疲れさまです。システムのことなら何でも聞いてください。
-                <br />
-                操作の手順や画面の場所、権限のほか、「今日の予定」「未入金の請求」のようなデータの確認もできます。
+                {guest ? (
+                  <>
+                    こんにちは。一畳屋 統合業務システムの案内です。
+                    <br />
+                    システムの使い方や画面の場所、ログイン・新規登録についてお答えします。予定や売上などのデータは、ログイン後に聞けます。
+                  </>
+                ) : (
+                  <>
+                    {first} さん、お疲れさまです。システムのことなら何でも聞いてください。
+                    <br />
+                    操作の手順や画面の場所、権限のほか、「今日の予定」「未入金の請求」のようなデータの確認もできます。
+                  </>
+                )}
               </div>
             </div>
             {msgs.length === 0 && (
               <div className="flex flex-wrap gap-1.5 pl-9">
-                {STARTERS.map((s) => (
+                {starters.map((s) => (
                   <button key={s} type="button" onClick={() => send(s)} className="rounded-full border border-accent/30 bg-panel px-3 py-1 text-xs text-accent-ink hover:bg-accent-soft">
                     {s}
                   </button>

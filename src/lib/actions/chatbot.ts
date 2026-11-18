@@ -2,7 +2,8 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { addAudit, getDb, mutate } from "@/lib/db/store";
+import { addAudit, getDb, mutate, syncDb } from "@/lib/db/store";
+import { getSessionUser } from "@/lib/auth/session";
 import { canManageChatbot } from "@/lib/auth/permissions";
 import { askChatbot, type BotReply, type ChatTurn } from "@/lib/chatbot/answer";
 import { ensureChatbotData } from "@/lib/chatbot/build";
@@ -12,9 +13,10 @@ import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 const BACK = "/ai?tab=bot";
 
-/** 画面左下のチャットボットへの質問 */
+/** 画面左下のチャットボットへの質問 (ログイン前のトップページからも使える) */
 export async function askChatbotAction(history: ChatTurn[], question: string): Promise<BotReply> {
-  const user = await requireActionUser();
+  const user = await getSessionUser();
+  const db = user ? getDb() : await syncDb();
   const q = String(question ?? "").trim();
   if (!q) return { answer: "質問を入力してください。", links: [], source: "none", suggestions: [] };
   const turns: ChatTurn[] = (Array.isArray(history) ? history : [])
@@ -22,16 +24,15 @@ export async function askChatbotAction(history: ChatTurn[], question: string): P
     .slice(-6)
     .map((h) => ({ role: h.role, content: h.content.slice(0, 2000) }));
   try {
-    return await askChatbot(getDb(), user, turns, q);
+    return await askChatbot(db, user, turns, q);
   } catch (err) {
     console.error("[chatbot] failed:", err);
     return { answer: "ごめんなさい、いま回答を用意できませんでした。少し時間をおいてもう一度お試しください。", links: [], source: "none", suggestions: [] };
   }
 }
 
-/** 回答の評価 (👍 / 👎)。👎 が重なった自動の回答は使われなくなる */
+/** 回答の評価 (👍 / 👎)。👎 が重なった自動の回答は使われなくなる。ログイン前でも可 */
 export async function rateChatbotAnswer(qaId: number, good: boolean): Promise<{ ok: boolean }> {
-  await requireActionUser();
   if (!Number.isInteger(qaId) || qaId <= 0 || !getQa(qaId)) return { ok: false };
   rateQa(qaId, Boolean(good));
   return { ok: true };

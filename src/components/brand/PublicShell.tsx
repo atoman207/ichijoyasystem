@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Link from "@/components/ui/Link";
 import { IchijoyaLogo } from "@/components/brand/Logo";
 import { ScrollTopButton } from "@/components/layout/ScrollTopButton";
+import { ChatbotWidget } from "@/components/chatbot/ChatbotWidget";
 
 /**
  * ログイン前の画面 (ホーム・ログイン・新規登録) の枠: ヘッダー (ロゴ・案内・ログイン・新規登録) とフッター。
@@ -54,6 +55,7 @@ export function PublicShell({ children, current }: { children: ReactNode; curren
           <span>このシステムは一畳屋の社員専用です。ログイン情報は社外に共有しないでください。</span>
         </div>
       </footer>
+      <ChatbotWidget guest />
       <ScrollTopButton />
     </div>
   );
