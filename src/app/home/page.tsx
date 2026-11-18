@@ -408,6 +408,11 @@ export default async function HomePage() {
         <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
           <SectionTitle eyebrow="権限" title="役割に合わせて、見える情報とできる操作を分けています">
             新規登録のときに自分の役割を選んで申請します。管理者 (店舗スタッフは所属店舗の店長も) が承認すると使えるようになります。
+            店舗ごとの担当者・顔写真つきの詳しい案内は{" "}
+            <Link href="/roles" className="font-medium text-wa-green hover:underline">
+              権限と担当
+            </Link>
+            のページで確認できます。
           </SectionTitle>
           <ul className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {(["admin", "hq_staff", "store_manager", "store_staff"] as Role[]).map((r) => {

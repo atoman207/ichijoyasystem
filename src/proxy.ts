@@ -20,11 +20,14 @@ export function proxy(request: NextRequest) {
   // 公開ホーム・ログイン・新規登録は常に表示できるようにする (ログイン済みかどうかの判定は画面側で署名を検証して行う。
   // 期限切れ・無効な Cookie のままでも /login・/home と / の間でリダイレクトが繰り返されないように)
   if (pathname === "/home" || pathname.startsWith("/home/")) return NextResponse.next();
+  if (pathname === "/roles" || pathname.startsWith("/roles/")) return NextResponse.next();
   if (pathname.startsWith("/login")) return NextResponse.next();
   // 新規登録 (申請) もログイン前に開く
   if (pathname === "/signup") return NextResponse.next();
   // 確認用リンク (鍵の確認は /review の処理で行う)
   if (pathname === "/review") return NextResponse.next();
+  // 公開の権限案内ページで顔写真を表示するため、有効な社員のアバターはログインなしでも返す (ルート側で制限)
+  if (pathname.startsWith("/api/avatars/")) return NextResponse.next();
 
   if (!hasSession) {
     // ルート (/) は公開ホームへ。それ以外の業務画面はログインへ (戻り先を next に付ける)

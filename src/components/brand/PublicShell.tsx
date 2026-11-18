@@ -11,7 +11,13 @@ import { ChatbotWidget } from "@/components/chatbot/ChatbotWidget";
  */
 const MARU_FONT = "https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@500&display=swap";
 
-export function PublicShell({ children, current }: { children: ReactNode; current: "home" | "login" | "signup" }) {
+function navClass(active: boolean) {
+  return active
+    ? "rounded-lg bg-wa-cream px-3 py-1.5 font-maru font-medium text-wa-deep"
+    : "rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep";
+}
+
+export function PublicShell({ children, current }: { children: ReactNode; current: "home" | "roles" | "login" | "signup" }) {
   return (
     <div className="min-h-screen bg-wa-cream">
       <link rel="stylesheet" href={MARU_FONT} precedence="default" />
@@ -24,14 +30,16 @@ export function PublicShell({ children, current }: { children: ReactNode; curren
             </span>
           </Link>
           <nav className="ml-auto flex items-center gap-1 text-sm">
+            <Link href="/home" className={`hidden lg:block ${navClass(current === "home")}`}>
+              ホーム
+            </Link>
             <a href="/home#issues" className="hidden rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep lg:block">解決すること</a>
             <a href="/home#stores" className="hidden rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep lg:block">店舗</a>
             <a href="/home#features" className="hidden rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep md:block">機能</a>
-            <a href="/home#roles" className="hidden rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream hover:text-wa-deep md:block">権限</a>
-            <Link
-              href="/login"
-              className={current === "login" ? "rounded-lg bg-wa-cream px-3 py-1.5 font-maru font-medium text-wa-deep" : "rounded-lg px-3 py-1.5 font-maru text-ink-2 hover:bg-wa-cream"}
-            >
+            <Link href="/roles" className={navClass(current === "roles")}>
+              権限と担当
+            </Link>
+            <Link href="/login" className={navClass(current === "login")}>
               ログイン
             </Link>
             <Link
