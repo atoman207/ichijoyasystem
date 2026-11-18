@@ -9,7 +9,7 @@ import { ROLE_LABEL } from "@/lib/constants";
 import { hashPassword } from "@/lib/auth/password";
 import { setSessionCookie } from "@/lib/auth/session";
 import { putObject, removeObjects } from "@/lib/storage";
-import { loginIdProblem, PASSWORD_AUDIT } from "@/lib/account-rules";
+import { loginIdProblem, PASSWORD_AUDIT, ACCOUNT_LOCK_MESSAGE, accountEditLocked } from "@/lib/account-rules";
 import { fail, isKeyOf, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 /**
@@ -17,10 +17,16 @@ import { fail, isKeyOf, requireActionUser, safeReturn, str, withMsg } from "./gu
  * ------------------------------------------------------------
  * - 管理者はすべてのアカウント、店長は自店舗の店舗スタッフを追加・変更・削除できる (permissions.ts の canManageUser)
  * - 新規登録 (ログイン画面から) は申請として受け付け、承認されるまでログインできない (signupStatus = pending・active = false)
+ * - 画面は 設定 → ユーザーと権限 と 社員管理 (/staff) の 2 か所。フォームの returnTo (アカウント画面の削除は listTo) で操作した画面に戻る
  * - 顔写真は本人が プロフィール から登録する (VPS の保存先の avatars/<ユーザー ID>/<時刻>.jpg)
  */
 
 const USERS = "/settings?tab=users";
+
+/** テスト期間中はアカウントの変更 (パスワードの再設定を除く) を断る (account-rules.ts の accountEditLocked) */
+function assertUnlocked(back: string) {
+  if (accountEditLocked()) fail(back, ACCOUNT_LOCK_MESSAGE);
+}
 
 async function requireManager(back: string): Promise<User> {
   const user = await requireActionUser();
@@ -53,8 +59,9 @@ function pickRoleStore(db: Database, actor: User, fd: FormData, back: string, fa
 }
 
 export async function createUser(formData: FormData) {
-  const back = USERS;
+  const back = safeReturn(str(formData, "returnTo"), USERS);
   const actor = await requireManager(back);
+  assertUnlocked(back);
   const name = str(formData, "name").slice(0, 60);
   const email = str(formData, "email").toLowerCase();
   const password = str(formData, "password");
@@ -97,6 +104,7 @@ export async function resetUserPassword(formData: FormData) {
 export async function updateUserRole(formData: FormData) {
   const back = safeReturn(str(formData, "returnTo"), USERS);
   const actor = await requireManager(back);
+  assertUnlocked(back);
   const id = str(formData, "userId");
   const title = str(formData, "title");
   if (!str(formData, "role") && !str(formData, "storeId") && !title) fail(back, "変更する項目を選んでください。");
@@ -122,6 +130,7 @@ export async function updateUserRole(formData: FormData) {
 export async function toggleUserActive(id: string, formData?: FormData) {
   const back = formData ? safeReturn(str(formData, "returnTo"), USERS) : USERS;
   const actor = await requireManager(back);
+  assertUnlocked(back);
   await mutate((db) => {
     const u = findManaged(db, actor, id, back);
     if (u.id === actor.id) fail(back, "自分自身は無効化できません。");
@@ -136,8 +145,9 @@ export async function toggleUserActive(id: string, formData?: FormData) {
 
 /** 氏名・フリガナ・ログイン ID・役職・電話の変更 (個別のアカウント画面から) */
 export async function updateUserProfile(id: string, formData: FormData) {
-  const back = `/settings/users/${id}`;
+  const back = safeReturn(str(formData, "returnTo"), `/settings/users/${id}`);
   const actor = await requireManager(back);
+  assertUnlocked(back);
   const name = str(formData, "name").slice(0, 60);
   const email = str(formData, "email").toLowerCase();
   if (!name) fail(back, "氏名を入力してください。");
@@ -167,6 +177,7 @@ export async function updateUserProfile(id: string, formData: FormData) {
 export async function deleteUser(id: string, formData: FormData) {
   const back = safeReturn(str(formData, "returnTo"), USERS);
   const actor = await requireManager(back);
+  assertUnlocked(back);
   if (str(formData, "confirm") !== "1") fail(back, "削除の確認にチェックを入れてください。");
   let removedKey: string | undefined;
   let label = "";
@@ -186,13 +197,15 @@ export async function deleteUser(id: string, formData: FormData) {
   });
   if (removedKey) await removeObjects([removedKey]).catch((err) => console.error("[accounts] avatar remove failed:", err));
   revalidatePath("/settings");
-  redirect(withMsg(USERS, `${label} さんのアカウントを削除しました。`));
+  // 削除したアカウントの画面には戻れないので、開いた一覧 (社員管理・設定) に戻る
+  redirect(withMsg(safeReturn(str(formData, "listTo"), USERS), `${label} さんのアカウントを削除しました。`));
 }
 
 /** 新規登録の申請を承認する (ロール・所属は承認する人の権限の範囲で変えられる) */
 export async function approveSignup(id: string, formData: FormData) {
   const back = safeReturn(str(formData, "returnTo"), USERS);
   const actor = await requireManager(back);
+  assertUnlocked(back);
   let name = "";
   await mutate((db) => {
     const u = db.users.find((x) => x.id === id && x.signupStatus === "pending");
@@ -212,13 +225,14 @@ export async function approveSignup(id: string, formData: FormData) {
   });
   revalidatePath("/settings");
   revalidatePath("/", "layout");
-  redirect(withMsg(USERS, `${name} さんの新規登録を承認しました。登録したログイン ID とパスワードでログインできることを本人に伝えてください。`));
+  redirect(withMsg(back, `${name} さんの新規登録を承認しました。登録したログイン ID とパスワードでログインできることを本人に伝えてください。`));
 }
 
 /** 新規登録の申請を却下する (申請の記録は消える。変更履歴には残る) */
 export async function rejectSignup(id: string, formData: FormData) {
   const back = safeReturn(str(formData, "returnTo"), USERS);
   const actor = await requireManager(back);
+  assertUnlocked(back);
   let name = "";
   await mutate((db) => {
     const u = db.users.find((x) => x.id === id && x.signupStatus === "pending");
@@ -230,7 +244,7 @@ export async function rejectSignup(id: string, formData: FormData) {
   });
   revalidatePath("/settings");
   revalidatePath("/", "layout");
-  redirect(withMsg(USERS, `${name} さんの新規登録の申請を却下しました。`));
+  redirect(withMsg(back, `${name} さんの新規登録の申請を却下しました。`));
 }
 
 /* ---------------- 本人の顔写真 ---------------- */

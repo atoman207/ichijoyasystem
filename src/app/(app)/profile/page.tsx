@@ -289,8 +289,8 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
       </Card>
 
       <Note>
-        ログイン ID・パスワード・顔写真・通知の受け取り方は、この画面で本人が変更できます。氏名・ロール・所属の変更は管理者 (店舗スタッフは所属店舗の店長も) が「設定 → ユーザーと権限」から行います。多要素認証は次の段階 (Phase 2) で認証基盤とあわせて提供します。
-        {canManageUsers(user) && <span className="ml-2"><LinkButton href="/settings?tab=users" variant="secondary" size="sm">ユーザー設定を開く</LinkButton></span>}
+        ログイン ID・パスワード・顔写真・通知の受け取り方は、この画面で本人が変更できます。氏名・ロール・所属の変更は管理者 (店舗スタッフは所属店舗の店長も) が 社員管理 (右上の自分のアイコンのメニュー) から行います。多要素認証は次の段階 (Phase 2) で認証基盤とあわせて提供します。
+        {canManageUsers(user) && <span className="ml-2"><LinkButton href="/staff" variant="secondary" size="sm">社員管理を開く</LinkButton></span>}
       </Note>
     </div>
   );

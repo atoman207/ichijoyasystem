@@ -187,7 +187,8 @@ scripts/
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | どちらか 1 つ。書類・はがきの AI 読取と AI アシスタントが動作 (`OPENAI_MODEL`・`AI_PROVIDER` で固定も可。`.env.example` 参照) |
 | `DATA_BACKEND` / `DATA_FILE_NAME` | `json` で Supabase を使わずローカルファイル (`data/` 配下、省略時 `db.json`) |
 | `SUPABASE_DB_PASSWORD` または `SUPABASE_DB_URL` | データベースへの直接接続。テーブル定義の自動反映 (`npm run build` の前に `scripts/import/migrate.mjs`) と ichijoya.sql の実行 (`setup-database.mjs`) に使う。アプリ本体では使わない |
-| `REVIEW_ACCESS_KEY` / `REVIEW_LOGIN` | 確認用ログインの鍵 (省略時は secret キーから導出) / `off` で確認用ログインを停止 |
+| `REVIEW_ACCESS_KEY` / `REVIEW_LOGIN` | 確認用ログインの鍵 (省略時は secret キーから導出) / 確認用ログインは既定で停止。`on` で使う |
+| `ACCOUNT_EDIT_LOCK` | テスト期間中のアカウントの変更の停止 (既定は停止。`off` で解除。パスワードの再設定は止めない) |
 | `APP_TIME_ZONE` | 日付・時刻の基準 (省略時 `Asia/Tokyo`) |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` と `MAIL_FROM` | メールの送信 (見積書・請求書の送付、社内通知)。会社のメールアカウント (Xserver の SMTP) を使う。`RESEND_API_KEY` / `SENDGRID_API_KEY` も可 |
 | `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_CHANNEL_SECRET` | LINE の送信 / 受信 (Webhook の署名の確認) |
@@ -212,7 +213,7 @@ scripts/
 
 ### 確認用ログイン (お客様の画面確認用)
 
-`/review?key=<鍵>` を開いた端末だけ、ログイン画面にロールのボタン (管理者 / 本部スタッフ / 店長 / 店舗スタッフ) が出て、パスワードなしでログインできます。確認用アカウント (`確認用 管理者` など) が初回に作られ、社員のアカウントは使いません。確認用アカウントは承認先の判定に含めません。リンクを知らない人には通常のログイン画面だけが表示されます。確認期間が終わったら `REVIEW_LOGIN=off` を設定するか、設定 → ユーザーと権限 で確認用アカウントを無効化します。
+`/review?key=<鍵>` を開いた端末だけ、ログイン画面にロールのボタン (管理者 / 本部スタッフ / 店長 / 店舗スタッフ) が出て、パスワードなしでログインできます。確認用アカウント (`確認用 管理者` など) が初回に作られ、社員のアカウントは使いません。確認用アカウントは承認先の判定に含めません。リンクを知らない人には通常のログイン画面だけが表示されます。確認用ログインは既定で止めています (2026-11-18 に確認用アカウントを削除)。使うときは `REVIEW_LOGIN=on` を設定します。
 
 ## 注意事項
 

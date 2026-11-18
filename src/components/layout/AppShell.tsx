@@ -42,6 +42,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  UserCog,
   UserPlus,
   Users,
   Wallet,
@@ -136,6 +137,8 @@ export interface ShellUser {
   /** 閲覧範囲の説明 (例: 全店舗の情報を閲覧 / 合志店の情報のみ) */
   scopeLabel: string;
   avatarSrc?: string;
+  /** 社員管理 (アカウントの管理) ができる: 管理者・店長 (permissions.ts の canManageUsers) */
+  canManageStaff?: boolean;
 }
 
 export interface NotificationItem {
@@ -273,7 +276,8 @@ export function AppShell({
   user: ShellUser;
   nav: NavItem[];
   notifications: NotificationItem[];
-  counts: { approvals: number; mentions: number };
+  /** signups: 自分が承認できる新規登録の申請 (社員管理のメニューに件数を出す) */
+  counts: { approvals: number; mentions: number; signups?: number };
   logoutAction: () => Promise<void>;
   children: ReactNode;
 }) {
@@ -647,6 +651,7 @@ export function AppShell({
                   <div className="border-t border-line p-1.5">
                     {[
                       { href: "/profile", label: "プロフィール", icon: CircleUser, count: 0 },
+                      ...(user.canManageStaff ? [{ href: "/staff", label: "社員管理", icon: UserCog, count: counts.signups ?? 0 }] : []),
                       { href: "/approvals?tab=mine", label: "あなたの承認待ち", icon: ClipboardCheck, count: counts.approvals },
                       { href: "/messages?tab=mine", label: "社内連絡", icon: MessageSquare, count: counts.mentions },
                       { href: "/schedule?view=list&user=me&store=all", label: "自分の予定", icon: CalendarDays, count: 0 },

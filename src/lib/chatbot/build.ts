@@ -5,7 +5,7 @@ import { buildSeed } from "./seed";
 import { getMeta, hashText, replaceDocs, replaceSeedQa, setMeta } from "./store";
 
 /** seed の作り方を変えたら上げる (次の質問のときに作り直す) */
-const SEED_VERSION = "4";
+const SEED_VERSION = "5";
 /** 同じプロセスで資料を確かめ直す間隔 */
 const CHECK_MS = 5 * 60_000;
 

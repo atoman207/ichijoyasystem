@@ -10,14 +10,14 @@ import type { Role, StoreId } from "@/lib/db/types";
  *   リンクを知らない人には通常のログイン画面 (ID とパスワード) だけが表示される
  * - ボタンは確認用アカウント (確認用 管理者 など) でログインする。社員のアカウントは使わない
  * - リンクの鍵: 環境変数 REVIEW_ACCESS_KEY があればその値、なければ SUPABASE_SECRET_KEY から導出した値。
- *   REVIEW_LOGIN=off で確認用ログインを止める (確認期間の終了後など)
+ *   確認用ログインは既定で止めている (2026-11-18 に確認用アカウントを削除)。使うときは REVIEW_LOGIN=on を設定する
  */
 
 export const REVIEW_COOKIE = "ichijoya_review";
 export const REVIEW_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 日
 
 export function reviewKey(): string | null {
-  if (process.env.REVIEW_LOGIN === "off") return null;
+  if (!/^(on|true|1|yes)$/i.test(process.env.REVIEW_LOGIN?.trim() ?? "")) return null;
   const explicit = process.env.REVIEW_ACCESS_KEY?.trim();
   if (explicit) return explicit.length >= 16 ? explicit : null;
   const secret = process.env.SUPABASE_SECRET_KEY;

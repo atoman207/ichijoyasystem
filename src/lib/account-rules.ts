@@ -1,6 +1,19 @@
 import type { AuditLog, User } from "@/lib/db/types";
 import { DEMO_EMAIL_DOMAIN } from "@/lib/auth/permissions";
 
+/**
+ * テスト期間中のアカウントの変更の停止 (設定 → ユーザーと権限・社員管理・アカウント画面)
+ * - 止めるもの: 氏名・ログイン ID・役職・電話の変更、ロール・所属の変更、有効と無効の切り替え、追加、削除、新規登録の申請の承認・却下
+ * - 止めないもの: パスワードの再設定 (管理者・店長) と、本人のプロフィールでの変更 (パスワード・ログイン ID・顔写真)、通知の受け取り方
+ * - 既定で停止。ACCOUNT_EDIT_LOCK=off を設定して再起動すると変更できるようになる
+ * 画面のボタンは押すとこの文言を出し (AccountLockButton)、サーバーの処理 (actions/accounts.ts) も同じ文言で断る
+ */
+export const ACCOUNT_LOCK_MESSAGE = "テスト期間中のため、現在はアカウントの情報を変更できません。パスワードの再設定はできます。";
+
+export function accountEditLocked(): boolean {
+  return !/^(off|false|0|no)$/i.test(process.env.ACCOUNT_EDIT_LOCK?.trim() ?? "");
+}
+
 /** 変更履歴に残すパスワードの操作 (credentialStatus がこの文言で判定する。変えるときは両方そろえる) */
 export const PASSWORD_AUDIT = { changed: "パスワードを変更", reset: "パスワードを再設定" } as const;
 

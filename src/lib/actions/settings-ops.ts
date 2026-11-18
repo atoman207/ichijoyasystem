@@ -14,7 +14,7 @@ import { sendAndRecord, type Outgoing } from "@/lib/notify/send";
 import { appBaseUrl } from "@/lib/notify/config";
 import { fieldLabel } from "@/lib/field-labels";
 import { AI_INTAKE_SETTINGS_ID, HANDOFF_MODE_LABEL, aiIntakeSettings } from "@/lib/ai-intake";
-import { fail, numField, requireActionUser, str, withMsg } from "./guards";
+import { fail, numField, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 /** settings の 1 行を保存する (なければ作る) */
 function saveSetting(db: Database, id: string, value: Record<string, unknown>, userId: string) {
@@ -133,7 +133,7 @@ export async function updateOwnNotify(formData: FormData) {
 
 /** 社員の通知の受け取り方 (管理者が社員のアカウント画面から) */
 export async function updateUserNotify(userId: string, formData: FormData) {
-  const back = `/settings/users/${userId}`;
+  const back = safeReturn(str(formData, "returnTo"), `/settings/users/${userId}`);
   const user = await requireActionUser();
   const target = getDb().users.find((u) => u.id === userId);
   if (!target || !canManageUser(user, target)) fail(back, "このアカウントを管理する権限がありません (店長は自店舗の店舗スタッフのみ)。");

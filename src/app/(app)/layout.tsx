@@ -96,7 +96,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     notifications.push({ kind: "overdue", title: `支払期日超過の請求 ${n.overdueInvoices} 件`, detail: "入金確認・督促が必要です", href: "/invoices?status=overdue" });
   }
   if (signups.length > 0) {
-    notifications.push({ kind: "signup", title: `新規登録の申請 ${signups.length} 件`, detail: `${signups.slice(0, 3).map((u) => `${u.name} (${ROLE_LABEL[u.role]})`).join("・")}${signups.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/settings?tab=users#signups" });
+    notifications.push({ kind: "signup", title: `新規登録の申請 ${signups.length} 件`, detail: `${signups.slice(0, 3).map((u) => `${u.name} (${ROLE_LABEL[u.role]})`).join("・")}${signups.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/staff#signups" });
   }
 
   return (
@@ -111,10 +111,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         storeColor: allStores ? "#4a5ae8" : (store?.color ?? "#4a5ae8"),
         scopeLabel: allStores ? "全店舗の情報を閲覧できます" : `${storeName(user.storeId)} の情報のみ閲覧できます`,
         avatarSrc: avatarUrl(user),
+        canManageStaff: canManageUsers(user),
       }}
       nav={nav}
       notifications={notifications}
-      counts={{ approvals: n.pendingApprovals.length, mentions: n.mentions.length }}
+      counts={{ approvals: n.pendingApprovals.length, mentions: n.mentions.length, signups: signups.length }}
       logoutAction={logout}
     >
       {children}
