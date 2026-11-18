@@ -2,7 +2,7 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canPay, canRegisterPurchase, canViewPurchase } from "@/lib/auth/permissions";
+import { canPay, canRegisterPurchase, canViewPurchase, skipsApproval } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
 import { deletePurchase, markPurchasePaid, reschedulePurchase, submitPurchase } from "@/lib/actions/purchases";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
@@ -16,6 +16,8 @@ export default async function PurchaseDetailPage({ params, searchParams }: { par
   const { id } = await params;
   const { msg, err } = await searchParams;
   const user = await requireUser();
+  /** 管理者 (社長) の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
+  const own = skipsApproval(user);
   const db = getDb();
   const p = db.purchases.find((x) => x.id === id);
   if (!p) notFound();
@@ -93,7 +95,7 @@ export default async function PurchaseDetailPage({ params, searchParams }: { par
               {editable && (
                 <form action={submitPurchase.bind(null, p.id)} className="flex flex-wrap items-end gap-2">
                   <Field label="依頼のコメント (任意)"><Input name="comment" placeholder="例: 月末に振込をお願いします" /></Field>
-                  <Button type="submit">{p.status === "disputed" ? "再度支払依頼する" : "支払依頼する (管理者の承認へ)"}</Button>
+                  <Button type="submit">{own ? "支払を承認済みにする (承認不要)" : p.status === "disputed" ? "再度支払依頼する" : "支払依頼する (管理者の承認へ)"}</Button>
                 </form>
               )}
               {["received", "disputed", "rejected"].includes(p.status) && (p.registeredBy === user.id || canPay(user)) && <form action={deletePurchase.bind(null, p.id)}><Button type="submit" variant="danger">削除</Button></form>}

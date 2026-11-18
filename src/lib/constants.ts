@@ -44,7 +44,7 @@ export const ROLE_LABEL: Record<Role, string> = {
 };
 
 export const ROLE_DESCRIPTION: Record<Role, string> = {
-  admin: "全店舗の情報閲覧・設定変更・高額案件と店長のいない店舗の承認。経営ダッシュボードを利用",
+  admin: "全店舗の情報閲覧・設定変更・高額案件と店長のいない店舗の承認 (自分の申請は承認なしで反映)。経営ダッシュボードを利用",
   store_manager: "自店舗の全情報を管理し、見積・受注・経費を承認 (自分の申請は管理者が承認)",
   store_staff: "自店舗の顧客・問い合わせ・見積・施工進捗を登録 (承認は店長へ依頼。店長のいない店舗は管理者)",
   hq_staff: "全店舗の請求・入金・仕入・経費を横断して処理 (経理・総務)",

@@ -11,7 +11,7 @@ import type { Approval, Attachment, AuditLog, CashEntry, Expense, PurchaseInvoic
  * - 請求書の発行: 管理者・本部スタッフ・店長。入金の登録: 自店舗のメンバー (店舗スタッフも可)
  * - 仕入: 登録と支払依頼は店長 (自店舗)・本部スタッフ・管理者、支払の承認は管理者、支払完了と経費の精算は本部スタッフ・管理者
  * - 現金出納帳: 全員が自店舗 (全店舗ロールは全店舗)。会計データの出力: 本部スタッフ・管理者
- * - 承認: 自分が申請したものは承認できない (管理者どうし・店長と管理者で相互に承認する)
+ * - 承認: 自分が申請したものは承認できない (店長の申請は管理者が承認する)。管理者 (社長) の申請は承認を省略し、申請と同時に承認済みにする (skipsApproval)
  * - 経費: 店舗スタッフは自分の経費のみ、店長は自店舗、全店舗ロールは全件
  * - 社内連絡: 参加しているスレッド・自店舗のスレッド・全社向け (店舗指定なし) のスレッド。全店舗ロールは全件
  * - 予定表 (全社カレンダー): 全ロールが全店舗・全社員の予定を閲覧。登録は自店舗 (全店舗ロールは全店舗)、
@@ -34,6 +34,15 @@ export function scopeByStore<T extends { storeId: StoreId }>(user: User, items: 
 
 /** すべての承認依頼 (店長承認・管理者承認) を承認できる (自分の申請を除く) */
 export function canApproveAll(user: User): boolean {
+  return user.role === "admin";
+}
+
+/**
+ * 承認を省略して、自分の申請をそのまま反映する: 管理者 (社長)。
+ * 管理者は最終の承認者で、ほかに承認できる人がいないため、見積・契約 (受注)・契約内容の変更・経費・仕入の支払の申請は
+ * 申請と同時に承認済みになる (承認の記録は「管理者の申請のため承認を省略」として残す。src/lib/approval-decide.ts の settleOwnApproval)
+ */
+export function skipsApproval(user: Pick<User, "role">): boolean {
   return user.role === "admin";
 }
 

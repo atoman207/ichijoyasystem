@@ -1,5 +1,5 @@
 import type { Database, PurchaseInvoice, User } from "@/lib/db/types";
-import { canEditSuppliers, canSeeAllStores } from "@/lib/auth/permissions";
+import { canEditSuppliers, canSeeAllStores, skipsApproval } from "@/lib/auth/permissions";
 import { PURCHASE_ACCOUNTS, SUPPLIER_KIND_LABEL } from "@/lib/constants";
 import { isActiveSupplier, supplierKindOf, termsLabel } from "@/lib/suppliers";
 import { Button, Field, FormActions, Input, LinkButton, Select, Textarea } from "@/components/ui";
@@ -82,7 +82,7 @@ export function PurchaseForm({ db, user, initial, action, cancelHref, mode, back
       <FormActions>
         <LinkButton href={cancelHref} variant="secondary">キャンセル</LinkButton>
         <Button type="submit" name="intent" value="save" variant="secondary">{mode === "create" ? "登録のみ" : "修正を保存"}</Button>
-        <Button type="submit" name="intent" value="submit">{mode === "create" ? "登録して支払依頼" : "修正して支払依頼"}</Button>
+        <Button type="submit" name="intent" value="submit">{skipsApproval(user) ? (mode === "create" ? "登録して支払を承認 (承認不要)" : "修正して支払を承認 (承認不要)") : mode === "create" ? "登録して支払依頼" : "修正して支払依頼"}</Button>
       </FormActions>
     </form>
   );

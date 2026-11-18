@@ -10,7 +10,7 @@ AI コーディング支援 (Claude Code 等) がこのリポジトリで作業�
 ## 設計原則
 1. 情報は一つの基盤に集約する。問い合わせ → 見積 → 受注・施工 → 売上 → 請求 → 入金 を ID で連結し、どの画面からも前後へ辿れるようにする
 2. 業務ロジックは `src/lib/actions/*` (Server Actions) に置く。順序は `requireActionUser` → `assertStore` (店舗スコープ) → `mutate` → `addAudit` → `revalidatePath` → `redirect(withMsg(...))`
-3. 金額・契約・支払いに関わる変更は `Approval` を経由する (`src/lib/actions/approvals.ts` の `applyDecision` に反映処理を集約)
+3. 金額・契約・支払いに関わる変更は `Approval` を経由する (`src/lib/approval-decide.ts` の `applyDecision` に反映処理を集約)。管理者 (社長) の申請は承認を省略する: 申請を作った直後に `settleOwnApproval` を呼び、その場で承認済みにする (`permissions.ts` の `skipsApproval`。承認の記録は残る)
 4. 権限は `src/lib/auth/permissions.ts` の関数のみで判定する (ロール名を画面で直接比較しない)
 5. 外部サービス (DB・ファイル・AI・送信) は境界 (`src/lib/db/store.ts`, `src/lib/storage.ts`, `src/lib/ai/*`) に閉じ込め、デモ (JSON / サンプル応答) と本番を同じインターフェイスで差し替える。ファイルの本体は本番もデモもサーバーのディスク (`storage.ts`)
 6. UI は `src/components/ui` の部品を使い、淡いブルーの背景 + 白いカード・日本語ラベル・ステータスは色 + ラベルで表現する。チャートは `src/components/charts` の方針 (店舗色固定・凡例・ツールチップ・表表示)
@@ -43,7 +43,7 @@ AI コーディング支援 (Claude Code 等) がこのリポジトリで作業�
 - AI の呼び出しは必ず `src/lib/ai/provider.ts` (generateJson / generateText) を通す。OpenAI (`OPENAI_API_KEY`) と Claude (`ANTHROPIC_API_KEY`) をキーの形で自動判定する。JSON Schema は全項目 required・additionalProperties: false、null を許す項目 (anyOf) は 1 回の依頼で 16 個まで (Claude の上限)。Vercel の 60 秒に収めるため、AI を呼ぶ画面は `export const maxDuration = 60`
 - 案件の状態は `src/lib/case-status.ts` に集約 (進捗・見積と仕様・工事日程・請求・入金・事務処理を分けて持ち、多くは記録から自動で決める。人が決めるのは Quote.specStatus / Order.specStatus・scheduleStatus・billing・plannedPayment・closedAt と Payment.settledOn)。手書き見積書の備考欄以下は `SiteInfo` (`src/lib/site-info.ts`) として見積 → 受注へ引き継ぎ、予定表の施工のメモにも書く。税込の見積 (Quote.taxIncluded) の合計は `src/lib/quote-calc.ts`
 - 顧客の新規登録は `canCreateCustomer` (初期設定は事務担当・本部・管理者。設定 → 運用)
-- 承認の判断は 承認 (approved)・差戻し (returned: 修正して再申請)・却下 (rejected) の 3 つ (`src/lib/actions/approvals.ts` の `applyDecision`)。基準額と顧客の重要情報の承認は `src/lib/approval-rules.ts` の `approvalSettings(db)` (設定 → 承認ルール。`APPROVAL_RULES` は既定値)。変更の申請 (`order_change`・`customer_change`) は内容を `Approval.changes` に持ち、承認時に変更前の値が変わっていないか確かめてから反映する。承認依頼を作ったら保存の後に `notifyNewApprovals` を呼ぶ
+- 承認の判断は 承認 (approved)・差戻し (returned: 修正して再申請)・却下 (rejected) の 3 つ (`src/lib/actions/approvals.ts` の `decideApproval` → `src/lib/approval-decide.ts` の `applyDecision`)。基準額と顧客の重要情報の承認は `src/lib/approval-rules.ts` の `approvalSettings(db)` (設定 → 承認ルール。`APPROVAL_RULES` は既定値)。変更の申請 (`order_change`・`customer_change`) は内容を `Approval.changes` に持ち、承認時に変更前の値が変わっていないか確かめてから反映する。承認依頼を作ったら保存の後に `notifyNewApprovals` を呼ぶ
 - メールは SMTP (Xserver の info@ichijoya.co.jp・`SMTP_*`。nodemailer) を優先し、なければ Resend / SendGrid
 - 外部連携の値 (SMTP・LINE・Chatwork・AI の受信の鍵など) は `.env.local` の「外部連携」に入れ、`npm run env:apply` で本番 (`/etc/ichijoya/ichijoya.env`) に写す (`deploy/env-apply.sh`: 前方一致の KEY だけ・空の値は写さない・変わったときだけ再起動)。`.env.local` の `SESSION_SECRET`・`APP_BASE_URL` は本番と同じ値 (3001 番から送ったリンクを本番で開けるように)。3001 番も本番のデータベースを使い、送信は本当に届く
 - 外部への送信 (メール・LINE・Chatwork) は `src/lib/notify/` だけで行う。業務の記録を保存した後に `sendAndRecord` (送信 → 送信履歴 `deliveries`)。設定 (環境変数) がなければ送らずに status = skipped。受信は `/api/integrations/*` (proxy.ts の matcher から除外し、署名・共有鍵を各ルートで確認)。お客様に送る PDF のリンクは `src/lib/notify/doc-link.ts` の署名つき URL (`/api/doc/*`)

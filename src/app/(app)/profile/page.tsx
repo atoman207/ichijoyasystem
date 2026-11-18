@@ -50,7 +50,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
       ok: isManagerOrAbove(user),
       label:
         canApproveAll(user)
-          ? "全案件の承認 (店長承認・管理者承認の両方。自分の申請を除く)"
+          ? "全案件の承認 (店長承認・管理者承認の両方)。自分の申請 (見積・契約・経費・仕入の支払) は承認なしでそのまま反映"
           : `自店舗の店長承認 (見積・契約 ${approvalSettings(db).quoteAdminThreshold.toLocaleString("ja-JP")} 円未満、経費 ${approvalSettings(db).expenseAdminThreshold.toLocaleString("ja-JP")} 円未満。自分の申請を除く)`,
     },
     { ok: canManageFinance(user) || isManagerOrAbove(user), label: `請求書の発行 (${allStores ? "全店舗" : "自店舗"})` },

@@ -2,7 +2,7 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canManageFinance, canRegisterPurchase, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
+import { canAccessStore, canManageFinance, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
 import { orderChain, userName } from "@/lib/db/queries";
 import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, requestOrderChange, resubmitOrder, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
@@ -31,6 +31,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const { id } = await params;
   const { msg, err } = await searchParams;
   const user = await requireUser();
+  /** 管理者 (社長) の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
+  const own = skipsApproval(user);
   const db = getDb();
   const o = db.orders.find((x) => x.id === id);
   if (!o) notFound();
@@ -102,7 +104,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           <p className="mb-3 text-xs text-ink-2">施工予定・案件情報・見積 (金額は見積の変更申請) を見直してから再申請してください。案件をやめる場合はキャンセルします。</p>
           <form action={resubmitOrder.bind(null, o.id)} className="flex flex-wrap items-end gap-2">
             <Field label="再申請のコメント" className="w-full @xl:w-96"><Input name="comment" placeholder="例: 施工日を確定し、材料の手配先を変更しました" /></Field>
-            <Button type="submit">契約承認を再申請する</Button>
+            <Button type="submit">{own ? "契約を確定する (承認不要)" : "契約承認を再申請する"}</Button>
           </form>
           {isManagerOrAbove(user) && (
             <form action={cancelOrder.bind(null, o.id)} className="mt-3 flex flex-wrap items-end gap-2 border-t border-line pt-3">
@@ -464,14 +466,14 @@ export default async function OrderDetailPage({ params, searchParams }: { params
 
           {o.status !== "cancelled" && !pendingChange && (
             <Card>
-              <CardHeader title="契約内容の変更 (承認が必要)" description={chain.quote ? "契約日を変更できます。金額は見積の画面の「変更を申請」で直します (版として残ります)" : "契約日・契約金額の変更を申請します。承認されると反映し、変更前後を履歴に残します"} />
+              <CardHeader title={own ? "契約内容の変更 (管理者は承認不要)" : "契約内容の変更 (承認が必要)"} description={chain.quote ? "契約日を変更できます。金額は見積の画面の「変更を申請」で直します (版として残ります)" : "契約日・契約金額の変更を申請します。承認されると反映し、変更前後を履歴に残します"} />
               <form action={requestOrderChange.bind(null, o.id)} className="space-y-2">
                 <div className="grid grid-cols-2 gap-2">
                   <Field label="契約日"><Input type="date" name="contractDate" defaultValue={o.contractDate} /></Field>
                   {!chain.quote && <Field label="契約金額 (税込)"><Input type="number" name="total" defaultValue={o.total} min={1} /></Field>}
                 </div>
                 <Field label="変更の理由" required><Input name="reason" required placeholder="例: お客様のご要望で追加工事" /></Field>
-                <Button type="submit" size="sm" variant="secondary">変更を申請する</Button>
+                <Button type="submit" size="sm" variant="secondary">{own ? "契約内容を変更する (承認不要)" : "変更を申請する"}</Button>
               </form>
             </Card>
           )}

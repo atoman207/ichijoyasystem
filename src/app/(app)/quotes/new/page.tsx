@@ -1,6 +1,6 @@
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
+import { canSeeAllStores, scopeByStore, skipsApproval } from "@/lib/auth/permissions";
 import { createQuote } from "@/lib/actions/quotes";
 import { customerOptions } from "@/lib/db/queries";
 import { CustomerSearch } from "@/components/features/CustomerSearch";
@@ -20,6 +20,8 @@ import { Button, Card, Field, Flash, FormActions, Input, LinkButton, Note, PageH
 export default async function NewQuotePage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
   const user = await requireUser();
+  /** 管理者 (社長) の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
+  const own = skipsApproval(user);
   const db = getDb();
   const allStores = canSeeAllStores(user);
   const inquiry = db.inquiries.find((i) => i.id === sp.inquiryId);
@@ -136,7 +138,7 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
           <FormActions>
             <LinkButton href="/quotes" variant="secondary">キャンセル</LinkButton>
             <Button type="submit" name="intent" value="draft" variant="secondary">下書き保存</Button>
-            <Button type="submit" name="intent" value="submit">承認を申請</Button>
+            <Button type="submit" name="intent" value="submit">{own ? "確定 (承認不要)" : "承認を申請"}</Button>
           </FormActions>
         </form>
       </Card>

@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
-import type { Database, Quote, QuoteItem, StoreId, User } from "@/lib/db/types";
+import type { Approval, Database, Quote, QuoteItem, StoreId, User } from "@/lib/db/types";
+import { AUTO_APPROVAL_NOTE, settleOwnApproval } from "@/lib/approval-decide";
 import { addDays, toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { approvalSettings, manYen } from "@/lib/approval-rules";
@@ -64,9 +65,10 @@ function requiredRole(db: Database, storeId: StoreId, amount: number, requesterI
   return approverRole(db.users, storeId, amount >= approvalSettings(db).quoteAdminThreshold, requesterId);
 }
 
-function requestApproval(db: Database, q: Quote, user: User, comment?: string) {
+/** 見積の承認の申請。管理者の申請は承認を省略して、その場で承認済みにする (auto = true) */
+function requestApproval(db: Database, q: Quote, user: User, comment?: string): { role: "store_manager" | "admin"; auto: boolean } {
   const role = requiredRole(db, q.storeId, q.total, user.id);
-  db.approvals.push({
+  const approval: Approval = {
     id: newId("ap"),
     type: "quote",
     targetId: q.id,
@@ -78,11 +80,15 @@ function requestApproval(db: Database, q: Quote, user: User, comment?: string) {
     status: "pending",
     requestComment: comment || undefined,
     createdAt: nowIso(),
-  });
+  };
+  db.approvals.push(approval);
   q.status = "pending_approval";
   addAudit(db, { userId: user.id, action: "submit", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `見積の承認を申請 (${approverLabel(role, q.total >= approvalSettings(db).quoteAdminThreshold, manYen(approvalSettings(db).quoteAdminThreshold))})`, storeId: q.storeId });
-  return role;
+  return { role, auto: settleOwnApproval(db, approval, user, `/quotes/${q.id}`) };
 }
+
+/** 申請のあとの案内 (管理者の申請は承認を省略して承認済み) */
+const submittedText = (r: { role: string; auto: boolean }) => (r.auto ? `${AUTO_APPROVAL_NOTE}し、承認済みにしました。` : `${r.role === "admin" ? "管理者" : "店長"}へ承認を申請しました。`);
 
 export async function createQuote(formData: FormData) {
   const user = await requireActionUser();
@@ -94,7 +100,7 @@ export async function createQuote(formData: FormData) {
   const items = parseItems(formData, back);
   const intent = str(formData, "intent");
   const id = newId("q");
-  let role: string | null = null;
+  let submitted = "";
   const approvalIds: string[] = [];
   await mutate((db) => {
     const documentId = str(formData, "documentId");
@@ -156,13 +162,13 @@ export async function createQuote(formData: FormData) {
       relinkDocumentAttachments(db, doc.id, { type: "quote", id, customerId: q.customerId, storeId });
     }
     if (intent === "submit") {
-      role = requestApproval(db, q, user);
+      submitted = submittedText(requestApproval(db, q, user));
       approvalIds.push(db.approvals[db.approvals.length - 1].id);
     }
   });
   await notifyNewApprovals(approvalIds, user.id);
   revalidatePath("/quotes");
-  redirect(withMsg(`/quotes/${id}`, intent === "submit" ? `見積を作成し、${role === "admin" ? "管理者" : "店長"}へ承認を申請しました。` : "見積を下書き保存しました。"));
+  redirect(withMsg(`/quotes/${id}`, intent === "submit" ? `見積を作成し、${submitted}` : "見積を下書き保存しました。"));
 }
 
 export async function updateQuote(id: string, formData: FormData) {
@@ -194,9 +200,9 @@ export async function updateQuote(id: string, formData: FormData) {
       q.updatedAt = now;
       addAudit(db, { userId: user.id, action: "update", entity: "quote", entityId: id, entityLabel: q.number, summary: `見積 (下書き) を更新 (合計 ${t.total.toLocaleString("ja-JP")}円)`, storeId: q.storeId });
       if (intent === "submit") {
-        const role = requestApproval(db, q, user);
+        const r = requestApproval(db, q, user);
         approvalIds.push(db.approvals[db.approvals.length - 1].id);
-        message = `見積を更新し、${role === "admin" ? "管理者" : "店長"}へ承認を申請しました。`;
+        message = `見積を更新し、${submittedText(r)}`;
       }
     } else if (q.status === "approved" || q.status === "sent" || q.status === "accepted") {
       if (q.pendingChange) fail(`/quotes/${id}`, "すでに承認待ちの変更があります。");
@@ -211,7 +217,7 @@ export async function updateQuote(id: string, formData: FormData) {
       q.pendingChange = { items, ...t, taxIncluded, title, workDetails, notes, reason, requestedBy: user.id, requestedAt: now };
       q.updatedAt = now;
       const role = requiredRole(db, q.storeId, Math.max(t.total, q.total), user.id);
-      db.approvals.push({
+      const amend: Approval = {
         id: newId("ap"),
         type: "quote_amend",
         targetId: q.id,
@@ -223,10 +229,13 @@ export async function updateQuote(id: string, formData: FormData) {
         status: "pending",
         requestComment: `${t.total !== q.total ? `変更前 ¥${q.total.toLocaleString("ja-JP")} → 変更後 ¥${t.total.toLocaleString("ja-JP")}` : `金額の変更なし (¥${q.total.toLocaleString("ja-JP")})`}${title !== q.title ? ` / 件名: ${title}` : ""}${workDetails !== (q.workDetails ?? "") ? " / 施工内容を変更" : ""} / 理由: ${reason}`,
         createdAt: now,
-      });
-      approvalIds.push(db.approvals[db.approvals.length - 1].id);
+      };
+      db.approvals.push(amend);
+      approvalIds.push(amend.id);
       addAudit(db, { userId: user.id, action: "submit", entity: "quote", entityId: id, entityLabel: q.number, summary: `確定見積の金額変更を申請 (${q.total.toLocaleString("ja-JP")}円 → ${t.total.toLocaleString("ja-JP")}円)`, storeId: q.storeId, changes: [{ field: "total", before: q.total, after: t.total }] });
-      message = `変更を申請しました。${role === "admin" ? "管理者" : "店長"}の承認後に第${q.version + 1}版として反映されます。`;
+      message = settleOwnApproval(db, amend, user, `/quotes/${id}`)
+        ? `${AUTO_APPROVAL_NOTE}し、変更を第${q.version}版として反映しました。`
+        : `変更を申請しました。${role === "admin" ? "管理者" : "店長"}の承認後に第${q.version + 1}版として反映されます。`;
     } else {
       fail(`/quotes/${id}`, "この状態の見積は編集できません。");
     }
@@ -239,19 +248,19 @@ export async function updateQuote(id: string, formData: FormData) {
 export async function submitQuote(id: string) {
   const user = await requireActionUser();
   const back = `/quotes/${id}`;
-  let role = "";
+  let submitted = "";
   let approvalId = "";
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
     assertStore(user, q.storeId, back);
     if (q.status !== "draft") fail(back, "下書きの見積のみ申請できます。");
-    role = requestApproval(db, q, user);
+    submitted = submittedText(requestApproval(db, q, user));
     approvalId = db.approvals[db.approvals.length - 1].id;
   });
   await notifyNewApprovals([approvalId], user.id);
   revalidatePath(back);
-  redirect(withMsg(back, `${role === "admin" ? "管理者" : "店長"}へ承認を申請しました。`));
+  redirect(withMsg(back, submitted));
 }
 
 export async function sendQuote(id: string, formData: FormData) {
@@ -283,6 +292,7 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
   const back = `/quotes/${id}`;
   let orderId = "";
   let role = "";
+  let auto = false;
   let approvalId = "";
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
@@ -328,12 +338,14 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
     const r = requiredRole(db, q.storeId, q.total, user.id);
     role = r;
     approvalId = newId("ap");
-    db.approvals.push({ id: approvalId, type: "order", targetId: orderId, title: `${db.orders[db.orders.length - 1].number} ${q.title}`, amount: q.total, storeId: q.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: str(formData, "note") || undefined, createdAt: now });
+    const contract: Approval = { id: approvalId, type: "order", targetId: orderId, title: `${db.orders[db.orders.length - 1].number} ${q.title}`, amount: q.total, storeId: q.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: str(formData, "note") || undefined, createdAt: now };
+    db.approvals.push(contract);
     addAudit(db, { userId: user.id, action: "create", entity: "order", entityId: orderId, entityLabel: db.orders[db.orders.length - 1].number, summary: `見積 ${q.number} から受注を登録し契約承認を申請`, storeId: q.storeId });
+    auto = settleOwnApproval(db, contract, user, back);
   });
   await notifyNewApprovals([approvalId], user.id);
   revalidatePath("/orders");
-  redirect(withMsg(`/orders/${orderId}`, `受注を登録しました。${role === "admin" ? "管理者" : "店長"}の契約承認後に施工手配へ進めます。`));
+  redirect(withMsg(`/orders/${orderId}`, auto ? `受注を登録しました。${AUTO_APPROVAL_NOTE}し、契約を確定しました。施工手配へ進めます。` : `受注を登録しました。${role === "admin" ? "管理者" : "店長"}の契約承認後に施工手配へ進めます。`));
 }
 
 export async function markQuoteLost(id: string, formData: FormData) {

@@ -1,7 +1,7 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canSeeAllStores } from "@/lib/auth/permissions";
+import { canSeeAllStores, skipsApproval } from "@/lib/auth/permissions";
 import { createExpense } from "@/lib/actions/expenses";
 import { toDateKey } from "@/lib/format";
 import { EXPENSE_METHOD_LABEL } from "@/lib/constants";
@@ -17,6 +17,8 @@ export const maxDuration = 60;
 export default async function NewExpensePage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
   const user = await requireUser();
+  /** 管理者 (社長) の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
+  const own = skipsApproval(user);
   const db = getDb();
   const allStores = canSeeAllStores(user);
   const doc = db.documents.find((d) => d.id === sp.documentId && !d.linkedId);
@@ -64,7 +66,7 @@ export default async function NewExpensePage({ searchParams }: { searchParams: P
           <FormActions>
             <LinkButton href="/expenses" variant="secondary">キャンセル</LinkButton>
             <Button type="submit" name="intent" value="draft" variant="secondary">下書き保存</Button>
-            <Button type="submit" name="intent" value="submit">承認を申請</Button>
+            <Button type="submit" name="intent" value="submit">{own ? "確定 (承認不要)" : "承認を申請"}</Button>
           </FormActions>
         </form>
       </Card>

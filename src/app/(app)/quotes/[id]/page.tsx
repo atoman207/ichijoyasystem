@@ -2,7 +2,7 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canApprove } from "@/lib/auth/permissions";
+import { canAccessStore, canApprove, skipsApproval } from "@/lib/auth/permissions";
 import { quoteChain, userName } from "@/lib/db/queries";
 import { convertQuoteToOrder, deleteQuote, markQuoteLost, sendQuote, submitQuote } from "@/lib/actions/quotes";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
@@ -26,6 +26,8 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
   const { id } = await params;
   const { msg, err } = await searchParams;
   const user = await requireUser();
+  /** 管理者 (社長) の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
+  const own = skipsApproval(user);
   const db = getDb();
   const q = db.quotes.find((x) => x.id === id);
   if (!q) notFound();
@@ -172,9 +174,9 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
           {/* アクション */}
           {q.status === "draft" && (
             <Card>
-              <CardHeader title="次のステップ" description="内容を確認して承認を申請してください" />
+              <CardHeader title="次のステップ" description={own ? "管理者の見積は承認不要です。内容を確認して確定してください" : "内容を確認して承認を申請してください"} />
               <form className="flex flex-wrap gap-2">
-                <Button type="submit" formAction={submitQuote.bind(null, q.id)}>承認を申請する</Button>
+                <Button type="submit" formAction={submitQuote.bind(null, q.id)}>{own ? "確定する (承認不要)" : "承認を申請する"}</Button>
                 <Button type="submit" variant="danger" formAction={deleteQuote.bind(null, q.id)}>下書きを削除</Button>
               </form>
             </Card>
@@ -205,7 +207,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
                   </div>
                   <Field label="メモ"><Input name="note" placeholder="例: LINE で正式依頼あり" /></Field>
                   <div className="flex gap-2">
-                    <Button type="submit">受注登録 (契約承認を申請)</Button>
+                    <Button type="submit">{own ? "受注登録 (契約を確定・承認不要)" : "受注登録 (契約承認を申請)"}</Button>
                     <Button type="submit" variant="danger" formAction={markQuoteLost.bind(null, q.id)}>失注</Button>
                   </div>
                 </form>

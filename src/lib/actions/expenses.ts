@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
-import type { Database, Expense, User } from "@/lib/db/types";
+import type { Approval, Database, Expense, User } from "@/lib/db/types";
+import { AUTO_APPROVAL_NOTE, settleOwnApproval } from "@/lib/approval-decide";
 import { toDateKey } from "@/lib/format";
 import { EXPENSE_ACCOUNTS, EXPENSE_METHOD_LABEL } from "@/lib/constants";
 import { approverLabel, approverRole, canPay, canViewExpense } from "@/lib/auth/permissions";
@@ -16,17 +17,22 @@ import { aiEnabled, generateJson } from "@/lib/ai/provider";
 import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { assertStore, choice, fail, numField, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
-function request(db: Database, e: Expense, user: User): { role: "store_manager" | "admin"; approvalId: string } {
+/** 経費の承認の申請。管理者の申請は承認を省略して、その場で承認済みにする (auto = true) */
+function request(db: Database, e: Expense, user: User): { role: "store_manager" | "admin"; approvalId: string; auto: boolean } {
   // 金額が基準以上、本部の経費、承認できる店長がいない店舗は管理者
   const threshold = approvalSettings(db).expenseAdminThreshold;
   const over = e.amount >= threshold;
   const role = approverRole(db.users, e.storeId, over, user.id);
   const approvalId = newId("ap");
-  db.approvals.push({ id: approvalId, type: "expense", targetId: e.id, title: `${e.number} ${e.vendor} (${e.account})`, amount: e.amount, storeId: e.storeId, requestedBy: user.id, requiredRole: role, status: "pending", requestComment: e.description || undefined, createdAt: nowIso() });
+  const approval: Approval = { id: approvalId, type: "expense", targetId: e.id, title: `${e.number} ${e.vendor} (${e.account})`, amount: e.amount, storeId: e.storeId, requestedBy: user.id, requiredRole: role, status: "pending", requestComment: e.description || undefined, createdAt: nowIso() };
+  db.approvals.push(approval);
   e.status = "pending_approval";
   addAudit(db, { userId: user.id, action: "submit", entity: "expense", entityId: e.id, entityLabel: e.number, summary: `経費精算を申請 (${approverLabel(role, over, manYen(threshold))})`, storeId: e.storeId });
-  return { role, approvalId };
+  return { role, approvalId, auto: settleOwnApproval(db, approval, user, `/expenses/${e.id}`) };
 }
+
+/** 申請のあとの案内 (管理者の申請は承認を省略して承認済み) */
+const submittedText = (role: string, auto: boolean) => (auto ? `${AUTO_APPROVAL_NOTE}し、承認済みにしました。` : `${role === "admin" ? "管理者" : "店長"}へ承認を申請しました。`);
 
 /** フォームの経費の項目 (登録・修正で共通) */
 function readFields(formData: FormData, back: string) {
@@ -60,6 +66,7 @@ export async function createExpense(formData: FormData) {
   const intent = str(formData, "intent");
   const id = newId("exp");
   let role = "";
+  let auto = false;
   let approvalId = "";
   await mutate((db) => {
     const now = nowIso();
@@ -86,11 +93,11 @@ export async function createExpense(formData: FormData) {
       doc.linkedId = id;
       relinkDocumentAttachments(db, doc.id, { type: "expense", id, storeId });
     }
-    if (intent === "submit") ({ role, approvalId } = request(db, e, user));
+    if (intent === "submit") ({ role, approvalId, auto } = request(db, e, user));
   });
   await notifyNewApprovals(approvalId ? [approvalId] : [], user.id);
   revalidatePath("/expenses");
-  redirect(withMsg(`/expenses/${id}`, intent === "submit" ? `経費を登録し、${role === "admin" ? "管理者" : "店長"}へ承認を申請しました。` : "経費を下書き保存しました。"));
+  redirect(withMsg(`/expenses/${id}`, intent === "submit" ? `経費を登録し、${submittedText(role, auto)}` : "経費を下書き保存しました。"));
 }
 
 /** 下書き・差戻しの経費の修正 (修正後にそのまま再申請もできる) */
@@ -100,6 +107,7 @@ export async function updateExpense(id: string, formData: FormData) {
   const f = readFields(formData, back);
   const intent = str(formData, "intent");
   let role = "";
+  let auto = false;
   let approvalId = "";
   await mutate((db) => {
     const e = db.expenses.find((x) => x.id === id);
@@ -114,17 +122,18 @@ export async function updateExpense(id: string, formData: FormData) {
       e.updatedAt = nowIso();
       addAudit(db, { userId: user.id, action: "update", entity: "expense", entityId: id, entityLabel: e.number, summary: `経費を修正 (${changes.map((c) => fieldLabel("expense", c.field)).join("・")})`, storeId: e.storeId, changes });
     } else if (intent !== "submit") fail(back, "変更はありませんでした。");
-    if (intent === "submit") ({ role, approvalId } = request(db, e, user));
+    if (intent === "submit") ({ role, approvalId, auto } = request(db, e, user));
   });
   await notifyNewApprovals(approvalId ? [approvalId] : [], user.id);
   revalidatePath("/expenses");
-  redirect(withMsg(`/expenses/${id}`, intent === "submit" ? `修正して${role === "admin" ? "管理者" : "店長"}へ再申請しました。` : "経費を修正しました。"));
+  redirect(withMsg(`/expenses/${id}`, intent === "submit" ? auto ? `経費を修正し、${submittedText(role, auto)}` : `修正して${role === "admin" ? "管理者" : "店長"}へ再申請しました。` : "経費を修正しました。"));
 }
 
 export async function submitExpense(id: string) {
   const user = await requireActionUser();
   const back = `/expenses/${id}`;
   let role = "";
+  let auto = false;
   let approvalId = "";
   await mutate((db) => {
     const e = db.expenses.find((x) => x.id === id);
@@ -132,12 +141,12 @@ export async function submitExpense(id: string) {
     assertStore(user, e.storeId, back);
     if (!canViewExpense(user, e)) fail(back, "自分の経費のみ申請できます。");
     if (e.status !== "draft" && e.status !== "rejected") fail(back, "下書きまたは差戻しの経費のみ申請できます。");
-    ({ role, approvalId } = request(db, e, user));
+    ({ role, approvalId, auto } = request(db, e, user));
     e.updatedAt = nowIso();
   });
   await notifyNewApprovals([approvalId], user.id);
   revalidatePath(back);
-  redirect(withMsg(back, `${role === "admin" ? "管理者" : "店長"}へ承認を申請しました。`));
+  redirect(withMsg(back, submittedText(role, auto)));
 }
 
 /** 精算 (立て替えた人へ支払う)。現金の経費は店舗の現金出納帳に出金として記帳する */

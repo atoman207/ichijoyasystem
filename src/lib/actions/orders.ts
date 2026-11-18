@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
-import type { StoreId } from "@/lib/db/types";
+import type { Approval, StoreId } from "@/lib/db/types";
+import { AUTO_APPROVAL_NOTE, settleOwnApproval } from "@/lib/approval-decide";
 import { addDays, toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, PROGRESS_KIND_LABEL } from "@/lib/constants";
 import { approverRole, canAccessStore, canManageFinance, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
@@ -191,6 +192,7 @@ export async function resubmitOrder(id: string, formData: FormData) {
   const back = `/orders/${id}`;
   let approvalId = "";
   let role = "";
+  let auto = false;
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
@@ -202,16 +204,18 @@ export async function resubmitOrder(id: string, formData: FormData) {
     role = r;
     approvalId = newId("ap");
     const comment = str(formData, "comment");
-    db.approvals.push({ id: approvalId, type: "order", targetId: o.id, title: `${o.number} ${o.title}`, amount: o.total, storeId: o.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: comment ? `再申請: ${comment}` : "再申請", createdAt: now });
+    const approval: Approval = { id: approvalId, type: "order", targetId: o.id, title: `${o.number} ${o.title}`, amount: o.total, storeId: o.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: comment ? `再申請: ${comment}` : "再申請", createdAt: now };
+    db.approvals.push(approval);
     o.status = "pending_approval";
     o.updatedAt = now;
     o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "note", body: `契約承認を再申請しました${comment ? ` (${comment})` : ""}` });
     addAudit(db, { userId: user.id, action: "submit", entity: "order", entityId: o.id, entityLabel: o.number, summary: `契約承認を再申請 (${r === "admin" ? "管理者" : "店長"}承認)${comment ? ` ${comment}` : ""}`, storeId: o.storeId });
+    auto = settleOwnApproval(db, approval, user, back);
   });
   await notifyNewApprovals([approvalId], user.id);
   revalidatePath(back);
   revalidatePath("/orders");
-  redirect(withMsg(back, `${role === "admin" ? "管理者" : "店長"}へ契約承認を再申請しました。`));
+  redirect(withMsg(back, auto ? `${AUTO_APPROVAL_NOTE}し、契約を確定しました。` : `${role === "admin" ? "管理者" : "店長"}へ契約承認を再申請しました。`));
 }
 
 /**
@@ -225,6 +229,7 @@ export async function requestOrderChange(id: string, formData: FormData) {
   if (!reason) fail(back, "変更の理由を入力してください。");
   let approvalId = "";
   let role = "";
+  let auto = false;
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
@@ -253,14 +258,16 @@ export async function requestOrderChange(id: string, formData: FormData) {
     role = r;
     approvalId = newId("ap");
     const now = nowIso();
-    db.approvals.push({ id: approvalId, type: "order_change", targetId: o.id, title: `${o.number} ${o.title}`, amount: newTotal, storeId: o.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: reason, changes, createdAt: now });
+    const approval: Approval = { id: approvalId, type: "order_change", targetId: o.id, title: `${o.number} ${o.title}`, amount: newTotal, storeId: o.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: reason, changes, createdAt: now };
+    db.approvals.push(approval);
     o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "change", body: `契約内容の変更を申請 (${changes.map((c) => `${fieldLabel("order", c.field)} ${fieldValue(c.field, c.before)} → ${fieldValue(c.field, c.after)}`).join("、")} / 理由: ${reason})` });
     o.updatedAt = now;
     addAudit(db, { userId: user.id, action: "submit", entity: "order", entityId: o.id, entityLabel: o.number, summary: `契約内容の変更を申請 (${changes.map((c) => fieldLabel("order", c.field)).join("・")} / 理由: ${reason})`, storeId: o.storeId, changes });
+    auto = settleOwnApproval(db, approval, user, back);
   });
   await notifyNewApprovals([approvalId], user.id);
   revalidatePath(back);
-  redirect(withMsg(back, `契約内容の変更を${role === "admin" ? "管理者" : "店長"}へ申請しました。承認後に反映されます。`));
+  redirect(withMsg(back, auto ? `${AUTO_APPROVAL_NOTE}し、契約内容の変更を反映しました。` : `契約内容の変更を${role === "admin" ? "管理者" : "店長"}へ申請しました。承認後に反映されます。`));
 }
 
 /**

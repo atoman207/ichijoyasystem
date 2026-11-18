@@ -2,7 +2,7 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canPay, canViewExpense } from "@/lib/auth/permissions";
+import { canAccessStore, canPay, canViewExpense, skipsApproval } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
 import { deleteExpense, markExpensePaid, submitExpense } from "@/lib/actions/expenses";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
@@ -16,6 +16,8 @@ export default async function ExpenseDetailPage({ params, searchParams }: { para
   const { id } = await params;
   const { msg, err } = await searchParams;
   const user = await requireUser();
+  /** 管理者 (社長) の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
+  const own = skipsApproval(user);
   const db = getDb();
   const e = db.expenses.find((x) => x.id === id);
   if (!e) notFound();
@@ -56,7 +58,7 @@ export default async function ExpenseDetailPage({ params, searchParams }: { para
             )}
             <div className="mt-5 flex flex-wrap items-end gap-2 border-t border-line pt-4">
               {editable && <LinkButton href={`/expenses/${e.id}/edit`} variant="secondary">修正する</LinkButton>}
-              {editable && <form action={submitExpense.bind(null, e.id)}><Button type="submit">{e.status === "rejected" ? "再申請する" : "承認を申請する"}</Button></form>}
+              {editable && <form action={submitExpense.bind(null, e.id)}><Button type="submit">{own ? "確定する (承認不要)" : e.status === "rejected" ? "再申請する" : "承認を申請する"}</Button></form>}
               {(editable || (e.status === "denied" && canViewExpense(user, e))) && <form action={deleteExpense.bind(null, e.id)}><Button type="submit" variant="danger">削除</Button></form>}
               {e.status === "approved" && canPay(user) && (
                 <form action={markExpensePaid.bind(null, e.id)} className="flex flex-wrap items-end gap-2">

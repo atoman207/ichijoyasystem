@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
-import type { Database, PurchaseInvoice, PurchaseItem, StoreId, User } from "@/lib/db/types";
+import type { Approval, Database, PurchaseInvoice, PurchaseItem, StoreId, User } from "@/lib/db/types";
+import { AUTO_APPROVAL_NOTE, settleOwnApproval } from "@/lib/approval-decide";
 import { toDateKey } from "@/lib/format";
 import { PURCHASE_ACCOUNTS, PURCHASE_PAY_METHOD_LABEL } from "@/lib/constants";
 import { canEditSuppliers, canPay, canRegisterPurchase, canSeeAllStores, canViewPurchase } from "@/lib/auth/permissions";
@@ -16,11 +17,11 @@ import { assertStore, choice, fail, numField, requireActionUser, safeReturn, str
 
 const isDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
 
-/** 支払依頼 (支払承認の申請)。仕入の支払は金額にかかわらず管理者が承認する */
-function request(db: Database, p: PurchaseInvoice, user: User, comment?: string): string {
+/** 支払依頼 (支払承認の申請)。仕入の支払は金額にかかわらず管理者が承認する。管理者の依頼は承認を省略して、その場で承認済みにする (auto = true) */
+function request(db: Database, p: PurchaseInvoice, user: User, comment?: string): { approvalId: string; auto: boolean } {
   const approvalId = newId("ap");
   const supplier = db.suppliers.find((s) => s.id === p.supplierId)?.name ?? "";
-  db.approvals.push({
+  const approval: Approval = {
     id: approvalId,
     type: "purchase",
     targetId: p.id,
@@ -32,11 +33,15 @@ function request(db: Database, p: PurchaseInvoice, user: User, comment?: string)
     status: "pending",
     requestComment: [`支払予定日 ${p.scheduledPayDate ?? p.dueDate}`, p.description, comment].filter(Boolean).join(" · "),
     createdAt: nowIso(),
-  });
+  };
+  db.approvals.push(approval);
   p.status = "pending_approval";
   addAudit(db, { userId: user.id, action: "submit", entity: "purchase", entityId: p.id, entityLabel: p.number, summary: `支払依頼を申請 (管理者承認 / ¥${p.amount.toLocaleString("ja-JP")} / 支払予定日 ${p.scheduledPayDate ?? p.dueDate})`, storeId: p.storeId });
-  return approvalId;
+  return { approvalId, auto: settleOwnApproval(db, approval, user, `/purchases/${p.id}`) };
 }
+
+/** 支払依頼のあとの案内 (管理者の依頼は承認を省略して支払承認済み) */
+const requestedText = (auto: boolean) => (auto ? `${AUTO_APPROVAL_NOTE}し、支払を承認済みにしました。` : "管理者へ支払依頼を申請しました。");
 
 /** 仕入内容 (明細)。JSON の配列 [{name, spec, qty, unit, unitPrice}] */
 function parseItems(raw: string, back: string): PurchaseItem[] {
@@ -139,6 +144,7 @@ export async function createPurchase(formData: FormData) {
   const intent = str(formData, "intent");
   const id = newId("ap_inv");
   let approvalId = "";
+  let auto = false;
   await mutate((db) => {
     const f = readFields(db, user, formData, back);
     const now = nowIso();
@@ -189,11 +195,11 @@ export async function createPurchase(formData: FormData) {
         o.updatedAt = now;
       }
     }
-    if (intent === "submit") approvalId = request(db, p, user);
+    if (intent === "submit") ({ approvalId, auto } = request(db, p, user));
   });
   await notifyNewApprovals(approvalId ? [approvalId] : [], user.id);
   revalidatePath("/purchases");
-  redirect(withMsg(`/purchases/${id}`, intent === "submit" ? "仕入請求書を登録し、管理者へ支払依頼を申請しました。" : "仕入請求書を登録しました。内容を確認して支払依頼を申請してください。"));
+  redirect(withMsg(`/purchases/${id}`, intent === "submit" ? `仕入請求書を登録し、${requestedText(auto)}` : "仕入請求書を登録しました。内容を確認して支払依頼を申請してください。"));
 }
 
 /** 受領・照会中 (差戻し) の仕入請求書を修正する (修正してそのまま支払依頼もできる) */
@@ -202,6 +208,7 @@ export async function updatePurchase(id: string, formData: FormData) {
   const back = `/purchases/${id}/edit`;
   const intent = str(formData, "intent");
   let approvalId = "";
+  let auto = false;
   await mutate((db) => {
     const p = db.purchases.find((x) => x.id === id);
     if (!p) fail("/purchases", "仕入請求書が見つかりません。");
@@ -230,28 +237,29 @@ export async function updatePurchase(id: string, formData: FormData) {
       p.updatedAt = nowIso();
       addAudit(db, { userId: user.id, action: "update", entity: "purchase", entityId: id, entityLabel: p.number, summary: `仕入請求書を修正 (${changes.map((c) => fieldLabel("purchase", c.field)).join("・")})`, storeId: p.storeId, changes });
     } else if (intent !== "submit") fail(back, "変更はありませんでした。");
-    if (intent === "submit") approvalId = request(db, p, user, p.status === "disputed" ? "照会後に再申請" : undefined);
+    if (intent === "submit") ({ approvalId, auto } = request(db, p, user, p.status === "disputed" ? "照会後に再申請" : undefined));
   });
   await notifyNewApprovals(approvalId ? [approvalId] : [], user.id);
   revalidatePath("/purchases");
-  redirect(withMsg(`/purchases/${id}`, intent === "submit" ? "修正して管理者へ支払依頼を申請しました。" : "仕入請求書を修正しました。"));
+  redirect(withMsg(`/purchases/${id}`, intent === "submit" ? auto ? `仕入請求書を修正し、${requestedText(auto)}` : "修正して管理者へ支払依頼を申請しました。" : "仕入請求書を修正しました。"));
 }
 
 export async function submitPurchase(id: string, formData?: FormData) {
   const user = await requireActionUser();
   const back = `/purchases/${id}`;
   let approvalId = "";
+  let auto = false;
   await mutate((db) => {
     const p = db.purchases.find((x) => x.id === id);
     if (!p) fail("/purchases", "仕入請求書が見つかりません。");
     if (!canViewPurchase(user, p) || !canRegisterPurchase(user)) fail("/purchases", "この仕入請求書を申請する権限がありません。");
     if (p.status !== "received" && p.status !== "disputed") fail(back, "受領・照会中の請求書のみ支払依頼できます。");
-    approvalId = request(db, p, user, formData ? str(formData, "comment") : undefined);
+    ({ approvalId, auto } = request(db, p, user, formData ? str(formData, "comment") : undefined));
     p.updatedAt = nowIso();
   });
   await notifyNewApprovals([approvalId], user.id);
   revalidatePath(back);
-  redirect(withMsg(back, "管理者へ支払依頼を申請しました。"));
+  redirect(withMsg(back, requestedText(auto)));
 }
 
 /** 支払待ち (承認済み) の支払予定日を変える (資金繰りに合わせて) */

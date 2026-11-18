@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore } from "@/lib/auth/permissions";
+import { canAccessStore, skipsApproval } from "@/lib/auth/permissions";
 import { updateQuote } from "@/lib/actions/quotes";
 import { customerName } from "@/lib/db/queries";
 import { CATEGORY_LABEL } from "@/lib/constants";
@@ -13,6 +13,8 @@ export default async function EditQuotePage({ params, searchParams }: { params: 
   const { id } = await params;
   const { err } = await searchParams;
   const user = await requireUser();
+  /** 管理者 (社長) の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
+  const own = skipsApproval(user);
   const db = getDb();
   const q = db.quotes.find((x) => x.id === id);
   if (!q) notFound();
@@ -28,7 +30,7 @@ export default async function EditQuotePage({ params, searchParams }: { params: 
       {amend ? (
         <Note tone="warn">この見積は確定済み (承認済・送付済・受注) です。金額・数量・施工内容の変更は <strong>変更申請</strong> として記録され、承認者 (店長または管理者) の承認後に第{q.version + 1}版として反映されます。変更前の版は「版の履歴」に残り、PDF も出力できます。</Note>
       ) : (
-        <Note>下書きの見積です。内容を修正して保存するか、そのまま承認を申請できます。</Note>
+        <Note>{own ? "下書きの見積です。内容を修正して保存するか、そのまま確定できます (管理者の見積は承認不要)。" : "下書きの見積です。内容を修正して保存するか、そのまま承認を申請できます。"}</Note>
       )}
       <Card className="mt-4">
         <form action={updateQuote.bind(null, id)} className="space-y-5">
@@ -61,11 +63,11 @@ export default async function EditQuotePage({ params, searchParams }: { params: 
           <FormActions>
             <LinkButton href={`/quotes/${id}`} variant="secondary">キャンセル</LinkButton>
             {amend ? (
-              <Button type="submit" name="intent" value="amend">変更を申請する</Button>
+              <Button type="submit" name="intent" value="amend">{own ? "変更を反映する (承認不要)" : "変更を申請する"}</Button>
             ) : (
               <>
                 <Button type="submit" name="intent" value="draft" variant="secondary">下書き保存</Button>
-                <Button type="submit" name="intent" value="submit">保存して承認を申請</Button>
+                <Button type="submit" name="intent" value="submit">{own ? "保存して確定 (承認不要)" : "保存して承認を申請"}</Button>
               </>
             )}
           </FormActions>
