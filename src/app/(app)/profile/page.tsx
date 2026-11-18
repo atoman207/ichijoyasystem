@@ -9,7 +9,7 @@ import { addDays, fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
 import { APPROVAL_TYPE_LABEL, AUDIT_ACTION_LABEL, ENTITY_LABEL, INQUIRY_STATUS, ORDER_STATUS, ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import { Avatar, Badge, Button, Card, CardHeader, ChannelTag, Field, Flash, Input, LinkButton, Note, PageHeader, Stat, StatusBadge, StoreTag } from "@/components/ui";
 import { changeOwnLoginId, changeOwnPassword } from "@/lib/actions/auth";
-import { avatarUrl, credentialStatus } from "@/lib/account-rules";
+import { accountEditLocked, avatarUrl, credentialStatus, PASSWORD_LOCK_MESSAGE } from "@/lib/account-rules";
 import { AvatarUploader } from "@/components/settings/AvatarUploader";
 import { updateOwnNotify } from "@/lib/actions/settings-ops";
 import { approvalSettings } from "@/lib/approval-rules";
@@ -43,6 +43,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
   const myCustomers = db.customers.filter((c) => c.assignedUserId === user.id).length;
   const loginCount = db.auditLogs.filter((l) => l.userId === user.id && l.action === "login").length;
   const initialPassword = !isDemoAccount(user) && credentialStatus(db.auditLogs, user.id).password === "initial";
+  const passwordLocked = accountEditLocked();
 
   const permissions: { ok: boolean; label: string }[] = [
     { ok: true, label: allStores ? "全店舗の顧客・問い合わせ・見積・案件・請求を閲覧" : `${storeName(user.storeId)} の顧客・問い合わせ・見積・案件・請求を閲覧` },
@@ -71,7 +72,9 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
         <div className="mb-6">
           <Note tone="warn">
             <span className="font-medium">初期パスワードのままです。</span>
-            配られたパスワードはほかの人も知っているため、下の <a href="#password" className="font-medium underline">パスワードの変更</a> で、自分だけが知っているパスワード (8 文字以上) に変更してください。ログイン ID (メールアドレス) もこの画面で変えられます。
+            {passwordLocked
+              ? " テスト期間中のため、現在はパスワードを変更できません。テスト期間の設定を解除したあとに変更してください。"
+              : <> 配られたパスワードはほかの人も知っているため、下の <a href="#password" className="font-medium underline">パスワードの変更</a> で、自分だけが知っているパスワード (8 文字以上) に変更してください。ログイン ID (メールアドレス) もこの画面で変えられます。</>}
           </Note>
         </div>
       )}
@@ -272,18 +275,19 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
 
       <Card className="mb-6" id="password">
         <CardHeader title="パスワードの変更" description="初期パスワードでログインした場合は、ここで自分だけが知っているパスワードに変更してください" icon={<KeyRound />} />
+        {passwordLocked && <Note tone="warn">{PASSWORD_LOCK_MESSAGE}</Note>}
         <form action={changeOwnPassword} className="grid grid-cols-1 gap-3 @xl:grid-cols-3">
           <Field label="現在のパスワード" required>
-            <Input name="current" type="password" required autoComplete="current-password" />
+            <Input name="current" type="password" required autoComplete="current-password" disabled={passwordLocked} />
           </Field>
           <Field label="新しいパスワード (8 文字以上)" required>
-            <Input name="next" type="password" required minLength={8} autoComplete="new-password" />
+            <Input name="next" type="password" required minLength={8} autoComplete="new-password" disabled={passwordLocked} />
           </Field>
           <Field label="新しいパスワード (確認)" required>
-            <Input name="confirm" type="password" required minLength={8} autoComplete="new-password" />
+            <Input name="confirm" type="password" required minLength={8} autoComplete="new-password" disabled={passwordLocked} />
           </Field>
           <div className="@xl:col-span-3">
-            <Button type="submit" size="sm">パスワードを変更する</Button>
+            <Button type="submit" size="sm" disabled={passwordLocked}>パスワードを変更する</Button>
           </div>
         </form>
       </Card>

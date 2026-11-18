@@ -9,7 +9,7 @@ import { ROLE_LABEL } from "@/lib/constants";
 import { hashPassword } from "@/lib/auth/password";
 import { setSessionCookie } from "@/lib/auth/session";
 import { putObject, removeObjects } from "@/lib/storage";
-import { loginIdProblem, PASSWORD_AUDIT, ACCOUNT_LOCK_MESSAGE, accountEditLocked } from "@/lib/account-rules";
+import { loginIdProblem, PASSWORD_AUDIT, ACCOUNT_LOCK_MESSAGE, PASSWORD_LOCK_MESSAGE, accountEditLocked } from "@/lib/account-rules";
 import { fail, isKeyOf, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 /**
@@ -23,7 +23,7 @@ import { fail, isKeyOf, requireActionUser, safeReturn, str, withMsg } from "./gu
 
 const USERS = "/settings?tab=users";
 
-/** テスト期間中はアカウントの変更 (パスワードの再設定を除く) を断る (account-rules.ts の accountEditLocked) */
+/** テスト期間中はアカウントの変更を断る (account-rules.ts の accountEditLocked) */
 function assertUnlocked(back: string) {
   if (accountEditLocked()) fail(back, ACCOUNT_LOCK_MESSAGE);
 }
@@ -84,6 +84,7 @@ export async function createUser(formData: FormData) {
 export async function resetUserPassword(formData: FormData) {
   const back = safeReturn(str(formData, "returnTo"), USERS);
   const actor = await requireManager(back);
+  if (accountEditLocked()) fail(back, PASSWORD_LOCK_MESSAGE);
   const id = str(formData, "userId");
   const password = str(formData, "password");
   if (password.length < 8) fail(back, "新しいパスワードは 8 文字以上で入力してください。");

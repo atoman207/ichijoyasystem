@@ -4,7 +4,7 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { assignableRoles, assignableStore, canManageUser, canManageUsers, canSeeAllStores, isDemoAccount } from "@/lib/auth/permissions";
 import { deleteUser, resetUserPassword, toggleUserActive, updateUserProfile, updateUserRole } from "@/lib/actions/accounts";
-import { ACCOUNT_LOCK_MESSAGE, accountEditLocked, avatarUrl, credentialStatus } from "@/lib/account-rules";
+import { ACCOUNT_LOCK_MESSAGE, PASSWORD_LOCK_MESSAGE, accountEditLocked, avatarUrl, credentialStatus } from "@/lib/account-rules";
 import { updateUserNotify } from "@/lib/actions/settings-ops";
 import { NotifyPrefsForm } from "@/components/settings/NotifyPrefsForm";
 import { AccountLockButton } from "@/components/settings/AccountLockButton";
@@ -44,9 +44,10 @@ export default async function UserAccountPage({ params, searchParams }: { params
     : u.passwordHash ? "設定済み" : u.password ? "サンプルデータ (平文)" : "未設定";
   const loginIdLabel = cred.loginIdChangedAt ? `${cred.loginIdChangedBySelf ? "本人" : "管理者・店長"}が ${fmtDateTime(cred.loginIdChangedAt)} に変更${cred.loginIdBefore ? ` (変更前: ${cred.loginIdBefore})` : ""}` : "変更なし";
   const scope = canSeeAllStores(u) ? "全店舗の情報を閲覧・登録・編集できます" : `${store?.name ?? u.storeId} の情報だけを閲覧・登録・編集できます (予定表は全店舗を閲覧)`;
-  // テスト期間中はアカウントの変更を止める (パスワードの再設定・通知の受け取り方を除く)。ボタンは押すと理由を出す
+  // テスト期間中はアカウントの変更を止める。通知の受け取り方は変更可。ボタンは押すと理由を出す
   const locked = accountEditLocked();
   const lockBtn = (label: string, variant: "primary" | "secondary" | "danger" = "primary") => <AccountLockButton label={label} variant={variant} message={ACCOUNT_LOCK_MESSAGE} />;
+  const lockPwBtn = (label: string, variant: "primary" | "secondary" | "danger" = "primary") => <AccountLockButton label={label} variant={variant} message={PASSWORD_LOCK_MESSAGE} />;
 
   return (
     <div>
@@ -59,7 +60,7 @@ export default async function UserAccountPage({ params, searchParams }: { params
       />
       {locked && (
         <div className="mb-4">
-          <Note tone="warn">テスト期間中のため、現在はアカウントの情報 (氏名・ログイン ID・役職・電話・ロール・所属・有効と無効) の変更と削除はできません。パスワードの再設定と通知の受け取り方は変更できます。</Note>
+          <Note tone="warn">テスト期間中のため、現在はアカウントの情報 (氏名・ログイン ID・役職・電話・ロール・所属・有効と無効) の変更・削除と、パスワードの再設定はできません。通知の受け取り方は変更できます。</Note>
         </div>
       )}
 
@@ -139,7 +140,7 @@ export default async function UserAccountPage({ params, searchParams }: { params
               <input type="hidden" name="userId" value={u.id} />
               <input type="hidden" name="returnTo" value={returnTo} />
               <Field label="新しいパスワード (8 文字以上)" required><Input name="password" type="password" required minLength={8} autoComplete="new-password" /></Field>
-              <Button type="submit" size="sm" variant="secondary">再設定する</Button>
+              {locked ? lockPwBtn("再設定する", "secondary") : <Button type="submit" size="sm" variant="secondary">再設定する</Button>}
             </form>
           </Card>
           {u.id !== user.id && (

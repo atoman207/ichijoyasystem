@@ -8,7 +8,7 @@ import { headers } from "next/headers";
 import { canResetData, DEMO_EMAIL_DOMAIN } from "@/lib/auth/permissions";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { hasReviewAccess, REVIEW_ACCOUNTS } from "@/lib/auth/review";
-import { loginIdProblem, PASSWORD_AUDIT, reservedLoginId } from "@/lib/account-rules";
+import { accountEditLocked, loginIdProblem, PASSWORD_AUDIT, PASSWORD_LOCK_MESSAGE, reservedLoginId } from "@/lib/account-rules";
 import { ROLE_LABEL } from "@/lib/constants";
 import type { Role, StoreId, User } from "@/lib/db/types";
 import crypto from "node:crypto";
@@ -112,6 +112,7 @@ export async function logout() {
 export async function changeOwnPassword(formData: FormData) {
   const user = await requireActionUser();
   const back = "/profile";
+  if (accountEditLocked()) fail(back, PASSWORD_LOCK_MESSAGE);
   const current = String(formData.get("current") ?? "");
   const next = str(formData, "next");
   const key = `pwchange:${user.id}`;

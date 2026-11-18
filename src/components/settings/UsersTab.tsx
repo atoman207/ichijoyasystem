@@ -2,7 +2,7 @@ import type { Database, Role, User } from "@/lib/db/types";
 import { assignableRoles, assignableStore, canApproveSignup, canManageUser, canManageUsers, isDemoAccount, isReviewAccount } from "@/lib/auth/permissions";
 import { ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import { approveSignup, createUser, rejectSignup, resetUserPassword, toggleUserActive, updateUserRole } from "@/lib/actions/accounts";
-import { ACCOUNT_LOCK_MESSAGE, accountEditLocked, avatarUrl, credentialStatus } from "@/lib/account-rules";
+import { ACCOUNT_LOCK_MESSAGE, PASSWORD_LOCK_MESSAGE, accountEditLocked, avatarUrl, credentialStatus } from "@/lib/account-rules";
 import { fmtDateTime } from "@/lib/format";
 import { Avatar, Badge, Button, buttonClass, Card, CardHeader, Field, Input, Note, Select, StoreTag } from "@/components/ui";
 import Link from "@/components/ui/Link";
@@ -32,13 +32,14 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
   const initialPw = new Set(manager ? managed.filter((u) => u.active && credentialStatus(db.auditLogs, u.id).password === "initial").map((u) => u.id) : []);
   const inactive = (u: User) => (u.active ? "" : " · 無効");
   const roleOptions = (list: Role[]) => list.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>);
-  // テスト期間中はアカウントの変更を止める (パスワードの再設定を除く)。ボタンは押すと理由を出す
+  // テスト期間中はアカウントの変更を止める。ボタンは押すと理由を出す
   const locked = manager && accountEditLocked();
   const lockBtn = (label: string, variant: "primary" | "secondary" | "ghost" | "danger" = "primary") => <AccountLockButton label={label} variant={variant} message={ACCOUNT_LOCK_MESSAGE} />;
+  const lockPwBtn = (label: string, variant: "primary" | "secondary" | "ghost" | "danger" = "primary") => <AccountLockButton label={label} variant={variant} message={PASSWORD_LOCK_MESSAGE} />;
 
   return (
     <div className="space-y-4">
-      {locked && <Note tone="warn">テスト期間中のため、現在はアカウントの情報 (氏名・ログイン ID・役職・電話・ロール・所属・有効と無効) の変更と、アカウントの追加・削除はできません。パスワードの再設定はできます。</Note>}
+      {locked && <Note tone="warn">テスト期間中のため、現在はアカウントの情報 (氏名・ログイン ID・役職・電話・ロール・所属・有効と無効) の変更、アカウントの追加・削除、パスワードの再設定はできません。</Note>}
       {manager && (signups.length > 0 || otherSignups > 0) && (
         <Card id="signups" padded={false}>
           <div className="px-5 pt-5">
@@ -227,7 +228,7 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
                   </Select>
                 </Field>
                 <Field label="新しいパスワード (8 文字以上)" required><Input name="password" type="password" required minLength={8} autoComplete="new-password" /></Field>
-                <Button type="submit" size="sm" variant="secondary">再設定する</Button>
+                {locked ? lockPwBtn("再設定する", "secondary") : <Button type="submit" size="sm" variant="secondary">再設定する</Button>}
               </form>
             </Card>
           )}
