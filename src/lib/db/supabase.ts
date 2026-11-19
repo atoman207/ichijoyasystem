@@ -8,7 +8,8 @@ import { CHANGES_TABLE, META_TABLE, TABLES, isTimestamp, loadOrder, snake, type 
  * ------------------------------------------------------------
  * - サーバー側だけで secret キーを使う (ブラウザへは渡さない)。テーブルは RLS 有効・ポリシーなしで
  *   publishable キーからは読めないようにしている (supabase/migrations/20261112000000_initial_schema.sql)
- * - 読み込み: 全テーブルを 1,000 行ずつ並列に取得してアプリのコレクション (camelCase) に変換
+ * - 読み込み: 全テーブルを 1,000 行ずつ (ID の範囲で区切って) 取得してアプリのコレクション (camelCase) に変換。
+ *   同時に送る問い合わせは全体で LOAD_CONCURRENCY まで (fetchTable)
  * - 書き込み: 変更・追加された行を upsert、消えた行を delete。最後にリビジョンを +1 して他のインスタンスへ知らせる
  */
 
@@ -92,11 +93,55 @@ function isMissingTable(error: { code?: string; message?: string } | null): bool
   return Boolean(error && (error.code === "PGRST205" || error.code === "42P01" || /Could not find the table|does not exist/i.test(error.message ?? "")));
 }
 
+/**
+ * 全件の読み込みで同時に送る問い合わせの数 (全テーブルで合わせて)。
+ * 多すぎると Supabase の時間制限 (1 回 8 秒) に引っかかる (2026-11-19: 全テーブル × 6 並列の OFFSET 読みで、受注・予定・問い合わせが失敗し続けた)
+ */
+const LOAD_CONCURRENCY = Math.max(1, Number(process.env.SUPABASE_LOAD_CONCURRENCY) || 6);
+let active = 0;
+const waiting: (() => void)[] = [];
+async function limited<T>(fn: () => PromiseLike<T>): Promise<T> {
+  if (active >= LOAD_CONCURRENCY) await new Promise<void>((r) => waiting.push(r));
+  active++;
+  try {
+    return await fn();
+  } finally {
+    active--;
+    waiting.shift()?.();
+  }
+}
+
+/** 並び順 (loadOrder の列。昇順・空の値は最後) で比べる。PostgreSQL の order by と同じ並びにする */
+function compareRows(cols: string[]) {
+  return (a: Row, b: Row): number => {
+    for (const c of cols) {
+      const x = a[c];
+      const y = b[c];
+      if (x === y) continue;
+      if (x === null || x === undefined) return 1;
+      if (y === null || y === undefined) return -1;
+      if (typeof x === "number" && typeof y === "number") return x - y;
+      const xs = String(x);
+      const ys = String(y);
+      if (xs !== ys) return xs < ys ? -1 : 1;
+    }
+    return 0;
+  };
+}
+
+/**
+ * 1 つのテーブルを全件読む。
+ * - 1,000 行以下: 1 回で読む
+ * - それより多い: ID (主キー) の順に「この ID より後の 1,000 件」で ID だけを読み (索引だけで済む軽い問い合わせ)、
+ *   その区切りごとに「ID がこの範囲」の行を並列に読む。OFFSET (先頭から数えて何件目から) は深いページほど遅くなり、
+ *   行の多い表 (受注 4 万行・予定 2 万行) で時間制限を超えるため使わない
+ * - 最後に、これまでと同じ並び (loadOrder) にそろえる
+ */
 async function fetchTable(def: TableDef): Promise<Entity[]> {
-  const head = await sb().from(def.table).select("id", { count: "exact", head: true });
+  const head = await limited(() => sb().from(def.table).select("id", { count: "exact", head: true }));
   let error = head.error;
   // テーブルがないとき、HEAD の問い合わせはエラーにならず件数が空 (204) で返る。GET で確かめる
-  if (!error && head.count == null) error = (await sb().from(def.table).select("id").limit(1)).error;
+  if (!error && head.count == null) error = (await limited(() => sb().from(def.table).select("id").limit(1))).error;
   if (error && isMissingTable(error)) {
     if (!missing.has(def.table)) console.warn(`[supabase] table "${def.table}" is missing. Run supabase/migrations/20261112000000_initial_schema.sql`);
     missing.add(def.table);
@@ -105,23 +150,52 @@ async function fetchTable(def: TableDef): Promise<Entity[]> {
   missing.delete(def.table);
   if (error) throw failure(def.table, "count", error);
   const total = head.count ?? 0;
-  const pages = Math.ceil(total / PAGE);
-  const out: Entity[][] = new Array(pages);
-  let next = 0;
-  async function worker() {
-    while (next < pages) {
-      const p = next++;
-      let q = sb().from(def.table).select("*");
-      // 並び順は索引 (schema-sql.mjs の *_load_order_idx。昇順・空の値は最後) と同じにする。nullsFirst: true だと索引が使われず、
-      // 行の多い表 (受注 4 万行など) で並べ替えが Supabase の時間制限 (8 秒) を超えて読み込みが失敗する (2026-11-13 に発生)
-      for (const col of loadOrder(def)) q = q.order(col, { ascending: true, nullsFirst: false });
-      const { data, error } = await q.range(p * PAGE, p * PAGE + PAGE - 1);
-      if (error) throw failure(def.table, "select", error);
-      out[p] = (data ?? []).map((r) => fromRow(def, r as Row));
-    }
+  const order = loadOrder(def);
+  const sortRows = (rows: Row[]) => rows.sort(compareRows(order));
+
+  if (total <= PAGE) {
+    // 少ない表は 1 回で読む (件数を数えた直後に増えていても取りこぼさないよう、上限は少し多めに)
+    const { data, error } = await limited(() => sb().from(def.table).select("*").order("id", { ascending: true }).limit(PAGE));
+    if (error) throw failure(def.table, "select", error);
+    const rows = (data ?? []) as Row[];
+    if (rows.length < PAGE) return sortRows(rows).map((r) => fromRow(def, r));
   }
-  await Promise.all(Array.from({ length: Math.min(6, pages) }, worker));
-  return out.flat();
+
+  // 1) ID の区切り (1,000 件ごとの最初と最後の ID)
+  const ranges: [string, string][] = [];
+  let after: string | undefined;
+  for (;;) {
+    const { data, error } = await limited(() => {
+      let q = sb().from(def.table).select("id").order("id", { ascending: true }).limit(PAGE);
+      if (after !== undefined) q = q.gt("id", after);
+      return q;
+    });
+    if (error) throw failure(def.table, "select", error);
+    const ids = ((data ?? []) as { id: string }[]).map((r) => String(r.id));
+    if (!ids.length) break;
+    ranges.push([ids[0], ids[ids.length - 1]]);
+    if (ids.length < PAGE) break;
+    after = ids[ids.length - 1];
+  }
+  // 2) 区切りごとに行を読む (並列。数は LOAD_CONCURRENCY で全体を制限)
+  const parts = await Promise.all(
+    ranges.map(async ([from, to]) => {
+      const { data, error } = await limited(() => sb().from(def.table).select("*").gte("id", from).lte("id", to).order("id", { ascending: true }).limit(PAGE + 500));
+      if (error) throw failure(def.table, "select", error);
+      return (data ?? []) as Row[];
+    }),
+  );
+  // 区切りを作った後に増えた行が、隣の区切りと重ならないようにする (同じ ID は 1 つ)
+  const seen = new Set<string>();
+  const rows: Row[] = [];
+  for (const part of parts)
+    for (const r of part) {
+      const id = String(r.id);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      rows.push(r);
+    }
+  return sortRows(rows).map((r) => fromRow(def, r));
 }
 
 /** 全テーブルを読み込む */
