@@ -29,7 +29,8 @@ export const STORES: Store[] = [
     kind: "store",
     postalCode: "862-0926",
     address: "熊本県熊本市東区保田窪2-1-21",
-    phone: "096-380-0002",
+    // 固定電話なし (2026-11 お客様のご連絡。公開ページ・帳票・チャットボットに電話番号を出さない)
+    phone: "",
     managerUserId: "u03",
     color: "#eb6834",
   },
@@ -41,7 +42,8 @@ export const STORES: Store[] = [
     kind: "store",
     postalCode: "861-4101",
     address: "熊本県熊本市南区近見1-1-5",
-    phone: "096-320-0003",
+    // 固定電話なし (2026-11 お客様のご連絡。公開ページ・帳票・チャットボットに電話番号を出さない)
+    phone: "",
     managerUserId: "u04",
     color: "#1baf7a",
   },
@@ -53,7 +55,8 @@ export const STORES: Store[] = [
     kind: "store",
     postalCode: "865-0023",
     address: "熊本県玉名市大倉750-8",
-    phone: "0968-70-0004",
+    // 固定電話なし (2026-11 お客様のご連絡。公開ページ・帳票・チャットボットに電話番号を出さない)
+    phone: "",
     managerUserId: "u05",
     color: "#eda100",
   },

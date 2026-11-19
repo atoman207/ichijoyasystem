@@ -1,4 +1,4 @@
-import type { Approval, Attachment, AuditLog, CashEntry, Expense, FaxMessage, PurchaseInvoice, PurchaseOrder, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
+import type { Approval, Attachment, AuditLog, CashEntry, Expense, FaxMessage, KnowledgeEntry, PurchaseInvoice, PurchaseOrder, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
 
 /**
  * 権限ルール
@@ -330,7 +330,37 @@ export function canCreateCustomer(user: User, ctx: { mode: "office" | "office_an
   return ctx.mode === "office_and_managers" && user.role === "store_manager";
 }
 
-/** 社内資料 (ナレッジ) の登録・修正: 店長・本部スタッフ・管理者 (閲覧と AI での利用は全員) */
+/**
+ * 社内資料 (ナレッジ) を閲覧できる (AI アシスタントも同じ範囲で回答に使う)。
+ * visibility: all (既定) = 全員 / manager = 店長・本部スタッフ・管理者 / hq = 本部スタッフ・管理者 / admin = 管理者のみ
+ */
+export function canViewKnowledge(user: User, k: Pick<KnowledgeEntry, "visibility">): boolean {
+  switch (k.visibility ?? "all") {
+    case "all":
+      return true;
+    case "manager":
+      return user.role === "admin" || user.role === "hq_staff" || user.role === "store_manager";
+    case "hq":
+      return user.role === "admin" || user.role === "hq_staff";
+    case "admin":
+      return user.role === "admin";
+  }
+  return false;
+}
+
+/** AI アシスタントの相談履歴: 自分の履歴は全員。全員の履歴の閲覧・検索は管理者・本部スタッフ (店長は自店舗の社員の分) */
+export function canViewChatLog(user: User, log: { userId: string; storeId?: string }): boolean {
+  if (log.userId === user.id) return true;
+  if (canSeeAllStores(user)) return true;
+  return user.role === "store_manager" && log.storeId === user.storeId;
+}
+
+/** 相談の回答を社内資料 (よくある質問) として登録できる: 社内資料を編集できる人 */
+export function canShareChatToKnowledge(user: User): boolean {
+  return canEditKnowledge(user);
+}
+
+/** 社内資料 (ナレッジ) の登録・修正: 店長・本部スタッフ・管理者 (閲覧と AI での利用は全員。visibility で絞れる) */
 export function canEditKnowledge(user: User): boolean {
   return user.role === "admin" || user.role === "hq_staff" || user.role === "store_manager";
 }

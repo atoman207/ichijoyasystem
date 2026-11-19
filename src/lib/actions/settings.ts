@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { BACKEND, addAudit, mutate, newId } from "@/lib/db/store";
+import { BACKEND, addAudit, mutate, newId, diffChanges } from "@/lib/db/store";
 import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
 import { DOCUMENT_SETTINGS_ID, documentSettings, validRegistrationNumber } from "@/lib/doc-settings";
 import { testConnection } from "@/lib/ai/provider";
@@ -56,10 +56,13 @@ export async function updateStore(id: StoreId, formData: FormData) {
   await mutate((db) => {
     const s = db.stores.find((x) => x.id === id);
     if (!s) fail(back, "店舗が見つかりません。");
-    s.phone = str(formData, "phone") || s.phone;
+    const before = { ...s };
+    // 電話は空にできる (固定電話を置いていない店舗)。住所・責任者は空のときは変えない
+    s.phone = str(formData, "phone");
     s.address = str(formData, "address") || s.address;
     s.managerUserId = str(formData, "managerUserId") || s.managerUserId;
-    addAudit(db, { userId: admin.id, action: "update", entity: "store", entityId: id, entityLabel: s.name, summary: `店舗情報を更新 (${s.name})` });
+    const changes = diffChanges(before, s, ["phone", "address", "managerUserId"]);
+    if (changes.length) addAudit(db, { userId: admin.id, action: "update", entity: "store", entityId: id, entityLabel: s.name, summary: `店舗情報を更新 (${s.name})`, changes });
   });
   revalidatePath("/settings");
   redirect(withMsg(back, "店舗情報を更新しました。"));

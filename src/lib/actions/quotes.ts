@@ -51,6 +51,39 @@ function parseItems(formData: FormData, back: string): QuoteItem[] {
   return items;
 }
 
+/** 施工場所 (お客様の住所と違うとき) と領収書の宛名。フォームに欄がないときは undefined (変更しない) */
+function siteFieldsOf(formData: FormData): { siteAddress?: string; receiptName?: string } | undefined {
+  if (!formData.has("siteAddress") && !formData.has("receiptName")) return undefined;
+  return { siteAddress: str(formData, "siteAddress").slice(0, 200) || undefined, receiptName: str(formData, "receiptName").slice(0, 100) || undefined };
+}
+
+/**
+ * 施工場所・領収書の宛名を見積に反映する (金額に関わらないので承認は不要)。受注済みなら受注にも反映する。
+ * 変更があった項目の監査ログを書き、変更の一覧を返す
+ */
+function applySiteFields(db: Database, q: Quote, next: { siteAddress?: string; receiptName?: string }, user: User): string[] {
+  const before = { siteAddress: q.siteAddress, receiptName: q.receiptName };
+  const changes = (["siteAddress", "receiptName"] as const).filter((f) => (before[f] ?? "") !== (next[f] ?? "")).map((f) => ({ field: f, before: before[f], after: next[f] }));
+  if (!changes.length) return [];
+  q.siteAddress = next.siteAddress;
+  q.receiptName = next.receiptName;
+  addAudit(db, { userId: user.id, action: "update", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `${changes.map((c) => (c.field === "siteAddress" ? "施工場所" : "領収書の宛名")).join("・")}を変更`, storeId: q.storeId, changes });
+  const o = q.orderId ? db.orders.find((x) => x.id === q.orderId && x.status !== "cancelled") : undefined;
+  if (o) {
+    const customer = db.customers.find((c) => c.id === q.customerId);
+    const ob = { siteAddress: o.siteAddress, receiptName: o.receiptName };
+    if (changes.some((c) => c.field === "siteAddress")) o.siteAddress = next.siteAddress || customer?.address || o.siteAddress;
+    if (changes.some((c) => c.field === "receiptName")) o.receiptName = next.receiptName;
+    const oc = (["siteAddress", "receiptName"] as const).filter((f) => (ob[f] ?? "") !== (o[f] ?? "")).map((f) => ({ field: f, before: ob[f], after: o[f] }));
+    if (oc.length) {
+      o.updatedAt = nowIso();
+      if (oc.some((c) => c.field === "siteAddress") && db.schedule.some((e) => e.orderId === o.id && e.source === "order")) syncOrderEvent(db, o, user.id);
+      addAudit(db, { userId: user.id, action: "update", entity: "order", entityId: o.id, entityLabel: o.number, summary: `見積 ${q.number} の変更に合わせて${oc.map((c) => (c.field === "siteAddress" ? "施工場所" : "領収書の宛名")).join("・")}を変更`, storeId: o.storeId, changes: oc });
+    }
+  }
+  return changes.map((c) => c.field);
+}
+
 function calc(items: QuoteItem[], discount: number, taxIncluded = false) {
   return quoteTotals(items, discount, taxIncluded);
 }
@@ -142,6 +175,7 @@ export async function createQuote(formData: FormData) {
       siteInfo: siteInfoFromForm(formData),
       paperNo: str(formData, "paperNo") || undefined,
       estimatorId: estimator && db.users.some((u) => u.id === estimator) ? estimator : user.id,
+      ...(siteFieldsOf(formData) ?? {}),
       handedOver: handedOver || undefined,
       issuedAt: handedOver && /^\d{4}-\d{2}-\d{2}$/.test(quoteDate) ? quoteDate : undefined,
       createdAt: now,
@@ -186,7 +220,9 @@ export async function updateQuote(id: string, formData: FormData) {
     const t = calc(items, Number(str(formData, "discount")) || 0, taxIncluded);
     if (t.total <= 0) fail(back, "合計が 0 円以下です。明細を確認してください。");
     const now = nowIso();
+    const site = siteFieldsOf(formData);
     if (q.status === "draft") {
+      if (site) applySiteFields(db, q, site, user);
       q.taxIncluded = taxIncluded || undefined;
       const est = str(formData, "estimatorId");
       if (est && db.users.some((u) => u.id === est)) q.estimatorId = est;
@@ -206,14 +242,24 @@ export async function updateQuote(id: string, formData: FormData) {
       }
     } else if (q.status === "approved" || q.status === "sent" || q.status === "accepted") {
       if (q.pendingChange) fail(`/quotes/${id}`, "すでに承認待ちの変更があります。");
-      if (hasActiveInvoice(db, q.id)) fail(`/quotes/${id}`, "請求書を発行済みの案件は金額を変更できません。入金前であれば、請求書を無効化してから変更を申請してください。");
-      const reason = str(formData, "reason");
-      if (!reason) fail(back, "確定済みの見積を変更するには変更理由が必要です。");
       const title = str(formData, "title") || q.title;
       const workDetails = str(formData, "workDetails");
       const notes = str(formData, "notes");
       const sameItems = JSON.stringify(items.map((i) => [i.name, i.spec ?? "", i.qty, i.unit, i.unitPrice])) === JSON.stringify(q.items.map((i) => [i.name, i.spec ?? "", i.qty, i.unit, i.unitPrice]));
-      if (sameItems && t.discount === q.discount && taxIncluded === Boolean(q.taxIncluded) && title === q.title && workDetails === (q.workDetails ?? "") && notes === (q.notes ?? "")) fail(back, "変更された内容がありません。");
+      const sameContent = sameItems && t.discount === q.discount && taxIncluded === Boolean(q.taxIncluded) && title === q.title && workDetails === (q.workDetails ?? "") && notes === (q.notes ?? "");
+      const siteChanged = Boolean(site) && ((site!.siteAddress ?? "") !== (q.siteAddress ?? "") || (site!.receiptName ?? "") !== (q.receiptName ?? ""));
+      // 施工場所・領収書の宛名だけの変更は、承認・変更理由なしで反映する (金額・契約内容に関わらない)
+      if (sameContent && siteChanged) {
+        const changed = applySiteFields(db, q, site!, user);
+        q.updatedAt = now;
+        message = `${changed.map((f) => (f === "siteAddress" ? "施工場所" : "領収書の宛名")).join("・")}を変更しました${q.orderId ? " (受注にも反映しました)" : ""}。`;
+        return;
+      }
+      if (sameContent) fail(back, "変更された内容がありません。");
+      if (hasActiveInvoice(db, q.id)) fail(`/quotes/${id}`, "請求書を発行済みの案件は金額を変更できません。入金前であれば、請求書を無効化してから変更を申請してください。");
+      const reason = str(formData, "reason");
+      if (!reason) fail(back, "確定済みの見積を変更するには変更理由が必要です。");
+      if (siteChanged) applySiteFields(db, q, site!, user);
       q.pendingChange = { items, ...t, taxIncluded, title, workDetails, notes, reason, requestedBy: user.id, requestedAt: now };
       q.updatedAt = now;
       const role = requiredRole(db, q.storeId, Math.max(t.total, q.total), user.id);
@@ -320,7 +366,8 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
       scheduledStart,
       scheduledEnd: scheduledStart,
       workerIds,
-      siteAddress: str(formData, "siteAddress") || customer?.address || "",
+      siteAddress: str(formData, "siteAddress") || q.siteAddress || customer?.address || "",
+      receiptName: q.receiptName,
       workDetails: q.workDetails,
       siteInfo: q.siteInfo,
       plannedPayment: plannedFromSiteInfo(q.siteInfo?.paymentMethod),

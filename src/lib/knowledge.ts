@@ -29,7 +29,12 @@ export function knowledgeSources(db: Pick<Database, "settings">): KnowledgeSheet
   return Array.isArray(v?.sources) ? v!.sources.filter((s) => s && s.id && s.url) : [];
 }
 
-export const KNOWLEDGE_CATEGORY_HINTS = ["商品・価格", "施工・作業手順", "お客様対応", "社内ルール", "よくある質問", "協力業者・仕入先", "その他"];
+export const KNOWLEDGE_CATEGORY_HINTS = ["商品・価格", "施工・作業手順", "お客様対応", "社内ルール", "議事録・決定事項", "マニュアル", "過去の対応事例", "よくある質問", "協力業者・仕入先", "その他"];
+/** 相談の回答から登録する資料の分類 */
+export const KNOWLEDGE_FAQ_CATEGORY = "よくある質問";
+/** 分類が議事録のとき、本文の欄に出すひな形 */
+export const MINUTES_TEMPLATE = "会議名: \n日時: \n参加者: \n\n■ 議題\n・\n\n■ 決定事項\n・\n\n■ 宿題 (担当・期限)\n・\n";
+export const KNOWLEDGE_VISIBILITY_LABEL = { all: "全員", manager: "店長・本部・管理者", hq: "本部・管理者", admin: "管理者のみ" } as const;
 
 /* ================================================================== */
 /* 検索                                                                 */

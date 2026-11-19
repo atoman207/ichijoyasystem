@@ -1,4 +1,5 @@
 import { notFound, redirect } from "next/navigation";
+import { storePhone } from "@/lib/store-contact";
 import { requireUser } from "@/lib/auth/session";
 import { syncDb } from "@/lib/db/store";
 import { canAccessStore } from "@/lib/auth/permissions";
@@ -39,13 +40,16 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
             <div className="text-base font-semibold">{settings.companyName}</div>
             {settings.address && <div>〒{settings.postalCode} {settings.address}</div>}
             {settings.tel && <div>TEL {settings.tel}{settings.fax ? ` / FAX ${settings.fax}` : ""}</div>}
-            {settings.showStore && store.kind !== "hq" && <div className="mt-1">{store.name} 〒{store.postalCode} {store.address} TEL {store.phone}</div>}
+            {settings.showStore && store.kind !== "hq" && <div className="mt-1">{store.name} 〒{store.postalCode} {store.address}{storePhone(store) && ` TEL ${storePhone(store)}`}</div>}
             {settings.registrationNumber && <div className="mt-1">登録番号: {settings.registrationNumber}</div>}
           </div>
         </div>
         <div className="mt-8 flex items-end justify-between border-b-2 border-ink pb-2">
           <div className="text-lg">{customer?.name} <span className="text-sm">{customer?.type === "corporate" ? "御中" : "様"}</span></div>
-          <div className="text-[11px] text-ink-2">{customer?.address}</div>
+          <div className="text-right text-[11px] text-ink-2">
+            <div>{customer?.address}</div>
+            {order?.siteAddress && order.siteAddress !== customer?.address && <div>施工場所: {order.siteAddress}</div>}
+          </div>
         </div>
         <p className="mt-6">下記のとおりご請求申し上げます。</p>
         <div className="mt-3 text-sm">件名: {inv.title ?? order?.title}</div>

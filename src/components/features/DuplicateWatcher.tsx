@@ -50,14 +50,22 @@ export function DuplicateWatcher({
     let last = "";
     const read = (): DuplicateInput => {
       const fd = new FormData(form);
-      return Object.fromEntries(FIELDS.map((k) => [k, String(fd.get(fields?.[k] ?? k) ?? "")])) as unknown as DuplicateInput;
+      const input = Object.fromEntries(FIELDS.map((k) => [k, String(fd.get(fields?.[k] ?? k) ?? "")])) as unknown as DuplicateInput;
+      // ほかの連絡先 (ContactsEditor の hidden の JSON) の電話番号も照合する
+      try {
+        const rows = JSON.parse(String(fd.get("contacts") ?? "[]")) as { phone?: string }[];
+        if (Array.isArray(rows)) input.otherPhones = rows.map((r) => String(r?.phone ?? "")).filter((p) => p.replace(/\D/g, "").length >= 10);
+      } catch {
+        /* 連絡先の欄がない画面 */
+      }
+      return input;
     };
     const run = async () => {
       const input = read();
       const key = JSON.stringify(input);
       if (key === last) return;
       last = key;
-      if (!input.name.trim() && !input.phone?.trim() && !input.email?.trim()) {
+      if (!input.name.trim() && !input.phone?.trim() && !input.email?.trim() && !input.otherPhones?.length) {
         setReport(null);
         return;
       }

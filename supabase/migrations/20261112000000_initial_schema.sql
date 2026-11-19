@@ -86,7 +86,10 @@ create table if not exists customers (
   tags text[] not null default '{}',
   notes text not null default '',
   created_at timestamptz not null,
-  updated_at timestamptz not null
+  updated_at timestamptz not null,
+  contacts jsonb,
+  trade_stopped boolean,
+  trade_stop_note text
 );
 comment on table customers is '顧客';
 
@@ -167,7 +170,9 @@ create table if not exists quotes (
   paper_no text,
   handed_over boolean,
   spec_status text,
-  estimator_id text
+  estimator_id text,
+  site_address text,
+  receipt_name text
 );
 comment on table quotes is '見積';
 
@@ -209,7 +214,8 @@ create table if not exists orders (
   billing text,
   planned_payment text,
   closed_at timestamptz,
-  closed_by text
+  closed_by text,
+  receipt_name text
 );
 comment on table orders is '受注・施工 (売上)';
 
@@ -817,6 +823,9 @@ alter table customers add column if not exists tags text[] not null default '{}'
 alter table customers add column if not exists notes text not null default '';
 alter table customers add column if not exists created_at timestamptz not null;
 alter table customers add column if not exists updated_at timestamptz not null;
+alter table customers add column if not exists contacts jsonb;
+alter table customers add column if not exists trade_stopped boolean;
+alter table customers add column if not exists trade_stop_note text;
 alter table inquiries add column if not exists number text not null unique;
 alter table inquiries add column if not exists customer_id text references customers(id) on delete set null;
 alter table inquiries add column if not exists contact_name text not null;
@@ -880,6 +889,8 @@ alter table quotes add column if not exists paper_no text;
 alter table quotes add column if not exists handed_over boolean;
 alter table quotes add column if not exists spec_status text;
 alter table quotes add column if not exists estimator_id text;
+alter table quotes add column if not exists site_address text;
+alter table quotes add column if not exists receipt_name text;
 alter table orders add column if not exists number text not null unique;
 alter table orders add column if not exists quote_id text references quotes(id) on delete set null;
 alter table orders add column if not exists customer_id text not null references customers(id);
@@ -916,6 +927,7 @@ alter table orders add column if not exists billing text;
 alter table orders add column if not exists planned_payment text;
 alter table orders add column if not exists closed_at timestamptz;
 alter table orders add column if not exists closed_by text;
+alter table orders add column if not exists receipt_name text;
 alter table invoices add column if not exists number text not null unique;
 alter table invoices add column if not exists order_id text not null references orders(id);
 alter table invoices add column if not exists customer_id text not null references customers(id);

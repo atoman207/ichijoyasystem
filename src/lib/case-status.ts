@@ -1,5 +1,6 @@
 import type { Customer, Database, Inquiry, Invoice, Order, Payment, Quote, StoreId } from "@/lib/db/types";
 import { siteInfoText } from "@/lib/site-info";
+import { customerPhonesText } from "@/lib/customer-contacts";
 
 /**
  * 案件の状態 (進捗・見積と仕様・工事日程・請求・入金・事務処理を分けて持つ)
@@ -189,7 +190,7 @@ export function orderCase(o: Order, ix: CaseIndex, today: string): CaseRow {
     closed,
     tasks,
     hasSiteInfo: Boolean(o.siteInfo && Object.keys(o.siteInfo).length),
-    text: [o.number, o.title, customer?.name, customer?.kana, customer?.phone, o.siteAddress, o.workDetails, siteInfoText(o.siteInfo), quote?.number].filter(Boolean).join(" "),
+    text: [o.number, o.title, customer?.name, customer?.kana, customer && customerPhonesText(customer), o.siteAddress, o.receiptName, o.workDetails, siteInfoText(o.siteInfo), quote?.number].filter(Boolean).join(" "),
   };
 }
 
@@ -221,7 +222,7 @@ export function quoteCase(q: Quote, ix: CaseIndex): CaseRow {
     closed: lost,
     tasks: lost ? [] : q.status === "draft" ? ["見積の承認申請"] : q.status === "pending_approval" ? ["見積の承認"] : spec === "none" ? ["お客様への提出"] : ["お客様の回答確認"],
     hasSiteInfo: Boolean(q.siteInfo && Object.keys(q.siteInfo).length),
-    text: [q.number, q.title, customer?.name, customer?.kana, customer?.phone, q.workDetails, q.notes, siteInfoText(q.siteInfo)].filter(Boolean).join(" "),
+    text: [q.number, q.title, customer?.name, customer?.kana, customer && customerPhonesText(customer), q.siteAddress, q.receiptName, q.workDetails, q.notes, siteInfoText(q.siteInfo)].filter(Boolean).join(" "),
   };
 }
 

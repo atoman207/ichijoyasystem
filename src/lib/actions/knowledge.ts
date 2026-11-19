@@ -4,7 +4,8 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { BACKEND, addAudit, diffChanges, mutate, newId, nowIso } from "@/lib/db/store";
 import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
-import { canEditKnowledge, canManageKnowledgeSources } from "@/lib/auth/permissions";
+import { canEditKnowledge, canManageKnowledgeSources, canViewKnowledge } from "@/lib/auth/permissions";
+import type { KnowledgeVisibility, User } from "@/lib/db/types";
 import { knowledgeSources, parseKnowledgeRows, parseKnowledgeText, splitTags, type KnowledgeDraft } from "@/lib/knowledge";
 import { saveSources, syncSource } from "@/lib/knowledge-sync";
 import { sheetCsvUrl } from "@/lib/data-io";
@@ -21,13 +22,19 @@ async function assertTable(back: string) {
   }
 }
 
-function fromForm(formData: FormData): KnowledgeDraft & { active: boolean } {
+function fromForm(formData: FormData, user: User): KnowledgeDraft & { active: boolean; visibility?: KnowledgeVisibility; recordDate?: string } {
+  const v = (["all", "manager", "hq", "admin"] as const).find((x) => x === str(formData, "visibility"));
+  // 自分が見られない範囲には設定しない (登録した本人が見られなくなるため)
+  const visibility = v && v !== "all" && canViewKnowledge(user, { visibility: v }) ? v : undefined;
+  const date = str(formData, "recordDate");
   return {
     title: str(formData, "title").slice(0, 200),
     body: str(formData, "body").slice(0, 20000),
     category: str(formData, "category").slice(0, 40),
     tags: splitTags(str(formData, "tags")),
     active: formData.getAll("active").map(String).includes("on") || !formData.has("activeShown"),
+    visibility,
+    recordDate: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : undefined,
   };
 }
 
@@ -35,12 +42,12 @@ export async function createKnowledge(formData: FormData) {
   const user = await requireActionUser();
   if (!canEditKnowledge(user)) fail(BACK, "社内資料の登録は店長・本部スタッフ・管理者が行います。");
   await assertTable(BACK);
-  const d = fromForm(formData);
+  const d = fromForm(formData, user);
   if (!d.title || !d.body) fail(BACK, "タイトルと内容を入力してください。");
   const id = newId("kn");
   await mutate((db) => {
     const now = nowIso();
-    db.knowledge.push({ id, title: d.title, body: d.body, category: d.category || "その他", tags: d.tags, source: "manual", active: d.active, createdBy: user.id, createdAt: now, updatedAt: now });
+    db.knowledge.push({ id, title: d.title, body: d.body, category: d.category || "その他", tags: d.tags, source: "manual", active: d.active, createdBy: user.id, createdAt: now, updatedAt: now, visibility: d.visibility, recordDate: d.recordDate });
     addAudit(db, { userId: user.id, action: "create", entity: "knowledge", entityId: id, entityLabel: d.title, summary: `社内資料を登録 (${d.title})` });
   });
   revalidatePath(BACK);
@@ -51,14 +58,15 @@ export async function updateKnowledge(id: string, formData: FormData) {
   const user = await requireActionUser();
   const back = `${BACK}/${id}`;
   if (!canEditKnowledge(user)) fail(back, "社内資料の修正は店長・本部スタッフ・管理者が行います。");
-  const d = fromForm(formData);
+  const d = fromForm(formData, user);
   if (!d.title || !d.body) fail(back, "タイトルと内容を入力してください。");
   await mutate((db) => {
     const e = db.knowledge.find((x) => x.id === id);
     if (!e) fail(BACK, "社内資料が見つかりません。");
+    if (!canViewKnowledge(user, e)) fail(BACK, "この社内資料を変更する権限がありません。");
     const before = { ...e };
-    Object.assign(e, { title: d.title, body: d.body, category: d.category || "その他", tags: d.tags, active: d.active, updatedBy: user.id, updatedAt: nowIso() });
-    const changes = diffChanges(before, e, ["title", "body", "category", "tags", "active"]);
+    Object.assign(e, { title: d.title, body: d.body, category: d.category || "その他", tags: d.tags, active: d.active, updatedBy: user.id, updatedAt: nowIso(), ...(formData.has("visibility") ? { visibility: d.visibility } : {}), ...(formData.has("recordDate") ? { recordDate: d.recordDate } : {}) });
+    const changes = diffChanges(before, e, ["title", "body", "category", "tags", "active", "visibility", "recordDate"]);
     if (!changes.length) fail(back, "変更はありませんでした。");
     addAudit(db, { userId: user.id, action: "update", entity: "knowledge", entityId: id, entityLabel: e.title, summary: `社内資料を修正 (${e.title})`, changes });
   });
@@ -72,6 +80,7 @@ export async function deleteKnowledge(id: string) {
   await mutate((db) => {
     const i = db.knowledge.findIndex((x) => x.id === id);
     if (i < 0) fail(BACK, "社内資料が見つかりません。");
+    if (!canViewKnowledge(user, db.knowledge[i])) fail(BACK, "この社内資料を削除する権限がありません。");
     const [e] = db.knowledge.splice(i, 1);
     addAudit(db, { userId: user.id, action: "delete", entity: "knowledge", entityId: id, entityLabel: e.title, summary: `社内資料を削除 (${e.title})` });
   });

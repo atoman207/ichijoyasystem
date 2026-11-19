@@ -1,6 +1,6 @@
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
-import { CalendarDays, ChartGantt, ChevronLeft, ChevronRight, Columns3, LayoutGrid, List, Plus, Rows3, TriangleAlert, UserRound } from "lucide-react";
+import { CalendarDays, ChartGantt, ChevronLeft, ChevronRight, Columns3, Gauge, LayoutGrid, List, Plus, Rows3, TriangleAlert, UserRound } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import type { ScheduleEvent, ScheduleKind, StoreId } from "@/lib/db/types";
@@ -150,6 +150,10 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
             <LinkButton href={link({ user: "me", store: "all", view: view === "month" ? "list" : view })} variant="secondary" size="sm">
               <UserRound />
               自分の予定
+            </LinkButton>
+            <LinkButton href="/schedule/capacity" variant="secondary" size="sm">
+              <Gauge />
+              仕事量と提案の設定
             </LinkButton>
             <LinkButton href={addBase({ date: anchor >= today ? anchor : today })} size="sm">
               <Plus />

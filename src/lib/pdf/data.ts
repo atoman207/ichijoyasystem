@@ -26,6 +26,18 @@ export function pdfCompany(db: Database, storeId: StoreId): PdfCompany {
 }
 
 const honorific = (c: Customer | undefined): "様" | "御中" => (c?.type === "corporate" ? "御中" : "様");
+
+/**
+ * 領収書の宛名 (受注の receiptName。空のときは顧客名)。宛名の最後に「御中」「様」と書かれていればその敬称を使い、
+ * なければ顧客名と同じ敬称 (会社名義なら「御中」と書いてもらう)
+ */
+export function receiptAddressee(customer: Customer | undefined, receiptName?: string): { name: string; honorific: "様" | "御中" } {
+  const raw = (receiptName ?? "").trim();
+  if (!raw) return { name: customer?.name ?? "お客様", honorific: honorific(customer) };
+  const m = raw.match(/^(.*?)[\s　]*(御中|様)$/);
+  if (m && m[1].trim()) return { name: m[1].trim(), honorific: m[2] as "様" | "御中" };
+  return { name: raw, honorific: /(株式会社|有限会社|合同会社|合資会社|一般社団|社団法人|財団法人|医療法人|社会福祉法人|学校法人|NPO|組合|\(株\)|（株）|\(有\)|（有）)/.test(raw) ? "御中" : "様" };
+}
 const lines = (items: QuoteItem[]): PdfLine[] => items.map((i) => ({ name: i.name, spec: i.spec, qty: i.qty, unit: i.unit, unitPrice: i.unitPrice, amount: i.amount }));
 const day = (iso?: string) => iso?.slice(0, 10);
 const joinNotes = (...xs: (string | undefined)[]) => xs.map((x) => x?.trim()).filter(Boolean).join("\n") || undefined;
@@ -41,7 +53,8 @@ export function quotePdfData(db: Database, q: Quote, version?: number): QuotePdf
     customerName: customer?.name ?? "お客様",
     honorific: honorific(customer),
     customerAddress: customer?.address || undefined,
-    siteAddress: order?.siteAddress && order.siteAddress !== customer?.address ? order.siteAddress : undefined,
+    // 施工場所: 見積に書いた施工場所 → 受注の現場住所 (お客様の住所と同じときは載せない)
+    siteAddress: [q.siteAddress, order?.siteAddress].find((a) => a && a !== customer?.address) || undefined,
     staffName: staff,
     company: pdfCompany(db, q.storeId),
   };
@@ -140,8 +153,8 @@ export function receiptPdfData(db: Database, inv: Invoice): ReceiptPdfData | nul
   return {
     number: inv.number.replace(/^INV/, "RCPT"),
     issuedOn: payments.at(-1)?.date ?? inv.issueDate,
-    customerName: customer?.name ?? "お客様",
-    honorific: honorific(customer),
+    // 領収書の宛名は案件ごとに変えられる (個人のお客様の依頼で会社名義の領収書など)
+    ...(({ name, honorific: h }) => ({ customerName: name, honorific: h }))(receiptAddressee(customer, order?.receiptName)),
     amount: inv.paidAmount,
     taxable: inv.paidAmount - tax,
     tax,

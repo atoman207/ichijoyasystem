@@ -7,6 +7,7 @@ import { quoteChain, userName } from "@/lib/db/queries";
 import { convertQuoteToOrder, deleteQuote, markQuoteLost, sendQuote, submitQuote } from "@/lib/actions/quotes";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
+import { customerPhonesText } from "@/lib/customer-contacts";
 import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag } from "@/components/ui";
 import { ApprovalDecision, ApprovalHistoryCard, HistoryCard, RecordStamp } from "@/components/features/History";
 import { ContactList, ContactLogForm } from "@/components/features/Contacts";
@@ -205,6 +206,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
                       </Select>
                     </Field>
                   </div>
+                  <Field label="施工場所" hint="お客様の住所と違うとき (ご実家など) は書き換えてください"><Input name="siteAddress" defaultValue={q.siteAddress || customer?.address} /></Field>
                   <Field label="メモ"><Input name="note" placeholder="例: LINE で正式依頼あり" /></Field>
                   <div className="flex gap-2">
                     <Button type="submit">{own ? "受注登録 (契約を確定・承認不要)" : "受注登録 (契約承認を申請)"}</Button>
@@ -253,7 +255,10 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
           <Card>
             <CardHeader title="お客様" />
             {customer && (
-              <Dl columns={1} items={[["氏名", <Link key="n" href={`/customers/${customer.id}`} className="text-accent hover:underline">{customer.name}</Link>], ["電話", customer.phone], ["住所", customer.address], ["希望連絡手段", CHANNEL_LABEL[customer.preferredChannel]]]} />
+              <>
+              <Dl columns={1} items={[["氏名", <Link key="n" href={`/customers/${customer.id}`} className="text-accent hover:underline">{customer.name}</Link>], ["電話", customerPhonesText(customer) || "-"], ["住所", customer.address], ...(q.siteAddress ? [["施工場所", q.siteAddress] as [string, string]] : []), ...(q.receiptName ? [["領収書の宛名", q.receiptName] as [string, string]] : []), ["希望連絡手段", CHANNEL_LABEL[customer.preferredChannel]]]} />
+              {customer.tradeStopped && <p className="mt-2 rounded-lg bg-critical-soft px-2.5 py-1.5 text-xs text-critical-ink">取引停止のお客様です{customer.tradeStopNote ? ` (${customer.tradeStopNote})` : ""}。受注の前に店長・管理者に確認してください。</p>}
+              </>
             )}
           </Card>
           <Card>

@@ -5,6 +5,7 @@ import { canImportData, canSeeAllStores, scopeByStore } from "@/lib/auth/permiss
 import { userName } from "@/lib/db/queries";
 import { fmtDate, yen } from "@/lib/format";
 import { CHANNEL_LABEL } from "@/lib/constants";
+import { customerPhoneIncludes, customerPhonesText } from "@/lib/customer-contacts";
 import { Badge, Button, EmptyRow, Flash, Input, LinkButton, PageHeader, Select, StoreTag, Table, Td, Th, Tr, Pager, paginate } from "@/components/ui";
 
 export default async function CustomersPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
@@ -16,7 +17,11 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
   let rows = scopeByStore(user, db.customers);
   if (allStores && sp.store) rows = rows.filter((c) => c.storeId === sp.store);
   if (sp.type) rows = rows.filter((c) => c.type === sp.type);
-  if (q) rows = rows.filter((c) => [c.name, c.kana, c.phone, c.address, c.code, c.email ?? "", ...c.tags].join(" ").toLowerCase().includes(q));
+  if (q) {
+    // 電話番号はハイフンなしでも探せるように、数字だけでも照合する (本人以外の連絡先の番号も対象)
+    const qDigits = /^[\d\s()‐－-]+$/.test(q) ? q.replace(/\D/g, "") : "";
+    rows = rows.filter((c) => [c.name, c.kana, customerPhonesText(c), c.address, c.code, c.email ?? "", ...c.tags].join(" ").toLowerCase().includes(q) || (qDigits.length >= 3 && customerPhoneIncludes(c, qDigits)));
+  }
   rows = [...rows].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const paged = paginate(rows, sp.page);
   const storeMap = new Map(db.stores.map((s) => [s.id, s]));

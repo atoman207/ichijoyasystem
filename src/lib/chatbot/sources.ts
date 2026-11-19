@@ -5,7 +5,7 @@ import { PERMISSION_TABLE, type Cell } from "@/lib/auth/permission-table";
 import { APPROVAL_STATUS, APPROVAL_TYPE_LABEL, EXPENSE_STATUS, INQUIRY_STATUS, INVOICE_STATUS, ORDER_STATUS, PURCHASE_STATUS, QUOTE_STATUS, ROLE_DESCRIPTION, ROLE_LABEL, TASK_STATUS } from "@/lib/constants";
 import { STAGE_LABEL, SPEC_LABEL, SCHEDULE_LABEL, BILLING_LABEL, PAYMENT_STATE_LABEL } from "@/lib/case-status";
 import { approvalSettings, manYen } from "@/lib/approval-rules";
-import { STORES } from "@/lib/db/master";
+import { storePhoneLabel } from "@/lib/store-contact";
 import type { NewDoc } from "./store";
 import UI_CATALOG from "./ui-catalog.json";
 
@@ -150,7 +150,7 @@ function uiScreenName(u: UiEntry): string {
 }
 
 /** 資料を作る (DB の設定・社内資料を含む) */
-export function buildDocs(db: Pick<Database, "settings" | "knowledge">): NewDoc[] {
+export function buildDocs(db: Pick<Database, "settings" | "knowledge" | "stores">): NewDoc[] {
   const docs: NewDoc[] = [...OVERVIEW];
 
   for (const g of GUIDES) {
@@ -225,11 +225,12 @@ export function buildDocs(db: Pick<Database, "settings" | "knowledge">): NewDoc[
     title: "店舗 (所在地・電話)",
     kind: "store",
     href: "/settings?tab=stores",
-    body: STORES.map((s) => `${s.name}: 〒${s.postalCode} ${s.address} / TEL ${s.phone}`).join("\n"),
+    body: db.stores.map((s) => `${s.name}: 〒${s.postalCode} ${s.address} / ${storePhoneLabel(s, db.stores.find((x) => x.kind === "hq"))}`).join("\n"),
   });
 
   for (const k of db.knowledge ?? []) {
-    if (!k.active) continue;
+    // 閲覧を絞った資料はチャットボットの共通の資料に入れない (AI アシスタントが閲覧権限を確かめて直接読む)
+    if (!k.active || (k.visibility && k.visibility !== "all")) continue;
     docs.push({ key: `knowledge:${k.id}`, title: `社内資料: ${k.title}`, kind: "knowledge", href: `/knowledge/${k.id}`, body: `${k.category ? `分類: ${k.category}\n` : ""}${k.body.slice(0, 4000)}` });
   }
   return docs;

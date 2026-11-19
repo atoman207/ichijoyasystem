@@ -10,6 +10,7 @@ import { integrationStatuses } from "@/lib/notify/config";
 import { knowledgeSources } from "@/lib/knowledge";
 import { backupDir, readBackupStatus } from "@/lib/backup";
 import { storageDir } from "@/lib/storage";
+import { customerPhoneDigits } from "@/lib/customer-contacts";
 
 /**
  * 本番運用の準備状況 (設定 → 本番運用の準備)
@@ -137,7 +138,7 @@ export function migrationChecks(db: Database): DataCheck[] {
   const orderIds = new Set(db.orders.map((o) => o.id));
   const activeUsers = new Set(db.users.filter((u) => u.active).map((u) => u.id));
   const rows: DataCheck[] = [
-    { label: "電話番号のない顧客", count: customers.filter((c) => digits(c.phone).length < 9).length, total: customers.length, status: "info", note: "電話での照合 (AI 電話受付・Web フォーム) ができません", href: "/customers" },
+    { label: "電話番号のない顧客", count: customers.filter((c) => customerPhoneDigits(c).length === 0).length, total: customers.length, status: "info", note: "電話での照合 (AI 電話受付・Web フォーム) ができません", href: "/customers" },
     { label: "住所のない顧客", count: customers.filter((c) => !c.address?.trim()).length, total: customers.length, status: "info", note: "現場の住所は受注ごとにも登録できます", href: "/customers" },
     { label: "電話番号が同じ顧客", count: dupPhones, total: customers.length, status: dupPhones ? "warn" : "ok", note: "同じお客様の重複か、家族・法人の共有の番号です。受付の自動ひも付けは最近更新した顧客になります", href: "/customers" },
     { label: "顧客が見つからない受注", count: db.orders.filter((o) => !customerIds.has(o.customerId)).length, total: db.orders.length, status: "ok", note: "移行の対応づけの漏れ" },

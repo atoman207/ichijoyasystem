@@ -12,6 +12,8 @@ import crypto from "node:crypto";
  *   ai (実際の質問に AI が答えたもの) / manual (管理者が登録・修正)
  * - docs: 回答の根拠にするシステムの説明 (使い方・権限・画面・社内資料)。sources.ts から作り直す
  * - asks: 質問の記録 (どの方法で答えたか。AI の呼び出しをどれだけ減らせたかの集計に使う)
+ * - chat_log: 相談の履歴 (ログインした社員の質問と回答・表・根拠。誰が・いつ・何を聞き、どう答えたか)。
+ *   本人は自分の履歴を、管理者・本部は全員の履歴を検索できる (permissions.ts の canViewChatLog)。社内資料への登録 (knowledge_id) もここに残す
  * 日本語の検索は FTS5 の trigram (3 文字ずつの組) で候補を出し、2 文字の組の重なりで似ている度合いを測る
  */
 
@@ -132,6 +134,31 @@ export function chatbotDb(): SqliteDb {
     );
     create index if not exists asks_at on asks (at);
     create table if not exists meta (key text primary key, value text not null);
+    create table if not exists chat_log (
+      id integer primary key,
+      conv_id text not null default '',
+      at text not null,
+      user_id text not null,
+      user_name text not null default '',
+      role text not null default '',
+      store_id text not null default '',
+      question text not null,
+      answer text not null,
+      source text not null,
+      payload text not null default '{}',
+      ms integer not null default 0,
+      rating integer not null default 0,
+      knowledge_id text
+    );
+    create index if not exists chat_log_user on chat_log (user_id, id);
+    create index if not exists chat_log_at on chat_log (at);
+    create virtual table if not exists chat_log_fts using fts5 (question, answer, content = 'chat_log', content_rowid = 'id', tokenize = 'trigram');
+    create trigger if not exists chat_log_ai after insert on chat_log begin insert into chat_log_fts (rowid, question, answer) values (new.id, new.question, new.answer); end;
+    create trigger if not exists chat_log_ad after delete on chat_log begin insert into chat_log_fts (chat_log_fts, rowid, question, answer) values ('delete', old.id, old.question, old.answer); end;
+    create trigger if not exists chat_log_au after update of question, answer on chat_log begin
+      insert into chat_log_fts (chat_log_fts, rowid, question, answer) values ('delete', old.id, old.question, old.answer);
+      insert into chat_log_fts (rowid, question, answer) values (new.id, new.question, new.answer);
+    end;
   `);
   g.__ichijoyaChatbotDb = db;
   return db;
@@ -407,7 +434,8 @@ export function replaceSeedQa(rows: NewQa[]): number {
 
 /* ---------------- 質問の記録・集計 ---------------- */
 
-export type AskSource = "database" | "data" | "smalltalk" | "ai" | "docs" | "none";
+/** agent = AI アシスタントがデータを調べて回答 (検索・集計の道具を使う) / analysis = AI なしで集計の表を作った */
+export type AskSource = "database" | "data" | "smalltalk" | "ai" | "agent" | "analysis" | "docs" | "none";
 
 export function logAsk(a: { userId: string; role: string; question: string; source: AskSource; qaId?: number; ms: number }): void {
   chatbotDb().prepare("insert into asks (at, user_id, role, question, source, qa_id, ms) values (?, ?, ?, ?, ?, ?, ?)").run(now(), a.userId, a.role, a.question.slice(0, 500), a.source, a.qaId ?? null, a.ms);
@@ -416,7 +444,7 @@ export function logAsk(a: { userId: string; role: string; question: string; sour
 /** その利用者が直近 minutes 分に AI で答えた回数 (使いすぎの防止) */
 export function recentAiAsks(userId: string, minutes = 60): number {
   const since = new Date(Date.now() - minutes * 60_000).toISOString();
-  return Number(chatbotDb().prepare("select count(*) n from asks where user_id = ? and source = 'ai' and at >= ?").get(userId, since)?.n ?? 0);
+  return Number(chatbotDb().prepare("select count(*) n from asks where user_id = ? and source in ('ai', 'agent') and at >= ?").get(userId, since)?.n ?? 0);
 }
 
 export function getMeta(key: string): string | undefined {
@@ -464,4 +492,118 @@ export function chatbotStats(days = 30): ChatbotStats {
   }
   const recent = (source: string) => db.prepare("select at, question from asks where source = ? order by id desc limit 15").all(source).map((r) => ({ at: String(r.at), question: String(r.question) }));
   return { path: file, sizeBytes, qa, docs: { total: docsTotal, trained }, asks: { days, total, bySource, aiRate: total ? (bySource.ai ?? 0) / total : 0 }, recentAi: recent("ai"), recentNone: recent("none") };
+}
+
+/* ---------------- 相談の履歴 ---------------- */
+
+export interface ChatLogPayload {
+  links?: QaLink[];
+  /** 回答の根拠 (記録・資料・集計) */
+  sources?: { label: string; href?: string; kind: string }[];
+  /** 集計の表 (src/lib/assistant/analyze.ts の AnalysisResult) */
+  tables?: unknown[];
+  /** 使った道具 (名前と条件の要約) */
+  tools?: { name: string; summary: string }[];
+  provider?: string;
+}
+
+export interface ChatLogRow {
+  id: number;
+  convId: string;
+  at: string;
+  userId: string;
+  userName: string;
+  role: string;
+  storeId: string;
+  question: string;
+  answer: string;
+  source: string;
+  payload: ChatLogPayload;
+  ms: number;
+  rating: number;
+  knowledgeId?: string;
+}
+
+function toLog(r: Record<string, unknown>): ChatLogRow {
+  let payload: ChatLogPayload = {};
+  try {
+    payload = JSON.parse(String(r.payload ?? "{}")) as ChatLogPayload;
+  } catch {
+    /* 壊れた行 */
+  }
+  return {
+    id: Number(r.id),
+    convId: String(r.conv_id ?? ""),
+    at: String(r.at),
+    userId: String(r.user_id),
+    userName: String(r.user_name ?? ""),
+    role: String(r.role ?? ""),
+    storeId: String(r.store_id ?? ""),
+    question: String(r.question),
+    answer: String(r.answer),
+    source: String(r.source),
+    payload,
+    ms: Number(r.ms ?? 0),
+    rating: Number(r.rating ?? 0),
+    knowledgeId: r.knowledge_id ? String(r.knowledge_id) : undefined,
+  };
+}
+
+export function insertChatLog(x: { convId?: string; userId: string; userName: string; role: string; storeId: string; question: string; answer: string; source: string; payload: ChatLogPayload; ms: number }): number {
+  const r = chatbotDb()
+    .prepare("insert into chat_log (conv_id, at, user_id, user_name, role, store_id, question, answer, source, payload, ms) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run((x.convId ?? "").slice(0, 64), now(), x.userId, x.userName, x.role, x.storeId, x.question.slice(0, 2000), x.answer.slice(0, 20000), x.source, JSON.stringify(x.payload).slice(0, 400_000), x.ms);
+  return Number(r.lastInsertRowid);
+}
+
+export function getChatLog(id: number): ChatLogRow | undefined {
+  const r = chatbotDb().prepare("select * from chat_log where id = ?").get(id);
+  return r ? toLog(r) : undefined;
+}
+
+export function rateChatLog(id: number, good: boolean): void {
+  chatbotDb().prepare("update chat_log set rating = ? where id = ?").run(good ? 1 : -1, id);
+}
+
+export function markChatShared(id: number, knowledgeId: string): void {
+  chatbotDb().prepare("update chat_log set knowledge_id = ? where id = ?").run(knowledgeId, id);
+}
+
+/**
+ * 履歴の一覧・検索。scope で見られる範囲を絞る (all = 全員 / store = その店舗の社員 / self = 本人だけ)。
+ * q は質問と回答の文字で探す (3 文字以上は全文検索、短いときは部分一致)
+ */
+export function listChatLogs(opts: { scope: "all" | "store" | "self"; userId: string; storeId?: string; filterUserId?: string; q?: string; limit?: number; offset?: number; onlyRated?: boolean }): { rows: ChatLogRow[]; total: number } {
+  const db = chatbotDb();
+  const where: string[] = [];
+  const args: unknown[] = [];
+  if (opts.scope === "self") {
+    where.push("l.user_id = ?");
+    args.push(opts.userId);
+  } else if (opts.scope === "store") {
+    where.push("(l.user_id = ? or l.store_id = ?)");
+    args.push(opts.userId, opts.storeId ?? "");
+  }
+  if (opts.filterUserId) {
+    where.push("l.user_id = ?");
+    args.push(opts.filterUserId);
+  }
+  if (opts.onlyRated) where.push("l.rating > 0");
+  const q = (opts.q ?? "").trim();
+  let from = "chat_log l";
+  if (q) {
+    const match = trigramQuery(q);
+    if (match && q.normalize("NFKC").replace(PUNCT, "").length >= 3) {
+      from = "chat_log_fts f join chat_log l on l.id = f.rowid";
+      where.push("chat_log_fts match ?");
+      args.push(match.replace(/ OR /g, " AND "));
+    } else {
+      where.push("(l.question like ? or l.answer like ?)");
+      args.push(`%${q}%`, `%${q}%`);
+    }
+  }
+  const w = where.length ? `where ${where.join(" and ")}` : "";
+  const total = Number(db.prepare(`select count(*) n from ${from} ${w}`).get(...args)?.n ?? 0);
+  const rows = db.prepare(`select l.* from ${from} ${w} order by l.id desc limit ? offset ?`).all(...args, opts.limit ?? 50, opts.offset ?? 0).map(toLog);
+  return { rows, total };
 }

@@ -17,6 +17,8 @@ export interface DuplicateInput {
   email?: string;
   postalCode?: string;
   address?: string;
+  /** ほかの連絡先 (夫・姉など) の電話番号 */
+  otherPhones?: string[];
 }
 
 export interface DuplicateMatch {
@@ -70,6 +72,8 @@ function surname(name: string): string {
 export function findDuplicateCustomers(db: Pick<Database, "customers">, input: DuplicateInput, excludeId?: string): DuplicateResult {
   const name = normName(input.name);
   const phone = normPhone(input.phone);
+  // 入力された電話番号 (主 + ほかの連絡先) と、既存の顧客の電話番号 (主 + ほかの連絡先) のどれかが一致すれば候補にする
+  const phones = new Set([phone, ...(input.otherPhones ?? []).map(normPhone)].filter(Boolean));
   const email = normText(input.email);
   const postal = (input.postalCode ?? "").replace(/\D/g, "");
   const address = normAddress(input.address);
@@ -78,14 +82,20 @@ export function findDuplicateCustomers(db: Pick<Database, "customers">, input: D
   const check: DuplicateMatch[] = [];
   const sameName: DuplicateMatch[] = [];
   let sameNameTotal = 0;
-  if (!name && !phone && !email) return { high, check, sameName, sameNameTotal };
+  if (!name && !phones.size && !email) return { high, check, sameName, sameNameTotal };
 
   for (const c of db.customers) {
     if (c.id === excludeId) continue;
     const reasons: string[] = [];
     const cName = normName(c.name);
     const sameFullName = Boolean(name) && cName === name;
-    if (phone && normPhone(c.phone) === phone) reasons.push("電話番号が一致");
+    if (phones.size) {
+      if (phones.has(normPhone(c.phone))) reasons.push("電話番号が一致");
+      else {
+        const hit = (c.contacts ?? []).find((x) => phones.has(normPhone(x.phone)));
+        if (hit) reasons.push(`電話番号が一致 (${hit.relation}${hit.name ? ` ${hit.name}` : ""} の番号)`);
+      }
+    }
     if (email && email.includes("@") && normText(c.email) === email) reasons.push("メールアドレスが一致");
     const cAddr = normAddress(c.address);
     if (sameFullName && address.length >= 4 && cAddr.length >= 4 && (cAddr === address || cAddr.startsWith(address) || address.startsWith(cAddr))) reasons.push("氏名と住所が一致");

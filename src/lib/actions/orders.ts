@@ -289,6 +289,7 @@ export async function updateOrderInfo(id: string, formData: FormData) {
     o.title = title;
     o.category = choice(formData, "category", CATEGORY_LABEL, o.category);
     o.siteAddress = str(formData, "siteAddress") || o.siteAddress;
+    if (formData.has("receiptName")) o.receiptName = str(formData, "receiptName").slice(0, 100) || undefined;
     if (formData.has("workDetails")) o.workDetails = str(formData, "workDetails") || undefined;
     const storeId = str(formData, "storeId");
     if (storeId && storeId !== o.storeId) {
@@ -300,13 +301,13 @@ export async function updateOrderInfo(id: string, formData: FormData) {
       for (const a of db.approvals) if (a.status === "pending" && a.targetId === o.id) a.storeId = o.storeId;
       moved = !canAccessStore(user, o.storeId);
     }
-    const changes = diffChanges(before, o, ["title", "category", "siteAddress", "storeId", "workDetails"]);
+    const changes = diffChanges(before, o, ["title", "category", "siteAddress", "receiptName", "storeId", "workDetails"]);
     if (changes.length === 0) fail(back, "変更はありませんでした。");
     o.updatedAt = nowIso();
     // 連動している施工の予定があれば、場所・店舗を合わせる (予定がない案件に新しく作ることはしない)
     if (db.schedule.some((e) => e.orderId === o.id && e.source === "order")) syncOrderEvent(db, o, user.id);
     const storeName = db.stores.find((s) => s.id === o.storeId)?.name ?? o.storeId;
-    const LABEL: Record<string, string> = { title: "件名", category: "種別", siteAddress: "現場住所", storeId: `担当店舗 (${storeName})`, workDetails: "施工内容" };
+    const LABEL: Record<string, string> = { title: "件名", category: "種別", siteAddress: "施工場所", receiptName: "領収書の宛名", storeId: `担当店舗 (${storeName})`, workDetails: "施工内容" };
     if (changes.some((c) => c.field === "workDetails")) syncHandoverMemo(db, o);
     if (changes.some((c) => c.field === "workDetails")) o.progressNotes.push({ id: newId("pn"), at: nowIso(), userId: user.id, kind: "change", body: `施工内容を変更: ${o.workDetails ?? "(なし)"}` });
     addAudit(db, { userId: user.id, action: "update", entity: "order", entityId: id, entityLabel: o.number, summary: `案件情報を変更 (${changes.map((c) => LABEL[c.field] ?? c.field).join("・")})`, storeId: o.storeId, changes });

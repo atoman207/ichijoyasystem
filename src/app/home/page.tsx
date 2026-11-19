@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { storePhone } from "@/lib/store-contact";
 import {
   ArrowRight,
   Bot,
@@ -199,9 +200,12 @@ export default async function HomePage() {
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-ink-2">
                 <span>〒{s.postalCode} {s.address}</span>
-                <a href={`tel:${s.phone.replace(/[^0-9]/g, "")}`} className="inline-flex items-center gap-1 font-medium text-accent hover:underline">
-                  <Phone className="h-3.5 w-3.5" aria-hidden /> {s.phone}
-                </a>
+                {/* 固定電話のない店舗 (中央店・西店・玉名店) は電話番号を出さない (src/lib/store-contact.ts) */}
+                {storePhone(s) && (
+                  <a href={`tel:${storePhone(s).replace(/[^0-9]/g, "")}`} className="inline-flex items-center gap-1 font-medium text-accent hover:underline">
+                    <Phone className="h-3.5 w-3.5" aria-hidden /> {storePhone(s)}
+                  </a>
+                )}
               </div>
             </li>
           ))}
@@ -221,7 +225,7 @@ export default async function HomePage() {
                 経理・承認・経営の数字を全店舗まとめて確認します。各店舗の見積・請求・入金も、本社からリアルタイムで見えます。
               </p>
               <p className="mt-3 text-xs text-ink-3">
-                〒{hq.postalCode} {hq.address} · TEL {hq.phone}
+                〒{hq.postalCode} {hq.address}{storePhone(hq) && ` · TEL ${storePhone(hq)}`}
               </p>
             </div>
           </div>

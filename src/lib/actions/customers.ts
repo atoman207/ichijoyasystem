@@ -11,6 +11,7 @@ import { CHANNEL_LABEL } from "@/lib/constants";
 import { approvalSettings, CUSTOMER_IMPORTANT_FIELDS } from "@/lib/approval-rules";
 import { fieldLabel } from "@/lib/field-labels";
 import { notifyNewApprovals } from "@/lib/notify/approvals";
+import { contactLine, parseContacts } from "@/lib/customer-contacts";
 import { assertStore, choice, fail, requireActionUser, resolveStoreId, safeReturn, str, withMsg } from "./guards";
 
 function parseTags(s: string): string[] {
@@ -51,15 +52,19 @@ function toReport(db: Database, user: User, r: DuplicateResult): DuplicateReport
 }
 
 function duplicateInput(formData: FormData): DuplicateInput {
-  return { name: str(formData, "name"), kana: str(formData, "kana"), phone: str(formData, "phone"), email: str(formData, "email"), postalCode: str(formData, "postalCode"), address: str(formData, "address") };
+  return { name: str(formData, "name"), kana: str(formData, "kana"), phone: str(formData, "phone"), email: str(formData, "email"), postalCode: str(formData, "postalCode"), address: str(formData, "address"), otherPhones: parseContacts(str(formData, "contacts"), () => "x").map((c) => c.phone) };
 }
+
+const contactsOf = (formData: FormData) => parseContacts(str(formData, "contacts"), () => newId("cc"));
+/** 変更履歴用 (連絡先は 1 件 1 行の文字にする) */
+const contactLines = (c: Pick<Customer, "contacts">) => (c.contacts ?? []).map(contactLine);
 
 /** 顧客登録・編集の画面から呼ぶ: 入力中の内容と既存顧客 (全店舗) の重複候補 */
 export async function checkCustomerDuplicates(input: DuplicateInput, excludeId?: string): Promise<DuplicateReport> {
   const user = await requireActionUser();
   const db = getDb();
   const clean = (v: unknown) => String(v ?? "").slice(0, 200);
-  const r = findDuplicateCustomers(db, { name: clean(input.name), kana: clean(input.kana), phone: clean(input.phone), email: clean(input.email), postalCode: clean(input.postalCode), address: clean(input.address) }, excludeId);
+  const r = findDuplicateCustomers(db, { name: clean(input.name), kana: clean(input.kana), phone: clean(input.phone), email: clean(input.email), postalCode: clean(input.postalCode), address: clean(input.address), otherPhones: Array.isArray(input.otherPhones) ? input.otherPhones.slice(0, 20).map(clean) : [] }, excludeId);
   return toReport(db, user, r);
 }
 
@@ -100,7 +105,11 @@ export async function createCustomer(formData: FormData) {
       notes: str(formData, "notes"),
       createdAt: now,
       updatedAt: now,
+      contacts: contactsOf(formData),
+      tradeStopped: str(formData, "tradeStopped") === "1" || undefined,
+      tradeStopNote: str(formData, "tradeStopNote") || undefined,
     };
+    if (!c.contacts?.length) delete c.contacts;
     db.customers.push(c);
     addAudit(db, { userId: user.id, action: "create", entity: "customer", entityId: id, entityLabel: `${c.code} ${c.name}`, summary: `顧客を登録 (${c.name})${dupNote}`, storeId });
   });
@@ -140,7 +149,11 @@ export async function updateCustomer(id: string, formData: FormData) {
       preferredChannel: choice(formData, "preferredChannel", CHANNEL_LABEL, c.preferredChannel),
       tags: parseTags(str(formData, "tags")),
       notes: str(formData, "notes"),
+      contacts: formData.has("contacts") ? contactsOf(formData) : c.contacts,
+      tradeStopped: str(formData, "tradeStopped") === "1" || undefined,
+      tradeStopNote: str(formData, "tradeStopNote") || undefined,
     };
+    if (!next.contacts?.length) next.contacts = undefined;
     const important = diffChanges(before, next, [...CUSTOMER_IMPORTANT_FIELDS]);
     const needsApproval = important.length > 0 && approvalSettings(db).customerChange && !canApplyCustomerChange(user, c.storeId);
     if (needsApproval && db.approvals.some((a) => a.type === "customer_change" && a.targetId === c.id && a.status === "pending")) {
@@ -149,7 +162,10 @@ export async function updateCustomer(id: string, formData: FormData) {
     // 承認が必要な項目は元の値のまま残し、ほかの項目だけをすぐに反映する
     const applied: Customer = needsApproval ? { ...next, ...Object.fromEntries(CUSTOMER_IMPORTANT_FIELDS.map((f) => [f, before[f]])) } : next;
     Object.assign(c, applied);
-    const changes = diffChanges(before, c, ["name", "kana", "type", "phone", "email", "lineId", "postalCode", "address", "storeId", "assignedUserId", "preferredChannel", "tags", "notes"]);
+    const changes = diffChanges(before, c, ["name", "kana", "type", "phone", "email", "lineId", "postalCode", "address", "storeId", "assignedUserId", "preferredChannel", "tags", "notes", "tradeStopped", "tradeStopNote"]);
+    const contactsBefore = contactLines(before);
+    const contactsAfter = contactLines(c);
+    if (JSON.stringify(contactsBefore) !== JSON.stringify(contactsAfter)) changes.push({ field: "contacts", before: contactsBefore, after: contactsAfter });
     if (changes.length) {
       c.updatedAt = nowIso();
       addAudit(db, { userId: user.id, action: "update", entity: "customer", entityId: id, entityLabel: `${c.code} ${c.name}`, summary: `顧客情報を更新 (${changes.map((x) => fieldLabel("customer", x.field)).join("・")})`, storeId: c.storeId, changes });

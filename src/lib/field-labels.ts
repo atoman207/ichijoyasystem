@@ -30,14 +30,15 @@ const COMMON: Record<string, string> = {
 };
 
 const BY_ENTITY: Record<string, Record<string, string>> = {
-  customer: { name: "氏名", kana: "フリガナ", type: "顧客区分", lineId: "LINE ID", area: "地区", assignedUserId: "担当者", preferredChannel: "希望連絡手段", tags: "タグ", notes: "メモ" },
+  customer: { name: "氏名", kana: "フリガナ", type: "顧客区分", lineId: "LINE ID", area: "地区", assignedUserId: "担当者", preferredChannel: "希望連絡手段", tags: "タグ", notes: "メモ", contacts: "ほかの連絡先", tradeStopped: "取引停止", tradeStopNote: "取引停止の理由" },
   inquiry: { contactName: "お客様名", contactPhone: "電話", channel: "受付経路", summary: "要件", detail: "詳細", assignedUserId: "担当者", nextAction: "次の対応", nextActionDue: "次の対応の期限", receivedAt: "受付日時", customerId: "顧客" },
-  quote: { total: "見積金額 (税込)", title: "件名", items: "明細", validUntil: "有効期限", workDetails: "施工内容" },
-  order: { total: "契約金額 (税込)", contractDate: "契約日", siteAddress: "現場住所", workDetails: "施工内容", scheduledStart: "施工開始日", scheduledEnd: "施工終了日", workerIds: "施工担当", billing: "請求書の発行", plannedPayment: "入金の予定方法", specStatus: "仕様", scheduleStatus: "工事日程" },
+  quote: { total: "見積金額 (税込)", title: "件名", items: "明細", validUntil: "有効期限", workDetails: "施工内容", siteAddress: "施工場所", receiptName: "領収書の宛名" },
+  order: { total: "契約金額 (税込)", contractDate: "契約日", siteAddress: "施工場所 (現場住所)", receiptName: "領収書の宛名", workDetails: "施工内容", scheduledStart: "施工開始日", scheduledEnd: "施工終了日", workerIds: "施工担当", billing: "請求書の発行", plannedPayment: "入金の予定方法", specStatus: "仕様", scheduleStatus: "工事日程" },
   invoice: { dueDate: "支払期限", expectedDate: "入金予定日", expectedAmount: "入金予定額", expectedNote: "入金予定のメモ", title: "件名", notes: "備考" },
   expense: { vendor: "支払先", date: "日付", amount: "金額 (税込)", taxAmount: "うち消費税", account: "勘定科目", paymentMethod: "支払方法", description: "内容・用途" },
   purchase: { supplierId: "仕入先", invoiceDate: "請求日", dueDate: "支払期限", scheduledPayDate: "支払予定日", amount: "金額 (税込)", taxAmount: "うち消費税", account: "勘定科目", items: "仕入内容", orderId: "案件", supplierInvoiceNo: "請求書番号", payMethod: "支払方法", payReference: "支払の記録" },
   ai: { question: "質問", answer: "回答", disabled: "無効" },
+  knowledge: { body: "内容", category: "分類", tags: "タグ", active: "AI に使う", visibility: "見られる人", recordDate: "日付" },
   settings: { lineGroup: "LINE グループのひも付け (受注 / 協力業者 / 呼び名)" },
   supplier: { kind: "区分", category: "取扱品目", contactName: "担当者", fax: "FAX", paymentTerms: "支払条件 (文章)", closingDay: "締め日", payMonthOffset: "支払月", payDay: "支払日", bankInfo: "振込先", registrationNumber: "登録番号", lineId: "LINE ユーザー ID", chatworkRoomId: "Chatwork ルーム ID", active: "取引中" },
   cash: { direction: "入出金", account: "科目", counterparty: "相手", description: "摘要" },
@@ -47,6 +48,7 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   purchase_order: { supplierId: "仕入先", issuedOn: "発注日", desiredDate: "希望納期", deliveryPlace: "納品先", deliveryAddress: "納品先の住所", faxTo: "送信先の FAX", showCustomer: "お客様の情報を載せる", lines: "明細", version: "版" },
   fax: { triage: "仕分け", supplierId: "仕入先", customerId: "顧客", purchaseOrderId: "発注書", orderIds: "案件", assignedUserId: "担当者" },
   fax_number: { kind: "種類", label: "名前" },
+  store: { phone: "電話", address: "住所", managerUserId: "責任者" },
 };
 
 export function fieldLabel(entity: string, field: string): string {

@@ -14,6 +14,7 @@ import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { toDateKey } from "@/lib/format";
 import { findDuplicateCustomers } from "@/lib/duplicates";
 import { AiSummary } from "@/components/features/AiSummary";
+import { contactLabel, phoneDigits } from "@/lib/customer-contacts";
 
 export default async function CustomerDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -27,7 +28,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
   const store = db.stores.find((s) => s.id === c.storeId);
   const openItems = t.inquiries.filter((i) => ["new", "in_progress", "quoted"].includes(i.status)).length + t.orders.filter((o) => ["pending_approval", "returned", "confirmed", "scheduled", "in_progress"].includes(o.status)).length;
   // 重複の可能性がある既存顧客 (電話・メール・氏名と住所の一致、同じ姓と地区)
-  const dup = findDuplicateCustomers(db, c, c.id);
+  const dup = findDuplicateCustomers(db, { ...c, otherPhones: (c.contacts ?? []).map((x) => x.phone) }, c.id);
   const dupRows = [...dup.high.map((m) => ({ ...m, label: "重複の可能性が高い" })), ...dup.check.map((m) => ({ ...m, label: "要確認" }))];
   const receivable = t.invoices.filter((i) => ["issued", "partially_paid", "overdue"].includes(i.status)).reduce((a, i) => a + i.total - i.paidAmount, 0);
   const changeApprovals = db.approvals.filter((a) => a.type === "customer_change" && a.targetId === c.id);
@@ -40,7 +41,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
       <Flash msg={msg} err={err} />
       <PageHeader
         title={c.name}
-        badge={<span className="flex gap-1">{c.type === "corporate" && <Badge tone="info" dot={false}>法人・施設</Badge>}{c.tags.map((tag) => <Badge key={tag} dot={false}>{tag}</Badge>)}</span>}
+        badge={<span className="flex gap-1">{c.tradeStopped && <Badge tone="critical">取引停止</Badge>}{c.type === "corporate" && <Badge tone="info" dot={false}>法人・施設</Badge>}{c.tags.map((tag) => <Badge key={tag} dot={false}>{tag}</Badge>)}</span>}
         description={`${c.code} · ${c.kana} · 担当 ${userName(c.assignedUserId)} · 登録 ${fmtDate(c.createdAt)}`}
         back={{ href: "/customers", label: "顧客一覧" }}
         actions={
@@ -52,6 +53,11 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
         }
       />
 
+      {c.tradeStopped && (
+        <Card className="mb-4 border-critical/40 bg-critical-soft/40">
+          <CardHeader title="このお客様は取引停止です" description={c.tradeStopNote ? `理由: ${c.tradeStopNote}` : "理由は登録されていません。見積・受注の前に店長・管理者に確認してください"} />
+        </Card>
+      )}
       {pendingChange && (
         <Card className="mb-4 border-warn/40 bg-warn-soft/40">
           <CardHeader title="承認待ち: 顧客の重要情報の変更" description={`${pendingChange.requiredRole === "admin" ? "管理者" : "店長"}の承認が必要 · 申請 ${userName(pendingChange.requestedBy)} ${fmtDateTime(pendingChange.createdAt)}${pendingChange.requestComment ? ` · 理由: ${pendingChange.requestComment}` : ""}`} />
@@ -73,7 +79,22 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
             <Dl
               columns={1}
               items={[
-                ["電話", c.phone],
+                ["電話", c.phone || "-"],
+                ...(c.contacts?.length
+                  ? ([
+                      [
+                        "ほかの連絡先",
+                        <ul key="cc" className="space-y-0.5">
+                          {c.contacts.map((x) => (
+                            <li key={x.id}>
+                              <span className="text-ink-2">{contactLabel(x)}</span> <a href={`tel:${phoneDigits(x.phone)}`} className="tnum text-accent hover:underline">{x.phone}</a>
+                              {x.note && <span className="text-ink-3"> · {x.note}</span>}
+                            </li>
+                          ))}
+                        </ul>,
+                      ],
+                    ] as [string, React.ReactNode][])
+                  : []),
                 ["メール", c.email],
                 ["LINE", c.lineId ?? "未登録"],
                 ["希望する連絡手段", CHANNEL_LABEL[c.preferredChannel]],

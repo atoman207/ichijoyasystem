@@ -4,6 +4,7 @@ import type { AttachmentParent, Channel, Database, Inquiry, ServiceCategory, Sto
 import { addAudit, nextNumber, nowIso } from "@/lib/db/store";
 import { CATEGORY_LABEL } from "@/lib/constants";
 import { detectType } from "@/lib/attachments";
+import { customerHasPhone } from "@/lib/customer-contacts";
 import { LINE_GROUP_ID_RE, MAX_PENDING, ensureLineGroup, findLineGroup, lineGroupName, touchLineGroups, type LineGroup, type PendingLineMessage } from "@/lib/line-groups";
 
 /**
@@ -271,7 +272,7 @@ export function recordWebForm(db: Database, f: WebFormInput): { created: boolean
   const store = db.stores.find((s) => s.id === f.store || s.name === f.store || s.shortName === f.store);
   const catKey = (Object.keys(CATEGORY_LABEL) as ServiceCategory[]).find((k) => k === f.category || CATEGORY_LABEL[k] === f.category);
   const phone = digits(f.phone);
-  const customer = db.customers.find((c) => (phone.length >= 9 && digits(c.phone) === phone) || (f.email && c.email && c.email.toLowerCase() === f.email.trim().toLowerCase()));
+  const customer = db.customers.find((c) => customerHasPhone(c, phone) || (f.email && c.email && c.email.toLowerCase() === f.email.trim().toLowerCase()));
   const detail = [
     message,
     "",

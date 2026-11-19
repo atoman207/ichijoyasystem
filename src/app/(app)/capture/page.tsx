@@ -16,6 +16,7 @@ import { findOrderByPostcard, findSurveyByPostcard, matchStaff, storeFromPostcar
 import { kpiSettings } from "@/lib/kpi-settings";
 import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { accuracyStats } from "@/lib/ocr-accuracy";
+import { customerHasPhone } from "@/lib/customer-contacts";
 import { Badge, Card, CardHeader, Flash, LinkButton, Note, PageHeader, Pager, StatusBadge, StoreTag, paginate } from "@/components/ui";
 
 /** AI の読み取り (最大 50 秒) を待つため、Vercel の処理時間の上限を 60 秒にする */
@@ -40,7 +41,7 @@ const normName = (s: string) => s.normalize("NFKC").replace(/(様|さま|御中|
 function customerCandidates(customers: Customer[], raw: unknown, phoneRaw?: unknown): Customer[] {
   // 電話番号が一致するお客様を最優先 (手書き見積書の Tel 欄)
   const digits = typeof phoneRaw === "string" ? phoneRaw.replace(/\D/g, "") : "";
-  const byPhone = digits.length >= 9 ? customers.filter((c) => c.phone.replace(/\D/g, "") === digits) : [];
+  const byPhone = digits.length >= 9 ? customers.filter((c) => customerHasPhone(c, digits)) : [];
   const name = typeof raw === "string" ? normName(raw) : "";
   if (name.length < 2) return byPhone.slice(0, 12);
   const exact = customers.filter((c) => normName(c.name) === name);

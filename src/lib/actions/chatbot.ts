@@ -4,38 +4,95 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, getDb, mutate, syncDb } from "@/lib/db/store";
 import { getSessionUser } from "@/lib/auth/session";
-import { canManageChatbot } from "@/lib/auth/permissions";
+import { canManageChatbot, canShareChatToKnowledge, canViewChatLog } from "@/lib/auth/permissions";
 import { askChatbot, type BotReply, type ChatTurn } from "@/lib/chatbot/answer";
 import { ensureChatbotData } from "@/lib/chatbot/build";
 import { startTraining, stopTraining } from "@/lib/chatbot/train";
-import { deleteQa, getQa, insertQa, rateQa, updateQa } from "@/lib/chatbot/store";
+import { deleteQa, getChatLog, getQa, insertQa, markChatShared, rateChatLog, rateQa, updateQa } from "@/lib/chatbot/store";
+import type { AnalysisSpec } from "@/lib/assistant/analyze";
+import { newId, nowIso } from "@/lib/db/store";
+import { KNOWLEDGE_FAQ_CATEGORY } from "@/lib/knowledge";
 import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 const BACK = "/ai?tab=bot";
 
-/** 画面左下のチャットボットへの質問 (ログイン前のトップページからも使える) */
-export async function askChatbotAction(history: ChatTurn[], question: string): Promise<BotReply> {
+/** 集計の条件 (画面から戻ってきたもの) を、知っている項目だけにして受け取る */
+function cleanSpecs(v: unknown): AnalysisSpec[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: AnalysisSpec[] = [];
+  for (const x of v.slice(0, 4)) {
+    if (!x || typeof x !== "object") continue;
+    try {
+      const j = JSON.parse(JSON.stringify(x).slice(0, 3000)) as AnalysisSpec;
+      out.push(j);
+    } catch {
+      /* 壊れた条件は使わない */
+    }
+  }
+  return out.length ? out : undefined;
+}
+
+/** 画面左下のチャットボット (「質問する」) への質問 (ログイン前のトップページからも使える) */
+export async function askChatbotAction(history: ChatTurn[], question: string, convId?: string): Promise<BotReply> {
   const user = await getSessionUser();
   const db = user ? getDb() : await syncDb();
   const q = String(question ?? "").trim();
   if (!q) return { answer: "質問を入力してください。", links: [], source: "none", suggestions: [] };
   const turns: ChatTurn[] = (Array.isArray(history) ? history : [])
     .filter((h) => h && (h.role === "user" || h.role === "assistant") && typeof h.content === "string")
-    .slice(-6)
-    .map((h) => ({ role: h.role, content: h.content.slice(0, 2000) }));
+    .slice(-8)
+    .map((h) => ({ role: h.role, content: h.content.slice(0, 3000), specs: user && h.role === "assistant" ? cleanSpecs(h.specs) : undefined }));
   try {
-    return await askChatbot(db, user, turns, q);
+    return await askChatbot(db, user, turns, q, { convId: typeof convId === "string" ? convId.slice(0, 64) : undefined });
   } catch (err) {
     console.error("[chatbot] failed:", err);
     return { answer: "ごめんなさい、いま回答を用意できませんでした。少し時間をおいてもう一度お試しください。", links: [], source: "none", suggestions: [] };
   }
 }
 
-/** 回答の評価 (👍 / 👎)。👎 が重なった自動の回答は使われなくなる。ログイン前でも可 */
-export async function rateChatbotAnswer(qaId: number, good: boolean): Promise<{ ok: boolean }> {
-  if (!Number.isInteger(qaId) || qaId <= 0 || !getQa(qaId)) return { ok: false };
-  rateQa(qaId, Boolean(good));
-  return { ok: true };
+/** 回答の評価 (👍 / 👎)。👎 が重なった自動の回答は使われなくなる。ログイン前でも可。相談の履歴にも残す (本人の履歴だけ) */
+export async function rateChatbotAnswer(qaId: number | undefined, good: boolean, logId?: number): Promise<{ ok: boolean }> {
+  let ok = false;
+  if (typeof qaId === "number" && Number.isInteger(qaId) && qaId > 0 && getQa(qaId)) {
+    rateQa(qaId, Boolean(good));
+    ok = true;
+  }
+  if (typeof logId === "number" && Number.isInteger(logId) && logId > 0) {
+    const user = await getSessionUser();
+    const log = getChatLog(logId);
+    if (user && log && log.userId === user.id) {
+      rateChatLog(logId, Boolean(good));
+      ok = true;
+    }
+  }
+  return { ok };
+}
+
+/**
+ * 相談の回答を社内資料 (よくある質問) に登録する。登録した資料は全員の AI アシスタント・チャットボットの根拠になる。
+ * 画面で質問と回答を整えてから登録する (個人情報・その時点の数字は消してから)
+ */
+export async function shareChatToKnowledge(logId: number, formData: FormData) {
+  const user = await requireActionUser();
+  const back = `/ai?tab=history&id=${logId}`;
+  if (!canShareChatToKnowledge(user)) fail(back, "社内資料への登録は、店長・本部スタッフ・管理者が行えます。");
+  const log = getChatLog(logId);
+  if (!log || !canViewChatLog(user, log)) fail("/ai?tab=history", "相談が見つからないか、閲覧する権限がありません。");
+  const title = str(formData, "title").slice(0, 200);
+  const body = str(formData, "body").slice(0, 20000);
+  if (!title || !body) fail(back, "タイトルと本文を入力してください。");
+  const visibility = (["all", "manager", "hq", "admin"] as const).find((v) => v === str(formData, "visibility")) ?? "all";
+  const category = str(formData, "category").slice(0, 40) || KNOWLEDGE_FAQ_CATEGORY;
+  const id = newId("kn");
+  await mutate((db) => {
+    const now = nowIso();
+    db.knowledge.push({ id, title, body, category, tags: ["相談から登録"], source: "manual", sourceRef: `chat:${logId}`, active: true, createdBy: user.id, createdAt: now, updatedBy: user.id, updatedAt: now, visibility: visibility === "all" ? undefined : visibility });
+    addAudit(db, { userId: user.id, action: "create", entity: "knowledge", entityId: id, entityLabel: title.slice(0, 60), summary: `相談の回答を社内資料に登録 (${title.slice(0, 40)})`, storeId: user.storeId });
+  });
+  markChatShared(logId, id);
+  revalidatePath("/knowledge");
+  revalidatePath("/ai");
+  redirect(withMsg(`/knowledge/${id}`, "社内資料に登録しました。AI アシスタントとチャットボットが回答に使います。"));
 }
 
 async function requireManager() {

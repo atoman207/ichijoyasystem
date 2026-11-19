@@ -1,9 +1,9 @@
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canEditKnowledge, canManageKnowledgeSources } from "@/lib/auth/permissions";
+import { canEditKnowledge, canManageKnowledgeSources, canViewKnowledge } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
-import { fmtDateTime } from "@/lib/format";
-import { KNOWLEDGE_CATEGORY_HINTS, knowledgeSources, searchKnowledge } from "@/lib/knowledge";
+import { fmtDateTime, toDateKey } from "@/lib/format";
+import { KNOWLEDGE_CATEGORY_HINTS, KNOWLEDGE_VISIBILITY_LABEL, MINUTES_TEMPLATE, knowledgeSources, searchKnowledge } from "@/lib/knowledge";
 import { addKnowledgeSource, createKnowledge, importKnowledgeFile, removeKnowledgeSource, syncKnowledgeSource } from "@/lib/actions/knowledge";
 import { aiEnabled } from "@/lib/ai/provider";
 import Link from "@/components/ui/Link";
@@ -26,8 +26,11 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Pr
   const q = (sp.q ?? "").trim();
   const cat = sp.category ?? "";
   const categories = [...new Set([...KNOWLEDGE_CATEGORY_HINTS, ...db.knowledge.map((k) => k.category).filter(Boolean)])];
-  const hits = q ? searchKnowledge(db.knowledge.filter((k) => !cat || k.category === cat), q, { limit: 50, minCoverage: 0.15 }) : [];
-  const list = q ? hits.map((h) => h.entry) : [...db.knowledge].filter((k) => !cat || k.category === cat).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  // 見られる範囲の資料だけ (visibility)
+  const readable = db.knowledge.filter((k) => canViewKnowledge(user, k));
+  const hits = q ? searchKnowledge(readable.filter((k) => !cat || k.category === cat), q, { limit: 50, minCoverage: 0.15 }) : [];
+  const list = q ? hits.map((h) => h.entry) : [...readable].filter((k) => !cat || k.category === cat).sort((a, b) => (b.recordDate ?? b.updatedAt).localeCompare(a.recordDate ?? a.updatedAt));
+  const minutes = sp.template === "minutes";
   const snippets = new Map(hits.map((h) => [h.entry.id, h.snippet]));
   const paged = paginate(list, sp.page, 50);
   const sources = knowledgeSources(db);
@@ -35,7 +38,7 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Pr
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title="社内資料 (ナレッジ)" description={`AI アシスタントは、ここにある資料をもとに回答します。登録 ${db.knowledge.length} 件 (うち AI に使う ${db.knowledge.filter((k) => k.active).length} 件)`} />
+      <PageHeader title="社内資料 (ナレッジ)" description={`AI アシスタントは、ここにある資料をもとに回答します。登録 ${readable.length} 件 (うち AI に使う ${readable.filter((k) => k.active).length} 件)`} />
       <Note>
         商品・価格の目安、施工の手順、お客様対応の決まり、社内ルール、よくある質問などを登録してください。AI は質問に関係しそうな資料を探して回答に使い、使った資料の名前を示します。資料にないことは「資料に記載がありません」と答えます。
       </Note>
@@ -73,14 +76,22 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Pr
         <div className="space-y-4">
           {editable && (
             <Card>
-              <CardHeader title="資料を登録" />
+              <CardHeader title={minutes ? "議事録を登録" : "資料を登録"} action={minutes ? <Link href="/knowledge" className="text-xs text-accent hover:underline">ふつうの資料にする</Link> : <Link href="/knowledge?template=minutes" className="text-xs text-accent hover:underline">議事録のひな形</Link>} />
               <form action={createKnowledge} className="space-y-2">
-                <Field label="タイトル" required><Input name="title" required maxLength={200} placeholder="例: お支払い方法" /></Field>
+                <Field label="タイトル" required><Input name="title" required maxLength={200} placeholder={minutes ? "例: 2026年11月 店長会議" : "例: お支払い方法"} /></Field>
                 <Field label="分類">
-                  <Input name="category" list="knowledge-categories" placeholder="例: よくある質問" />
+                  <Input name="category" list="knowledge-categories" placeholder="例: よくある質問" defaultValue={minutes ? "議事録・決定事項" : undefined} />
                   <datalist id="knowledge-categories">{categories.map((c) => <option key={c} value={c} />)}</datalist>
                 </Field>
-                <Field label="内容" required><Textarea name="body" required className="min-h-[140px]" placeholder="例: 現金・クレジットカード (VISA・マスター)・PayPay・銀行振込に対応。振込の場合は納品後 2 週間以内。" /></Field>
+                <Field label="内容" required><Textarea name="body" required className={minutes ? "min-h-[260px]" : "min-h-[140px]"} defaultValue={minutes ? MINUTES_TEMPLATE : undefined} placeholder="例: 現金・クレジットカード (VISA・マスター)・PayPay・銀行振込に対応。振込の場合は納品後 2 週間以内。" /></Field>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="見られる人" hint="AI も同じ範囲で回答に使います">
+                    <Select name="visibility" defaultValue={minutes ? "manager" : "all"}>
+                      {(Object.keys(KNOWLEDGE_VISIBILITY_LABEL) as (keyof typeof KNOWLEDGE_VISIBILITY_LABEL)[]).filter((v) => canViewKnowledge(user, { visibility: v })).map((v) => <option key={v} value={v}>{KNOWLEDGE_VISIBILITY_LABEL[v]}</option>)}
+                    </Select>
+                  </Field>
+                  <Field label="日付 (会議・決定の日)"><Input name="recordDate" type="date" defaultValue={minutes ? toDateKey(new Date()) : undefined} /></Field>
+                </div>
                 <Field label="タグ (読点・空白区切り)"><Input name="tags" placeholder="例: 支払い、カード、PayPay" /></Field>
                 <Button type="submit" size="sm">登録する</Button>
               </form>

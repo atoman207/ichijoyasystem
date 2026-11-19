@@ -4,7 +4,7 @@ import { GUIDES } from "@/lib/help-guides";
 import { PERMISSION_TABLE, type Cell } from "@/lib/auth/permission-table";
 import { ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import { approvalSettings, manYen } from "@/lib/approval-rules";
-import { STORES } from "@/lib/db/master";
+import { storePhoneLabel } from "@/lib/store-contact";
 import { CELL_TEXT, SCREENS } from "./sources";
 import type { NewQa, QaLink } from "./store";
 
@@ -45,7 +45,7 @@ const SCREEN = ["{t}はどこ", "{t}の画面", "{t}で何ができる", "{t}と
 
 const fill = (tpl: string[], t: string) => tpl.map((x) => x.replace("{t}", t));
 
-export function buildSeed(db: Pick<Database, "settings" | "knowledge">): NewQa[] {
+export function buildSeed(db: Pick<Database, "settings" | "knowledge" | "stores">): NewQa[] {
   const out: NewQa[] = [];
   const add = (questions: string[], answer: string, links: QaLink[], sourceKeys: string[], role = "") => {
     for (const question of questions) out.push({ question, answer, links, origin: "seed", sourceKeys, role });
@@ -97,9 +97,10 @@ export function buildSeed(db: Pick<Database, "settings" | "knowledge">): NewQa[]
   add(["差戻しと却下の違い", "差し戻すとどうなる", "却下するとどうなる"], "「差し戻す」は修正して再申請してもらうとき、「却下する」は申請そのものを取りやめるときに使います。どちらも理由の入力が必要で、申請した人にお知らせが届きます。", linkTo("/approvals", "承認"), ["overview:approval"]);
 
   // 店舗
-  for (const s of STORES) {
+  const hq = db.stores.find((x) => x.kind === "hq");
+  for (const s of db.stores) {
     const names = [...new Set([s.name, s.shortName])];
-    add(names.flatMap((n) => [`${n}の住所`, `${n}の電話番号`, `${n}の場所`, `${n}の連絡先`]), `${s.name}: 〒${s.postalCode} ${s.address} / TEL ${s.phone}`, linkTo("/settings?tab=stores", "店舗"), ["stores:all"]);
+    add(names.flatMap((n) => [`${n}の住所`, `${n}の電話番号`, `${n}の場所`, `${n}の連絡先`]), `${s.name}: 〒${s.postalCode} ${s.address} / ${storePhoneLabel(s, hq)}`, linkTo("/settings?tab=stores", "店舗"), ["stores:all"]);
   }
 
   // 定番の質問
@@ -111,7 +112,7 @@ export function buildSeed(db: Pick<Database, "settings" | "knowledge">): NewQa[]
 
   // 社内資料 (タイトルが質問の形になっているものは、そのまま答えにする)
   for (const k of db.knowledge ?? []) {
-    if (!k.active) continue;
+    if (!k.active || (k.visibility && k.visibility !== "all")) continue;
     const t = k.title.trim();
     const body = k.body.trim();
     if (!t || !body) continue;

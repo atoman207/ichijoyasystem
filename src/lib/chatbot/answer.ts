@@ -1,28 +1,34 @@
 import "server-only";
 import type { Database, User } from "@/lib/db/types";
-import { ROLE_LABEL } from "@/lib/constants";
 import { aiEnabled, AiError, generateText } from "@/lib/ai/provider";
 import { rulesAnswer } from "@/lib/ai/assistant";
 import { extractTerms, searchRecords } from "@/lib/ai/search";
-import { PERMISSION_TABLE } from "@/lib/auth/permission-table";
-import { CELL_TEXT } from "./sources";
 import { ensureChatbotData } from "./build";
-import { countHit, findSimilarQa, insertQa, logAsk, recentAiAsks, normalizeQuestion, similarity, searchDocs, type AskSource, type DocRow, type QaLink, type QaMatch } from "./store";
+import { countHit, findSimilarQa, insertChatLog, insertQa, logAsk, recentAiAsks, normalizeQuestion, searchDocs, type AskSource, type ChatLogPayload, type DocRow, type QaLink, type QaMatch } from "./store";
+import { runAgent, type AgentSource } from "@/lib/assistant/agent";
+import { runAnalysis, type AnalysisResult, type AnalysisSpec } from "@/lib/assistant/analyze";
+import { ANALYSIS_WORDS, heuristicSpec, refineSpec } from "@/lib/assistant/intent";
+import { yen } from "@/lib/format";
 
 /**
- * チャットボットの回答
+ * チャットボット (「質問する」) の回答
  * ------------------------------------------------------------
- * AI (OpenAI) の呼び出しをできるだけ減らすため、安い方法から順に試す:
+ * AI の呼び出しをできるだけ減らすため、安い方法から順に試す:
  *  1. あいさつ・お礼 → 決まった返事
- *  2. データの質問 (今日の予定・未入金・承認待ち・顧客名や番号) → assistant.ts の rulesAnswer (各自の閲覧範囲)
- *  3. データベースに似た質問がある (似ている度合い ≥ REUSE) → 蓄えた回答をそのまま返す
- *  4. AI が使えない → 近い質問の回答か、関係する資料の要点
- *  5. AI に、関係する資料と近い質問の回答を渡して答えてもらい、その回答をデータベースに保存 (次からは 3 で答える)
+ *  2. 使い方の質問で、データベースに似た質問がある (似ている度合い ≥ REUSE) → 蓄えた回答をそのまま返す
+ *  3. ログインした社員: AI アシスタント (src/lib/assistant/agent.ts) が検索・集計の道具でデータを調べて答える。
+ *     使い方だけの回答は蓄え (次からは 2 で答える)、データの回答は蓄えない (内容が日々変わり、閲覧範囲も人で違うため)
+ *  4. AI が使えない・使いすぎの制限 → 集計の質問は言葉の決まりで表を作る (intent.ts)。データの質問は rulesAnswer、
+ *     使い方は近い質問の回答か関係する資料の要点
+ *  ログイン前 (公開ページ) は使い方の案内だけ (データ・社内資料は答えない)。
+ *  ログインした社員の質問と回答は相談の履歴 (chat_log) に残す (誰が・いつ・何を聞き・どう答えたか)
  */
 
 export interface ChatTurn {
   role: "user" | "assistant";
   content: string;
+  /** その回答で使った集計の条件 (続けて「店舗別にして」と聞かれたときに使う) */
+  specs?: AnalysisSpec[];
 }
 
 export interface BotReply {
@@ -33,6 +39,14 @@ export interface BotReply {
   qaId?: number;
   /** 近い質問 (押すとその質問を送る) */
   suggestions: string[];
+  /** 集計の表 (画面で表・グラフにする) */
+  tables?: AnalysisResult[];
+  /** 回答の根拠 (記録・資料・集計) */
+  sources?: AgentSource[];
+  /** 調べた内容 (道具と条件) */
+  tools?: { name: string; summary: string }[];
+  /** 相談の履歴の ID (評価・社内資料への登録に使う) */
+  logId?: number;
 }
 
 const REUSE = 0.8;
@@ -65,18 +79,6 @@ function dataReply(db: Database, user: User, q: string): string | undefined {
   }
   if (DATA.test(q) && !howTo) return rulesAnswer(db, user, q);
   return undefined;
-}
-
-const COL = { admin: "admin", hq_staff: "hq", store_manager: "manager", store_staff: "staff" } as const;
-
-/** 質問に関係しそうな権限一覧の行と、質問した人のロールでできるか */
-function permissionHints(q: string, role: User["role"]): string[] {
-  const norm = normalizeQuestion(q);
-  return PERMISSION_TABLE.map((r) => ({ r, score: similarity(norm, normalizeQuestion(r.action.replace(/\s*\([^)]*\)/g, ""))) }))
-    .filter((x) => x.score >= 0.15)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5)
-    .map(({ r }) => `・${r.action} → ${CELL_TEXT[r[COL[role]]]}`);
 }
 
 const linksOf = (docs: DocRow[], max = 2): QaLink[] => {
@@ -126,32 +128,53 @@ const PERSONA = [
   "- 社員の個人名・お客様の個人情報は書かない。データ (売上・予定・顧客など) を聞かれたら「今日の予定は？」のように聞けば答えられることを案内する。",
 ].join("\n");
 
+/** 集計の表を、AI を使わずに短い文章にする */
+function analysisReply(r: AnalysisResult): string {
+  const first = r.columns.find((c) => c.kind !== "text");
+  const lines = [`**${r.title}**`];
+  if (first && r.total[first.key] !== undefined && r.total[first.key] !== null && typeof r.total[first.key] === "number") lines.push(`合計 ${first.kind === "yen" ? yen(r.total[first.key] as number) : (r.total[first.key] as number).toLocaleString("ja-JP")}`);
+  if (r.compareLabel) lines.push(`比較: ${r.compareLabel}`);
+  lines.push("表とグラフで表示しています。条件を変えたいときは「月別にして」「前年と比べて」のように続けて聞いてください。");
+  if (r.notes.length) lines.push(`※ ${r.notes.slice(0, 2).join(" / ")}`);
+  return lines.join("\n");
+}
+
+/** 知識 (社内資料) から作った資料・回答はログイン前の人には使わない */
+const isKnowledgeQa = (m: QaMatch) => m.qa.sourceKeys.some((k) => k.startsWith("knowledge:"));
+
 /**
  * チャットボットに答える。user が null のときはログイン前 (公開ホームなど)。
- * ログイン前は個人のデータ (予定・売上など) は答えず、使い方・画面の案内に限る。
+ * ログイン前は個人のデータ (予定・売上など) と社内資料は答えず、使い方・画面の案内に限る。
  */
-export async function askChatbot(db: Database, user: User | null, history: ChatTurn[], raw: string): Promise<BotReply> {
+export async function askChatbot(db: Database, user: User | null, history: ChatTurn[], raw: string, opts: { convId?: string } = {}): Promise<BotReply> {
   const t0 = Date.now();
-  const q = raw.trim().slice(0, 500);
+  const q = raw.trim().slice(0, 1000);
   const norm = normalizeQuestion(q);
   const guest = !user;
   const role = user?.role ?? "";
   const askerId = user?.id ?? "guest";
   const done = (r: BotReply): BotReply => {
+    const ms = Date.now() - t0;
     try {
-      logAsk({ userId: askerId, role, question: q, source: r.source, qaId: r.qaId, ms: Date.now() - t0 });
+      logAsk({ userId: askerId, role, question: q, source: r.source, qaId: r.qaId, ms });
     } catch (err) {
       console.warn("[chatbot] log failed:", (err as Error).message);
+    }
+    // 相談の履歴 (ログインした社員だけ。あいさつは残さない)
+    if (user && r.source !== "smalltalk") {
+      try {
+        const payload: ChatLogPayload = { links: r.links, sources: r.sources, tools: r.tools, tables: r.tables };
+        r.logId = insertChatLog({ convId: opts.convId, userId: user.id, userName: user.name, role: user.role, storeId: user.storeId, question: q, answer: r.answer, source: r.source, payload, ms });
+      } catch (err) {
+        console.warn("[chatbot] chat log failed:", (err as Error).message);
+      }
     }
     return r;
   };
 
   for (const s of SMALLTALK) if (s.test.test(q.replace(/[\s!！。、?？~〜]+$/g, ""))) return done({ answer: s.reply, links: [], source: "smalltalk", suggestions: [] });
 
-  if (user) {
-    const data = dataReply(db, user, q);
-    if (data) return done({ answer: data, links: [], source: "data", suggestions: [] });
-  } else if (DATA.test(q) && !HOW_TO.test(q)) {
+  if (!user && DATA.test(q) && !HOW_TO.test(q)) {
     return done({
       answer: "予定や売上などのデータは、ログイン後に聞けます。使い方や画面の場所なら、このままお答えできます。",
       links: [{ label: "ログイン", href: "/login" }],
@@ -162,18 +185,53 @@ export async function askChatbot(db: Database, user: User | null, history: ChatT
 
   ensureChatbotData(db);
   const followUp = history.some((h) => h.role === "user") && (norm.length <= 6 || FOLLOW_UP.test(q));
-  const matches = findSimilarQa(q, role, 8);
+  const matches = findSimilarQa(q, role, 8).filter((m) => !guest || !isKnowledgeQa(m));
   const top = matches[0];
+  const howTo = HOW_TO.test(q);
+  // データ・集計の質問 (蓄えた回答では答えない)
+  const t = extractTerms(q);
+  const dataish = Boolean(user) && (DATA.test(q) || ANALYSIS_WORDS.test(q) || t.names.length > 0 || t.numbers.length > 0 || t.phones.length > 0) && !(howTo && !ANALYSIS_WORDS.test(q) && !t.names.length && !t.numbers.length);
 
-  if (!followUp && top && top.score >= REUSE) {
+  if (!followUp && !dataish && top && top.score >= REUSE) {
     countHit(top.qa.id);
     return done({ answer: top.qa.answer, links: top.qa.links, source: "database", qaId: top.qa.id, suggestions: suggestionsOf(matches, top.qa.id) });
   }
 
-  const lastUser = [...history].reverse().find((h) => h.role === "user")?.content ?? "";
-  const docs = searchDocs(followUp && lastUser ? `${lastUser} ${q}` : q, 6);
+  const canUseAi = aiEnabled() && recentAiAsks(askerId) < AI_PER_HOUR;
 
-  if (!aiEnabled() || recentAiAsks(askerId) >= AI_PER_HOUR) {
+  // ---- ログインした社員: AI アシスタント (データを調べて答える) ----
+  if (user && canUseAi) {
+    try {
+      const r = await runAgent(db, user, history, q, { prefetchGuides: !dataish || howTo });
+      let qaId: number | undefined;
+      const links = r.sources.filter((s) => s.href).slice(0, 3).map((s) => ({ label: s.label.slice(0, 24), href: s.href! }));
+      // 使い方だけの回答は蓄える (同じロールの人に次から AI なしで答える)。データを使った回答は蓄えない
+      if (!r.usedData && !r.usedKnowledge && !r.unknown && !followUp && r.docKeys.length && norm.length >= 3) {
+        qaId = insertQa({ question: q, answer: r.answer, links, origin: "ai", role, sourceKeys: [...new Set(r.docKeys)].slice(0, 3) });
+      }
+      return done({ answer: r.answer, links: r.tables.length || r.usedData ? [] : links, source: r.usedData ? "agent" : r.unknown ? "none" : "ai", qaId, suggestions: [], tables: r.tables, sources: r.sources, tools: r.tools });
+    } catch (err) {
+      console.warn("[chatbot] agent failed:", err instanceof AiError ? `${err.code} ${err.detail ?? ""}` : (err as Error).message);
+      // 下の AI なしの回答へ
+    }
+  }
+
+  // ---- AI なし (キーなし・使いすぎ・失敗) ----
+  if (user) {
+    const prevSpec = history.at(-1)?.role === "assistant" ? history.at(-1)?.specs?.[0] : undefined;
+    const spec = heuristicSpec(db, q) ?? (prevSpec && !howTo ? refineSpec(db, prevSpec, q) : null);
+    if (spec) {
+      const r = runAnalysis(db, user, spec);
+      if (r.ok) return done({ answer: `${canUseAi ? "" : aiEnabled() ? "(AI の利用回数の上限に達したため、集計だけを表示します)\n" : ""}${analysisReply(r)}`, links: [{ label: "経営ダッシュボード", href: "/reports" }], source: "analysis", suggestions: [], tables: [r], sources: [{ label: r.title, kind: "集計" }] });
+    }
+    const data = dataReply(db, user, q);
+    if (data) return done({ answer: data, links: [], source: "data", suggestions: [] });
+  }
+
+  const lastUser = [...history].reverse().find((h) => h.role === "user")?.content ?? "";
+  const docs = searchDocs(followUp && lastUser ? `${lastUser} ${q}` : q, 6).filter((d) => !guest || d.kind !== "knowledge");
+
+  if (!canUseAi || user) {
     if (top && top.score >= NEAR) {
       countHit(top.qa.id);
       return done({ answer: `近い質問「${top.qa.question}」への回答です。\n\n${top.qa.answer}`, links: top.qa.links, source: "database", qaId: top.qa.id, suggestions: suggestionsOf(matches, top.qa.id) });
@@ -182,13 +240,11 @@ export async function askChatbot(db: Database, user: User | null, history: ChatT
     return done({ answer: NOT_FOUND, links: [], source: "none", suggestions: suggestionsOf(matches) });
   }
 
+  // ---- ログイン前: 使い方の資料を AI に渡して答える ----
   const refs = matches.filter((m) => m.score >= 0.4).slice(0, 5);
   const system = [
     PERSONA,
-    guest
-      ? "\n## 質問している人\nログイン前の訪問者。個人のデータ (予定・顧客・売上など) は答えず、システムの使い方・画面・新規登録・ログインの案内に限る。データ確認はログイン後に聞いてほしいと伝える。"
-      : `\n## 質問している社員のロール\n${ROLE_LABEL[user.role]}`,
-    !guest ? ((h) => (h.length ? `\n## このロールの権限 (質問に関係しそうなもの。操作を案内する前に必ず確かめる)\n${h.join("\n")}` : ""))(permissionHints(q, user.role)) : "",
+    "\n## 質問している人\nログイン前の訪問者。個人のデータ (予定・顧客・売上など) と社内の資料は答えず、システムの使い方・画面・新規登録・ログインの案内に限る。データ確認はログイン後に聞いてほしいと伝える。",
     docs.length ? `\n## 参考資料\n${docs.map((d) => `### ${d.title}${d.href ? ` (画面: ${d.href})` : ""}\n${d.body.slice(0, 1500)}`).join("\n\n")}` : "\n## 参考資料\n(見つかりませんでした)",
     refs.length ? `\n## 蓄えた回答 (近い質問と、その回答)\n${refs.map((m) => `Q: ${m.qa.question}\nA: ${m.qa.answer.slice(0, 600)}`).join("\n\n")}` : "",
   ].join("\n");
@@ -204,14 +260,12 @@ export async function askChatbot(db: Database, user: User | null, history: ChatT
   if (turns.length && turns[turns.length - 1].role === "user") turns.pop();
 
   try {
-    const res = await generateText({ system, messages: [...turns, { role: "user", content: q }], maxTokens: 1200 });
+    const res = await generateText({ system, messages: [...turns.map((x) => ({ role: x.role, content: x.content })), { role: "user", content: q }], maxTokens: 1200 });
     let text = res.data.trim();
     const unknown = text.startsWith("[不明]") || /見当たりません|記載がありません|わかりません|分かりません/.test(text);
     text = text.replace(/^\[不明\]\s*/, "").trim() || NOT_FOUND;
     const links = unknown ? [] : linksOf(docs);
     let qaId: number | undefined;
-    // 会話の流れに頼らない質問で、資料から答えられたものだけ蓄える (次から AI を呼ばずに答える)。
-    // 回答はロールの権限を踏まえているので、同じロールの人にだけ使う (ログイン前は role = '' で共有)
     if (!unknown && !followUp && docs.length && norm.length >= 3) {
       qaId = insertQa({ question: q, answer: text, links, origin: "ai", role, sourceKeys: docs.slice(0, 3).map((d) => d.key) });
     }

@@ -11,6 +11,8 @@ import { fromMinutes, isDateKey, periodLabel, repeatDates, shortDate, toMinutes,
 import { Card, Field, Input, Select, Textarea, buttonClass } from "@/components/ui";
 import { KINDS_BY_GROUP, KindIcon, kindStyle } from "./parts";
 import { AssigneePicker, ConflictPanel, useConflictReport, type FormStore, type FormUser } from "./form-parts";
+import { SuggestPanel, SUGGESTABLE_KINDS } from "./SuggestPanel";
+import type { SuggestCandidate } from "@/lib/schedule-suggest";
 
 /** 案件の選択肢 (value は "order:o_1" 形式) */
 export interface FormCase {
@@ -165,6 +167,20 @@ export function EventForm({
     });
   };
   const slotOnly = !v.allDay && !v.startTime && v.slot !== "";
+  /** AI 予定候補日の提案で選んだ候補を、日付・時刻・担当者に入れる */
+  const applySuggestion = (c: SuggestCandidate) => {
+    setEndTouched(true);
+    setV((prev) => ({
+      ...prev,
+      date: c.date,
+      endDate: c.endDate ?? "",
+      allDay: false,
+      slot: c.startTime ? "" : c.slot === "am" || c.slot === "pm" ? c.slot : "",
+      startTime: c.startTime ?? "",
+      endTime: c.endTime ?? "",
+      assigneeIds: c.assigneeIds,
+    }));
+  };
 
   // 入力チェック
   const timeError = !v.allDay && v.startTime && v.endTime && toMinutes(v.endTime) <= toMinutes(v.startTime) ? "終了時刻は開始時刻より後にしてください" : "";
@@ -465,6 +481,20 @@ export function EventForm({
 
         {/* 空き状況・重複 / 保存 */}
         <div className="min-w-0 space-y-4 @4xl:sticky @4xl:top-24 @4xl:self-start">
+          {SUGGESTABLE_KINDS.includes(v.kind) && !v.companyWide && (
+            <Card>
+              <SuggestPanel
+                kind={v.kind}
+                storeId={v.storeId}
+                caseValue={selectedCase?.value}
+                customerId={v.customerId || undefined}
+                location={v.location.trim() || undefined}
+                assigneeIds={v.assigneeIds}
+                eventId={eventId}
+                onApply={applySuggestion}
+              />
+            </Card>
+          )}
           <Card>
             <ConflictPanel
               report={report}

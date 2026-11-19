@@ -1,4 +1,5 @@
 import { notFound, redirect } from "next/navigation";
+import { storePhone } from "@/lib/store-contact";
 import { requireUser } from "@/lib/auth/session";
 import { syncDb } from "@/lib/db/store";
 import { canAccessStore } from "@/lib/auth/permissions";
@@ -19,6 +20,9 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
   const customer = db.customers.find((c) => c.id === q.customerId);
   const store = db.stores.find((s) => s.id === q.storeId)!;
   const creator = db.users.find((u) => u.id === q.createdBy);
+  // 施工場所 (お客様の住所と違うときだけ載せる): 見積の施工場所 → 受注の現場住所
+  const order = db.orders.find((o) => o.quoteId === q.id && o.status !== "cancelled");
+  const site = [q.siteAddress, order?.siteAddress].find((a) => a && a !== customer?.address);
 
   return (
     <div className="min-h-screen bg-subtle py-6 print:bg-white print:py-0">
@@ -35,7 +39,7 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
             <div className="text-base font-semibold">株式会社一畳屋</div>
             <div>{store.name}</div>
             <div>〒{store.postalCode} {store.address}</div>
-            <div>TEL {store.phone} / フリーダイヤル 0120-158-108</div>
+            <div>{storePhone(store) ? `TEL ${storePhone(store)} / ` : ""}フリーダイヤル 0120-158-108</div>
             <div>担当: {creator?.name}</div>
           </div>
         </div>
@@ -44,7 +48,10 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
           <div className="text-lg">
             {customer?.name} <span className="text-sm">{customer?.type === "corporate" ? "御中" : "様"}</span>
           </div>
-          <div className="text-[11px] text-ink-2">{customer?.address}</div>
+          <div className="text-right text-[11px] text-ink-2">
+            <div>{customer?.address}</div>
+            {site && <div>施工場所: {site}</div>}
+          </div>
         </div>
 
         <p className="mt-6">下記のとおりお見積り申し上げます。</p>

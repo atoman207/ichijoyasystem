@@ -19,6 +19,7 @@ export default async function EditQuotePage({ params, searchParams }: { params: 
   const q = db.quotes.find((x) => x.id === id);
   if (!q) notFound();
   if (!canAccessStore(user, q.storeId)) redirect("/quotes?err=" + encodeURIComponent("この見積を編集する権限がありません。"));
+  const customer = db.customers.find((c) => c.id === q.customerId);
   const amend = q.status !== "draft";
   if (!["draft", "approved", "sent", "accepted"].includes(q.status) || q.pendingChange) {
     redirect(`/quotes/${id}?err=` + encodeURIComponent(q.pendingChange ? "承認待ちの変更があるため編集できません。" : "この状態の見積は編集できません。"));
@@ -55,6 +56,15 @@ export default async function EditQuotePage({ params, searchParams }: { params: 
             <Textarea name="workDetails" defaultValue={q.workDetails} rows={3} />
           </Field>
           <Field label="備考 (見積書に印字)"><Textarea name="notes" defaultValue={q.notes} /></Field>
+          <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
+            <Field label="施工場所 (お客様の住所と違うとき)" hint="例: ご実家・お子様の家など。空欄ならお客様の住所。受注・予定表・見積書に引き継ぎます">
+              <Input name="siteAddress" defaultValue={q.siteAddress} placeholder={customer?.address ? `空欄 = ${customer.address}` : "熊本県…"} />
+            </Field>
+            <Field label="領収書の宛名 (お客様名と違うとき)" hint="例: 株式会社○○ (会社名義の領収書)。空欄ならお客様名。受注で変更できます">
+              <Input name="receiptName" defaultValue={q.receiptName} placeholder={customer?.name ? `空欄 = ${customer.name} 様` : "株式会社○○"} />
+            </Field>
+          </div>
+
           {amend && (
             <Field label="変更理由" required hint="承認者と変更履歴に記録されます">
               <Textarea name="reason" required placeholder="例: お客様より網戸2枚の追加依頼" />

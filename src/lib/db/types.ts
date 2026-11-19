@@ -81,6 +81,20 @@ export type RecordSource = "app" | "import";
 
 export type CustomerType = "individual" | "corporate";
 
+/**
+ * 顧客の連絡先 (本人以外の家族・勤務先など。1 人のお客様に電話番号を複数登録する)。
+ * 主の電話番号は Customer.phone。電話番号での照合 (着信・Web フォーム・重複の確認・検索) はここも見る (src/lib/customer-contacts.ts)
+ */
+export interface CustomerContact {
+  id: string;
+  /** 続柄・種類 (例: 本人 携帯 / 夫 / 姉 / 祖母 / 勤務先) */
+  relation: string;
+  /** その人の名前 (任意) */
+  name?: string;
+  phone: string;
+  note?: string;
+}
+
 export interface Customer {
   id: string;
   code: string;
@@ -102,6 +116,11 @@ export interface Customer {
   notes: string;
   createdAt: string;
   updatedAt: string;
+  /** 本人以外の連絡先 (夫・姉・祖母など。電話番号が誰のものかを続柄で持つ) */
+  contacts?: CustomerContact[];
+  /** 取引停止 (見積・受注の登録時に警告する) と、その理由 */
+  tradeStopped?: boolean;
+  tradeStopNote?: string;
 }
 
 export type ServiceCategory =
@@ -312,6 +331,10 @@ export interface Quote {
   specStatus?: "discussing";
   /** 見積担当 (現場で見積をした社員) */
   estimatorId?: string;
+  /** 施工場所の住所 (お客様の住所と違うとき。例: お子様・ご両親の家)。受注に引き継ぐ */
+  siteAddress?: string;
+  /** 領収書の宛名 (お客様名と違うとき。例: 会社名義)。受注に引き継ぐ */
+  receiptName?: string;
 }
 
 export type OrderStatus =
@@ -398,6 +421,8 @@ export interface Order {
   specNote?: string;
   /** 工事日程: adjusting = 調整中 (日程は scheduledStart があれば確定) */
   scheduleStatus?: "adjusting";
+  /** 領収書の宛名 (お客様名と違うとき。例: 個人のお客様の依頼で会社名義の領収書)。空のときは顧客名 */
+  receiptName?: string;
   /** 請求書の発行: required = 必要 (業者・後日振込など) / not_required = 不要 (現場で集金など)。未設定は自動判定 */
   billing?: "required" | "not_required";
   /** 入金の予定方法 (cash / transfer / visit / card / epay / trade) */
@@ -781,7 +806,16 @@ export interface KnowledgeEntry {
   createdAt: string;
   updatedBy?: string;
   updatedAt: string;
+  /**
+   * 閲覧できる人 (AI の回答にも同じ範囲で使う): all = 全員 (既定) / manager = 店長・本部・管理者 / hq = 本部・管理者 / admin = 管理者のみ
+   * 判定は permissions.ts の canViewKnowledge
+   */
+  visibility?: KnowledgeVisibility;
+  /** 日付 (議事録の会議の日・決定事項の日など。AI が「いつ決まったか」を答えるのに使う) */
+  recordDate?: string;
 }
+
+export type KnowledgeVisibility = "all" | "manager" | "hq" | "admin";
 
 export type DeliveryChannel = "email" | "line" | "chatwork";
 /** sent = 送信 / failed = 送信失敗 / skipped = 送信の設定がないため記録のみ */

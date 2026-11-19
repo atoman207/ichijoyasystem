@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Database, ScheduleEvent, ScheduleKind, StoreId, User } from "@/lib/db/types";
 import { SCHEDULE_KIND, SCHEDULE_KINDS, SCHEDULE_REPEAT, type ScheduleRepeat } from "@/lib/constants";
-import { canAccessStore, canEditEvent, canManageCompanyEvents } from "@/lib/auth/permissions";
+import { canAccessStore, canEditEvent, canManageCompanyEvents, canManageSettings } from "@/lib/auth/permissions";
 import {
   addMonths,
   dateRange,
@@ -30,6 +30,8 @@ import {
 } from "@/lib/calendar";
 import { addDays, daysBetween } from "@/lib/format";
 import { createCaseResolver, orderEditable, type CaseRef } from "@/lib/db/schedule";
+import { suggestScheduleDates, type SuggestResult, type SuggestSlot } from "@/lib/schedule-suggest";
+import { readCapacitySettings, SCHEDULE_CAPACITY_ID, SUGGEST_KINDS, type CapacitySettings } from "@/lib/schedule-capacity";
 import { fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
 /**
@@ -462,4 +464,128 @@ export async function checkScheduleConflicts(q: ConflictQuery): Promise<Conflict
     }
   }
   return { conflicts, agenda, busy, day: q.date, occurrences: dates.length };
+}
+
+/* ---------------- AI 予定候補日の提案 ---------------- */
+
+/** 予定の入力フォームからの候補日の問い合わせ (案件は "order:o_1" の形) */
+export interface SuggestQuery {
+  kind: ScheduleKind;
+  storeId: StoreId;
+  caseRef?: string;
+  customerId?: string;
+  location?: string;
+  tatamiCount?: number;
+  staffCount?: number;
+  assigneeIds?: string[];
+  slot?: SuggestSlot;
+  from?: string;
+  days?: number;
+  durationDays?: number;
+  eventId?: string;
+}
+
+/**
+ * 候補日を提案する (データは変えない)。案件・お客様は閲覧できる範囲だけを手がかりにする (suggestScheduleDates の中で確かめる)。
+ * 予定表は全社共有のため、担当者の予定は店舗をまたいで使う
+ */
+export async function suggestScheduleSlots(q: SuggestQuery): Promise<SuggestResult> {
+  const user = await requireActionUser();
+  const db = getDb();
+  if (!q || !SUGGEST_KINDS.includes(q.kind)) return { candidates: [], notes: ["候補日の提案は、現地調査・顧客訪問・採寸・引き取り・納品・施工の予定で使えます。"] };
+  const ref = createCaseResolver(db).fromValue(typeof q.caseRef === "string" ? q.caseRef : undefined);
+  const storeId = ref?.storeId ?? (db.stores.some((s) => s.id === q.storeId) ? q.storeId : user.storeId);
+  const int = (v: unknown, min: number, max: number) => (typeof v === "number" && Number.isFinite(v) && v >= min && v <= max ? Math.round(v) : undefined);
+  const assigneeIds = (Array.isArray(q.assigneeIds) ? q.assigneeIds : []).filter((id) => typeof id === "string" && db.users.some((u) => u.id === id && u.active)).slice(0, 6);
+  const from = isDateKey(q.from) ? q.from : undefined;
+  const days = int(q.days, 7, 62);
+  return suggestScheduleDates(db, user, {
+    storeId,
+    kind: q.kind,
+    orderId: ref?.orderId,
+    quoteId: ref?.quoteId,
+    inquiryId: ref?.inquiryId,
+    customerId: ref?.customerId ?? (typeof q.customerId === "string" && q.customerId ? q.customerId : undefined),
+    address: typeof q.location === "string" ? q.location.slice(0, 200) : undefined,
+    tatamiCount: int(q.tatamiCount, 0, 200),
+    staffCount: assigneeIds.length ? undefined : int(q.staffCount, 1, 4),
+    assigneeIds,
+    slot: q.slot === "am" || q.slot === "pm" || q.slot === "day" ? q.slot : undefined,
+    from,
+    to: from && days ? addDays(from, days - 1) : undefined,
+    durationDays: int(q.durationDays, 1, 10),
+    eventId: typeof q.eventId === "string" ? q.eventId : undefined,
+  });
+}
+
+/** 候補日の提案の設定 (店舗の 1 日の上限など)。空欄は「過去 1 年の実績から自動」に戻す。管理者のみ */
+export async function updateScheduleCapacity(formData: FormData) {
+  const back = "/schedule/capacity";
+  const user = await requireActionUser();
+  if (!canManageSettings(user)) fail(back, "候補日の提案の設定は管理者のみ変更できます。");
+  const db0 = getDb();
+  const num = (key: string, label: string, min: number, max: number): number | undefined => {
+    const raw = str(formData, key);
+    if (!raw) return undefined;
+    const n = Number(raw.normalize("NFKC"));
+    if (!Number.isFinite(n) || n < min || n > max) fail(back, `「${label}」は ${min}〜${max} の数で入力してください (空欄は自動)。`);
+    return Math.round(n);
+  };
+  const time = (key: string) => {
+    const raw = str(formData, key);
+    if (!raw) return undefined;
+    const t = normTime(raw);
+    if (!t) fail(back, "作業の時間帯は 08:30 の形で入力してください。");
+    return t;
+  };
+  const stores: CapacitySettings["stores"] = {};
+  for (const s of db0.stores) {
+    const v = {
+      jobsPerDay: num(`${s.id}.jobsPerDay`, `${s.shortName}の現場作業の件数`, 1, 99),
+      visitsPerDay: num(`${s.id}.visitsPerDay`, `${s.shortName}の営業の訪問の件数`, 1, 99),
+      tatamiPerDay: num(`${s.id}.tatamiPerDay`, `${s.shortName}の畳の製造の枚数`, 1, 999),
+    };
+    if (v.jobsPerDay || v.visitsPerDay || v.tatamiPerDay) stores[s.id] = v;
+  }
+  const workStart = time("workStart");
+  const workEnd = time("workEnd");
+  if (workStart && workEnd && toMinutes(workEnd) - toMinutes(workStart) < 180) fail(back, "作業の時間帯は 3 時間以上にしてください。");
+  const next: CapacitySettings = {
+    stores,
+    staffEventsPerDay: num("staffEventsPerDay", "1 人の 1 日の件数", 1, 20),
+    workStart,
+    workEnd,
+    travelSpeedKmh: num("travelSpeedKmh", "移動の速さ", 10, 80),
+    leadDays: num("leadDays", "何日後から提案するか", 0, 30),
+    horizonDays: num("horizonDays", "探す日数", 7, 62),
+  };
+  const value = JSON.parse(JSON.stringify(next)) as Record<string, unknown>;
+  await mutate((db) => {
+    const now = nowIso();
+    const before = readCapacitySettings(db);
+    const row = db.settings.find((s) => s.id === SCHEDULE_CAPACITY_ID);
+    if (row) Object.assign(row, { value, updatedBy: user.id, updatedAt: now });
+    else db.settings.push({ id: SCHEDULE_CAPACITY_ID, value, updatedBy: user.id, updatedAt: now });
+    const flatten = (c: CapacitySettings): Record<string, unknown> => {
+      const out: Record<string, unknown> = { staffEventsPerDay: c.staffEventsPerDay, workStart: c.workStart, workEnd: c.workEnd, travelSpeedKmh: c.travelSpeedKmh, leadDays: c.leadDays, horizonDays: c.horizonDays };
+      for (const s of db.stores) for (const k of ["jobsPerDay", "visitsPerDay", "tatamiPerDay"] as const) out[`${s.shortName}.${k}`] = c.stores[s.id]?.[k];
+      return out;
+    };
+    const b = flatten(before);
+    const a = flatten(next);
+    const changes = Object.keys(a)
+      .filter((k) => (b[k] ?? null) !== (a[k] ?? null))
+      .map((field) => ({ field, before: b[field] ?? "自動", after: a[field] ?? "自動" }));
+    addAudit(db, {
+      userId: user.id,
+      action: "update",
+      entity: "settings",
+      entityId: SCHEDULE_CAPACITY_ID,
+      entityLabel: "候補日の提案の設定",
+      summary: changes.length ? `候補日の提案の設定を変更 (${changes.length} 項目)` : "候補日の提案の設定を保存 (変更なし)",
+      changes,
+    });
+  });
+  revalidatePath("/schedule/capacity");
+  redirect(withMsg(back, "候補日の提案の設定を保存しました。次の提案から使われます。"));
 }

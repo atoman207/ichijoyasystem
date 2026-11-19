@@ -20,6 +20,7 @@ import { NOTIFY_EVENT_LABEL, notifySettings, type NotifyEvent } from "@/lib/noti
 import { canManageIntegrations } from "@/lib/auth/permissions";
 import type { ServiceCategory } from "@/lib/db/types";
 import { Badge, Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select, StoreTag, Textarea } from "@/components/ui";
+import Link from "@/components/ui/Link";
 import { GoLivePanel } from "@/components/settings/GoLivePanel";
 import { LineGroupsCard } from "@/components/settings/LineGroupsCard";
 import { MessagingConnectionCheck } from "@/components/settings/MessagingConnectionCheck";
@@ -71,13 +72,13 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 <form action={updateStore.bind(null, s.id)} className="space-y-2">
                   <Field label="住所"><Input name="address" defaultValue={s.address} /></Field>
                   <div className="grid grid-cols-2 gap-2">
-                    <Field label="電話"><Input name="phone" defaultValue={s.phone} /></Field>
+                    <Field label="電話" hint="固定電話のない店舗は空欄 (公開ページ・帳票に出しません)"><Input name="phone" defaultValue={s.phone} /></Field>
                     <Field label="責任者"><Select name="managerUserId" defaultValue={s.managerUserId}>{db.users.filter((u) => u.active).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></Field>
                   </div>
                   <Button type="submit" size="sm" variant="secondary">保存</Button>
                 </form>
               ) : (
-                <dl className="text-sm"><dt className="text-xs text-ink-3">住所</dt><dd>〒{s.postalCode} {s.address}</dd><dt className="mt-2 text-xs text-ink-3">電話</dt><dd>{s.phone}</dd><dt className="mt-2 text-xs text-ink-3">責任者</dt><dd>{userName(s.managerUserId)}</dd></dl>
+                <dl className="text-sm"><dt className="text-xs text-ink-3">住所</dt><dd>〒{s.postalCode} {s.address}</dd><dt className="mt-2 text-xs text-ink-3">電話</dt><dd>{s.phone || "固定電話なし"}</dd><dt className="mt-2 text-xs text-ink-3">責任者</dt><dd>{userName(s.managerUserId)}</dd></dl>
               )}
             </Card>
           ))}
@@ -217,6 +218,13 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             <p className="text-[11px] text-ink-3">事務担当は 設定 → KPI・インセンティブ の「事務担当」で選んだ社員です。登録できない人には、顧客の検索 (既存のお客様の選択) と、事務担当への依頼の案内が表示されます。</p>
             {admin && <Button type="submit" size="sm">保存</Button>}
           </form>
+          <p className="mt-4 border-t border-line pt-3 text-xs text-ink-2">
+            予定の候補日の提案 (店舗の 1 日の仕事量・畳の製造の上限など) は{" "}
+            <Link href="/schedule/capacity" className="text-accent hover:underline">
+              予定表 → 仕事量と提案の設定
+            </Link>{" "}
+            で設定します。
+          </p>
         </Card>
       )}
 

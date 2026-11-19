@@ -196,6 +196,110 @@ export async function generateText(req: TextRequest): Promise<AiResult<string>> 
   return { data: text, provider: "openai", model, ms: Date.now() - t0 };
 }
 
+/* ================================================================== */
+/* 道具を使う会話 (AI アシスタント: 検索・集計などの道具を AI が選んで呼ぶ)                    */
+/* ================================================================== */
+
+export interface ToolDef {
+  name: string;
+  description: string;
+  /** JSON Schema (object)。省略可の項目は required に入れない */
+  parameters: Record<string, unknown>;
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}
+
+export interface ToolLoopRequest {
+  system: string;
+  messages: { role: "user" | "assistant"; content: string }[];
+  tools: ToolDef[];
+  /** 道具の実行 (結果は AI に返す文字) */
+  execute: (call: ToolCall) => Promise<string>;
+  /** AI とのやりとりの最大回数 (道具の呼び出しを含む) */
+  maxRounds?: number;
+  maxTokens?: number;
+  /** 全体の制限時間 */
+  deadlineMs?: number;
+  effort?: AiEffort;
+}
+
+export interface ToolLoopResult {
+  text: string;
+  provider: AiProviderName;
+  model: string;
+  rounds: number;
+  calls: ToolCall[];
+  ms: number;
+}
+
+const parseArgs = (s: string | undefined): Record<string, unknown> => {
+  try {
+    const v = JSON.parse(s || "{}");
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+};
+
+/**
+ * AI に道具 (関数) を渡し、AI が呼んだ道具を実行して結果を返す、を最終の回答が出るまで繰り返す。
+ * OpenAI (function calling) と Claude (tool use) の両方に対応。最後の回数では道具を渡さず、答えを出させる
+ */
+export async function runToolLoop(req: ToolLoopRequest): Promise<ToolLoopResult> {
+  const c = aiConfig();
+  if (!c) throw new AiError("config", "AI の API キーが設定されていません。");
+  const t0 = Date.now();
+  const total = req.deadlineMs ?? 110_000;
+  const maxRounds = Math.max(1, req.maxRounds ?? 6);
+  const effort = effortFromEnv(req.effort ?? "low");
+  const calls: ToolCall[] = [];
+  const left = () => total - (Date.now() - t0);
+  const FINAL = "\n\n(道具の呼び出しの上限に達しました。ここまでに得た情報だけで回答してください。足りない点は、足りないと書いてください。)";
+
+  if (c.provider === "claude") {
+    const tools: Anthropic.Beta.BetaToolUnion[] = req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters as Anthropic.Beta.BetaTool.InputSchema }));
+    const messages: Anthropic.Beta.BetaMessageParam[] = req.messages.map((m) => ({ role: m.role, content: m.content }));
+    let model = CLAUDE_MODEL;
+    for (let round = 1; ; round++) {
+      const last = round >= maxRounds || left() < 25_000;
+      if (last && round > 1) messages.push({ role: "user", content: FINAL.trim() });
+      const res = await claudeCall(c, { system: req.system, cacheSystem: true, messages, maxTokens: req.maxTokens ?? 3000, effort, tools, noToolUse: last, deadlineMs: Math.max(8_000, left() - 2_000) });
+      model = res.model;
+      const uses = res.blocks.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use");
+      if (!uses.length || last) return { text: res.text, provider: "claude", model, rounds: round, calls, ms: Date.now() - t0 };
+      messages.push({ role: "assistant", content: res.blocks as Anthropic.Beta.BetaContentBlockParam[] });
+      const results: Anthropic.Beta.BetaToolResultBlockParam[] = [];
+      for (const u of uses) {
+        const call = { id: u.id, name: u.name, args: (u.input && typeof u.input === "object" ? u.input : {}) as Record<string, unknown> };
+        calls.push(call);
+        const out = await req.execute(call).catch((e: Error) => `エラー: ${e.message}`);
+        results.push({ type: "tool_result", tool_use_id: u.id, content: out.slice(0, 24_000) });
+      }
+      messages.push({ role: "user", content: results });
+    }
+  }
+
+  const tools = req.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
+  const messages: OpenAiMessage[] = [{ role: "system", content: req.system }, ...req.messages.map((m) => ({ role: m.role, content: m.content }) as OpenAiMessage)];
+  for (let round = 1; ; round++) {
+    const last = round >= maxRounds || left() < 25_000;
+    if (last && round > 1) messages.push({ role: "user", content: FINAL.trim() });
+    const res = await openAiCall(c, { messages, maxTokens: req.maxTokens ?? 3000, effort, tools, noToolUse: last, deadlineMs: Math.max(8_000, left() - 2_000) });
+    if (!res.toolCalls?.length || last) return { text: res.text, provider: "openai", model: res.model, rounds: round, calls, ms: Date.now() - t0 };
+    messages.push({ role: "assistant", content: res.text || null, tool_calls: res.toolCalls });
+    for (const tc of res.toolCalls) {
+      const call = { id: tc.id, name: tc.function.name, args: parseArgs(tc.function.arguments) };
+      calls.push(call);
+      const out = await req.execute(call).catch((e: Error) => `エラー: ${e.message}`);
+      messages.push({ role: "tool", tool_call_id: tc.id, content: out.slice(0, 24_000) });
+    }
+  }
+}
+
 /** 接続の確認 (設定画面の「接続を確認」)。読取と同じ形 (JSON Schema) で短い依頼を 1 回送る */
 export async function testConnection(): Promise<{ ok: true; provider: AiProviderName; model: string; ms: number; reply: string } | { ok: false; message: string; detail?: string }> {
   try {
@@ -229,12 +333,25 @@ function toClaudeBlock(p: AiPart): ClaudeBlock {
 
 async function claudeCall(
   c: AiConfig,
-  opts: { system: string; cacheSystem?: boolean; content?: ClaudeBlock[]; messages?: { role: "user" | "assistant"; content: string }[]; maxTokens: number; effort: AiEffort; schema?: Record<string, unknown> },
-): Promise<{ text: string; model: string }> {
+  opts: {
+    system: string;
+    cacheSystem?: boolean;
+    content?: ClaudeBlock[];
+    messages?: Anthropic.Beta.BetaMessageParam[];
+    maxTokens: number;
+    effort: AiEffort;
+    schema?: Record<string, unknown>;
+    tools?: Anthropic.Beta.BetaToolUnion[];
+    /** 道具を渡したうえで、呼ばせない (会話に道具の呼び出しが含まれる最後の回答) */
+    noToolUse?: boolean;
+    deadlineMs?: number;
+  },
+): Promise<{ text: string; model: string; blocks: Anthropic.Beta.BetaContentBlock[] }> {
   // ANTHROPIC_BASE_URL があればそこへ送る (SDK の既定の動き。検証用)
-  const client = new Anthropic({ apiKey: c.apiKey, maxRetries: 0, timeout: DEADLINE_MS });
+  const limit = opts.deadlineMs ?? DEADLINE_MS;
+  const client = new Anthropic({ apiKey: c.apiKey, maxRetries: 0, timeout: limit });
   const messages: Anthropic.Beta.BetaMessageParam[] = opts.messages ?? [{ role: "user", content: opts.content ?? [] }];
-  const deadline = Date.now() + DEADLINE_MS;
+  const deadline = Date.now() + limit;
   for (let attempt = 0; ; attempt++) {
     try {
       const res = await client.beta.messages.create(
@@ -245,6 +362,7 @@ async function claudeCall(
           max_tokens: opts.maxTokens,
           system: opts.cacheSystem ? [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }] : opts.system,
           output_config: opts.schema ? { effort: opts.effort, format: { type: "json_schema", schema: opts.schema } } : { effort: opts.effort },
+          ...(opts.tools?.length ? { tools: opts.tools, ...(opts.noToolUse ? { tool_choice: { type: "none" as const } } : {}) } : {}),
           messages,
         },
         { timeout: Math.max(5_000, deadline - Date.now()) },
@@ -252,7 +370,7 @@ async function claudeCall(
       if (res.stop_reason === "refusal") throw new AiError("refusal", MSG.refusal, res.stop_details?.category ?? undefined);
       if (res.stop_reason === "max_tokens") throw new AiError("truncated", MSG.truncated);
       const text = res.content.map((b) => (b.type === "text" ? b.text : "")).join("");
-      return { text, model: res.model ?? CLAUDE_MODEL };
+      return { text, model: res.model ?? CLAUDE_MODEL, blocks: res.content };
     } catch (err) {
       const retryable = err instanceof Anthropic.InternalServerError || err instanceof Anthropic.RateLimitError || (err instanceof Anthropic.APIConnectionError && !(err instanceof Anthropic.APIConnectionTimeoutError));
       if (attempt === 0 && retryable && deadline - Date.now() > 20_000) {
@@ -297,14 +415,17 @@ let workingOpenAiModel: string | undefined;
 
 type OpenAiBody = { choices?: { message?: { content?: string | null; refusal?: string | null }; finish_reason?: string }[]; model?: string; error?: { message?: string; code?: string; type?: string } } | null;
 
+type OpenAiToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+type OpenAiMessage = { role: "system" | "user" | "assistant" | "tool"; content: OpenAiContent | null; tool_calls?: OpenAiToolCall[]; tool_call_id?: string };
+
 async function openAiCall(
   c: AiConfig,
-  opts: { messages: { role: "system" | "user" | "assistant"; content: OpenAiContent }[]; maxTokens: number; effort: AiEffort; responseFormat?: Record<string, unknown> },
-): Promise<{ text: string; model: string }> {
+  opts: { messages: OpenAiMessage[]; maxTokens: number; effort: AiEffort; responseFormat?: Record<string, unknown>; tools?: Record<string, unknown>[]; noToolUse?: boolean; deadlineMs?: number },
+): Promise<{ text: string; model: string; toolCalls?: OpenAiToolCall[] }> {
   const base = (process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1").replace(/\/$/, "");
   const preferred = process.env.OPENAI_MODEL?.trim();
   const models = [...new Set([preferred, workingOpenAiModel, ...OPENAI_MODELS].filter(Boolean) as string[])];
-  const deadline = Date.now() + DEADLINE_MS;
+  const deadline = Date.now() + (opts.deadlineMs ?? DEADLINE_MS);
   let lastError: AiError | undefined;
   let retried = false;
   /** reasoning_effort を受け付けなかったモデル (同じモデルで付けずにやり直す) */
@@ -326,6 +447,7 @@ async function openAiCall(
           // 推論モデルは推論の分も出力に数えるため、上限に余裕を足す (使った分だけの料金)
           max_completion_tokens: reasoning ? opts.maxTokens + REASONING_HEADROOM : opts.maxTokens,
           ...(opts.responseFormat ? { response_format: opts.responseFormat } : {}),
+          ...(opts.tools?.length ? { tools: opts.tools, tool_choice: opts.noToolUse ? "none" : "auto", ...(opts.noToolUse ? {} : { parallel_tool_calls: true }) } : {}),
           ...(withEffort ? { reasoning_effort: opts.effort } : {}),
         }),
         signal: AbortSignal.timeout(remaining),
@@ -388,7 +510,8 @@ async function openAiCall(
     if (choice?.finish_reason === "length") throw new AiError("truncated", MSG.truncated);
     if (choice?.finish_reason === "content_filter") throw new AiError("refusal", MSG.refusal, "content_filter");
     workingOpenAiModel = model;
-    return { text: choice?.message?.content ?? "", model: body?.model ?? model };
+    const raw = choice?.message as { content?: string | null; tool_calls?: OpenAiToolCall[] } | undefined;
+    return { text: raw?.content ?? "", model: body?.model ?? model, toolCalls: raw?.tool_calls?.length ? raw.tool_calls : undefined };
   }
   throw lastError ?? new AiError("unsupported", "利用できる OpenAI のモデルが見つかりませんでした。OPENAI_MODEL を設定してください。");
 }

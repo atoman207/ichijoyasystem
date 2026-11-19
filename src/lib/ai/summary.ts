@@ -1,4 +1,5 @@
 import "server-only";
+import { customerPhonesText } from "@/lib/customer-contacts";
 import type { Database, User } from "@/lib/db/types";
 import { canAccessStore, canViewExpense } from "@/lib/auth/permissions";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
@@ -116,7 +117,7 @@ export function recordFacts(db: Database, user: User, kind: SummaryKind, id: str
     const unpaid = db.invoices.filter((i) => i.customerId === c.id && ["issued", "partially_paid", "overdue"].includes(i.status));
     const head = [`${c.name} 様 (${c.code}) · 受注 ${orders.length} 件 · 累計売上 ${yen(orders.filter((o) => o.salesDate).reduce((a, o) => a + o.total, 0))}`, orders[0] ? `最新の受注: ${orders[0].title} (${fmtDate(orders[0].contractDate)}, ${ORDER_STATUS[orders[0].status].label})` : "受注はまだありません", `対応中の問い合わせ ${open.length} 件 · 未入金 ${unpaid.length} 件`];
     const facts = [
-      `顧客 ${c.code} ${c.name} 様 (${c.kana}) ${c.type === "corporate" ? "法人" : "個人"} / 電話 ${c.phone || "-"} / 住所 ${c.address || "-"} / 担当 ${uname(db, c.assignedUserId)}`,
+      `顧客 ${c.code} ${c.name} 様 (${c.kana}) ${c.type === "corporate" ? "法人" : "個人"} / 電話 ${customerPhonesText(c) || "-"} / 住所 ${c.address || "-"} / 担当 ${uname(db, c.assignedUserId)}${c.tradeStopped ? ` / 取引停止${c.tradeStopNote ? ` (${c.tradeStopNote})` : ""}` : ""}`,
       c.tags.length ? `タグ: ${c.tags.join("・")}` : "",
       c.notes ? `メモ: ${c.notes}` : "",
       "受注 (新しい順):",

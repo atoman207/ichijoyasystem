@@ -71,6 +71,11 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
         合計 {approvalSettings(db).quoteAdminThreshold.toLocaleString("ja-JP")} 円未満は店長承認、以上は管理者承認が必要です (本部の案件と、承認できる店長がいない店舗は管理者)。「承認を申請」すると承認者に通知され、承認後にお客様へ送付できます。
         {doc && <> この見積は取込書類「{doc.fileName}」の読取結果を初期値にしています (品名は商品マスタに対応づけ、単価が読み取れない行はマスタの単価)。内容を確認・修正してください。</>}
       </Note>
+      {customer?.tradeStopped && (
+        <Note tone="warn">
+          {customer.name} 様は<strong>取引停止</strong>のお客様です{customer.tradeStopNote ? ` (理由: ${customer.tradeStopNote})` : ""}。見積を作る前に店長・管理者に確認してください。
+        </Note>
+      )}
       <Card className="mt-4">
         {choices.searchable && (
           <CustomerSearch total={choices.total} q={sp.cq} shown={customers.filter((c) => c.id !== customerId).length} keep={{ customerId: sp.customerId, inquiryId: sp.inquiryId, documentId: sp.documentId, category: sp.category }} />
@@ -119,6 +124,15 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
           <Field label="備考 (見積書に印字)">
             <Textarea name="notes" placeholder="例: 施工は 2 日仕上げ。古畳の処分費を含みます。" defaultValue={exText("note")} />
           </Field>
+          <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
+            <Field label="施工場所 (お客様の住所と違うとき)" hint="例: ご実家・お子様の家など。空欄ならお客様の住所。受注・予定表・見積書に引き継ぎます">
+              <Input name="siteAddress" defaultValue={exText("siteAddress") && exText("siteAddress") !== customer?.address ? exText("siteAddress") : undefined} placeholder={customer?.address ? `空欄 = ${customer.address}` : "熊本県…"} />
+            </Field>
+            <Field label="領収書の宛名 (お客様名と違うとき)" hint="例: 株式会社○○ (会社名義の領収書)。空欄ならお客様名。受注で変更できます">
+              <Input name="receiptName" defaultValue={undefined} placeholder={customer?.name ? `空欄 = ${customer.name} 様` : "株式会社○○"} />
+            </Field>
+          </div>
+
           <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
             <Field label="見積担当 (現場で見積をした社員)">
               <Select name="estimatorId" defaultValue={estimatorDefault}>

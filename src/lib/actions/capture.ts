@@ -13,6 +13,7 @@ import { DOCUMENT_KIND_LABEL } from "@/lib/constants";
 import { findOrderByPostcard, storeFromPostcard, surveyFromExtracted } from "@/lib/survey-link";
 import { assertStore, choice, fail, requireActionUser, resolveStoreId, str, withErr, withMsg } from "./guards";
 import { canAccessStore } from "@/lib/auth/permissions";
+import { customerHasPhone } from "@/lib/customer-contacts";
 
 // 写真は画面側で縮小してから送る。PDF などは 4 MB まで (Vercel の 1 回の送信の上限 4.5 MB)
 const MAX_BYTES = 4 * 1024 * 1024;
@@ -272,7 +273,7 @@ export async function saveExtraction(formData: FormData) {
       const qs = new URLSearchParams({ documentId: id });
       // 電話番号が 1 人のお客様と一致すれば、そのお客様を選ぶ
       const digits = typeof extracted.phone === "string" ? extracted.phone.replace(/\D/g, "") : "";
-      const byPhone = !customerId && digits.length >= 9 ? getDb().customers.filter((c) => c.phone.replace(/\D/g, "") === digits && canAccessStore(user, c.storeId)) : [];
+      const byPhone = !customerId && digits.length >= 9 ? getDb().customers.filter((c) => customerHasPhone(c, digits) && canAccessStore(user, c.storeId)) : [];
       if (customerId) qs.set("customerId", customerId);
       else if (byPhone.length === 1) qs.set("customerId", byPhone[0].id);
       else if (cq) qs.set("cq", cq);

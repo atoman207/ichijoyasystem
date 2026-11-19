@@ -7,6 +7,7 @@ import { orderChain, userName } from "@/lib/db/queries";
 import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, requestOrderChange, resubmitOrder, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
 import { APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, PROGRESS_KIND_LABEL, QUOTE_STATUS } from "@/lib/constants";
+import { customerPhonesText } from "@/lib/customer-contacts";
 import { ApprovalDecision, ApprovalHistoryCard, HistoryCard, RecordStamp } from "@/components/features/History";
 import { ContactList, ContactLogForm } from "@/components/features/Contacts";
 import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
@@ -462,14 +463,16 @@ export default async function OrderDetailPage({ params, searchParams }: { params
                   </Select>
                 </Field>
               </div>
-              <Field label="現場住所"><Input name="siteAddress" defaultValue={o.siteAddress} /></Field>
+              <Field label="施工場所 (現場住所)" hint="お客様の住所と違うとき (ご実家など) はここを変えます"><Input name="siteAddress" defaultValue={o.siteAddress} /></Field>
+              <Field label="領収書の宛名" hint={`空欄なら「${customer?.name ?? "お客様名"}」。会社名義などで変えるとき (「御中」と書けば御中で出します)`}><Input name="receiptName" defaultValue={o.receiptName} placeholder={customer?.name} /></Field>
               <Field label="施工内容"><Textarea name="workDetails" defaultValue={o.workDetails} rows={3} /></Field>
               <Button type="submit" size="sm" variant="secondary">変更する</Button>
             </form>
           </Card>
           <Card>
             <CardHeader title="お客様" />
-            {customer && <Dl columns={1} items={[["氏名", <Link key="n" href={`/customers/${customer.id}`} className="text-accent hover:underline">{customer.name}</Link>], ["電話", customer.phone], ["現場", o.siteAddress], ["希望連絡手段", CHANNEL_LABEL[customer.preferredChannel]]]} />}
+            {customer && <Dl columns={1} items={[["氏名", <Link key="n" href={`/customers/${customer.id}`} className="text-accent hover:underline">{customer.name}</Link>], ["電話", customerPhonesText(customer) || "-"], ["住所", customer.address || "-"], ["施工場所", o.siteAddress && o.siteAddress !== customer.address ? o.siteAddress : "お客様の住所と同じ"], ["領収書の宛名", o.receiptName || `${customer.name} (顧客名)`], ["希望連絡手段", CHANNEL_LABEL[customer.preferredChannel]]]} />}
+            {customer?.tradeStopped && <p className="mt-2 rounded-lg bg-critical-soft px-2.5 py-1.5 text-xs text-critical-ink">取引停止のお客様です{customer.tradeStopNote ? ` (${customer.tradeStopNote})` : ""}。</p>}
           </Card>
           <Card>
             <CardHeader title="関連情報" />

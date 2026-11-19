@@ -108,6 +108,10 @@ export const TABLES: TableDef[] = [
       ["notes", "text not null default ''"],
       ["createdAt", `${ts} not null`],
       ["updatedAt", `${ts} not null`],
+      // 2026-11: 本人以外の連絡先 (続柄つきの電話番号) と取引停止
+      ["contacts", "jsonb"],
+      ["tradeStopped", "boolean"],
+      ["tradeStopNote", "text"],
     ],
     orderBy: ["code"],
     indexes: [["store_id"], ["name"], ["area"]],
@@ -201,6 +205,9 @@ export const TABLES: TableDef[] = [
       ["handedOver", "boolean"],
       ["specStatus", "text"],
       ["estimatorId", "text"],
+      // 2026-11: 施工場所 (お客様の住所と違うとき) と領収書の宛名。受注に引き継ぐ
+      ["siteAddress", "text"],
+      ["receiptName", "text"],
     ],
     orderBy: ["created_at"],
     indexes: [["store_id"], ["status"], ["customer_id"]],
@@ -248,6 +255,8 @@ export const TABLES: TableDef[] = [
       ["plannedPayment", "text"],
       ["closedAt", ts],
       ["closedBy", "text"],
+      // 2026-11: 領収書の宛名 (お客様名と違うとき)
+      ["receiptName", "text"],
     ],
     orderBy: ["created_at"],
     indexes: [["store_id"], ["status"], ["customer_id"], ["sales_date"]],
@@ -808,6 +817,9 @@ export const TABLES: TableDef[] = [
       ["createdAt", `${ts} not null`],
       ["updatedBy", "text"],
       ["updatedAt", `${ts} not null`],
+      // 2026-11: 閲覧できる人 (権限) と日付 (議事録・決定事項)
+      ["visibility", "text"],
+      ["recordDate", "date"],
     ],
     orderBy: ["created_at"],
     indexes: [["source_ref"]],

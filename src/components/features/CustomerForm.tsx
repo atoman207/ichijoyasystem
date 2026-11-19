@@ -4,6 +4,7 @@ import { Button, Field, FormActions, Input, LinkButton, Select, Textarea } from 
 import { canSeeAllStores } from "@/lib/auth/permissions";
 import { checkCustomerDuplicates } from "@/lib/actions/customers";
 import { DuplicateWatcher } from "./DuplicateWatcher";
+import { ContactsEditor } from "./ContactsEditor";
 
 export function CustomerForm({
   action,
@@ -92,10 +93,20 @@ export function CustomerForm({
           <Input name="tags" defaultValue={customer?.tags?.join(", ")} />
         </Field>
       </div>
+      <Field label="ほかの連絡先 (本人以外の電話番号)" hint="夫・姉・祖母・勤務先など、続柄つきで何件でも登録できます。着信・Web フォームの照合と顧客の検索に使います">
+        <ContactsEditor initial={customer?.contacts} />
+      </Field>
       <DuplicateWatcher check={checkCustomerDuplicates} excludeId={customer?.id} requireConfirm={!customer?.id} />
       <Field label="備考 (駐車・訪問時の注意など)">
         <Textarea name="notes" defaultValue={customer?.notes} />
       </Field>
+      <div className="rounded-lg border border-line px-3 py-2.5">
+        <label className="inline-flex items-center gap-2 text-sm text-ink">
+          <input type="checkbox" name="tradeStopped" value="1" defaultChecked={Boolean(customer?.tradeStopped)} className="h-4 w-4" />
+          取引停止 (見積・受注の登録時に警告を表示します)
+        </label>
+        <Input name="tradeStopNote" defaultValue={customer?.tradeStopNote} placeholder="理由 (例: 未払いのため 2024-03 から取引停止)" className="mt-2" aria-label="取引停止の理由" />
+      </div>
       {changeNote && (
         <div className="rounded-lg border border-warn/40 bg-warn-soft/40 px-3 py-2 text-xs text-ink-2">
           <p>{changeNote}</p>

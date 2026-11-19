@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { CheckCircle2, ClipboardList, Shield, ShieldCheck, Users } from "lucide-react";
+import { CheckCircle2, ClipboardList, Shield, ShieldCheck, Users, XCircle } from "lucide-react";
 import { syncDb } from "@/lib/db/store";
 import { avatarUrl } from "@/lib/account-rules";
 import { isDemoAccount, isReviewAccount } from "@/lib/auth/permissions";
@@ -54,34 +54,37 @@ export default async function RolesPage() {
         <CardHeader
           icon={<Users />}
           title={<span id="people-by-store">店舗・本社の担当</span>}
-          description="顔写真と役職から、どの店舗の誰かを確認できます。自分のカードのロール説明を読んでください。"
+          description="各人のカードに、その人ができること・できないことを整理しています。"
         />
-        <div className="space-y-6">
+        <div className="space-y-5">
           {stores.map((store) => {
             const people = members.filter((u) => u.storeId === store.id);
             if (!people.length) return null;
             const photo = STORE_PHOTO[store.id];
             return (
-              <Card key={store.id} padded={false} className="overflow-hidden">
-                <div className="relative aspect-[4.6/1] min-h-[5rem] bg-subtle @3xl:aspect-[5.8/1]">
-                  {photo && (
-                    // eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル
-                    <img src={photo} alt={`${store.name}の外観`} className="h-full w-full object-cover" />
-                  )}
-                  <div className="absolute inset-0 bg-linear-to-t from-ink/55 via-ink/10 to-transparent" aria-hidden />
-                  <div className="absolute right-3 bottom-3 left-3 flex flex-wrap items-end justify-between gap-2 sm:right-5 sm:bottom-4 sm:left-5">
-                    <div>
-                      <p className="inline-flex items-center rounded-full bg-white/95 px-3 py-1 text-sm font-semibold text-ink shadow-xs">
-                        {store.name}
-                      </p>
-                      <p className="mt-1.5 text-xs text-white/90 drop-shadow-sm">
-                        〒{store.postalCode} {store.address}
-                      </p>
+              <Card key={store.id} className="overflow-hidden">
+                {/* 店舗ヘッダー: 小さなサムネイル + 店名・住所 */}
+                <div className="mb-4 flex items-center gap-3 border-b border-line/70 pb-4">
+                  <div className="h-14 w-20 shrink-0 overflow-hidden rounded-lg border border-line/70 bg-subtle sm:h-16 sm:w-24">
+                    {photo ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル
+                      <img src={photo} alt={`${store.name}の外観`} className="h-full w-full object-cover" />
+                    ) : null}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-[15px] font-semibold tracking-tight text-ink">{store.name}</h3>
+                      <Badge tone="neutral" dot={false}>
+                        {people.length} 名
+                      </Badge>
                     </div>
+                    <p className="mt-0.5 text-xs text-ink-3">
+                      〒{store.postalCode} {store.address}
+                    </p>
                   </div>
                 </div>
 
-                <ul className="grid grid-cols-1 gap-3 p-4 sm:p-5 @3xl:grid-cols-2 @5xl:grid-cols-3">
+                <ul className="grid grid-cols-1 gap-3 @3xl:grid-cols-2">
                   {people.map((u) => (
                     <MemberCard key={u.id} user={u} storeName={store.name} />
                   ))}
@@ -127,11 +130,11 @@ function DutyBlock({ icon: Icon, title, items }: { icon: typeof CheckCircle2; ti
 }
 
 function MemberCard({ user, storeName }: { user: User; storeName: string }) {
-  const permissions = permissionLines(user, storeName);
+  const { can, cannot } = permissionCards(user, storeName);
   return (
-    <li className="flex flex-col rounded-xl border border-line/70 bg-panel p-4">
+    <li className="rounded-xl border border-line/70 bg-panel p-4">
       <div className="flex items-start gap-3">
-        <Avatar name={user.name} id={user.id} size={56} ring src={avatarUrl(user)} />
+        <Avatar name={user.name} id={user.id} size={48} ring src={avatarUrl(user)} />
         <div className="min-w-0 flex-1">
           <p className="text-[15px] font-semibold tracking-tight text-ink">{user.name}</p>
           <p className="mt-0.5 text-xs text-ink-2">{user.title || ROLE_LABEL[user.role]}</p>
@@ -142,49 +145,96 @@ function MemberCard({ user, storeName }: { user: User; storeName: string }) {
           </div>
         </div>
       </div>
-      <div className="mt-3 border-t border-line/70 pt-3">
-        <p className="text-[11px] font-semibold text-ink-3">この人の権限 (具体)</p>
-        <ul className="mt-1.5 space-y-1">
-          {permissions.map((t) => (
-            <li key={t} className="text-xs leading-relaxed text-ink-2">{t}</li>
-          ))}
-        </ul>
+
+      <div className="mt-3 grid grid-cols-1 gap-2">
+        <PermissionGroup title="できること" tone="can" items={can} />
+        <PermissionGroup title="できないこと" tone="cannot" items={cannot} />
       </div>
     </li>
   );
 }
 
-function permissionLines(user: User, storeName: string): string[] {
+function PermissionGroup({ title, tone, items }: { title: string; tone: "can" | "cannot"; items: string[] }) {
+  const Icon = tone === "can" ? CheckCircle2 : XCircle;
+  const box = tone === "can" ? "border-good/25 bg-good-soft/40" : "border-line/70 bg-subtle/50";
+  const head = tone === "can" ? "text-good-ink" : "text-ink-3";
+  const icon = tone === "can" ? "text-good" : "text-ink-3";
+  return (
+    <div className={`rounded-lg border px-3 py-2.5 ${box}`}>
+      <p className={`flex items-center gap-1.5 text-[11px] font-semibold ${head}`}>
+        <Icon className={`h-3.5 w-3.5 ${icon}`} aria-hidden />
+        {title}
+      </p>
+      <ul className="mt-1.5 space-y-1">
+        {items.map((t) => (
+          <li key={t} className="text-xs leading-relaxed text-ink-2">{t}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** 人ごと・店舗ごとに具体化した権限カード用の文面 */
+function permissionCards(user: User, storeName: string): { can: string[]; cannot: string[] } {
   switch (user.role) {
     case "admin":
-      return [
-        "全店舗の顧客・問い合わせ・見積・受注・請求・経費・仕入を閲覧/更新できます。",
-        "承認は店長承認/管理者承認の両方を決裁できます。",
-        "アカウント追加・削除・ロール変更、各種設定変更を実行できます。",
-        "変更履歴・経営レポート・会計データを全社分で確認/出力できます。",
-      ];
+      return {
+        can: [
+          "全店舗の顧客・問い合わせ・見積・受注・請求・経費・仕入を閲覧・更新できる",
+          "店長承認・管理者承認の両方を決裁できる",
+          "アカウントの追加・削除・ロール変更、各種設定を変更できる",
+          "変更履歴・経営レポート・会計データを全社分で確認・出力できる",
+        ],
+        cannot: [
+          "自分自身の管理者権限を外すことはできない",
+          "有効な管理者が 1 人だけになる無効化・削除はできない",
+        ],
+      };
     case "hq_staff":
-      return [
-        "全店舗の情報を閲覧できます (本部の横断確認)。",
-        "請求・入金・仕入・経費処理を全店舗分で実行できます。",
-        "設定変更やロール変更、承認決裁はできません。",
-        "アカウントは自分の設定のみ変更できます。",
-      ];
+      return {
+        can: [
+          "全店舗の情報を横断して閲覧できる",
+          "請求・入金・仕入・経費処理を全店舗分で実行できる",
+          "自分のログイン ID・パスワード・顔写真・通知設定を変更できる",
+          "予定表は全店舗を閲覧でき、担当または自店舗の予定を変更できる",
+        ],
+        cannot: [
+          "承認の決裁はできない",
+          "他の社員のアカウント追加・削除・ロール変更はできない",
+          "設定の変更はできない (閲覧のみ)",
+        ],
+      };
     case "store_manager":
-      return [
-        `${storeName}の顧客・問い合わせ・見積・受注・請求・経費を登録/更新できます。`,
-        `${storeName}の承認依頼 (見積・契約・経費) を店長として決裁できます。`,
-        `${storeName}の店舗スタッフの申請承認とアカウント管理ができます。`,
-        "予定表は全店舗を閲覧でき、担当または自店舗予定を変更できます。",
-      ];
+      return {
+        can: [
+          `${storeName}の顧客・問い合わせ・見積・受注・請求・経費を登録・更新できる`,
+          `${storeName}の承認依頼 (見積・契約・経費) を店長として決裁できる`,
+          `${storeName}の店舗スタッフの新規登録申請を承認し、アカウントを管理できる`,
+          "予定表は全店舗を閲覧でき、担当または自店舗の予定を変更できる",
+        ],
+        cannot: [
+          "他店舗の顧客・案件・請求を登録・更新することはできない",
+          "管理者承認が必要な高額案件は決裁できない",
+          "ロール変更 (店長・本部・管理者にする操作) はできない",
+          "設定の変更はできない (閲覧のみ)",
+        ],
+      };
     case "store_staff":
-      return [
-        `${storeName}の顧客・問い合わせ・見積・施工進捗を登録/更新できます。`,
-        "金額が関わる変更は承認申請し、店長/管理者の決裁後に反映されます。",
-        "承認決裁、他社員のアカウント管理、設定変更はできません。",
-        "予定表は全店舗を閲覧でき、担当または自店舗予定を変更できます。",
-      ];
+      return {
+        can: [
+          `${storeName}の顧客・問い合わせ・見積・施工進捗を登録・更新できる`,
+          "金額が関わる変更は承認申請し、店長・管理者の決裁後に反映できる",
+          "経費は自分が登録したものを中心に扱える",
+          "予定表は全店舗を閲覧でき、担当または自店舗の予定を変更できる",
+        ],
+        cannot: [
+          "承認の決裁はできない",
+          "他の社員のアカウント管理・設定変更はできない",
+          "他店舗の顧客・案件を登録・更新することはできない",
+          "全社共通の予定の登録・変更はできない",
+        ],
+      };
     default:
-      return [];
+      return { can: [], cannot: [] };
   }
 }

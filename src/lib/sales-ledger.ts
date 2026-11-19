@@ -71,7 +71,7 @@ export interface SalesImportReport {
 
 const KUBUN = new Set(["個人", "建設", "不動産", "その他", "", "個人オーナー", "賃貸", "LINE@会員", "団地退去", "旅館・ホテル", "医療施設", "営業店", "その他施設", "寺・神社", "官公庁", "保育施設", "外注", "マンション", "業者紹介", "官公庁(子)"]);
 const CORPORATE_KUBUN = new Set(["建設", "不動産", "旅館・ホテル", "医療施設", "営業店", "その他施設", "寺・神社", "官公庁", "官公庁(子)", "保育施設", "外注", "マンション", "業者紹介"]);
-const ITEM_KEY: Record<string, keyof OrderAmounts> = {
+export const ITEM_KEY: Record<string, keyof OrderAmounts> = {
   畳: "tatami",
   襖: "fusuma",
   障子: "shoji",

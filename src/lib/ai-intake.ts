@@ -3,6 +3,7 @@ import { addAudit, newId, nowIso } from "@/lib/db/store";
 import { toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { SYSTEM_USER, buildInquiry } from "@/lib/notify/inbound";
+import { customerHasPhone } from "@/lib/customer-contacts";
 
 /**
  * 既存の AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) からの受付情報の取込
@@ -276,7 +277,7 @@ export function recordAiIntake(db: Database, input: IntakeInput, settings = aiIn
   // お客様の照合 (電話番号 9 桁以上・メール)
   const phone = digits(input.phone || input.callbackPhone);
   const email = input.email?.toLowerCase();
-  const matches = db.customers.filter((c) => (phone.length >= 9 && digits(c.phone) === phone) || (email && c.email?.toLowerCase() === email));
+  const matches = db.customers.filter((c) => customerHasPhone(c, phone) || (email && c.email?.toLowerCase() === email));
   const customer = [...matches].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))[0];
   const store = db.stores.find((s) => s.id === input.store || s.name === input.store || s.shortName === input.store || (input.store && s.name.includes(input.store)));
   const storeId: StoreId = store?.id ?? customer?.storeId ?? settings.defaultStore;

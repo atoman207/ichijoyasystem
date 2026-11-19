@@ -13,6 +13,7 @@ import { canApprove, canSeeAllStores, scopeByStore } from "@/lib/auth/permission
 import { addDays, toDateKey, toMonthKey } from "@/lib/format";
 import { analyzeConflicts, compareEvents, lastDay, occursOn, periodLabel } from "@/lib/calendar";
 import { caseEvents } from "./schedule";
+import { customerPhoneIncludes } from "@/lib/customer-contacts";
 
 /* ---------------- lookups ---------------- */
 
@@ -70,7 +71,7 @@ export function customerOptions(scoped: Customer[], q: string | undefined, selec
   const term = (q ?? "").trim();
   const digits = term.replace(/[^0-9]/g, "");
   const hits = term
-    ? scoped.filter((c) => c.name.includes(term) || c.kana.includes(term) || c.code.includes(term) || (digits.length >= 3 && c.phone.replace(/[^0-9]/g, "").includes(digits))).slice(0, 50)
+    ? scoped.filter((c) => c.name.includes(term) || c.kana.includes(term) || c.code.includes(term) || customerPhoneIncludes(c, digits)).slice(0, 50)
     : [];
   const selected = selectedId ? scoped.find((c) => c.id === selectedId) : undefined;
   const options = [...(selected ? [selected] : []), ...hits.filter((c) => c.id !== selected?.id)].sort(byKana);
