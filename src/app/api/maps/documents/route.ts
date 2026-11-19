@@ -42,7 +42,8 @@ export async function POST(req: Request) {
     if (!loc) return json(404, "場所が見つかりません。");
     if (!canViewLocation(user, db, loc)) return json(403, "この場所に住宅地図を登録する権限がありません。");
   } else if (!canEditRecordMap(user, db, type as MapRefType, targetId)) {
-    return json(403, "この記録に住宅地図を登録する権限がありません。");
+    const exists = type === "customer" ? db.customers.some((x) => x.id === targetId) : type === "quote" ? db.quotes.some((x) => x.id === targetId) : type === "order" ? db.orders.some((x) => x.id === targetId) : db.schedule.some((x) => x.id === targetId);
+    return exists ? json(403, "この記録に住宅地図を登録する権限がありません。") : json(404, "登録先の記録が見つかりません。");
   }
   const f = form.get("file");
   if (!(f instanceof File) || f.size === 0) return json(400, "PDF ファイルを選んでください。");

@@ -51,6 +51,8 @@ export interface EventFormValues {
   caseValue: string;
   customerId: string;
   location: string;
+  /** 場所の指定: follow = 案件・お客様の場所に合わせる (住所が変わると予定の場所も変わる) / custom = この予定だけの場所 */
+  locationMode?: "follow" | "custom";
   memo: string;
 }
 
@@ -218,6 +220,9 @@ export function EventForm({
     : "";
   const customer = customers.find((c) => c.id === v.customerId);
   const suggestedLocation = selectedCase?.location || customer?.address;
+  // 受注と連動する施工の予定は、場所の欄が受注の施工場所そのもの (変更すると受注にも反映) なので指定を出さない
+  const canFollow = Boolean(suggestedLocation) && !syncedOrderNumber;
+  const locationMode: "follow" | "custom" = canFollow ? (v.locationMode ?? "follow") : "custom";
 
   return (
     <form action={action} className="@container">
@@ -463,14 +468,44 @@ export function EventForm({
                   </Select>
                 </Field>
               )}
-              <Field label="場所">
-                <Input name="location" value={v.location} onChange={(e) => set("location", e.target.value)} maxLength={200} placeholder={SCHEDULE_KIND[v.kind].group === "case" ? "現場住所" : "例: 本社 会議室 / 坪井ショールーム"} />
-              </Field>
-              {suggestedLocation && suggestedLocation !== v.location && (
-                <button type="button" onClick={() => set("location", suggestedLocation)} className="-mt-1 inline-flex items-center gap-1 self-start text-xs text-accent hover:underline">
-                  <MapPin className="h-3.5 w-3.5" aria-hidden />
-                  {selectedCase ? "現場住所" : "お客様の住所"}を入れる ({suggestedLocation})
-                </button>
+              {canFollow && (
+                <fieldset className="space-y-1 text-sm text-ink">
+                  <legend className="label">場所の指定</legend>
+                  <label className="flex items-start gap-2">
+                    <input type="radio" name="locationModeChoice" checked={locationMode === "follow"} onChange={() => set("locationMode", "follow")} className="mt-1" />
+                    <span>
+                      {selectedCase ? "案件の施工場所" : "お客様の住所"}に合わせる
+                      <span className="block text-xs text-ink-3">住所が変わると、この予定の場所も変わります</span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2">
+                    <input type="radio" name="locationModeChoice" checked={locationMode === "custom"} onChange={() => setV((prev) => ({ ...prev, locationMode: "custom", location: prev.location || "" }))} className="mt-1" />
+                    <span>
+                      この予定だけ別の場所
+                      <span className="block text-xs text-ink-3">お客様の住所を変えても、この予定の場所は変わりません</span>
+                    </span>
+                  </label>
+                </fieldset>
+              )}
+              <input type="hidden" name="locationMode" value={locationMode} />
+              {canFollow && locationMode === "follow" ? (
+                <div className="rounded-xl bg-subtle/70 px-3 py-2 text-sm text-ink">
+                  <MapPin className="mr-1 inline h-3.5 w-3.5 text-accent" aria-hidden />
+                  {suggestedLocation}
+                  <input type="hidden" name="location" value={suggestedLocation} />
+                </div>
+              ) : (
+                <>
+                  <Field label="場所">
+                    <Input name="location" value={v.location} onChange={(e) => set("location", e.target.value)} maxLength={200} placeholder={SCHEDULE_KIND[v.kind].group === "case" ? "現場住所" : "例: 本社 会議室 / 坪井ショールーム"} />
+                  </Field>
+                  {suggestedLocation && suggestedLocation !== v.location && !syncedOrderNumber && (
+                    <button type="button" onClick={() => set("location", suggestedLocation)} className="-mt-1 inline-flex items-center gap-1 self-start text-xs text-accent hover:underline">
+                      <MapPin className="h-3.5 w-3.5" aria-hidden />
+                      {selectedCase ? "現場住所" : "お客様の住所"}を入れる ({suggestedLocation})
+                    </button>
+                  )}
+                </>
               )}
               <Field label="メモ (社内共有)">
                 <Textarea name="memo" value={v.memo} onChange={(e) => set("memo", e.target.value)} maxLength={2000} placeholder="持ち物・駐車場・事前連絡・議題など" />

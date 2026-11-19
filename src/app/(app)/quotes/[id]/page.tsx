@@ -13,6 +13,7 @@ import { ApprovalDecision, ApprovalHistoryCard, HistoryCard, RecordStamp } from 
 import { ContactList, ContactLogForm } from "@/components/features/Contacts";
 import { SendDocumentCard } from "@/components/features/SendDocument";
 import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
+import { MapInfoCard } from "@/components/maps/MapInfoCard";
 import { SiteInfoCard } from "@/components/features/SiteInfo";
 import { setQuoteDiscussing, updateSiteInfo } from "@/lib/actions/cases";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
@@ -226,6 +227,8 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
             />
           )}
           {q.status === "pending_approval" && !canDecide && <Note>承認されると「お客様へ送付」「受注登録」が行えるようになります。</Note>}
+
+          <MapInfoCard db={db} user={user} target={{ type: "quote", id: q.id }} returnTo={returnTo} title="施工場所の地図・住宅地図" />
 
           <Card>
             <CardHeader title="やりとりの記録" description="この見積に関するお客様とのやりとり (電話・メール・LINE・対面など)" />

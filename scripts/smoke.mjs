@@ -261,16 +261,18 @@ await page.getByRole("button", { name: /経費として登録/ }).click();
 await page.waitForURL(/\/expenses\/new/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 await shot("51-admin-expense-from-receipt");
-await page.getByRole("button", { name: "承認を申請" }).click();
+// 管理者の申請は承認を省略する (807c6aa) ため、ボタンは「確定 (承認不要)」
+await page.getByRole("button", { name: /承認を申請|確定 \(承認不要\)/ }).click();
 await page.waitForURL(/\/expenses\/exp_/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
 await expectText(/経費を登録し/, "action: 経費登録 (レシートから)");
 }
 // AI アシスタント
 await visit("/ai", null);
-await page.fill('input[placeholder^="質問や依頼を入力"]', "今月の売上は？");
-await page.getByRole("button", { name: /送信/ }).click();
-await page.getByText(/社内データからの自動回答|Claude による回答|OpenAI による回答/).first().waitFor({ timeout: 60000 });
+// 「質問する」(AssistantChat) の入力欄と、回答の出どころの表示 (AI のキーがなければ集計・社内データから答える)
+await page.getByRole("textbox", { name: "質問" }).first().fill("今月の売上は？");
+await page.getByRole("button", { name: "送信" }).first().click();
+await page.getByText(/システムのデータを調べて回答|集計 \(AI なし\)|データベースから回答|社内データから回答|資料から回答|AI が資料をもとに回答/).first().waitFor({ timeout: 90000 });
 await shot("52-admin-ai");
 // 印刷書式
 await visit("/quotes", null);

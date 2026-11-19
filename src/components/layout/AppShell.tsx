@@ -69,6 +69,7 @@ import {
   Wallet,
   X,
   type LucideIcon,
+  MapPinned,
 } from "lucide-react";
 import { Avatar, Badge } from "@/components/ui";
 import { IchijoyaLogo } from "@/components/brand/Logo";
@@ -104,6 +105,7 @@ export type NavIcon =
   | "knowledge"
   | "purchaseOrders"
   | "fax"
+  | "maps"
   | "help";
 
 const ICONS: Record<NavIcon, LucideIcon> = {
@@ -125,6 +127,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   settings: Settings,
   materials: FolderOpen,
   dataio: FileSpreadsheet,
+  maps: MapPinned,
   kpi: Award,
   cases: ListChecks,
   cashbook: Coins,

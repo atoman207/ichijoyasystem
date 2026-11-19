@@ -8,13 +8,14 @@
     "build": "next build",
     "start": "next start",
     "deploy": "bash deploy/deploy.sh",
-    "env:apply": "sudo bash deploy/env-apply.sh .env.local --keys 'SMTP_ MAIL_FROM LINE_ CHATWORK_ WEBFORM_SECRET AI_INTAKE_SECRET OPENAI_API_KEY ANTHROPIC_API_KEY RESEND_API_KEY SENDGRID_API_KEY FAX_'",
+    "env:apply": "sudo bash deploy/env-apply.sh .env.local --keys 'SMTP_ MAIL_FROM LINE_ CHATWORK_ WEBFORM_SECRET AI_INTAKE_SECRET OPENAI_API_KEY ANTHROPIC_API_KEY RESEND_API_KEY SENDGRID_API_KEY FAX_ GOOGLE_MAPS_ MAP_IMPORT_DIR ZENRIN_'",
     "lint": "eslint",
     "smoke": "node scripts/smoke.mjs",
     "db:sql": "node scripts/import/generate-data-sql.mjs",
     "db:setup": "node scripts/import/generate-data-sql.mjs && node scripts/import/setup-database.mjs",
     "db:migrate": "node scripts/import/generate-schema.mjs && node scripts/import/migrate.mjs",
     "typecheck": "tsc --noEmit",
+    "test:maps": "node scripts/tests/maps/address.test.mjs && node scripts/tests/maps/logic.test.mjs && node scripts/tests/maps/batch.test.mjs",
     "chatbot:catalog": "node scripts/chatbot/extract-ui.mjs"
   },
   "dependencies": {

@@ -14,23 +14,23 @@ import { locationReferences, mapIndex } from "./resolve";
 
 /** 画面の記録から、その記録の地図 (場所・住宅地図) を見られるか */
 export function canViewRecordMap(user: User, db: Database, type: MapRefType, id: string): boolean {
-  if (canSeeAllStores(user)) return true;
+  const all = canSeeAllStores(user);
   switch (type) {
     case "customer": {
       const c = db.customers.find((x) => x.id === id);
-      return Boolean(c && canAccessStore(user, c.storeId));
+      return Boolean(c && (all || canAccessStore(user, c.storeId)));
     }
     case "quote": {
       const q = db.quotes.find((x) => x.id === id);
-      return Boolean(q && canAccessStore(user, q.storeId));
+      return Boolean(q && (all || canAccessStore(user, q.storeId)));
     }
     case "order": {
       const o = db.orders.find((x) => x.id === id);
-      return Boolean(o && canAccessStore(user, o.storeId));
+      return Boolean(o && (all || canAccessStore(user, o.storeId)));
     }
     case "event": {
       const e = db.schedule.find((x) => x.id === id);
-      return Boolean(e && (canAccessStore(user, e.storeId) || e.assigneeIds.includes(user.id) || e.createdBy === user.id));
+      return Boolean(e && (all || canAccessStore(user, e.storeId) || e.assigneeIds.includes(user.id) || e.createdBy === user.id));
     }
   }
   return false;

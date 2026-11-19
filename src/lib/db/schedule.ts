@@ -78,7 +78,7 @@ export function createCaseResolver(db: Database) {
       storeId: head.storeId,
       customerId,
       customerName: customer?.name ?? inq?.contactName ?? "",
-      location: o?.siteAddress || customer?.address || undefined,
+      location: o?.siteAddress || q?.siteAddress || customer?.address || undefined,
       assigneeIds: o?.workerIds.length ? [...o.workerIds] : inq?.assignedUserId ? [inq.assignedUserId] : q ? [q.createdBy] : [],
       inquiryId: inq?.id ?? q?.inquiryId,
       quoteId: q?.id,

@@ -12,6 +12,8 @@ import { daysBetween, fmtDateTime } from "@/lib/format";
 import { AUDIT_ACTION_LABEL } from "@/lib/constants";
 import { Avatar, Badge, Button, Card, CardHeader, Dl, Flash, LinkButton, Note, PageHeader } from "@/components/ui";
 import { ConflictBadge, KindBadge, KindIcon, kindStyle } from "@/components/schedule/parts";
+import { MapInfoCard } from "@/components/maps/MapInfoCard";
+import { mapsSearchUrl } from "@/lib/maps/google";
 
 export const metadata: Metadata = { title: "予定の詳細" };
 
@@ -140,7 +142,7 @@ export default async function EventDetailPage({ params, searchParams }: { params
                   e.location ? (
                     <span key="l" className="inline-flex flex-wrap items-center gap-2">
                       {e.location}
-                      <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(e.location)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-xs text-accent hover:underline">
+                      <a href={mapsSearchUrl({ address: e.location })} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-xs text-accent hover:underline">
                         <MapPin className="h-3.5 w-3.5" aria-hidden />
                         地図で開く
                         <ExternalLink className="h-3 w-3" aria-hidden />
@@ -162,6 +164,8 @@ export default async function EventDetailPage({ params, searchParams }: { params
               </div>
             )}
           </Card>
+
+          <MapInfoCard db={db} user={user} target={{ type: "event", id: e.id }} returnTo={`/schedule/${e.id}`} />
 
           <Card>
             <CardHeader title="担当者と、この日のほかの予定" description={`${longDate(e.date)} · 人員配置の確認に`} icon={<Users />} />

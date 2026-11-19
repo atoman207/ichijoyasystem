@@ -32,6 +32,8 @@ import { addDays, daysBetween } from "@/lib/format";
 import { createCaseResolver, orderEditable, type CaseRef } from "@/lib/db/schedule";
 import { suggestScheduleDates, type SuggestResult, type SuggestSlot } from "@/lib/schedule-suggest";
 import { readCapacitySettings, SCHEDULE_CAPACITY_ID, SUGGEST_KINDS, type CapacitySettings } from "@/lib/schedule-capacity";
+import { basePlaceOfEvent } from "@/lib/maps/resolve";
+import { mapTablesReady, propagateOrderSite, saveEventLocationMode } from "@/lib/maps/store";
 import { fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
 /**
@@ -46,6 +48,8 @@ type EventFields = Omit<ScheduleEvent, "id" | "source" | "seriesId" | "createdBy
 
 interface ParsedEvent {
   fields: EventFields;
+  /** 場所の指定: follow = 案件・お客様の場所に合わせる / custom = この予定だけの場所 (お客様の住所を変えても変わらない) */
+  locationMode: "follow" | "custom";
   /** 繰り返しを展開した開始日 */
   dates: string[];
   repeat: ScheduleRepeat;
@@ -165,6 +169,12 @@ function parseEventForm(
     if (until > addMonths(date, 12)) fail(back, "繰り返しは 1 年以内で設定してください。");
   }
 
+  // 場所: 案件・お客様の場所に合わせる (follow) ときは、案件・お客様の住所を入れる (関係のない住所は選ばない)
+  const base = basePlaceOfEvent(db, { orderId: caseRef?.orderId, quoteId: caseRef?.quoteId, inquiryId: caseRef?.inquiryId, customerId });
+  const wantFollow = fixed ? true : str(fd, "locationMode") === "follow";
+  const locationMode: "follow" | "custom" = wantFollow && base?.addressText ? "follow" : "custom";
+  const location = fixed ? str(fd, "location").slice(0, 200) || undefined : locationMode === "follow" ? base!.addressText.slice(0, 200) : str(fd, "location").slice(0, 200) || undefined;
+
   return {
     fields: {
       title,
@@ -181,9 +191,10 @@ function parseEventForm(
       inquiryId: caseRef?.inquiryId,
       quoteId: caseRef?.quoteId,
       orderId: caseRef?.orderId,
-      location: str(fd, "location").slice(0, 200) || undefined,
+      location,
       memo: str(fd, "memo").slice(0, 2000) || undefined,
     },
+    locationMode,
     dates: repeatDates(date, repeat, until),
     repeat,
     allowOverlap: str(fd, "allowOverlap") === "1",
@@ -237,6 +248,8 @@ export async function createScheduleEvent(formData: FormData) {
       const id = newId("ev");
       if (!firstId) firstId = id;
       db.schedule.push({ id, ...shiftTo(p.fields, d), source: "manual", seriesId, createdBy: user.id, createdAt: now, updatedBy: user.id, updatedAt: now });
+      // 場所の指定 (案件・お客様に合わせる / この予定だけの場所) を残す。地図の表がまだないときは省く (表示は場所の文字から判断)
+      if (mapTablesReady() && (p.fields.customerId || p.caseRef)) saveEventLocationMode(db, user, db.schedule[db.schedule.length - 1], p.locationMode);
     }
     const kindLabel = SCHEDULE_KIND[p.fields.kind].label;
     if (p.fields.orderId) {
@@ -287,6 +300,8 @@ function applyToOrder(db: Database, ev: ScheduleEvent, user: User) {
   if (ev.location) o.siteAddress = ev.location;
   const changed = before.start !== o.scheduledStart || before.end !== o.scheduledEnd || before.workers.join() !== o.workerIds.join() || before.site !== o.siteAddress;
   if (!changed) return;
+  // 予定表から施工場所を変えたときは、案件の場所に合わせているほかの今後の予定 (納品・訪問など) も合わせる
+  if (before.site !== o.siteAddress) propagateOrderSite(db, user, o, before.site);
   if (o.status === "confirmed") o.status = "scheduled";
   const now = nowIso();
   o.updatedAt = now;
@@ -331,6 +346,7 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
     if (!ev) return;
     const before = { ...ev, assigneeIds: [...ev.assigneeIds] };
     Object.assign(ev, p.fields);
+    if (mapTablesReady() && !synced && (ev.customerId || ev.orderId || ev.quoteId || ev.inquiryId)) saveEventLocationMode(db, user, ev, p.locationMode);
     const now = nowIso();
     ev.updatedBy = user.id;
     ev.updatedAt = now;

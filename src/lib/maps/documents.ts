@@ -45,7 +45,7 @@ export interface RegisterResult {
 
 export function validateMeta(meta: DocMeta): string | null {
   if (!meta.licenseConfirmed) return "住宅地図の利用許諾 (契約で社内サーバーへの保存と社内の複数人での閲覧が認められていること) を確認してから登録してください。";
-  const copyright = (meta.copyrightNotice ?? DEFAULT_COPYRIGHT[meta.provider]).trim();
+  const copyright = (meta.copyrightNotice?.trim() || DEFAULT_COPYRIGHT[meta.provider]).trim();
   if (meta.provider === "zenrin" && !copyright) return "ゼンリンの地図には著作権表示 (例: © ZENRIN CO., LTD.) を入力してください。";
   return null;
 }

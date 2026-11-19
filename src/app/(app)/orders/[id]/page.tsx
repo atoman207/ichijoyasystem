@@ -26,6 +26,7 @@ import { AiSummary } from "@/components/features/AiSummary";
 import { lineGroupName, lineGroups } from "@/lib/line-groups";
 import { linkLineGroup, unlinkLineGroup } from "@/lib/actions/line-groups";
 import { FaxHistoryCard, PurchaseOrderTable } from "@/components/fax/FaxParts";
+import { MapInfoCard } from "@/components/maps/MapInfoCard";
 
 const STEPS = ["pending_approval", "confirmed", "scheduled", "in_progress", "completed", "invoiced", "paid"] as const;
 
@@ -153,6 +154,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               <Dl columns={3} items={[["施工期間", o.scheduledStart ? `${fmtDate(o.scheduledStart)}${o.scheduledEnd && o.scheduledEnd !== o.scheduledStart ? `〜${fmtDate(o.scheduledEnd)}` : ""}` : "未定"], ["施工担当", o.workerIds.map((w) => userName(w)).join("・") || "-"], ["現場住所", o.siteAddress], ["完了日", o.completedAt ? fmtDate(o.completedAt) : "-"], ["売上計上日", o.salesDate ? fmtDate(o.salesDate) : "-"], ["承認者", userName(o.approvedBy)]]} />
             )}
           </Card>
+
+          <MapInfoCard db={db} user={user} target={{ type: "order", id: o.id }} returnTo={returnTo} title="施工場所の地図・住宅地図" />
 
           <CaseStatusCard db={db} order={o} user={user} />
 

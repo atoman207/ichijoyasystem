@@ -13,6 +13,7 @@ import { fieldLabel } from "@/lib/field-labels";
 import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { contactLine, parseContacts } from "@/lib/customer-contacts";
 import { assertStore, choice, fail, requireActionUser, resolveStoreId, safeReturn, str, withMsg } from "./guards";
+import { propagateCustomerAddress } from "@/lib/maps/store";
 
 function parseTags(s: string): string[] {
   return s.split(/[,、\s]+/).map((t) => t.trim()).filter(Boolean);
@@ -129,6 +130,7 @@ export async function updateCustomer(id: string, formData: FormData) {
   const back = `/customers/${id}/edit`;
   let message = "顧客情報を更新しました。関連する問い合わせ・見積・案件にも反映されます。";
   let approvalId = "";
+  let propagated = { orders: 0, events: 0 };
   await mutate((db) => {
     const c = db.customers.find((x) => x.id === id);
     if (!c) fail("/customers", "顧客が見つかりません。");
@@ -162,6 +164,8 @@ export async function updateCustomer(id: string, formData: FormData) {
     // 承認が必要な項目は元の値のまま残し、ほかの項目だけをすぐに反映する
     const applied: Customer = needsApproval ? { ...next, ...Object.fromEntries(CUSTOMER_IMPORTANT_FIELDS.map((f) => [f, before[f]])) } : next;
     Object.assign(c, applied);
+    // 住所が変わったら、施工場所がお客様の住所と同じ進行中の受注と、お客様の場所に合わせている今後の予定にも反映する
+    if (before.address !== c.address) propagated = propagateCustomerAddress(db, user, c, before.address);
     const changes = diffChanges(before, c, ["name", "kana", "type", "phone", "email", "lineId", "postalCode", "address", "storeId", "assignedUserId", "preferredChannel", "tags", "notes", "tradeStopped", "tradeStopNote"]);
     const contactsBefore = contactLines(before);
     const contactsAfter = contactLines(c);
@@ -194,8 +198,10 @@ export async function updateCustomer(id: string, formData: FormData) {
     }
   });
   await notifyNewApprovals(approvalId ? [approvalId] : [], user.id);
+  if (propagated.orders || propagated.events) message += ` 新しい住所を進行中の案件 ${propagated.orders} 件・今後の予定 ${propagated.events} 件にも反映しました (個別に場所を指定した予定は変えていません)。`;
   revalidatePath("/customers");
   revalidatePath(`/customers/${id}`);
+  if (propagated.orders || propagated.events) revalidatePath("/", "layout");
   redirect(withMsg(`/customers/${id}`, message));
 }
 

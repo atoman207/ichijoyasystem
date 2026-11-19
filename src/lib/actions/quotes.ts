@@ -18,6 +18,7 @@ import { siteInfoFromForm } from "@/lib/site-info";
 import { plannedFromSiteInfo } from "@/lib/case-status";
 import { syncHandoverMemo } from "@/lib/db/schedule";
 import { assertStore, choice, fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
+import { propagateOrderSite } from "@/lib/maps/store";
 
 function parseItems(formData: FormData, back: string): QuoteItem[] {
   let raw: unknown;
@@ -78,6 +79,7 @@ function applySiteFields(db: Database, q: Quote, next: { siteAddress?: string; r
     if (oc.length) {
       o.updatedAt = nowIso();
       if (oc.some((c) => c.field === "siteAddress") && db.schedule.some((e) => e.orderId === o.id && e.source === "order")) syncOrderEvent(db, o, user.id);
+      if (oc.some((c) => c.field === "siteAddress")) propagateOrderSite(db, user, o, ob.siteAddress);
       addAudit(db, { userId: user.id, action: "update", entity: "order", entityId: o.id, entityLabel: o.number, summary: `見積 ${q.number} の変更に合わせて${oc.map((c) => (c.field === "siteAddress" ? "施工場所" : "領収書の宛名")).join("・")}を変更`, storeId: o.storeId, changes: oc });
     }
   }

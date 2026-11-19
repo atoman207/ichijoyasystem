@@ -6,6 +6,7 @@ import { APPROVAL_TYPE_LABEL } from "@/lib/constants";
 import { removeUpcomingOrderEvents, syncOrderEvent } from "@/lib/db/schedule";
 import { fieldLabel, fieldValue } from "@/lib/field-labels";
 import { fail } from "@/lib/actions/guards";
+import { propagateCustomerAddress } from "@/lib/maps/store";
 
 /**
  * 承認の反映 (承認・差戻し・却下で申請の対象を変える処理)
@@ -192,8 +193,11 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
       if (!c) return;
       if (decision === "approved") {
         assertUnchanged("customer", c as unknown as Record<string, unknown>, a.changes ?? [], back);
+        const beforeAddress = c.address;
         applyChanges(c as unknown as Record<string, unknown>, a.changes ?? []);
         c.updatedAt = now;
+        // 住所の変更の承認: 施工場所がお客様の住所と同じ進行中の受注と、お客様の場所に合わせている今後の予定にも反映する
+        if (beforeAddress !== c.address) propagateCustomerAddress(db, { id: userId }, c, beforeAddress);
         addAudit(db, { userId, action: "approve", entity: "customer", entityId: c.id, entityLabel: c.name, summary: `顧客の重要情報の変更を承認 (${(a.changes ?? []).map((x) => fieldLabel("customer", x.field)).join("・")})`, storeId: c.storeId, changes: a.changes });
       } else {
         addAudit(db, { userId, action: "reject", entity: "customer", entityId: c.id, entityLabel: c.name, summary: `顧客の重要情報の変更を${word}${note}`, storeId: c.storeId });

@@ -78,6 +78,7 @@ export default async function NewEventPage({ searchParams }: { searchParams: Pro
           caseValue: fixedCase?.value ?? "",
           customerId: fixed?.customerId ?? customer?.id ?? "",
           location: fixed?.location ?? customer?.address ?? "",
+          locationMode: "follow",
           memo: "",
         }}
         users={formUsers(db)}

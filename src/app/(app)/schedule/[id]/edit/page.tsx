@@ -1,3 +1,4 @@
+import { currentEventMode } from "@/lib/maps/store";
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { Pencil } from "lucide-react";
@@ -56,6 +57,7 @@ export default async function EditEventPage({ params, searchParams }: { params: 
           caseValue: ref ? caseValue(ref) : "",
           customerId: e.customerId ?? "",
           location: e.location ?? "",
+          locationMode: currentEventMode(db, e),
           memo: e.memo ?? "",
         }}
         users={formUsers(db)}

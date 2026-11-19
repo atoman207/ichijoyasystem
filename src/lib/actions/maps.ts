@@ -284,7 +284,7 @@ export async function followCaseLocation(eventId: string, formData: FormData) {
 }
 
 /** 受注の施工場所をお客様の住所にする (施工場所が地区名だけで、お客様の住所と同じ地区のとき。人が押したときだけ) */
-export async function useCustomerAddressForSite(orderId: string, formData: FormData) {
+export async function applyCustomerAddressToSite(orderId: string, formData: FormData) {
   const user = await requireActionUser();
   const back = safeReturn(str(formData, "returnTo"), `/orders/${orderId}`);
   if (!canEditRecordMap(user, getDb(), "order", orderId)) fail(back, "この案件を変更する権限がありません。");

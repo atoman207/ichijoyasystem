@@ -15,6 +15,7 @@ import { toDateKey } from "@/lib/format";
 import { findDuplicateCustomers } from "@/lib/duplicates";
 import { AiSummary } from "@/components/features/AiSummary";
 import { contactLabel, phoneDigits } from "@/lib/customer-contacts";
+import { MapInfoCard } from "@/components/maps/MapInfoCard";
 
 export default async function CustomerDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -143,6 +144,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
         </div>
 
         <div className="space-y-4 @3xl:col-span-2">
+          <MapInfoCard db={db} user={user} target={{ type: "customer", id: c.id }} returnTo={returnTo} />
           <Card>
             <CardHeader title="案件の流れ" description="問い合わせ → 見積 → 受注・施工 → 請求 → 入金 がすべて紐づきます" />
             {t.quotes.length === 0 && t.inquiries.length === 0 && <p className="text-sm text-ink-3">まだ案件はありません</p>}

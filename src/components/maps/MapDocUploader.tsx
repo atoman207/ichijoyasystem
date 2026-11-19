@@ -59,9 +59,14 @@ export function MapDocUploader({
       const body = res.headers.get("content-type")?.includes("application/json") ? ((await res.json()) as { ok: boolean; error?: string; message?: string }) : null;
       if (!body) throw new Error(res.status === 413 ? "ファイルが大きすぎます (1 ファイル 9 MB まで)。" : "ログインの有効期限が切れた可能性があります。ログインし直してください。");
       if (!body.ok) throw new Error(body.error ?? "登録できませんでした。");
-      setResult({ ok: true, text: body.message ?? "登録しました。" });
+      const text = body.message ?? "登録しました。";
+      setResult({ ok: true, text });
       form.reset();
-      router.refresh();
+      // 画面の上のお知らせ (msg) に結果を出す (差し替えると、この欄は新しい版の行に置き換わるため)
+      const url = new URL(window.location.href);
+      url.searchParams.delete("err");
+      url.searchParams.set("msg", text);
+      router.replace(`${url.pathname}${url.search}#map`, { scroll: false });
     } catch (err) {
       setResult({ ok: false, text: (err as Error).message });
     } finally {
@@ -102,7 +107,7 @@ export function MapDocUploader({
               setProvider(v);
               if (v === "zenrin" && !copyright) setCopyright("© ZENRIN CO., LTD.");
             }}
-            className="input mt-1"
+            className="field mt-1"
           >
             <option value="zenrin">ゼンリン 住宅地図</option>
             <option value="other">その他の地図・案内図</option>
@@ -110,19 +115,19 @@ export function MapDocUploader({
         </label>
         <label className="block">
           <span className="label">版・発行年 (任意)</span>
-          <input name="edition" maxLength={60} placeholder="例: 2025年版" className="input mt-1" />
+          <input name="edition" maxLength={60} placeholder="例: 2025年版" className="field mt-1" />
         </label>
         <label className="block">
           <span className="label">表示名 (任意)</span>
-          <input name="title" maxLength={120} placeholder="例: 合志市 p.123" className="input mt-1" />
+          <input name="title" maxLength={120} placeholder="例: 合志市 p.123" className="field mt-1" />
         </label>
         <label className="block">
           <span className="label">著作権表示{provider === "zenrin" ? " (必須)" : ""}</span>
-          <input name="copyrightNotice" value={copyright} onChange={(e) => setCopyright(e.target.value)} maxLength={200} required={provider === "zenrin"} className="input mt-1" />
+          <input name="copyrightNotice" value={copyright} onChange={(e) => setCopyright(e.target.value)} maxLength={200} required={provider === "zenrin"} className="field mt-1" />
         </label>
         <label className="block @xl:col-span-2">
           <span className="label">契約・許諾の番号やメモ (任意)</span>
-          <input name="licenseRef" maxLength={100} placeholder="例: 契約番号・利用許諾の範囲" className="input mt-1" />
+          <input name="licenseRef" maxLength={100} placeholder="例: 契約番号・利用許諾の範囲" className="field mt-1" />
         </label>
       </div>
       <input type="hidden" name="kind" value={provider === "zenrin" ? "residential" : "other"} />

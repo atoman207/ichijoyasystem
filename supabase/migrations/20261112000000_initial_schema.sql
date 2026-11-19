@@ -682,7 +682,9 @@ create table if not exists knowledge (
   created_by text not null,
   created_at timestamptz not null,
   updated_by text,
-  updated_at timestamptz not null
+  updated_at timestamptz not null,
+  visibility text,
+  record_date date
 );
 comment on table knowledge is '社内資料 (ナレッジ・AI の回答の根拠)';
 
@@ -774,6 +776,90 @@ create table if not exists fax_numbers (
   updated_at timestamptz not null
 );
 comment on table fax_numbers is 'FAX 番号の台帳 (不要な番号・顧客と仕入先の FAX 番号)';
+
+-- 場所 (地図上の 1 か所。顧客・案件・予定が共有する)
+create table if not exists map_locations (
+  id text primary key,
+  address_key text not null default '',
+  address text not null default '',
+  postal_code text,
+  precision text not null check (precision in ('house','area','none')),
+  lat double precision check (lat between -90 and 90),
+  lng double precision check (lng between -180 and 180),
+  place_id text,
+  coord_source text check (coord_source in ('manual','geocode','import')),
+  coord_status text check (coord_status in ('unverified','needs_review','verified')),
+  coord_verified_by text,
+  coord_verified_at timestamptz,
+  geocode_note text,
+  note text,
+  status text not null default 'active' check (status in ('active','merged')),
+  merged_into text,
+  source text not null default 'app' check (source in ('app','batch')),
+  store_id text not null references stores(id),
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz not null
+);
+comment on table map_locations is '場所 (地図上の 1 か所。顧客・案件・予定が共有する)';
+
+-- 記録と場所の結び付け (番地のない住所の手動の結び付け・予定の場所の指定)
+create table if not exists map_location_refs (
+  id text primary key,
+  record_type text not null check (record_type in ('customer','quote','order','event')),
+  record_id text not null,
+  mode text not null check (mode in ('manual','follow','custom')),
+  location_id text references map_locations(id) on delete set null,
+  address_snapshot text,
+  linked_by text not null,
+  linked_at timestamptz not null
+);
+comment on table map_location_refs is '記録と場所の結び付け (番地のない住所の手動の結び付け・予定の場所の指定)';
+
+-- 住宅地図などの地図の PDF (本体は VPS のディスク。ここには台帳とライセンスの情報)
+create table if not exists map_documents (
+  id text primary key,
+  kind text not null check (kind in ('residential','other')),
+  provider text not null check (provider in ('zenrin','other')),
+  title text not null default '',
+  file_name text not null,
+  content_type text not null default 'application/pdf',
+  size integer not null default 0,
+  sha256 text not null,
+  page_count integer,
+  storage_key text,
+  status text not null check (status in ('active','replaced','removed')),
+  replaces_id text,
+  replaced_by_id text,
+  source text not null check (source in ('upload','bulk_import','provider_api')),
+  source_ref text,
+  edition text,
+  copyright_notice text not null default '',
+  license_ref text,
+  license_note text,
+  license_confirmed_by text not null,
+  license_confirmed_at timestamptz not null,
+  shareable boolean,
+  store_id text not null references stores(id),
+  uploaded_by text not null,
+  uploaded_at timestamptz not null,
+  updated_at timestamptz not null,
+  removed_by text,
+  removed_at timestamptz,
+  remove_reason text
+);
+comment on table map_documents is '住宅地図などの地図の PDF (本体は VPS のディスク。ここには台帳とライセンスの情報)';
+
+-- 地図の PDF と場所の結び付け (1 つの PDF を複数の場所から参照)
+create table if not exists map_document_links (
+  id text primary key,
+  document_id text not null references map_documents(id) on delete cascade,
+  location_id text not null references map_locations(id) on delete cascade,
+  linked_by text not null,
+  linked_at timestamptz not null
+);
+comment on table map_document_links is '地図の PDF と場所の結び付け (1 つの PDF を複数の場所から参照)';
 
 -- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)
 -- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する
@@ -1257,6 +1343,8 @@ alter table knowledge add column if not exists created_by text not null;
 alter table knowledge add column if not exists created_at timestamptz not null;
 alter table knowledge add column if not exists updated_by text;
 alter table knowledge add column if not exists updated_at timestamptz not null;
+alter table knowledge add column if not exists visibility text;
+alter table knowledge add column if not exists record_date date;
 alter table purchase_orders add column if not exists number text not null unique;
 alter table purchase_orders add column if not exists supplier_id text not null references suppliers(id);
 alter table purchase_orders add column if not exists store_id text not null references stores(id);
@@ -1328,6 +1416,66 @@ alter table fax_numbers add column if not exists note text;
 alter table fax_numbers add column if not exists created_by text not null;
 alter table fax_numbers add column if not exists created_at timestamptz not null;
 alter table fax_numbers add column if not exists updated_at timestamptz not null;
+alter table map_locations add column if not exists address_key text not null default '';
+alter table map_locations add column if not exists address text not null default '';
+alter table map_locations add column if not exists postal_code text;
+alter table map_locations add column if not exists precision text not null check (precision in ('house','area','none'));
+alter table map_locations add column if not exists lat double precision check (lat between -90 and 90);
+alter table map_locations add column if not exists lng double precision check (lng between -180 and 180);
+alter table map_locations add column if not exists place_id text;
+alter table map_locations add column if not exists coord_source text check (coord_source in ('manual','geocode','import'));
+alter table map_locations add column if not exists coord_status text check (coord_status in ('unverified','needs_review','verified'));
+alter table map_locations add column if not exists coord_verified_by text;
+alter table map_locations add column if not exists coord_verified_at timestamptz;
+alter table map_locations add column if not exists geocode_note text;
+alter table map_locations add column if not exists note text;
+alter table map_locations add column if not exists status text not null default 'active' check (status in ('active','merged'));
+alter table map_locations add column if not exists merged_into text;
+alter table map_locations add column if not exists source text not null default 'app' check (source in ('app','batch'));
+alter table map_locations add column if not exists store_id text not null references stores(id);
+alter table map_locations add column if not exists created_by text not null;
+alter table map_locations add column if not exists created_at timestamptz not null;
+alter table map_locations add column if not exists updated_by text;
+alter table map_locations add column if not exists updated_at timestamptz not null;
+alter table map_location_refs add column if not exists record_type text not null check (record_type in ('customer','quote','order','event'));
+alter table map_location_refs add column if not exists record_id text not null;
+alter table map_location_refs add column if not exists mode text not null check (mode in ('manual','follow','custom'));
+alter table map_location_refs add column if not exists location_id text references map_locations(id) on delete set null;
+alter table map_location_refs add column if not exists address_snapshot text;
+alter table map_location_refs add column if not exists linked_by text not null;
+alter table map_location_refs add column if not exists linked_at timestamptz not null;
+alter table map_documents add column if not exists kind text not null check (kind in ('residential','other'));
+alter table map_documents add column if not exists provider text not null check (provider in ('zenrin','other'));
+alter table map_documents add column if not exists title text not null default '';
+alter table map_documents add column if not exists file_name text not null;
+alter table map_documents add column if not exists content_type text not null default 'application/pdf';
+alter table map_documents add column if not exists size integer not null default 0;
+alter table map_documents add column if not exists sha256 text not null;
+alter table map_documents add column if not exists page_count integer;
+alter table map_documents add column if not exists storage_key text;
+alter table map_documents add column if not exists status text not null check (status in ('active','replaced','removed'));
+alter table map_documents add column if not exists replaces_id text;
+alter table map_documents add column if not exists replaced_by_id text;
+alter table map_documents add column if not exists source text not null check (source in ('upload','bulk_import','provider_api'));
+alter table map_documents add column if not exists source_ref text;
+alter table map_documents add column if not exists edition text;
+alter table map_documents add column if not exists copyright_notice text not null default '';
+alter table map_documents add column if not exists license_ref text;
+alter table map_documents add column if not exists license_note text;
+alter table map_documents add column if not exists license_confirmed_by text not null;
+alter table map_documents add column if not exists license_confirmed_at timestamptz not null;
+alter table map_documents add column if not exists shareable boolean;
+alter table map_documents add column if not exists store_id text not null references stores(id);
+alter table map_documents add column if not exists uploaded_by text not null;
+alter table map_documents add column if not exists uploaded_at timestamptz not null;
+alter table map_documents add column if not exists updated_at timestamptz not null;
+alter table map_documents add column if not exists removed_by text;
+alter table map_documents add column if not exists removed_at timestamptz;
+alter table map_documents add column if not exists remove_reason text;
+alter table map_document_links add column if not exists document_id text not null references map_documents(id) on delete cascade;
+alter table map_document_links add column if not exists location_id text not null references map_locations(id) on delete cascade;
+alter table map_document_links add column if not exists linked_by text not null;
+alter table map_document_links add column if not exists linked_at timestamptz not null;
 
 -- 索引 (検索・読み込みの並び順)
 create index if not exists stores_load_order_idx on stores (code, id);
@@ -1406,6 +1554,17 @@ create index if not exists fax_messages_purchase_order_id_idx on fax_messages (p
 create index if not exists fax_messages_remote_number_idx on fax_messages (remote_number);
 create index if not exists fax_messages_load_order_idx on fax_messages (at, id);
 create index if not exists fax_numbers_load_order_idx on fax_numbers (created_at, id);
+create index if not exists map_locations_address_key_idx on map_locations (address_key);
+create index if not exists map_locations_load_order_idx on map_locations (created_at, id);
+create index if not exists map_location_refs_record_type_record_id_idx on map_location_refs (record_type, record_id);
+create index if not exists map_location_refs_location_id_idx on map_location_refs (location_id);
+create index if not exists map_location_refs_load_order_idx on map_location_refs (linked_at, id);
+create index if not exists map_documents_sha256_idx on map_documents (sha256);
+create index if not exists map_documents_source_ref_idx on map_documents (source_ref);
+create index if not exists map_documents_load_order_idx on map_documents (uploaded_at, id);
+create index if not exists map_document_links_document_id_idx on map_document_links (document_id);
+create index if not exists map_document_links_location_id_idx on map_document_links (location_id);
+create index if not exists map_document_links_load_order_idx on map_document_links (linked_at, id);
 
 -- 後から not null を外した列 (データは変えない。外した後に実行しても変化なし)
 alter table comm_logs alter column customer_id drop not null;
@@ -1518,6 +1677,18 @@ grant select, insert, update, delete on table fax_messages to service_role;
 alter table fax_numbers enable row level security;
 revoke all on table fax_numbers from anon, authenticated;
 grant select, insert, update, delete on table fax_numbers to service_role;
+alter table map_locations enable row level security;
+revoke all on table map_locations from anon, authenticated;
+grant select, insert, update, delete on table map_locations to service_role;
+alter table map_location_refs enable row level security;
+revoke all on table map_location_refs from anon, authenticated;
+grant select, insert, update, delete on table map_location_refs to service_role;
+alter table map_documents enable row level security;
+revoke all on table map_documents from anon, authenticated;
+grant select, insert, update, delete on table map_documents to service_role;
+alter table map_document_links enable row level security;
+revoke all on table map_document_links from anon, authenticated;
+grant select, insert, update, delete on table map_document_links to service_role;
 
 -- 書き込みのたびにリビジョンを +1 (他のサーバーインスタンスが変更を検知して読み直す)
 create or replace function public.bump_revision() returns bigint

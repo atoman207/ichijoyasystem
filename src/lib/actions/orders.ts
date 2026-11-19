@@ -14,6 +14,7 @@ import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { findConflicts, isDateKey, normTime, shortDate, timeLabel, toMinutes } from "@/lib/calendar";
 import { orderEditable, removeUpcomingOrderEvents, syncHandoverMemo, syncOrderEvent } from "@/lib/db/schedule";
 import { assertStore, choice, fail, requireActionUser, str, withMsg } from "./guards";
+import { propagateOrderSite } from "@/lib/maps/store";
 
 /** 施工予定 (施工期間・時間帯・施工担当・現場住所) を設定し、予定表の「施工」の予定と連動させる */
 export async function updateOrderSchedule(id: string, formData: FormData) {
@@ -54,7 +55,9 @@ export async function updateOrderSchedule(id: string, formData: FormData) {
     o.scheduledStart = start || undefined;
     o.scheduledEnd = start ? end || start : undefined;
     if (workerIds.length) o.workerIds = workerIds;
+    const siteBefore = o.siteAddress;
     o.siteAddress = str(formData, "siteAddress") || o.siteAddress;
+    if (siteBefore !== o.siteAddress) propagateOrderSite(db, user, o, siteBefore);
     if (o.status === "confirmed" && start) o.status = "scheduled";
     if (o.status === "scheduled" && !start) o.status = "confirmed";
     o.updatedAt = nowIso();
@@ -306,6 +309,8 @@ export async function updateOrderInfo(id: string, formData: FormData) {
     o.updatedAt = nowIso();
     // 連動している施工の予定があれば、場所・店舗を合わせる (予定がない案件に新しく作ることはしない)
     if (db.schedule.some((e) => e.orderId === o.id && e.source === "order")) syncOrderEvent(db, o, user.id);
+    // 案件の場所に合わせている今後の予定 (納品・訪問など) の場所も合わせる
+    if (before.siteAddress !== o.siteAddress) propagateOrderSite(db, user, o, before.siteAddress);
     const storeName = db.stores.find((s) => s.id === o.storeId)?.name ?? o.storeId;
     const LABEL: Record<string, string> = { title: "件名", category: "種別", siteAddress: "施工場所", receiptName: "領収書の宛名", storeId: `担当店舗 (${storeName})`, workDetails: "施工内容" };
     if (changes.some((c) => c.field === "workDetails")) syncHandoverMemo(db, o);
