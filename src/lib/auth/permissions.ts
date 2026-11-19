@@ -444,3 +444,30 @@ export function canManageMaps(user: User): boolean {
 export function canRemoveMapDocument(user: User, d: Pick<MapDocument, "uploadedBy" | "storeId">): boolean {
   return d.uploadedBy === user.id || user.role === "admin" || (user.role === "store_manager" && user.storeId === d.storeId);
 }
+
+/* ---------------- 予定の計画 (src/lib/scheduling) ---------------- */
+
+/** 予定の計画 (作業の内容の登録・仮押さえ・確定・お客様への候補の案内・製造の予定・全体の最適化の実行): その店舗のメンバー・本部・管理者 */
+export function canPlanSchedule(user: User, storeId: StoreId): boolean {
+  return canAccessStore(user, storeId);
+}
+
+/** 計画のマスタ (作業種別・製造工程・技能・車両と設備・経路・最適化の重み・計画の基準) の変更: 管理者 */
+export function canManageScheduling(user: User): boolean {
+  return user.role === "admin";
+}
+
+/** 社員の勤務と技能の設定: 管理者は全員、店長は自店舗の社員 */
+export function canEditStaffProfile(user: User, target: Pick<User, "storeId">): boolean {
+  return user.role === "admin" || (user.role === "store_manager" && user.storeId === target.storeId);
+}
+
+/** 仮押さえへの「行ける / 行けない」の返事: 担当者本人と、その店舗のメンバー */
+export function canAckHold(user: User, h: { storeId: StoreId; assigneeIds: string[] }): boolean {
+  return h.assigneeIds.includes(user.id) || canAccessStore(user, h.storeId);
+}
+
+/** 提案の検証 (過去の予定との比較) の実行: 全店舗を見られるロール (管理者・本部)。重みの適用は管理者 */
+export function canRunScheduleBacktest(user: User): boolean {
+  return canSeeAllStores(user);
+}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { forSpeech } from "@/lib/speech-text";
+import { speechChunks } from "@/lib/speech-text";
 
 /**
  * 「質問する」の音声 (読み上げと音声入力)
@@ -66,22 +66,57 @@ export function canRecord(): boolean {
 /* 読み上げ                                                              */
 /* ================================================================== */
 
+export interface SpeakOptions {
+  /** 要点だけを読む (会話モード。続きは画面で) */
+  brief?: boolean;
+  /** 読み終わったとき (止めたときは呼ばない) */
+  onEnd?: () => void;
+}
+
+const RATE_KEY = "ichijoya-chatbot-rate";
+export const RATES = [0.9, 1, 1.2, 1.4] as const;
+
 export function useSpeaker(mode: VoiceMode) {
   const [speakingId, setSpeakingId] = useState<number | null>(null);
   const [loadingId, setLoadingId] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [rate, setRateState] = useState(1);
+  const rateRef = useRef(1);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** 再生中のかたまりの終わりを待っている処理 (止めたときに終わらせる) */
+  const waitRef = useRef<(() => void) | null>(null);
   const seq = useRef(0);
 
-  // ブラウザーの声の一覧は後から読み込まれる
+  // ブラウザーの声の一覧は後から読み込まれる・保存した速さ
   useEffect(() => {
+    try {
+      const r = Number(localStorage.getItem(RATE_KEY));
+      if ((RATES as readonly number[]).includes(r)) {
+        rateRef.current = r;
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- 保存した設定はブラウザでしか読めない
+        setRateState(r);
+      }
+    } catch {
+      /* 保存なし */
+    }
     if (!browserCanSpeak()) return;
     const load = () => window.speechSynthesis.getVoices();
     load();
     window.speechSynthesis.addEventListener?.("voiceschanged", load);
     return () => window.speechSynthesis.removeEventListener?.("voiceschanged", load);
+  }, []);
+
+  const setRate = useCallback((r: number) => {
+    rateRef.current = r;
+    setRateState(r);
+    if (audioRef.current) audioRef.current.playbackRate = r;
+    try {
+      localStorage.setItem(RATE_KEY, String(r));
+    } catch {
+      /* 保存できない */
+    }
   }, []);
 
   const release = () => {
@@ -99,6 +134,8 @@ export function useSpeaker(mode: VoiceMode) {
       a.removeAttribute("src");
       a.load();
     }
+    waitRef.current?.();
+    waitRef.current = null;
     release();
     if (browserCanSpeak()) window.speechSynthesis.cancel();
     setSpeakingId(null);
@@ -127,7 +164,7 @@ export function useSpeaker(mode: VoiceMode) {
     }
   }, [mode]);
 
-  const speakBrowser = useCallback((id: number, text: string, hasTable: boolean, my: number) => {
+  const speakBrowser = useCallback((id: number, parts: string[], my: number, onEnd?: () => void) => {
     if (!browserCanSpeak()) {
       setError("このブラウザーは読み上げに対応していません。");
       setSpeakingId(null);
@@ -137,65 +174,97 @@ export function useSpeaker(mode: VoiceMode) {
     synth.cancel();
     const voice = pickBrowserVoice();
     // 長い文は途中で止まるブラウザーがあるため、文ごとに分けて読む
-    const parts = forSpeech(text, { hasTable }).match(/[^。！？!?]+[。！？!?]?/g) ?? [];
-    if (!parts.length) {
+    const sentences = parts.join("").match(/[^。！？!?]+[。！？!?]?/g) ?? [];
+    if (!sentences.length) {
       setSpeakingId(null);
+      onEnd?.();
       return;
     }
     setSpeakingId(id);
-    parts.forEach((p, i) => {
+    sentences.forEach((p, i) => {
       const u = new SpeechSynthesisUtterance(p);
       u.lang = "ja-JP";
       if (voice) u.voice = voice;
-      u.rate = 1.05;
+      u.rate = 1.05 * rateRef.current;
       u.pitch = 1.15;
-      if (i === parts.length - 1) u.onend = () => my === seq.current && setSpeakingId(null);
+      if (i === sentences.length - 1)
+        u.onend = () => {
+          if (my !== seq.current) return;
+          setSpeakingId(null);
+          onEnd?.();
+        };
       u.onerror = () => my === seq.current && setSpeakingId(null);
       synth.speak(u);
     });
   }, []);
 
+  /** 1 かたまりの音声 (サーバー) */
+  const fetchChunk = (text: string, signal: AbortSignal): Promise<Blob> =>
+    fetch("/api/assistant/speech", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, hasTable: false }), signal }).then(async (res) => {
+      if (!res.ok || !(res.headers.get("content-type") ?? "").startsWith("audio/")) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? "読み上げの音声を作れませんでした。");
+      }
+      return res.blob();
+    });
+
   const speak = useCallback(
-    async (id: number, text: string, hasTable = false) => {
+    async (id: number, text: string, hasTable = false, opts: SpeakOptions = {}) => {
       stop();
       setError("");
       const my = ++seq.current;
       if (mode === "none") return;
-      if (mode === "browser") return speakBrowser(id, text, hasTable, my);
+      const chunks = speechChunks(text, { hasTable, brief: opts.brief });
+      if (!chunks.length) {
+        opts.onEnd?.();
+        return;
+      }
+      if (mode === "browser") return speakBrowser(id, chunks, my, opts.onEnd);
       setLoadingId(id);
       const ctrl = new AbortController();
       abortRef.current = ctrl;
+      let i = 0;
       try {
-        const res = await fetch("/api/assistant/speech", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, hasTable }), signal: ctrl.signal });
-        if (!res.ok || !(res.headers.get("content-type") ?? "").startsWith("audio/")) {
-          const body = (await res.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(body?.error ?? "読み上げの音声を作れませんでした。");
-        }
-        const blob = await res.blob();
-        if (my !== seq.current) return;
-        release();
-        urlRef.current = URL.createObjectURL(blob);
-        if (!audioRef.current) audioRef.current = new Audio();
-        const a = audioRef.current;
-        a.src = urlRef.current;
-        a.onended = () => {
-          if (my === seq.current) setSpeakingId(null);
+        // 最初の 1 文をすぐに読み始め、読んでいる間に次のかたまりを作る
+        let next = fetchChunk(chunks[0], ctrl.signal);
+        for (; i < chunks.length; i++) {
+          const blob = await next;
+          if (my !== seq.current) return;
+          if (i + 1 < chunks.length) {
+            next = fetchChunk(chunks[i + 1], ctrl.signal);
+            next.catch(() => {});
+          }
           release();
-        };
-        a.onerror = () => my === seq.current && setSpeakingId(null);
-        setLoadingId(null);
-        setSpeakingId(id);
-        await a.play();
+          urlRef.current = URL.createObjectURL(blob);
+          if (!audioRef.current) audioRef.current = new Audio();
+          const a = audioRef.current;
+          a.src = urlRef.current;
+          a.playbackRate = rateRef.current;
+          const ended = new Promise<void>((resolve, reject) => {
+            waitRef.current = resolve;
+            a.onended = () => resolve();
+            a.onerror = () => reject(new Error("音声を再生できませんでした。"));
+          });
+          setLoadingId(null);
+          setSpeakingId(id);
+          await a.play();
+          await ended;
+          waitRef.current = null;
+          if (my !== seq.current) return;
+        }
+        release();
+        setSpeakingId(null);
+        opts.onEnd?.();
       } catch (err) {
         if (my !== seq.current || (err as Error).name === "AbortError") return;
         setLoadingId(null);
-        // 自動再生が止められた・サーバーの音声が使えないときは、ブラウザーの声で読む
+        // 自動再生が止められた・サーバーの音声が使えないときは、残りをブラウザーの声で読む
         if ((err as Error).name === "NotAllowedError") {
           setSpeakingId(null);
           setError("音声を再生できませんでした。もう一度 🔈 を押してください。");
           return;
         }
-        if (browserCanSpeak()) speakBrowser(id, text, hasTable, my);
+        if (browserCanSpeak()) speakBrowser(id, chunks.slice(i), my, opts.onEnd);
         else {
           setSpeakingId(null);
           setError((err as Error).message);
@@ -205,7 +274,7 @@ export function useSpeaker(mode: VoiceMode) {
     [mode, speakBrowser, stop],
   );
 
-  return { speak, stop, unlock, speakingId, loadingId, error, clearError: () => setError("") };
+  return { speak, stop, unlock, speakingId, loadingId, error, clearError: () => setError(""), rate, setRate };
 }
 
 /* ================================================================== */
@@ -233,7 +302,17 @@ function pickMime(): string | undefined {
   return undefined;
 }
 
-export function useRecorder(mode: VoiceMode, onText: (text: string) => void) {
+/** 録音の終わり方: text = 文字になった / empty = 声が聞き取れなかった / error = 失敗 / cancel = やめた */
+export type RecResult = "text" | "empty" | "error" | "cancel";
+
+export interface RecorderOptions {
+  /** 録音が終わったとき (会話モードで次を決める) */
+  onDone?: (r: RecResult) => void;
+  /** サーバーの音声入力が使えなかった (ブラウザーの音声認識に切り替える) */
+  onServerFail?: () => void;
+}
+
+export function useRecorder(mode: VoiceMode, onText: (text: string) => void, options: RecorderOptions = {}) {
   const [state, setState] = useState<RecState>("idle");
   const [level, setLevel] = useState(0);
   const [seconds, setSeconds] = useState(0);
@@ -242,9 +321,11 @@ export function useRecorder(mode: VoiceMode, onText: (text: string) => void) {
   const cleanupRef = useRef<() => void>(() => {});
   const finishRef = useRef<(send: boolean) => void>(() => {});
   const onTextRef = useRef(onText);
+  const optsRef = useRef(options);
   useEffect(() => {
     onTextRef.current = onText;
-  }, [onText]);
+    optsRef.current = options;
+  });
 
   useEffect(() => () => cleanupRef.current(), []);
 
@@ -284,6 +365,7 @@ export function useRecorder(mode: VoiceMode, onText: (text: string) => void) {
     let spoke = false;
     let lastVoice = Date.now();
     let sendOnStop = true;
+    let silent = false;
     const tick = window.setInterval(() => {
       const now = Date.now();
       setSeconds(Math.floor((now - t0) / 1000));
@@ -301,6 +383,7 @@ export function useRecorder(mode: VoiceMode, onText: (text: string) => void) {
         if (spoke && now - lastVoice > SILENCE_MS) finish(true);
         else if (!spoke && now - t0 > NO_SPEECH_MS) {
           setError("声が聞き取れませんでした。マイクに近づいて、もう一度お話しください。");
+          silent = true;
           finish(false);
         }
       }
@@ -326,23 +409,35 @@ export function useRecorder(mode: VoiceMode, onText: (text: string) => void) {
       cleanup();
       if (!sendOnStop || !chunks.length) {
         setState("idle");
+        optsRef.current.onDone?.(silent ? "empty" : "cancel");
         return;
       }
       setState("transcribing");
       const blob = new Blob(chunks, { type: rec.mimeType || mime || "audio/webm" });
+      let result: RecResult = "error";
       try {
         const form = new FormData();
         form.append("audio", blob, `voice.${/mp4|m4a/.test(blob.type) ? "m4a" : /ogg/.test(blob.type) ? "ogg" : "webm"}`);
         const res = await fetch("/api/assistant/transcribe", { method: "POST", body: form });
         const body = (await res.json().catch(() => null)) as { text?: string; error?: string } | null;
-        if (!res.ok) throw new Error(body?.error ?? "音声を文字にできませんでした。");
+        if (!res.ok) {
+          // サーバーの音声入力が止まっている (キーなし・障害) ときは、次からブラウザーの音声認識を使う
+          if (res.status >= 500 && recognitionCtor()) optsRef.current.onServerFail?.();
+          throw new Error(body?.error ?? "音声を文字にできませんでした。");
+        }
         const text = (body?.text ?? "").trim();
-        if (!text) setError("声が聞き取れませんでした。もう一度お話しください。");
-        else onTextRef.current(text);
+        if (!text) {
+          setError("声が聞き取れませんでした。もう一度お話しください。");
+          result = "empty";
+        } else {
+          result = "text";
+          onTextRef.current(text);
+        }
       } catch (err) {
         setError((err as Error).message || "音声を文字にできませんでした。");
       } finally {
         setState("idle");
+        optsRef.current.onDone?.(result);
       }
     };
     rec.start(250);
@@ -363,6 +458,7 @@ export function useRecorder(mode: VoiceMode, onText: (text: string) => void) {
     r.maxAlternatives = 1;
     let finalText = "";
     let send = true;
+    let failed: RecResult | undefined;
     const t0 = Date.now();
     const tick = window.setInterval(() => {
       setSeconds(Math.floor((Date.now() - t0) / 1000));
@@ -380,6 +476,7 @@ export function useRecorder(mode: VoiceMode, onText: (text: string) => void) {
       if (e.error === "not-allowed" || e.error === "service-not-allowed") setError("マイクの使用が許可されていません。アドレス欄の左のアイコンからマイクを「許可」にしてください。");
       else if (e.error === "no-speech") setError("声が聞き取れませんでした。もう一度お話しください。");
       else if (e.error !== "aborted") setError("音声入力に失敗しました。もう一度お試しください。");
+      failed = e.error === "no-speech" ? "empty" : e.error === "aborted" ? "cancel" : "error";
       send = false;
     };
     r.onend = () => {
@@ -389,6 +486,7 @@ export function useRecorder(mode: VoiceMode, onText: (text: string) => void) {
       const text = (finalText || "").trim();
       setInterim("");
       if (send && text) onTextRef.current(text);
+      optsRef.current.onDone?.(send && text ? "text" : (failed ?? (send ? "empty" : "cancel")));
     };
     cleanupRef.current = () => {
       send = false;

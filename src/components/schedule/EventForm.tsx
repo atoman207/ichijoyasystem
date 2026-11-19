@@ -205,6 +205,8 @@ export function EventForm({
         caseRef: selectedCase?.value,
         repeat: repeat === "none" || repeatError ? "none" : repeat,
         repeatUntil: repeat === "none" || repeatError ? undefined : until,
+        kind: v.kind,
+        storeId: v.storeId,
       }
     : null;
   const { report, fresh, checking } = useConflictReport(query);
@@ -526,6 +528,8 @@ export function EventForm({
                 location={v.location.trim() || undefined}
                 assigneeIds={v.assigneeIds}
                 eventId={eventId}
+                title={v.title}
+                memo={v.memo}
                 onApply={applySuggestion}
               />
             </Card>

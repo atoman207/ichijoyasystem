@@ -1,6 +1,6 @@
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
-import { CalendarDays, ChartGantt, ChevronLeft, ChevronRight, Columns3, Gauge, LayoutGrid, List, Plus, Rows3, TriangleAlert, UserRound } from "lucide-react";
+import { CalendarDays, ChartGantt, ChevronLeft, ChevronRight, Columns3, Gauge, LayoutGrid, List, Plus, Route, Rows3, TriangleAlert, UserRound } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import type { ScheduleEvent, ScheduleKind, StoreId } from "@/lib/db/types";
@@ -13,6 +13,8 @@ import { SCHEDULE_GROUP_LABEL, SCHEDULE_KIND, SCHEDULE_KINDS } from "@/lib/const
 import { Card, CardHeader, Flash, LinkButton, LinkTabs, PageHeader } from "@/components/ui";
 import { ConflictList, DayView, ListView, MonthView, StaffView, WeekView, type CalendarContext, type CalUser } from "@/components/schedule/CalendarViews";
 import { KindLegend } from "@/components/schedule/parts";
+import { activeHolds } from "@/lib/scheduling/context";
+import { expireHoldsNow } from "@/lib/actions/scheduling";
 
 type View = "month" | "week" | "staff" | "day" | "list";
 
@@ -85,7 +87,12 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   const here = link();
 
   // 期間内の全予定。重複は店舗・担当者の絞り込みに関係なく全社の予定で判定する
-  const inRange = db.schedule.filter((e) => overlapsRange(e, from, to));
+  // 仮押さえ (点線で表示。押すと計画の画面) も同じ予定表に重ねる
+  await expireHoldsNow().catch(() => 0);
+  const holdEvents: ScheduleEvent[] = activeHolds(db, now)
+    .filter((h) => overlapsRange(h, from, to))
+    .map((h) => ({ id: `hold:${h.id}`, title: `[仮${h.rank > 1 ? ` 第${h.rank}候補` : ""}] ${h.title}`, kind: h.kind, date: h.date, endDate: h.endDate, startTime: h.startTime, endTime: h.endTime, slot: h.slot, storeId: h.storeId, assigneeIds: h.assigneeIds, customerId: h.customerId, inquiryId: h.inquiryId, quoteId: h.quoteId, orderId: h.orderId, location: h.location, memo: h.memo, source: "manual" }));
+  const inRange = [...db.schedule.filter((e) => overlapsRange(e, from, to)), ...holdEvents];
   const { byEvent, pairs } = analyzeConflicts(inRange);
   const kindOk = (e: ScheduleEvent) => !kindParam || (kindParam === "case" || kindParam === "internal" ? SCHEDULE_KIND[e.kind].group === kindParam : e.kind === kindParam);
   const storeOk = (e: ScheduleEvent) => !storeFilter || e.storeId === storeFilter || Boolean(e.companyWide);
@@ -150,6 +157,10 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
             <LinkButton href={link({ user: "me", store: "all", view: view === "month" ? "list" : view })} variant="secondary" size="sm">
               <UserRound />
               自分の予定
+            </LinkButton>
+            <LinkButton href="/schedule/planning" variant="secondary" size="sm">
+              <Route />
+              計画・最適化
             </LinkButton>
             <LinkButton href="/schedule/capacity" variant="secondary" size="sm">
               <Gauge />

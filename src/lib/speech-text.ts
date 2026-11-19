@@ -85,3 +85,29 @@ export function fixTranscript(text: string): string {
 
 /** 音声認識に渡す言葉の手がかり (社名・店舗名・よく使う言葉) */
 export const TRANSCRIBE_HINT = "一畳屋 (いちじょうや)、合志店 (こうしてん)、中央店、西店、玉名店 (たまなてん)、本社・坪井ショールーム、畳、表替え、襖、障子、網戸、カーテン、クロス、見積、受注、施工、請求、入金、粗利、売上、予定表、問い合わせ";
+
+/**
+ * 読み上げを小分けにする (最初の 1 文をすぐに読み始め、その間に続きの音声を作る)。
+ * brief = 会話モード (要点だけを読み、続きは画面で)
+ */
+export function speechChunks(text: string, opts: { hasTable?: boolean; brief?: boolean } = {}): string[] {
+  const s = forSpeech(text, { hasTable: opts.hasTable, max: opts.brief ? 260 : SPEECH_MAX_CHARS });
+  const sentences = s.match(/[^。！？!?]+[。！？!?]?/g)?.map((x) => x.trim()).filter(Boolean) ?? [];
+  const out: string[] = [];
+  let cur = "";
+  for (const x of sentences) {
+    // 最初のかたまりは短く (1 文、長くても 90 文字まで)、あとは 220 文字まで
+    const limit = out.length === 0 ? 90 : 220;
+    if (cur && (cur.length + x.length > limit || out.length === 0)) {
+      out.push(cur);
+      cur = x;
+    } else cur += x;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/** 会話モードを終える言葉 (「終わり」「ありがとう」など) */
+export function isStopPhrase(text: string): boolean {
+  return /^(?:会話を?)?(?:終わり|おわり|終了|ストップ|止めて|とめて|やめて|もういい|大丈夫です|以上(?:です)?|ありがとう(?:ございます|ございました)?)[。.!！、\s]*$/.test(text.trim());
+}

@@ -150,13 +150,13 @@ const METRICS: Record<Subject, Record<string, MetricDef>> = {
   sales: SALES_METRICS,
   inquiries: {
     count: COUNT_AMOUNT.count,
-    won_count: { label: "受注になった件数", kind: "count", calc: (a) => sum(a, "won") },
+    won_count: { label: "受注になった問い合わせの件数", kind: "count", calc: (a) => sum(a, "won") },
     conversion: { label: "受注率", kind: "percent", calc: (a) => ratio(sum(a, "won"), a.n) },
   },
   quotes: {
     count: COUNT_AMOUNT.count,
     amount: { label: "見積金額 (税込)", kind: "yen", calc: (a) => sum(a, "amount") },
-    won_count: { label: "受注件数", kind: "count", calc: (a) => sum(a, "won") },
+    won_count: { label: "受注になった見積の件数 (見積から受注)", kind: "count", calc: (a) => sum(a, "won") },
     win_rate: { label: "成約率", kind: "percent", calc: (a) => ratio(sum(a, "won"), sum(a, "decided")) },
     avg_amount: { label: "平均見積額", kind: "yen", calc: (a) => (a.n ? Math.round(sum(a, "amount") / a.n) : null) },
   },

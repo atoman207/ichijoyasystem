@@ -8,6 +8,8 @@
 
 import type { AllocationRun, Bom, ExpenseClass, ItemCategory, Material, MaterialCost, MaterialUsage, MgmtEntry, MgmtRule, OrderAttribution, PeriodClose, PurchaseLineAlloc, SalesAdjustment, SalesArea, StockMove } from "./types-mgmt";
 export type * from "./types-mgmt";
+import type { JobSpec, ProductionJob, ResourceBooking, ScheduleHold } from "./types-plan";
+export type * from "./types-plan";
 
 export type Role = "admin" | "store_manager" | "store_staff" | "hq_staff";
 
@@ -845,7 +847,7 @@ export interface Delivery {
   status: DeliveryStatus;
   error?: string;
   /** notify = 社内通知 / document = 見積書・請求書の送付 / message = 個別の連絡 / test = 接続の確認 */
-  purpose: "notify" | "document" | "message" | "test";
+  purpose: "notify" | "document" | "message" | "test" | "schedule_offer";
   relatedType?: RelatedType | "approval" | "thread";
   relatedId?: string;
   /** 送信した人 (自動の通知は操作した人) */
@@ -1502,6 +1504,11 @@ export interface Database {
   mgmtEntries: MgmtEntry[];
   allocationRuns: AllocationRun[];
   periodCloses: PeriodClose[];
+  /* 予定の計画 (types-plan.ts) */
+  jobSpecs: JobSpec[];
+  productionJobs: ProductionJob[];
+  resourceBookings: ResourceBooking[];
+  scheduleHolds: ScheduleHold[];
 }
 
 export type CollectionName = Exclude<keyof Database, "meta">;

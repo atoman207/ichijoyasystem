@@ -432,7 +432,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                     {[...db.deliveries].reverse().slice(0, 50).map((d) => (
                       <tr key={d.id} className="border-t border-line align-top">
                         <td className="px-4 py-2 text-xs tnum text-ink-3">{fmtDateTime(d.createdAt)}<div>{userName(d.userId)}</div></td>
-                        <td className="px-3 py-2 text-xs">{DELIVERY_CHANNEL_LABEL[d.channel]}<div className="text-ink-3">{{ notify: "社内通知", document: "帳票の送付", message: "個別の連絡", test: "接続の確認" }[d.purpose]}</div></td>
+                        <td className="px-3 py-2 text-xs">{DELIVERY_CHANNEL_LABEL[d.channel]}<div className="text-ink-3">{{ notify: "社内通知", document: "帳票の送付", message: "個別の連絡", test: "接続の確認", schedule_offer: "日程の候補の案内" }[d.purpose]}</div></td>
                         <td className="px-3 py-2 text-xs">{d.recipientLabel ?? ""}<div className="font-mono text-[11px] text-ink-3">{d.recipient}</div></td>
                         <td className="px-3 py-2 text-xs"><div className="font-medium text-ink">{d.subject ?? ""}</div><div className="line-clamp-2 text-ink-3">{d.body}</div>{d.attachments?.length ? <div className="text-[11px] text-ink-3">添付: {d.attachments.join("、")}</div> : null}</td>
                         <td className="px-3 py-2 text-xs"><Badge tone={DELIVERY_STATUS[d.status].tone}>{DELIVERY_STATUS[d.status].label}</Badge>{d.error && <div className="mt-1 text-[11px] text-critical">{d.error}</div>}</td>

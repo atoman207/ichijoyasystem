@@ -13,5 +13,9 @@ TZ=Asia/Tokyo
 # FAX の定期処理 2 分ごと (送信の状態の確認・通信エラーの自動の再送・AI の判定待ちの読み直し。FAX サービスが未接続なら何もしない)
 */2 * * * * ichijoya bash /srv/ichijoya/current/deploy/run-task.sh fax >> /var/log/ichijoya/cron.log 2>&1
 
+# AI アシスタントの精度の評価 毎月 1 日 4:10 (正解付きの質問を AI に聞いて採点。AI の費用がかかる。結果は AI アシスタント →「品質・費用」)
+# 毎週にするときは「10 4 * * 1」
+10 4 1 * * ichijoya bash /srv/ichijoya/current/deploy/run-task.sh chatbot-eval >> /var/log/ichijoya/cron.log 2>&1
+
 # 死活監視 5 分ごと (止まっていたら再起動を試み、ログに残す)
 */5 * * * * root bash /srv/ichijoya/current/deploy/run-task.sh health >> /var/log/ichijoya/health.log 2>&1

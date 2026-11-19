@@ -8,7 +8,9 @@ import { updateScheduleCapacity } from "@/lib/actions/schedule";
 import { CAPACITY_LABEL, DEFAULTS, effectiveCapacity, isClosedDay, readCapacitySettings, scheduleStats, storeDayLoads, type CapacityKey, type CapacitySource } from "@/lib/schedule-capacity";
 import { shortDate } from "@/lib/calendar";
 import { addDays, toDateKey } from "@/lib/format";
-import { Button, Card, CardHeader, Field, Flash, Input, Note, PageHeader } from "@/components/ui";
+import { Button, Card, CardHeader, Field, Flash, Input, LinkTabs, Note, PageHeader } from "@/components/ui";
+import { WorkTab, ProductionTab, StaffTab, ResourcesTab, RoutingTab, WeightsTab, RulesTab, ReadyTab } from "./tabs";
+import { BacktestTab } from "./tab-backtest";
 
 export const metadata: Metadata = { title: "仕事量と提案の設定" };
 
@@ -26,10 +28,47 @@ function loadTone(used: number, cap: number): string {
   return "text-ink-2";
 }
 
+const TABS = [
+  { id: "ready", label: "準備の状況" },
+  { id: "capacity", label: "1 日の上限" },
+  { id: "work", label: "作業種別・標準工数" },
+  { id: "production", label: "製造の工程" },
+  { id: "staff", label: "社員の勤務と技能" },
+  { id: "resources", label: "車両・設備" },
+  { id: "routing", label: "経路" },
+  { id: "rules", label: "計画の基準" },
+  { id: "weights", label: "最適化の重み" },
+  { id: "backtest", label: "提案の検証" },
+] as const;
+type TabId = (typeof TABS)[number]["id"];
+
 export default async function ScheduleCapacityPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
   const user = await requireUser();
   const db = getDb();
+  const tab: TabId = TABS.some((t) => t.id === sp.tab) ? (sp.tab as TabId) : "capacity";
+  const tabs = <LinkTabs items={TABS.map((t) => ({ href: `/schedule/capacity?tab=${t.id}`, label: t.label }))} current={`/schedule/capacity?tab=${tab}`} />;
+  const header = (
+    <PageHeader title="仕事量と提案の設定" icon={<Gauge />} description="AI 予定候補日の提案・全体の最適化で使う、店舗の仕事量・作業の標準・製造の能力・社員と車両・経路・重み" back={{ href: "/schedule", label: "予定表" }} />
+  );
+  if (tab !== "capacity") {
+    return (
+      <div className="@container">
+        <Flash msg={sp.msg} err={sp.err} />
+        {header}
+        {tabs}
+        {tab === "ready" && <ReadyTab />}
+        {tab === "work" && <WorkTab />}
+        {tab === "production" && <ProductionTab />}
+        {tab === "staff" && <StaffTab focus={sp.user} />}
+        {tab === "resources" && <ResourcesTab />}
+        {tab === "routing" && <RoutingTab />}
+        {tab === "rules" && <RulesTab />}
+        {tab === "weights" && <WeightsTab />}
+        {tab === "backtest" && <BacktestTab />}
+      </div>
+    );
+  }
   const admin = canManageSettings(user);
   const now = new Date();
   const today = toDateKey(now);
@@ -47,12 +86,8 @@ export default async function ScheduleCapacityPage({ searchParams }: { searchPar
   return (
     <div className="@container">
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader
-        title="仕事量と提案の設定"
-        icon={<Gauge />}
-        description="AI 予定候補日の提案で使う、店舗の 1 日の仕事量の上限と、これからの店舗ごとの仕事量"
-        back={{ href: "/schedule", label: "予定表" }}
-      />
+      {header}
+      {tabs}
 
       <div className="grid grid-cols-1 gap-4 @5xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-4">
@@ -108,12 +143,14 @@ export default async function ScheduleCapacityPage({ searchParams }: { searchPar
           <Card>
             <CardHeader title="提案の仕組み" />
             <ul className="space-y-1.5 text-xs leading-relaxed text-ink-2">
-              <li>・休業日 (休日カレンダー) と、店舗の 1 日の上限 (現場作業・営業の訪問・畳の製造) を超える日は候補にしません。</li>
-              <li>・担当者は、休暇・終日の予定がなく、1 日の件数が上限未満で、前後の予定との移動時間を含めて時間が空いている人から選びます。現場作業は「施工」の担当、営業の訪問は「営業」の担当と店長を優先します。</li>
-              <li>・同じ案件の予定の順番 (現地調査 → 採寸 → 引き取り → 施工 → 納品。納品は引き取りの翌日以降) を守ります。</li>
-              <li>・点数 (0〜100) は、移動の効率 (同じ日に近くの現場を回れるか)・店舗の空き・畳の製造の空き・担当者の負担・早さ・経験 から計算します。</li>
-              <li>・距離は住所の市区町村と町名からの目安です (道路距離 = 直線距離 × 1.3、移動時間 = 道路距離 ÷ 移動の速さ + 5 分)。お客様の住所は社外の地図サービスに送りません。</li>
-              <li>・提案はフォームに入れるだけで、保存は担当者が「予定を登録する」で行います。</li>
+              <li>・休業日 (休日カレンダー) と、店舗の 1 日の上限 (現場作業・営業の訪問・引き取る畳) を超える日は候補にしません。</li>
+              <li>・作業の内容 (作業種別と数量・標準工数・人数・技能・車両・製造日数・期限・お客様の希望・優先度) を予定・案件ごとに登録できます。登録がないときは件名・メモ・明細から推定します。</li>
+              <li>・担当者は、休暇・終日の予定がなく、件数・作業時間・勤務日・連続勤務・残業の上限に収まり、移動時間を含めて時間が空いている人から選びます。技能を登録した社員は、必要な技能を一人前以上で持つ人を選び、同行が必要な人には熟練者を付けます。</li>
+              <li>・車両・設備を登録した店舗は、必要な種類の車両の空きと積める数を確かめます。引き取りは、製造の工程の空きから完成の日を出し、期限に間に合わない日は候補にしません。</li>
+              <li>・同じ案件の予定の順番 (現地調査 → 採寸 → 引き取り → 施工 → 納品。納品は製造の完成の後) を守ります。仮押さえ中の候補の枠も使いません。</li>
+              <li>・点数 (0〜100) は 移動の効率・店舗の空き・製造の空き・担当者の負担・早さ・経験と熟練度・お客様の希望・期限 から計算し、応援・残業を減点します。重みは「最適化の重み」で変えられ、「提案の検証」で過去の予定と比べて調整できます。</li>
+              <li>・移動時間は社内の計算 (住所の町名からの距離・道路の回り道・距離の帯・朝夕の混雑の目安) です。社内の承認と Google のキーがあれば、実際の道路の経路を使えます (「経路」)。</li>
+              <li>・提案はフォームに入れる・仮押さえするだけで、予定の確定は担当者が行います。</li>
             </ul>
           </Card>
         </div>

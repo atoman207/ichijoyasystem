@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "@/components/ui/Link";
 import { notFound } from "next/navigation";
-import { CalendarDays, ExternalLink, Globe, History, Link2, MapPin, Pencil, Repeat, TriangleAlert, Users } from "lucide-react";
+import { CalendarDays, ExternalLink, Globe, History, Link2, MapPin, Pencil, Repeat, TriangleAlert, Users, ClipboardList } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canAccessStore, canEditEvent } from "@/lib/auth/permissions";
@@ -13,6 +13,7 @@ import { AUDIT_ACTION_LABEL } from "@/lib/constants";
 import { Avatar, Badge, Button, Card, CardHeader, Dl, Flash, LinkButton, Note, PageHeader } from "@/components/ui";
 import { ConflictBadge, KindBadge, KindIcon, kindStyle } from "@/components/schedule/parts";
 import { MapInfoCard } from "@/components/maps/MapInfoCard";
+import { SUGGEST_KINDS } from "@/lib/schedule-capacity";
 import { mapsSearchUrl } from "@/lib/maps/google";
 
 export const metadata: Metadata = { title: "予定の詳細" };
@@ -69,6 +70,12 @@ export default async function EventDetailPage({ params, searchParams }: { params
               <Users />
               この日の全社員の予定
             </LinkButton>
+            {canEdit && SUGGEST_KINDS.includes(e.kind) && (
+              <LinkButton href={`/schedule/spec?type=event&id=${e.id}`} variant="secondary" size="sm">
+                <ClipboardList />
+                作業の内容
+              </LinkButton>
+            )}
             {canEdit && (
               <LinkButton href={`/schedule/${e.id}/edit`} size="sm">
                 <Pencil />

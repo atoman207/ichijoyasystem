@@ -1,5 +1,6 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
+import { reportAiCall } from "./usage";
 
 /**
  * AI の接続 (書類の読取・AI アシスタントで共通)
@@ -352,6 +353,7 @@ async function claudeCall(
   const client = new Anthropic({ apiKey: c.apiKey, maxRetries: 0, timeout: limit });
   const messages: Anthropic.Beta.BetaMessageParam[] = opts.messages ?? [{ role: "user", content: opts.content ?? [] }];
   const deadline = Date.now() + limit;
+  const t0 = Date.now();
   for (let attempt = 0; ; attempt++) {
     try {
       const res = await client.beta.messages.create(
@@ -370,6 +372,9 @@ async function claudeCall(
       if (res.stop_reason === "refusal") throw new AiError("refusal", MSG.refusal, res.stop_details?.category ?? undefined);
       if (res.stop_reason === "max_tokens") throw new AiError("truncated", MSG.truncated);
       const text = res.content.map((b) => (b.type === "text" ? b.text : "")).join("");
+      const u = res.usage;
+      const cached = u?.cache_read_input_tokens ?? 0;
+      reportAiCall({ provider: "claude", model: res.model ?? CLAUDE_MODEL, inputTokens: (u?.input_tokens ?? 0) + cached + (u?.cache_creation_input_tokens ?? 0), outputTokens: u?.output_tokens ?? 0, cachedTokens: cached, ms: Date.now() - t0, ok: true });
       return { text, model: res.model ?? CLAUDE_MODEL, blocks: res.content };
     } catch (err) {
       const retryable = err instanceof Anthropic.InternalServerError || err instanceof Anthropic.RateLimitError || (err instanceof Anthropic.APIConnectionError && !(err instanceof Anthropic.APIConnectionTimeoutError));
@@ -377,7 +382,9 @@ async function claudeCall(
         await sleep(1_500);
         continue;
       }
-      throw claudeError(err);
+      const e = claudeError(err);
+      reportAiCall({ provider: "claude", model: CLAUDE_MODEL, inputTokens: 0, outputTokens: 0, cachedTokens: 0, ms: Date.now() - t0, ok: false, error: e.code });
+      throw e;
     }
   }
 }
@@ -413,15 +420,30 @@ function toOpenAiPart(p: AiPart) {
 /** 使えたモデルを覚えておく (次回から最初に使う) */
 let workingOpenAiModel: string | undefined;
 
-type OpenAiBody = { choices?: { message?: { content?: string | null; refusal?: string | null }; finish_reason?: string }[]; model?: string; error?: { message?: string; code?: string; type?: string } } | null;
+type OpenAiUsage = { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+type OpenAiBody = { choices?: { message?: { content?: string | null; refusal?: string | null }; finish_reason?: string }[]; model?: string; usage?: OpenAiUsage; error?: { message?: string; code?: string; type?: string } } | null;
 
 type OpenAiToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 type OpenAiMessage = { role: "system" | "user" | "assistant" | "tool"; content: OpenAiContent | null; tool_calls?: OpenAiToolCall[]; tool_call_id?: string };
 
-async function openAiCall(
-  c: AiConfig,
-  opts: { messages: OpenAiMessage[]; maxTokens: number; effort: AiEffort; responseFormat?: Record<string, unknown>; tools?: Record<string, unknown>[]; noToolUse?: boolean; deadlineMs?: number },
-): Promise<{ text: string; model: string; toolCalls?: OpenAiToolCall[] }> {
+type OpenAiCallOpts = { messages: OpenAiMessage[]; maxTokens: number; effort: AiEffort; responseFormat?: Record<string, unknown>; tools?: Record<string, unknown>[]; noToolUse?: boolean; deadlineMs?: number };
+
+/** OpenAI の 1 回の呼び出し (使ったトークン数・時間・失敗を usage.ts に知らせる) */
+async function openAiCall(c: AiConfig, opts: OpenAiCallOpts): Promise<{ text: string; model: string; toolCalls?: OpenAiToolCall[] }> {
+  const t0 = Date.now();
+  try {
+    const r = await openAiCallRaw(c, opts);
+    const cached = r.usage?.prompt_tokens_details?.cached_tokens ?? 0;
+    reportAiCall({ provider: "openai", model: r.model, inputTokens: r.usage?.prompt_tokens ?? 0, outputTokens: r.usage?.completion_tokens ?? 0, cachedTokens: cached, ms: Date.now() - t0, ok: true });
+    return { text: r.text, model: r.model, toolCalls: r.toolCalls };
+  } catch (err) {
+    const model = process.env.OPENAI_MODEL?.trim() || workingOpenAiModel || OPENAI_MODELS[0];
+    reportAiCall({ provider: "openai", model, inputTokens: 0, outputTokens: 0, cachedTokens: 0, ms: Date.now() - t0, ok: false, error: err instanceof AiError ? err.code : "api" });
+    throw err;
+  }
+}
+
+async function openAiCallRaw(c: AiConfig, opts: OpenAiCallOpts): Promise<{ text: string; model: string; toolCalls?: OpenAiToolCall[]; usage?: OpenAiUsage }> {
   const base = (process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1").replace(/\/$/, "");
   const preferred = process.env.OPENAI_MODEL?.trim();
   const models = [...new Set([preferred, workingOpenAiModel, ...OPENAI_MODELS].filter(Boolean) as string[])];
@@ -511,7 +533,7 @@ async function openAiCall(
     if (choice?.finish_reason === "content_filter") throw new AiError("refusal", MSG.refusal, "content_filter");
     workingOpenAiModel = model;
     const raw = choice?.message as { content?: string | null; tool_calls?: OpenAiToolCall[] } | undefined;
-    return { text: raw?.content ?? "", model: body?.model ?? model, toolCalls: raw?.tool_calls?.length ? raw.tool_calls : undefined };
+    return { text: raw?.content ?? "", model: body?.model ?? model, toolCalls: raw?.tool_calls?.length ? raw.tool_calls : undefined, usage: body?.usage };
   }
   throw lastError ?? new AiError("unsupported", "利用できる OpenAI のモデルが見つかりませんでした。OPENAI_MODEL を設定してください。");
 }
@@ -593,6 +615,7 @@ export async function synthesizeSpeech(text: string): Promise<{ audio: ArrayBuff
   const voice = process.env.OPENAI_TTS_VOICE?.trim() || "nova";
   const models = [...new Set([workingTtsModel, ...TTS_MODELS()].filter(Boolean) as string[])];
   let last: AiError | undefined;
+  const t0 = Date.now();
   for (const model of models) {
     const res = await voiceFetch(
       "/audio/speech",
@@ -606,10 +629,16 @@ export async function synthesizeSpeech(text: string): Promise<{ audio: ArrayBuff
     );
     if (res.ok) {
       workingTtsModel = model;
-      return { audio: await res.arrayBuffer(), contentType: res.headers.get("content-type") || "audio/mpeg", model };
+      const audio = await res.arrayBuffer();
+      // 費用の記録 (読み上げの API はトークン数を返さないため目安: 入力 = 文字数、音声の出力 = mp3 の長さ (約 48kbps) × 毎秒 21 トークン)
+      reportAiCall({ kind: "voice", provider: "openai", model, inputTokens: text.length, outputTokens: Math.round((audio.byteLength / 6000) * 21), cachedTokens: 0, ms: Date.now() - t0, ok: true });
+      return { audio, contentType: res.headers.get("content-type") || "audio/mpeg", model };
     }
     last = await voiceError(res);
-    if (last.code !== "unsupported") throw last;
+    if (last.code !== "unsupported") {
+      reportAiCall({ kind: "voice", provider: "openai", model, inputTokens: 0, outputTokens: 0, cachedTokens: 0, ms: Date.now() - t0, ok: false, error: last.code });
+      throw last;
+    }
   }
   throw last ?? new AiError("unsupported", "音声のモデルを利用できません。");
 }
@@ -620,6 +649,7 @@ export async function transcribeAudio(audio: Blob, fileName: string, hint: strin
   if (!key) throw new AiError("config", "音声入力には OpenAI の API キーが必要です。");
   const models = [...new Set([workingSttModel, ...STT_MODELS()].filter(Boolean) as string[])];
   let last: AiError | undefined;
+  const t0 = Date.now();
   for (const model of models) {
     const form = new FormData();
     form.append("model", model);
@@ -629,11 +659,16 @@ export async function transcribeAudio(audio: Blob, fileName: string, hint: strin
     const res = await voiceFetch("/audio/transcriptions", { method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form }, 45_000);
     if (res.ok) {
       workingSttModel = model;
-      const body = (await res.json().catch(() => null)) as { text?: string } | null;
+      const body = (await res.json().catch(() => null)) as { text?: string; usage?: { input_tokens?: number; output_tokens?: number } } | null;
+      // 費用の記録 (gpt-4o 系の文字起こしはトークン数を返す。返さないモデルは音声の大きさからの目安)
+      reportAiCall({ kind: "voice", provider: "openai", model, inputTokens: body?.usage?.input_tokens ?? Math.round((audio.size / 4000) * 10), outputTokens: body?.usage?.output_tokens ?? (body?.text ?? "").length, cachedTokens: 0, ms: Date.now() - t0, ok: true });
       return { text: (body?.text ?? "").trim(), model };
     }
     last = await voiceError(res);
-    if (last.code !== "unsupported") throw last;
+    if (last.code !== "unsupported") {
+      reportAiCall({ kind: "voice", provider: "openai", model, inputTokens: 0, outputTokens: 0, cachedTokens: 0, ms: Date.now() - t0, ok: false, error: last.code });
+      throw last;
+    }
   }
   throw last ?? new AiError("unsupported", "音声認識のモデルを利用できません。");
 }

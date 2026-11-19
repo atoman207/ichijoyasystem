@@ -7,7 +7,7 @@
                                                          │
                                                          ├─▶ VPS のディスク: /srv/ichijoya/data/uploads (ファイルの本体)・data/cache (データの控え)
                                                          ▲
-cron: バックアップ 3:30 (→ /var/backups/ichijoya) / 社内資料の同期 毎時 / 死活監視 5 分ごと
+cron: バックアップ 3:30 (→ /var/backups/ichijoya) / 社内資料の同期 毎時 / AI アシスタントの精度の評価 毎月 1 日 4:10 / 死活監視 5 分ごと
 ```
 
 | ファイル | 内容 |
@@ -202,12 +202,21 @@ Xserver 側の保守 (ホストの障害・メンテナンス) による再起�
 | アプリのログ | `journalctl -u ichijoya -n 200 --no-pager` (`-f` で追跡) |
 | 死活監視 (止まったら自動で再起動) | `/var/log/ichijoya/health.log` |
 | バックアップ | `/var/log/ichijoya/backup.log` |
-| 社内資料の同期・FAX の定期処理 | `/var/log/ichijoya/cron.log` |
+| 社内資料の同期・FAX の定期処理・AI の精度の評価 | `/var/log/ichijoya/cron.log` |
 | nginx | `/var/log/nginx/access.log` / `error.log` |
 | 証明書の期限 | `sudo certbot certificates` (自動更新: `systemctl list-timers \| grep certbot`) |
 | ディスク | `df -h /` |
 
 OS のセキュリティ更新は自動 (unattended-upgrades) です。カーネルの更新で再起動が必要なときは、業務時間外に `sudo reboot` してください (アプリは自動で起動します)。
+
+## 5-AI. AI アシスタントの品質・費用
+
+- 画面: AI アシスタント →「品質・費用」(管理者)。受入基準 (正答率・数字の一致・権限の漏えい・存在しない画面の案内・根拠のない回答・答えられない質問・実行の断り・参照元の表示) と、正解付きの質問・評価の実行・AI の利用回数と費用・予算・低評価の回答・データの品質。
+- 定期の評価 (毎月 1 日 4:10) を cron に加えたため、`deploy/ichijoya.cron` を入れ直してください: `sudo install -m 644 /srv/ichijoya/current/deploy/ichijoya.cron /etc/cron.d/ichijoya`。評価は AI を本当に呼ぶので費用がかかります (1 問あたり AI の呼び出し 2〜6 回)。
+- 予算: 画面の「予算と単価」(または `.env.local` の `AI_MONTHLY_BUDGET_JPY`・`AI_MONTHLY_TOKEN_LIMIT`・`AI_USD_JPY`)。超えたら月末まで AI を使わずに (蓄えた回答・集計・資料から) 答えます。単価は OpenAI・Anthropic の料金表で確かめて入れてください (未設定のモデルは費用に入りません)。
+- 障害: AI の呼び出しが続けて失敗すると、3 分 (キー・残高の誤りは 30 分) は AI を呼ばずにすぐ答えます。失敗の種類と回数は同じ画面に出ます。
+- 相談の履歴の保存期間: `CHATBOT_LOG_RETENTION_DAYS` (既定 730 日)、履歴の集計の表 (お客様の名前などを含む) は `CHATBOT_LOG_TABLE_DAYS` (既定 90 日)。AI の呼び出しの記録 (数だけ) は `AI_CALLS_RETENTION_DAYS` (既定 400 日)。
+- テスト: `npm run test:chatbot` (AI を呼ばない単体テストと、モックの OpenAI・Claude を使うテスト。本物の AI・本番のデータは使わない)。本物の AI での評価は画面の「評価を実行」、またはサンプルデータで `node scripts/tests/chatbot/eval-live.mjs`。
 
 ## 5-A. 発注書・クラウド FAX
 

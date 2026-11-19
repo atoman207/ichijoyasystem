@@ -13,6 +13,7 @@ import { ContactList, ContactLogForm } from "@/components/features/Contacts";
 import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
 import { OrderScheduleForm } from "@/components/schedule/OrderScheduleForm";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
+import { CasePlanCard } from "@/components/scheduling/CasePlanCard";
 import { formStores, formUsers } from "@/components/schedule/form-data";
 import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { createQualityIssue } from "@/lib/actions/kpi";
@@ -188,6 +189,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             </Card>
           )}
 
+          <CasePlanCard recordType="order" recordId={o.id} user={user} />
           <CaseScheduleCard
             events={chain.events}
             allEvents={db.schedule}

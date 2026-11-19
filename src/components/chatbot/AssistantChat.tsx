@@ -2,14 +2,15 @@
 
 import { Fragment, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import clsx from "clsx";
-import { Database, FileSearch, Loader2, Mic, SendHorizontal, Sparkles, Square, Table2, ThumbsDown, ThumbsUp, UserRound, Volume2, VolumeX, X } from "lucide-react";
+import { AudioLines, Database, FileSearch, Loader2, Mic, SendHorizontal, Sparkles, Square, Table2, ThumbsDown, ThumbsUp, UserRound, Volume2, VolumeX, X } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { Avatar } from "@/components/ui";
 import { IchijoyaMark } from "@/components/brand/Logo";
 import { askChatbotAction, rateChatbotAnswer } from "@/lib/actions/chatbot";
 import type { AnalysisResult, AnalysisSpec } from "@/lib/assistant/analyze";
 import { AnalysisTable } from "./AnalysisTable";
-import { browserCanListen, browserCanSpeak, canRecord, useRecorder, useSpeaker, type VoiceMode } from "./voice";
+import { browserCanListen, browserCanSpeak, canRecord, RATES, useRecorder, useSpeaker, type RecResult, type VoiceMode } from "./voice";
+import { isStopPhrase } from "@/lib/speech-text";
 
 /**
  * 「質問する」の会話 (画面左下のチャットボットと AI アシスタントの画面で共通)
@@ -18,6 +19,9 @@ import { browserCanListen, browserCanSpeak, canRecord, useRecorder, useSpeaker, 
  * - 続けて質問すると、前の回答で使った集計の条件を引き継ぐ (「店舗別にして」「前年と比べて」)
  * - 音声: マイクのボタンで話して質問し (話し終わると自動で送る)、回答を 20 代の日本人女性の声で読み上げる (./voice.ts)。
  *   声で聞いた質問の回答は自動で読み上げる。「読み上げ」をオンにすると、文字で聞いた回答も読み上げる
+ * - 会話モード: 押すと、話す → 回答の要点を読み上げる → 読み終わると自動でまた聞く、をくり返す (手を使わずに続けて相談できる)。
+ *   「終わり」「ありがとう」と言う・声が 2 回続けて聞こえない・Esc・「終わる」で終える。読み上げ中にマイクを押すと読み上げを止めて話せる
+ * - 読み上げの速さ (0.9〜1.4 倍) はこのブラウザーに保存する。サーバーの音声入力が使えないときは、ブラウザーの音声認識に切り替える
  * - 顔: AI は一畳屋のマーク、質問した人はログインしている人の顔写真 (なければ名前の頭文字)
  */
 
@@ -234,8 +238,73 @@ export function AssistantConversation({
 
   const speaker = useSpeaker(voice.tts);
   const sendRef = useRef<(text: string, opts?: { voice?: boolean }) => void>(() => {});
-  const recorder = useRecorder(voice.stt, (text) => sendRef.current(text, { voice: true }));
+
+  // ---- 会話モード (話す → 読み上げ → また聞く) ----
+  const [talk, setTalk] = useState(false);
+  const talkRef = useRef(false);
+  const emptyRef = useRef(0);
+  const startRef = useRef<() => void>(() => {});
+  const [talkNote, setTalkNote] = useState("");
+  const endTalk = (note = "") => {
+    talkRef.current = false;
+    setTalk(false);
+    emptyRef.current = 0;
+    setTalkNote(note);
+  };
+  const listenAgain = () => {
+    window.setTimeout(() => {
+      if (talkRef.current) startRef.current();
+    }, 350);
+  };
+  const onRecDone = (r: RecResult) => {
+    if (!talkRef.current) return;
+    if (r === "text") {
+      emptyRef.current = 0;
+      return;
+    }
+    if (r === "empty") {
+      emptyRef.current++;
+      if (emptyRef.current >= 2) endTalk("声が聞こえないため、会話モードを終えました。");
+      else listenAgain();
+      return;
+    }
+    endTalk(r === "error" ? "音声入力に失敗したため、会話モードを終えました。" : "");
+  };
+  const recorder = useRecorder(voice.stt, (text) => sendRef.current(text, { voice: true }), {
+    onDone: onRecDone,
+    onServerFail: () => setVoice((v) => ({ ...v, stt: browserCanListen() ? "browser" : "none" })),
+  });
   const recording = recorder.state === "recording" || recorder.state === "starting";
+  useEffect(() => {
+    startRef.current = recorder.start;
+  });
+  useEffect(() => {
+    if (!talk) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        recorder.cancel();
+        speaker.stop();
+        endTalk();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  const toggleTalk = () => {
+    if (talk) {
+      recorder.cancel();
+      speaker.stop();
+      endTalk();
+      return;
+    }
+    speaker.stop();
+    speaker.unlock();
+    talkRef.current = true;
+    emptyRef.current = 0;
+    setTalkNote("");
+    setTalk(true);
+    if (recorder.state === "idle") recorder.start();
+  };
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -256,19 +325,27 @@ export function AssistantConversation({
     if (!q || pending) return;
     speaker.stop();
     speaker.unlock();
+    // 会話モードを終える言葉 (「終わり」「ありがとう」)
+    if (opts.voice && talkRef.current && isStopPhrase(q)) {
+      endTalk("会話モードを終えました。");
+      if (voice.tts !== "none") void speaker.speak(-1, "はい。会話モードを終わります。", false);
+      return;
+    }
     const history = msgs.map(({ role, content, tables }) => ({ role, content, specs: tables?.map((t) => t.spec as AnalysisSpec) }));
     // 回答の位置 (読み上げに使う): 今の会話 + 質問 の次
     const answerIndex = msgs.length + 1;
-    const speakAnswer = Boolean(opts.voice) || readAloud;
+    const speakAnswer = Boolean(opts.voice) || readAloud || talkRef.current;
     setMsgs((m) => [...m, { role: "user", content: q, voice: opts.voice || undefined }]);
     setInput("");
     startTransition(async () => {
       try {
         const r = await askChatbotAction(history, q, convId, { voice: Boolean(opts.voice) });
         setMsgs((m) => [...m, { role: "assistant", content: r.answer, source: r.source as Source, links: r.links, suggestions: r.suggestions, qaId: r.qaId, logId: r.logId, tables: r.tables, sources: r.sources, tools: r.tools }]);
-        if (speakAnswer && voice.tts !== "none") void speaker.speak(answerIndex, r.answer, Boolean(r.tables?.length));
+        if (speakAnswer && voice.tts !== "none") void speaker.speak(answerIndex, r.answer, Boolean(r.tables?.length), { brief: talkRef.current, onEnd: () => talkRef.current && listenAgain() });
+        else if (talkRef.current) listenAgain();
       } catch {
         setMsgs((m) => [...m, { role: "assistant", content: "通信に失敗しました。画面を再読み込みしてから、もう一度お試しください。", source: "none" }]);
+        if (talkRef.current) endTalk("通信に失敗したため、会話モードを終えました。");
       }
     });
   };
@@ -443,6 +520,34 @@ export function AssistantConversation({
         )}
       </div>
 
+      {(talk || talkNote) && (
+        <div className={clsx("flex items-center gap-2 border-t border-line px-3 py-2 text-xs", talk ? "bg-accent-soft text-accent-ink" : "bg-panel text-ink-2")} role="status" aria-live="polite">
+          <AudioLines className={clsx("h-4 w-4 shrink-0", talk && "animate-pulse")} aria-hidden />
+          <span className="min-w-0 flex-1">
+            {!talk
+              ? talkNote
+              : recorder.state === "transcribing"
+                ? "会話モード: 聞き取っています…"
+                : recording
+                  ? "会話モード: お話しください (「終わり」で終了)"
+                  : pending
+                    ? "会話モード: 考えています…"
+                    : speaker.speakingId !== null || speaker.loadingId !== null
+                      ? "会話モード: 読み上げています (マイクを押すと止めて話せます)"
+                      : "会話モード"}
+          </span>
+          {talk ? (
+            <button type="button" onClick={toggleTalk} className="shrink-0 rounded-md bg-white/70 px-2 py-0.5 font-medium text-accent-ink hover:bg-white">
+              終わる
+            </button>
+          ) : (
+            <button type="button" onClick={() => setTalkNote("")} className="grid h-5 w-5 shrink-0 place-items-center rounded hover:bg-subtle" aria-label="閉じる">
+              <X className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          )}
+        </div>
+      )}
+
       {(recorder.state !== "idle" || voiceError) && (
         <div className="border-t border-line bg-panel px-3 py-2 text-xs" role="status" aria-live="polite">
           {recorder.state === "transcribing" ? (
@@ -504,6 +609,17 @@ export function AssistantConversation({
             {readAloud ? <Volume2 className="h-4 w-4" aria-hidden /> : <VolumeX className="h-4 w-4" aria-hidden />}
           </button>
         )}
+        {voice.tts !== "none" && (readAloud || talk) && (
+          <button
+            type="button"
+            onClick={() => speaker.setRate(RATES[(RATES.indexOf(speaker.rate as (typeof RATES)[number]) + 1) % RATES.length])}
+            className="grid h-10 w-9 shrink-0 place-items-center rounded-xl text-[11px] font-semibold text-ink-2 tnum hover:bg-subtle"
+            aria-label={`読み上げの速さ ${speaker.rate} 倍 (押すと変わります)`}
+            title="読み上げの速さ (押すと 0.9 → 1 → 1.2 → 1.4 倍)"
+          >
+            {speaker.rate}×
+          </button>
+        )}
         <textarea
           ref={ref}
           value={input}
@@ -520,6 +636,19 @@ export function AssistantConversation({
           aria-label="質問"
           className="max-h-32 min-h-10 min-w-0 flex-1 resize-none rounded-xl border border-line bg-subtle px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:border-accent focus:bg-panel focus:outline-none"
         />
+        {voice.stt !== "none" && voice.tts !== "none" && (
+          <button
+            type="button"
+            onClick={toggleTalk}
+            disabled={pending && !talk}
+            className={clsx("grid h-10 w-9 shrink-0 place-items-center rounded-xl disabled:opacity-40", talk ? "bg-accent text-white" : "text-ink-3 hover:bg-subtle hover:text-ink")}
+            aria-pressed={talk}
+            aria-label={talk ? "会話モードを終える" : "会話モード (話す → 読み上げ → また聞く をくり返す)"}
+            title={talk ? "会話モードを終える (Esc)" : "会話モード: 手を使わずに続けて相談する"}
+          >
+            <AudioLines className="h-4 w-4" aria-hidden />
+          </button>
+        )}
         {voice.stt !== "none" && (
           <button
             type="button"

@@ -34,6 +34,10 @@ import { suggestScheduleDates, type SuggestResult, type SuggestSlot } from "@/li
 import { readCapacitySettings, SCHEDULE_CAPACITY_ID, SUGGEST_KINDS, type CapacitySettings } from "@/lib/schedule-capacity";
 import { basePlaceOfEvent } from "@/lib/maps/resolve";
 import { mapTablesReady, propagateOrderSite, saveEventLocationMode } from "@/lib/maps/store";
+import { changeImpacts, moveBookingsWithEvent } from "@/lib/scheduling/impact";
+import { replanProductionForPickup } from "@/lib/scheduling/production";
+import { prefetchForStore } from "@/lib/scheduling/prefetch";
+import { planTablesReady } from "@/lib/scheduling/tables";
 import { fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
 /**
@@ -341,6 +345,8 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
     fail(back, `担当者の予定が重複しています: ${describeConflicts(db, hits)}。日時・担当者を見直すか、「重複を承知で保存する」にチェックしてください。`);
   }
   let changed = 0;
+  const followUps: string[] = [];
+  const impacts = changeImpacts(db, { id, kind: p.fields.kind, date: p.fields.date, endDate: p.fields.endDate, storeId: p.fields.storeId, assigneeIds: p.fields.assigneeIds, orderId: p.fields.orderId, quoteId: p.fields.quoteId, inquiryId: p.fields.inquiryId }).filter((x) => !/予約 .* も .* に移します|保存すると製造の予定を作り直します/.test(x));
   await mutate((db) => {
     const ev = db.schedule.find((e) => e.id === id);
     if (!ev) return;
@@ -352,6 +358,10 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
     ev.updatedAt = now;
     const changes = diffChanges(before, ev, ["title", "kind", "date", "endDate", "startTime", "endTime", "slot", "storeId", "companyWide", "assigneeIds", "customerId", "orderId", "inquiryId", "location", "memo"]);
     changed = changes.length;
+    if (planTablesReady() && changes.some((c) => ["date", "endDate", "startTime", "endTime", "slot"].includes(c.field))) {
+      if (moveBookingsWithEvent(db, ev)) followUps.push("車両・設備の予約も移しました。");
+      if (ev.kind === "pickup") followUps.push(...replanProductionForPickup(db, user, ev));
+    }
     if (synced) {
       applyToOrder(db, ev, user);
     } else if (ev.orderId && changes.some((c) => ["date", "endDate", "startTime", "endTime", "assigneeIds"].includes(c.field))) {
@@ -375,7 +385,8 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
   });
   revalidateSchedule(current);
   revalidateSchedule(p.fields);
-  const msg = `${changed ? "予定を更新しました。" : "変更はありませんでした。"}${synced && changed ? "受注の施工予定にも反映しました。" : ""}${hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : ""}`;
+  const freed = changed && p.fields.date > current.date && SUGGEST_KINDS.includes(current.kind) ? ` 空いた ${shortDate(current.date)} に入れられる予定は 予定表 →「計画」で確かめられます。` : "";
+  const msg = `${changed ? "予定を更新しました。" : "変更はありませんでした。"}${synced && changed ? "受注の施工予定にも反映しました。" : ""}${hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : ""}${followUps.join("")}${changed && impacts.length ? ` 注意: ${impacts.join(" / ")}。` : ""}${freed}`;
   redirect(withMsg(returnTo ?? `/schedule/${id}`, msg));
 }
 
@@ -403,6 +414,11 @@ export async function deleteScheduleEvent(id: string, formData: FormData) {
         o.updatedAt = now;
       }
     }
+    if (planTablesReady()) {
+      // ひも付く車両の予約を外し、引き取りの製造の予定は取りやめにする
+      db.resourceBookings = (db.resourceBookings ?? []).filter((b) => !b.eventId || !ids.has(b.eventId));
+      for (const j of db.productionJobs ?? []) if (j.pickupEventId && ids.has(j.pickupEventId) && j.status === "planned") Object.assign(j, { status: "cancelled", updatedBy: user.id, updatedAt: now, note: [j.note, "引き取りの予定の削除により取りやめ"].filter(Boolean).join(" / ") });
+    }
     addAudit(db, {
       userId: user.id,
       action: "delete",
@@ -411,10 +427,17 @@ export async function deleteScheduleEvent(id: string, formData: FormData) {
       entityLabel: e.title,
       summary: `予定を削除 (${periodLabel(e)} ${SCHEDULE_KIND[e.kind].label}${removed > 1 ? ` / 以降の繰り返し ${removed - 1} 件を含む` : ""})`,
       storeId: e.storeId,
+      // 空いた枠の提案 (src/lib/scheduling/replan.ts) に使う
+      changes: [
+        { field: "date", before: e.date, after: null },
+        { field: "kind", before: e.kind, after: null },
+        { field: "assigneeIds", before: e.assigneeIds, after: null },
+      ],
     });
   });
   revalidateSchedule(e);
-  redirect(withMsg(returnTo ?? `/schedule?date=${e.date}`, removed > 1 ? `予定を ${removed} 件削除しました。` : "予定を削除しました。"));
+  const freed = SUGGEST_KINDS.includes(e.kind) && e.date >= new Date().toISOString().slice(0, 10) ? ` 空いた枠 (${shortDate(e.date)}) に入れられる予定・案件は 予定表 →「計画」の「空いた枠」で確かめられます。` : "";
+  redirect(withMsg(returnTo ?? `/schedule?date=${e.date}`, `${removed > 1 ? `予定を ${removed} 件削除しました。` : "予定を削除しました。"}${freed}`));
 }
 
 /**
@@ -479,7 +502,10 @@ export async function checkScheduleConflicts(q: ConflictQuery): Promise<Conflict
       if (clash) b.overlap = true;
     }
   }
-  return { conflicts, agenda, busy, day: q.date, occurrences: dates.length };
+  const kind = q.kind && SCHEDULE_KINDS.includes(q.kind) ? q.kind : undefined;
+  const impactStore = q.storeId && db.stores.some((s) => s.id === q.storeId) ? q.storeId : ref?.storeId;
+  const impacts = kind && impactStore ? changeImpacts(db, { id: q.eventId, kind, date: q.date, endDate, storeId: impactStore, assigneeIds, orderId: ref?.orderId, quoteId: ref?.quoteId, inquiryId: ref?.inquiryId }) : [];
+  return { conflicts, agenda, busy, day: q.date, occurrences: dates.length, impacts };
 }
 
 /* ---------------- AI 予定候補日の提案 ---------------- */
@@ -499,6 +525,9 @@ export interface SuggestQuery {
   days?: number;
   durationDays?: number;
   eventId?: string;
+  /** 予定の件名・メモ (保存前の入力。作業の内容の推定に使う) */
+  title?: string;
+  memo?: string;
 }
 
 /**
@@ -515,7 +544,11 @@ export async function suggestScheduleSlots(q: SuggestQuery): Promise<SuggestResu
   const assigneeIds = (Array.isArray(q.assigneeIds) ? q.assigneeIds : []).filter((id) => typeof id === "string" && db.users.some((u) => u.id === id && u.active)).slice(0, 6);
   const from = isDateKey(q.from) ? q.from : undefined;
   const days = int(q.days, 7, 62);
+  // Google の経路を使う設定なら、使いそうな経路を先に取りに行く (失敗しても社内の目安で続く)
+  await prefetchForStore(db, user, { storeId, address: typeof q.location === "string" ? q.location.slice(0, 200) : ref?.location, from, days: days ?? 21 }).catch(() => {});
   return suggestScheduleDates(db, user, {
+    title: typeof q.title === "string" ? q.title.slice(0, 200) : undefined,
+    memo: typeof q.memo === "string" ? q.memo.slice(0, 2000) : undefined,
     storeId,
     kind: q.kind,
     orderId: ref?.orderId,

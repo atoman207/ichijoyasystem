@@ -12,6 +12,7 @@ import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, ORDER_STATUS, QUOTE_STAT
 import { Badge, Button, Card, CardHeader, ChannelTag, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
 import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
+import { CasePlanCard } from "@/components/scheduling/CasePlanCard";
 import { caseEvents } from "@/lib/db/schedule";
 import { toDateKey } from "@/lib/format";
 import { AiSummary } from "@/components/features/AiSummary";
@@ -117,6 +118,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             )}
           </Card>
 
+          <CasePlanCard recordType="inquiry" recordId={inq.id} user={user} />
           <CaseScheduleCard
             events={events}
             allEvents={db.schedule}

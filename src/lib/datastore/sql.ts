@@ -136,7 +136,39 @@ export function checkSql(raw: string): { sql: string } | { error: string } {
   // 「main.表」は閲覧範囲の覆いを外すため使えない (どの書き方でも)
   if (/(?:\bmain|"main"|\[main\]|`main`)\s*\./i.test(outside)) return { error: "表の名前に main. は付けないでください (そのまま 表の名前 で書きます)。" };
   sql = sql.replace(/\s+/g, " ");
+  const lint = bareAggregate(sql);
+  if (lint) return { error: lint };
   return { sql };
+}
+
+/**
+ * よくある集計の誤り: GROUP BY なしで、集計関数 (MAX・SUM など) と集計していない列を一緒に選ぶ。
+ * SQLite はその列に 1 行分の値を入れて返すため、「お客様ごとの残高の一番」が「1 件の請求の最大」になる (エラーにならず誤る)。
+ * 断って、GROUP BY で数え直させる (サブクエリ・ウィンドウ関数・WITH は対象外)
+ */
+export function bareAggregate(sql: string): string | undefined {
+  const s = sql.replace(/'(?:[^']|'')*'/g, "''").toLowerCase();
+  if (/\bgroup\s+by\b/.test(s) || /\bover\s*\(/.test(s) || /^\s*with\b/.test(s)) return undefined;
+  const m = s.match(/^\s*select\s+(?:distinct\s+)?([\s\S]*?)\sfrom\s/);
+  if (!m) return undefined;
+  const items: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of m[1]) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth--;
+    if (ch === "," && depth === 0) {
+      items.push(cur.trim());
+      cur = "";
+    } else cur += ch;
+  }
+  items.push(cur.trim());
+  if (items.some((i) => /\(\s*select\b/.test(i))) return undefined;
+  if (!items.some((i) => /\b(max|min|sum|count|avg|total|group_concat)\s*\(/.test(i))) return undefined;
+  const bare = items.filter((i) => !i.includes("(") && !/^(''|-?\d+(\.\d+)?|null|true|false)(\s|$)/.test(i));
+  if (!bare.length) return undefined;
+  const cols = bare.map((i) => i.split(/\s+/)[0]).join("・");
+  return `集計関数 (MAX・SUM・COUNT など) と、集計していない列 (${cols}) を GROUP BY なしで一緒に選んでいます。SQLite ではその列は 1 行分の値になり、「お客様ごとの一番」が「1 件の最大」になって誤ります。お客様・店舗・担当者ごとに比べるときは GROUP BY (例: group by customer_id, customer_name) で SUM・COUNT を数え、order by ... desc limit 1 で並べてください。全体の 1 行だけなら、集計していない列を外してください。`;
 }
 
 export async function runSql(raw: string, user: Pick<User, "id" | "role" | "storeId">): Promise<SqlResult> {

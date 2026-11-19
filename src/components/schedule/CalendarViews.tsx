@@ -57,6 +57,11 @@ export interface CalendarContext {
   closedDays?: Set<string>;
 }
 
+/** 仮押さえ (予定表に点線で表示。ID は "hold:<仮押さえの ID>") */
+export const isHold = (e: Pick<ScheduleEvent, "id">) => e.id.startsWith("hold:");
+/** 予定の画面へのリンク (仮押さえは計画の画面) */
+export const eventHref = (e: Pick<ScheduleEvent, "id">) => (isHold(e) ? `/schedule/planning?tab=holds&hold=${encodeURIComponent(e.id.slice(5))}` : `/schedule/${e.id}`);
+
 const WEEK_LABELS = ["月", "火", "水", "木", "金", "土", "日"];
 
 /** その日・その担当者にとって重複している予定か */
@@ -100,7 +105,7 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
   const s = kindStyle(e.kind);
   const conflict = conflictOn(ctx, e, day, personId);
   const label = describe(ctx, e, day, conflict);
-  const href = `/schedule/${e.id}`;
+  const href = eventHref(e);
   if (variant === "month" || variant === "staff") {
     return (
       <Link
@@ -111,6 +116,7 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
           "flex min-w-0 items-center gap-1 rounded border-l-[3px] px-1 py-0.5 text-[11px] leading-tight text-ink transition hover:brightness-95",
           s.soft,
           s.border,
+          isHold(e) && "border-dashed opacity-80",
           conflict && "ring-1 ring-critical/70",
         )}
       >
@@ -133,6 +139,7 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
         "block rounded-lg border-l-[3px] px-2 py-1.5 text-[11px] leading-snug text-ink transition hover:shadow-lift",
         s.soft,
         s.border,
+        isHold(e) && "border-dashed opacity-80",
         conflict && "ring-1 ring-critical/70",
       )}
     >
@@ -601,13 +608,14 @@ function DayBar({ e, ctx, day, userId, style }: { e: ScheduleEvent; ctx: Calenda
   const label = describe(ctx, e, day, conflict);
   return (
     <Link
-      href={`/schedule/${e.id}`}
+      href={eventHref(e)}
       title={label}
       aria-label={label}
       className={clsx(
         "absolute flex h-[22px] items-center gap-1 overflow-hidden rounded-md border-l-[3px] px-1.5 text-[11px] leading-none whitespace-nowrap text-ink shadow-xs transition hover:z-20 hover:shadow-lift",
         s.soft,
         s.border,
+        isHold(e) && "border-dashed opacity-80",
         conflict && "ring-1 ring-critical",
       )}
       style={style}
@@ -670,7 +678,7 @@ function ListRow({ e, d, ctx }: { e: ScheduleEvent; d: string; ctx: CalendarCont
         {conflict && <ConflictBadge />}
       </div>
       <div className="min-w-0">
-        <Link href={`/schedule/${e.id}`} className="font-medium text-ink hover:text-accent hover:underline">
+        <Link href={eventHref(e)} className="font-medium text-ink hover:text-accent hover:underline">
           {e.title}
         </Link>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-ink-3">
@@ -755,7 +763,7 @@ export function ConflictList({ pairs, ctx, limit = 8, moreHref }: { pairs: Confl
 
 function PairLink({ e }: { e: ScheduleEvent }) {
   return (
-    <Link href={`/schedule/${e.id}`} className={clsx("inline-flex min-w-0 items-center gap-1 rounded-md border-l-[3px] px-1.5 py-0.5 text-ink hover:underline", kindStyle(e.kind).soft, kindStyle(e.kind).border)}>
+    <Link href={eventHref(e)} className={clsx("inline-flex min-w-0 items-center gap-1 rounded-md border-l-[3px] px-1.5 py-0.5 text-ink hover:underline", kindStyle(e.kind).soft, kindStyle(e.kind).border)}>
       <KindIcon kind={e.kind} className={clsx("h-3 w-3", kindStyle(e.kind).ink)} />
       <span className="shrink-0 tnum text-ink-2">{timeLabel(e)}</span>
       <span className="truncate">{e.title}</span>

@@ -555,6 +555,8 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
   return [
     // 店舗の表
     ...["customers", "inquiries", "quotes", "orders", "invoices", "cash_entries", "quality_issues", "survey_responses", "google_reviews", "attachments", "approvals", "documents", "purchase_orders", "photo_albums", "sales_orders", "sales_items"].map(byStore),
+    // 予定の計画 (作業の内容・製造の予定・車両の予約・仮押さえ。src/lib/scheduling/access.ts と同じ: 自店舗)
+    ...["job_specs", "production_jobs", "resource_bookings", "schedule_holds"].map(byStore),
     v("payments", "select * from main.payments where invoice_id in (select id from main.invoices where store_id = " + store + ")"),
     v("order_staff", `select * from main.order_staff where order_id in (select order_id from main.sales_orders where store_id = ${store})`),
     // 経費: 店長は自店舗、店舗スタッフは自分の申請 / 仕入: 店長は自店舗 / 仕入先: 店長のみ

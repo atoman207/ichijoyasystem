@@ -17,6 +17,7 @@ import { MapInfoCard } from "@/components/maps/MapInfoCard";
 import { SiteInfoCard } from "@/components/features/SiteInfo";
 import { setQuoteDiscussing, updateSiteInfo } from "@/lib/actions/cases";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
+import { CasePlanCard } from "@/components/scheduling/CasePlanCard";
 import { caseEvents } from "@/lib/db/schedule";
 import { toDateKey } from "@/lib/format";
 import { AiSummary } from "@/components/features/AiSummary";
@@ -238,6 +239,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
             </div>
           </Card>
 
+          <CasePlanCard recordType="quote" recordId={q.id} user={user} />
           <CaseScheduleCard
             events={caseEvents(db, { inquiryId: q.inquiryId, quoteId: q.id, orderId: chain.order?.id })}
             allEvents={db.schedule}

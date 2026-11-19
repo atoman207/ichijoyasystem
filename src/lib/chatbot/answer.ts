@@ -9,6 +9,9 @@ import { runAgent, type AgentSource } from "@/lib/assistant/agent";
 import { runAnalysis, type AnalysisResult, type AnalysisSpec } from "@/lib/assistant/analyze";
 import { ANALYSIS_WORDS, heuristicSpec, refineSpec } from "@/lib/assistant/intent";
 import { yen } from "@/lib/format";
+import { withAiContext } from "@/lib/ai/usage";
+import { aiAvailability, installAiMonitor } from "./monitor";
+import type { AnswerChecks } from "@/lib/assistant/guard";
 
 /**
  * チャットボット (「質問する」) の回答
@@ -22,6 +25,9 @@ import { yen } from "@/lib/format";
  *     使い方は近い質問の回答か関係する資料の要点
  *  ログイン前 (公開ページ) は使い方の案内だけ (データ・社内資料は答えない)。
  *  ログインした社員の質問と回答は相談の履歴 (chat_log) に残す (誰が・いつ・何を聞き・どう答えたか)
+ *  今月の AI の予算・上限を超えたとき、AI の障害が続いているとき (monitor.ts の aiAvailability) は、AI を呼ばずに 4 で答える。
+ *  AI の呼び出しは withAiContext で「誰の・何のための呼び出しか」を付けて記録する (利用回数・トークン・費用・失敗)
+ *  opts.evaluation (精度の評価 eval.ts) のときは、履歴・蓄えた回答・利用回数の上限に触れない
  */
 
 export interface ChatTurn {
@@ -47,6 +53,12 @@ export interface BotReply {
   tools?: { name: string; summary: string }[];
   /** 相談の履歴の ID (評価・社内資料への登録に使う) */
   logId?: number;
+  /** 回答の確かめの結果 (guard.ts。画面には出さず、履歴と精度の評価に使う) */
+  checks?: AnswerChecks;
+  /** AI の接続先とモデル */
+  provider?: string;
+  /** AI を使わなかった理由 (予算の上限・障害) */
+  degraded?: "budget" | "outage" | "error" | "limit";
 }
 
 const REUSE = 0.8;
@@ -146,7 +158,12 @@ const isKnowledgeQa = (m: QaMatch) => m.qa.sourceKeys.some((k) => k.startsWith("
  * チャットボットに答える。user が null のときはログイン前 (公開ホームなど)。
  * ログイン前は個人のデータ (予定・売上など) と社内資料は答えず、使い方・画面の案内に限る。
  */
-export async function askChatbot(db: Database, user: User | null, history: ChatTurn[], raw: string, opts: { convId?: string; voice?: boolean } = {}): Promise<BotReply> {
+export async function askChatbot(db: Database, user: User | null, history: ChatTurn[], raw: string, opts: { convId?: string; voice?: boolean; evaluation?: boolean } = {}): Promise<BotReply> {
+  installAiMonitor();
+  return withAiContext({ kind: opts.evaluation ? "eval" : user ? "assistant" : "guest", userId: user?.id }, () => answerQuestion(db, user, history, raw, opts));
+}
+
+async function answerQuestion(db: Database, user: User | null, history: ChatTurn[], raw: string, opts: { convId?: string; voice?: boolean; evaluation?: boolean }): Promise<BotReply> {
   const t0 = Date.now();
   const q = raw.trim().slice(0, 1000);
   const norm = normalizeQuestion(q);
@@ -155,6 +172,7 @@ export async function askChatbot(db: Database, user: User | null, history: ChatT
   const askerId = user?.id ?? "guest";
   const done = (r: BotReply): BotReply => {
     const ms = Date.now() - t0;
+    if (opts.evaluation) return r;
     try {
       logAsk({ userId: askerId, role, question: q, source: r.source, qaId: r.qaId, ms });
     } catch (err) {
@@ -163,7 +181,7 @@ export async function askChatbot(db: Database, user: User | null, history: ChatT
     // 相談の履歴 (ログインした社員だけ。あいさつは残さない)
     if (user && r.source !== "smalltalk") {
       try {
-        const payload: ChatLogPayload = { links: r.links, sources: r.sources, tools: r.tools, tables: r.tables, voice: opts.voice || undefined };
+        const payload: ChatLogPayload = { links: r.links, sources: r.sources, tools: r.tools, tables: r.tables, voice: opts.voice || undefined, provider: r.provider, checks: r.checks, degraded: r.degraded };
         r.logId = insertChatLog({ convId: opts.convId, userId: user.id, userName: user.name, role: user.role, storeId: user.storeId, question: q, answer: r.answer, source: r.source, payload, ms });
       } catch (err) {
         console.warn("[chatbot] chat log failed:", (err as Error).message);
@@ -192,26 +210,33 @@ export async function askChatbot(db: Database, user: User | null, history: ChatT
   const t = extractTerms(q);
   const dataish = Boolean(user) && (DATA.test(q) || ANALYSIS_WORDS.test(q) || t.names.length > 0 || t.numbers.length > 0 || t.phones.length > 0) && !(howTo && !ANALYSIS_WORDS.test(q) && !t.names.length && !t.numbers.length);
 
-  if (!followUp && !dataish && top && top.score >= REUSE) {
+  if (!followUp && !dataish && top && top.score >= REUSE && !opts.evaluation) {
     countHit(top.qa.id);
     return done({ answer: top.qa.answer, links: top.qa.links, source: "database", qaId: top.qa.id, suggestions: suggestionsOf(matches, top.qa.id) });
   }
 
-  const canUseAi = aiEnabled() && recentAiAsks(askerId) < AI_PER_HOUR;
+  // AI を使えるか: キー・1 時間の回数・今月の予算・障害の遮断 (monitor.ts)
+  const availability = aiEnabled() ? aiAvailability() : ({ ok: true } as const);
+  const underLimit = opts.evaluation || recentAiAsks(askerId) < AI_PER_HOUR;
+  const canUseAi = aiEnabled() && underLimit && availability.ok;
+  let degraded: BotReply["degraded"] = !aiEnabled() ? undefined : !availability.ok ? availability.reason : !underLimit ? "limit" : undefined;
+  // ログイン前 (公開ページ) の人には、予算・障害などの社内の事情を書かない
+  const degradedNote = () => (!user ? "" : degraded === "budget" || degraded === "outage" ? `(${!availability.ok ? availability.message : ""})\n` : degraded === "limit" ? "(AI の利用回数の上限に達したため、AI を使わずにお答えします)\n" : degraded === "error" ? "(AI の応答が得られなかったため、AI を使わずにお答えします)\n" : "");
 
   // ---- ログインした社員: AI アシスタント (データを調べて答える) ----
   if (user && canUseAi) {
     try {
-      const r = await runAgent(db, user, history, q, { prefetchGuides: !dataish || howTo });
+      const r = await runAgent(db, user, history, q, { prefetchGuides: !dataish || howTo, dataQuestion: dataish, voice: opts.voice });
       let qaId: number | undefined;
       const links = r.sources.filter((s) => s.href).slice(0, 3).map((s) => ({ label: s.label.slice(0, 24), href: s.href! }));
       // 使い方だけの回答は蓄える (同じロールの人に次から AI なしで答える)。データを使った回答は蓄えない
-      if (!r.usedData && !r.usedKnowledge && !r.unknown && !followUp && r.docKeys.length && norm.length >= 3) {
+      if (!r.usedData && !r.usedKnowledge && !r.unknown && !followUp && r.docKeys.length && norm.length >= 3 && !opts.evaluation && !r.checks?.issues.some((i) => i.severity !== "low")) {
         qaId = insertQa({ question: q, answer: r.answer, links, origin: "ai", role, sourceKeys: [...new Set(r.docKeys)].slice(0, 3) });
       }
-      return done({ answer: r.answer, links: r.tables.length || r.usedData ? [] : links, source: r.usedData ? "agent" : r.unknown ? "none" : "ai", qaId, suggestions: [], tables: r.tables, sources: r.sources, tools: r.tools });
+      return done({ answer: r.answer, links: r.tables.length || r.usedData ? [] : links, source: r.usedData ? "agent" : r.unknown ? "none" : "ai", qaId, suggestions: [], tables: r.tables, sources: r.sources, tools: r.tools, checks: r.checks, provider: r.provider });
     } catch (err) {
       console.warn("[chatbot] agent failed:", err instanceof AiError ? `${err.code} ${err.detail ?? ""}` : (err as Error).message);
+      degraded = "error";
       // 下の AI なしの回答へ
     }
   }
@@ -222,10 +247,10 @@ export async function askChatbot(db: Database, user: User | null, history: ChatT
     const spec = heuristicSpec(db, q) ?? (prevSpec && !howTo ? refineSpec(db, prevSpec, q) : null);
     if (spec) {
       const r = runAnalysis(db, user, spec);
-      if (r.ok) return done({ answer: `${canUseAi ? "" : aiEnabled() ? "(AI の利用回数の上限に達したため、集計だけを表示します)\n" : ""}${analysisReply(r)}`, links: [{ label: "経営ダッシュボード", href: "/reports" }], source: "analysis", suggestions: [], tables: [r], sources: [{ label: r.title, kind: "集計" }] });
+      if (r.ok) return done({ answer: `${degradedNote()}${analysisReply(r)}`, links: [{ label: "経営ダッシュボード", href: "/reports" }], source: "analysis", suggestions: [], tables: [r], sources: [{ label: r.title, kind: "集計" }], degraded });
     }
     const data = dataReply(db, user, q);
-    if (data) return done({ answer: data, links: [], source: "data", suggestions: [] });
+    if (data) return done({ answer: `${degradedNote()}${data}`, links: [], source: "data", suggestions: [], degraded });
   }
 
   const lastUser = [...history].reverse().find((h) => h.role === "user")?.content ?? "";
@@ -234,10 +259,10 @@ export async function askChatbot(db: Database, user: User | null, history: ChatT
   if (!canUseAi || user) {
     if (top && top.score >= NEAR) {
       countHit(top.qa.id);
-      return done({ answer: `近い質問「${top.qa.question}」への回答です。\n\n${top.qa.answer}`, links: top.qa.links, source: "database", qaId: top.qa.id, suggestions: suggestionsOf(matches, top.qa.id) });
+      return done({ answer: `${degradedNote()}近い質問「${top.qa.question}」への回答です。\n\n${top.qa.answer}`, links: top.qa.links, source: "database", qaId: top.qa.id, suggestions: suggestionsOf(matches, top.qa.id), degraded });
     }
-    if (docs.length) return done({ answer: docsReply(docs), links: linksOf(docs), source: "docs", suggestions: suggestionsOf(matches) });
-    return done({ answer: NOT_FOUND, links: [], source: "none", suggestions: suggestionsOf(matches) });
+    if (docs.length) return done({ answer: `${degradedNote()}${docsReply(docs)}`, links: linksOf(docs), source: "docs", suggestions: suggestionsOf(matches), degraded });
+    return done({ answer: `${degradedNote()}${NOT_FOUND}`, links: [], source: "none", suggestions: suggestionsOf(matches), degraded });
   }
 
   // ---- ログイン前: 使い方の資料を AI に渡して答える ----
@@ -266,7 +291,7 @@ export async function askChatbot(db: Database, user: User | null, history: ChatT
     text = text.replace(/^\[不明\]\s*/, "").trim() || NOT_FOUND;
     const links = unknown ? [] : linksOf(docs);
     let qaId: number | undefined;
-    if (!unknown && !followUp && docs.length && norm.length >= 3) {
+    if (!unknown && !followUp && docs.length && norm.length >= 3 && !opts.evaluation) {
       qaId = insertQa({ question: q, answer: text, links, origin: "ai", role, sourceKeys: docs.slice(0, 3).map((d) => d.key) });
     }
     return done({ answer: text, links, source: unknown ? "none" : "ai", qaId, suggestions: unknown ? suggestionsOf(matches) : [] });

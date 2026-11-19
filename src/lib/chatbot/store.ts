@@ -15,6 +15,8 @@ import crypto from "node:crypto";
  * - chat_log: 相談の履歴 (ログインした社員の質問と回答・表・根拠。誰が・いつ・何を聞き、どう答えたか)。
  *   本人は自分の履歴を、管理者・本部は全員の履歴を検索できる (permissions.ts の canViewChatLog)。社内資料への登録 (knowledge_id) もここに残す
  * 日本語の検索は FTS5 の trigram (3 文字ずつの組) で候補を出し、2 文字の組の重なりで似ている度合いを測る
+ * 個人情報: asks (利用状況の集計用) の質問は電話番号・メールアドレスを伏せて残す。相談の履歴は CHATBOT_LOG_RETENTION_DAYS 日
+ * (既定 730 日) で消し、集計の表 (お客様の名前などを含む) は CHATBOT_LOG_TABLE_DAYS 日 (既定 90 日) で消す (purgeOldLogs。1 日 1 回)
  */
 
 interface Statement {
@@ -437,8 +439,53 @@ export function replaceSeedQa(rows: NewQa[]): number {
 /** agent = AI アシスタントがデータを調べて回答 (検索・集計の道具を使う) / analysis = AI なしで集計の表を作った */
 export type AskSource = "database" | "data" | "smalltalk" | "ai" | "agent" | "analysis" | "docs" | "none";
 
+/** 電話番号・メールアドレスを伏せる (利用状況の記録に個人情報を残さない) */
+export function maskPii(text: string): string {
+  return text
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[メール]")
+    .replace(/(?<![\d-])(?:\+81[-\s]?|0)\d{1,4}[-‐－ー−\s]?\d{1,4}[-‐－ー−\s]?\d{3,4}(?![\d-])/g, (m) => (m.replace(/\D/g, "").length >= 10 ? "[電話番号]" : m))
+    .replace(/[０-９]{2,4}[-‐－ー−][０-９]{2,4}[-‐－ー−][０-９]{3,4}/g, "[電話番号]");
+}
+
 export function logAsk(a: { userId: string; role: string; question: string; source: AskSource; qaId?: number; ms: number }): void {
-  chatbotDb().prepare("insert into asks (at, user_id, role, question, source, qa_id, ms) values (?, ?, ?, ?, ?, ?, ?)").run(now(), a.userId, a.role, a.question.slice(0, 500), a.source, a.qaId ?? null, a.ms);
+  chatbotDb().prepare("insert into asks (at, user_id, role, question, source, qa_id, ms) values (?, ?, ?, ?, ?, ?, ?)").run(now(), a.userId, a.role, maskPii(a.question).slice(0, 500), a.source, a.qaId ?? null, a.ms);
+}
+
+/**
+ * 古い記録を消す (1 日 1 回まで。insertChatLog から呼ぶ):
+ * 相談の履歴は retentionDays 日、履歴の集計の表 (お客様の名前・金額の行) は tableDays 日、利用状況 (asks) は 400 日、
+ * AI の呼び出しの記録 (ai_calls) は AI_CALLS_RETENTION_DAYS 日 (既定 400 日)
+ */
+export function purgeOldLogs(opts: { force?: boolean; retentionDays?: number; tableDays?: number } = {}): { logs: number; tables: number; asks: number } {
+  const today = now().slice(0, 10);
+  if (!opts.force && getMeta("purged_on") === today) return { logs: 0, tables: 0, asks: 0 };
+  setMeta("purged_on", today);
+  const db = chatbotDb();
+  const days = (n: number) => new Date(Date.now() - n * 86400_000).toISOString();
+  const retention = opts.retentionDays ?? (Number(process.env.CHATBOT_LOG_RETENTION_DAYS) || 730);
+  const tableDays = opts.tableDays ?? (Number(process.env.CHATBOT_LOG_TABLE_DAYS) || 90);
+  // 社内資料に登録した相談は、元の履歴として残す
+  const logs = Number(db.prepare("delete from chat_log where at < ? and knowledge_id is null").run(days(retention)).changes);
+  let tables = 0;
+  for (const r of db.prepare("select id, payload from chat_log where at < ? and payload like '%\"tables\":[{%'").all(days(tableDays))) {
+    try {
+      const p = JSON.parse(String(r.payload)) as ChatLogPayload;
+      if (!p.tables?.length) continue;
+      p.tables = [];
+      db.prepare("update chat_log set payload = ? where id = ?").run(JSON.stringify(p), r.id);
+      tables++;
+    } catch {
+      /* 壊れた行 */
+    }
+  }
+  const asks = Number(db.prepare("delete from asks where at < ?").run(days(400)).changes);
+  // AI の呼び出しの記録 (monitor.ts。数だけで中身はない)
+  try {
+    db.prepare("delete from ai_calls where at < ?").run(days(Number(process.env.AI_CALLS_RETENTION_DAYS) || 400));
+  } catch {
+    /* まだ表がない */
+  }
+  return { logs, tables, asks };
 }
 
 /** その利用者が直近 minutes 分に AI で答えた回数 (使いすぎの防止) */
@@ -507,6 +554,10 @@ export interface ChatLogPayload {
   provider?: string;
   /** 声で聞いた質問 (音声入力) */
   voice?: boolean;
+  /** 回答の確かめの結果 (src/lib/assistant/guard.ts) */
+  checks?: { issues: { kind: string; detail: string; severity: string }[]; retried: boolean; fixed: string[] };
+  /** AI を使わなかった理由 (budget = 予算の上限 / outage = 障害 / error = 失敗 / limit = 1 時間の回数) */
+  degraded?: string;
 }
 
 export interface ChatLogRow {
@@ -552,6 +603,11 @@ function toLog(r: Record<string, unknown>): ChatLogRow {
 }
 
 export function insertChatLog(x: { convId?: string; userId: string; userName: string; role: string; storeId: string; question: string; answer: string; source: string; payload: ChatLogPayload; ms: number }): number {
+  try {
+    purgeOldLogs();
+  } catch (err) {
+    console.warn("[chatbot] purge failed:", (err as Error).message);
+  }
   const r = chatbotDb()
     .prepare("insert into chat_log (conv_id, at, user_id, user_name, role, store_id, question, answer, source, payload, ms) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
     .run((x.convId ?? "").slice(0, 64), now(), x.userId, x.userName, x.role, x.storeId, x.question.slice(0, 2000), x.answer.slice(0, 20000), x.source, JSON.stringify(x.payload).slice(0, 400_000), x.ms);

@@ -1,4 +1,5 @@
 import { currentEventMode } from "@/lib/maps/store";
+import { fromMinutes, isDateKey, normTime, toMinutes } from "@/lib/calendar";
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { Pencil } from "lucide-react";
@@ -13,9 +14,9 @@ import { formCases, formCustomers, formStores, formUsers, toFormCase } from "@/c
 
 export const metadata: Metadata = { title: "予定を変更" };
 
-export default async function EditEventPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
+export default async function EditEventPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string; date?: string; start?: string }> }) {
   const { id } = await params;
-  const { msg, err } = await searchParams;
+  const { msg, err, date: propDate, start: propStart } = await searchParams;
   const user = await requireUser();
   const db = getDb();
   const e = db.schedule.find((x) => x.id === id);
@@ -34,9 +35,13 @@ export default async function EditEventPage({ params, searchParams }: { params: 
   const customer = e.customerId ? db.customers.find((c) => c.id === e.customerId) : undefined;
   if (customer && !customers.some((c) => c.id === customer.id)) customers.unshift({ id: customer.id, name: customer.name, storeId: customer.storeId, address: customer.address || undefined });
 
+  // 計画の画面 (最適化・空いた枠) の提案の日時を入れて開く (保存するまで予定は変わらない)
+  const proposed = isDateKey(propDate) && !synced ? propDate : undefined;
+  const pStart = proposed ? normTime(propStart) : undefined;
+  const span = e.startTime && e.endTime ? toMinutes(e.endTime) - toMinutes(e.startTime) : 60;
   return (
     <div>
-      <Flash msg={msg} err={err} />
+      <Flash msg={msg ?? (proposed ? `提案の日時 (${proposed}${pStart ? ` ${pStart}` : ""}) を入れています。お客様・担当者に連絡してから保存してください。` : undefined)} err={err} />
       <PageHeader title="予定を変更" icon={<Pencil />} description={e.title} back={{ href: `/schedule/${id}`, label: "予定の詳細" }} />
       <EventForm
         mode="edit"
@@ -45,12 +50,12 @@ export default async function EditEventPage({ params, searchParams }: { params: 
         initial={{
           title: e.title,
           kind: e.kind,
-          date: e.date,
-          endDate: e.endDate ?? "",
-          allDay: !e.startTime && !e.slot,
-          slot: e.startTime ? "" : (e.slot ?? ""),
-          startTime: e.startTime ?? "",
-          endTime: e.endTime ?? "",
+          date: proposed ?? e.date,
+          endDate: proposed ? "" : (e.endDate ?? ""),
+          allDay: pStart ? false : !e.startTime && !e.slot,
+          slot: pStart || e.startTime ? "" : (e.slot ?? ""),
+          startTime: pStart ?? e.startTime ?? "",
+          endTime: pStart ? fromMinutes(toMinutes(pStart) + span) : (e.endTime ?? ""),
           storeId: e.storeId,
           companyWide: Boolean(e.companyWide),
           assigneeIds: e.assigneeIds,

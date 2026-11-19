@@ -34,6 +34,9 @@ function scopeOf(user: User): "all" | "store" | "self" {
   return canSeeAllStores(user) ? "all" : user.role === "store_manager" ? "store" : "self";
 }
 
+const ISSUE_TEXT: Record<string, string> = { number: "根拠のない数字", no_evidence: "データを調べずに回答", action: "実行したような書き方", link: "根拠のないリンク", screen: "資料にない画面・ボタン" };
+const DEGRADED_TEXT: Record<string, string> = { budget: "今月の予算の上限", outage: "AI の障害が続いているため", error: "AI の応答が得られなかったため", limit: "1 時間の回数の上限" };
+
 export function ChatHistory({ user, db, sp }: { user: User; db: Database; sp: Record<string, string | undefined> }) {
   const id = Number(sp.id) || 0;
   if (id) return <ChatDetail user={user} db={db} id={id} />;
@@ -179,6 +182,24 @@ function ChatDetail({ user, db, id }: { user: User; db: Database; id: number }) 
                 ))}
               </div>
             )}
+          </Card>
+        )}
+        {(r.payload.checks || r.payload.degraded) && (
+          <Card>
+            <CardHeader title="回答の確かめ" description="AI の回答を、調べた記録・集計・資料と自動で突き合わせた結果" />
+            <ul className="space-y-1 text-xs text-ink-2">
+              {r.payload.degraded && <li>・AI を使わずに答えました ({DEGRADED_TEXT[r.payload.degraded] ?? r.payload.degraded})</li>}
+              {r.payload.checks && !r.payload.checks.issues.length && <li>・問題は見つかりませんでした</li>}
+              {r.payload.checks?.retried && <li>・問題が見つかったため、AI に確かめ直させました</li>}
+              {r.payload.checks?.issues.map((i, k) => (
+                <li key={k} className={i.severity === "low" ? "" : "text-warn-ink"}>
+                  ・{ISSUE_TEXT[i.kind] ?? i.kind}: {i.detail}
+                </li>
+              ))}
+              {r.payload.checks?.fixed.map((f, k) => (
+                <li key={`f${k}`}>・{f}</li>
+              ))}
+            </ul>
           </Card>
         )}
         {r.knowledgeId && (

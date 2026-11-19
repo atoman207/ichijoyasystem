@@ -16,13 +16,14 @@ import type { Outgoing } from "./send";
  * 画面のヘッダーの通知 (お知らせ) は従来どおり常に表示する
  */
 
-export type NotifyEvent = "approval_request" | "approval_result" | "mention" | "task";
+export type NotifyEvent = "approval_request" | "approval_result" | "mention" | "task" | "schedule_hold";
 
 export const NOTIFY_EVENT_LABEL: Record<NotifyEvent, string> = {
   approval_request: "承認の依頼 (承認者へ)",
   approval_result: "承認・差戻し・却下の結果 (申請者へ)",
   mention: "社内連絡のメンション",
   task: "業務依頼 (依頼・確認・報告・完了)",
+  schedule_hold: "予定の仮押さえ (担当者へ確認の依頼・お客様が選んだ候補)",
 };
 
 export interface NotifySettings {
@@ -140,4 +141,21 @@ export function taskNotices(db: Database, t: Thread, actorId: string, what: "req
     `/messages/${t.id}`,
     { relatedType: "thread", relatedId: t.id },
   );
+}
+
+/** 予定の仮押さえ: 担当者へ「行ける / 行けない」の確認の依頼、お客様が候補を選んだときは店舗のメンバーへ */
+export function scheduleHoldNotices(db: Database, holds: { id: string; title: string; date: string; startTime?: string; slot?: string; rank: number; assigneeIds: string[]; storeId: string }[], actorId: string, what: "request" | "customer_choice", note?: string): Outgoing[] {
+  if (!holds.length) return [];
+  const h0 = holds[0];
+  const when = (h: (typeof holds)[number]) => `第 ${h.rank} 候補 ${h.date} ${h.startTime ?? (h.slot === "am" ? "午前" : h.slot === "pm" ? "午後" : "終日")}`;
+  const to =
+    what === "request"
+      ? db.users.filter((u) => holds.some((h) => h.assigneeIds.includes(u.id)) && u.id !== actorId)
+      : db.users.filter((u) => u.active && (holds.some((h) => h.assigneeIds.includes(u.id)) || (u.storeId === h0.storeId && u.role === "store_manager")));
+  const subject = what === "request" ? `予定の仮押さえ: ${h0.title}` : `お客様が日程を選びました: ${h0.title}`;
+  const body =
+    what === "request"
+      ? `${nameOf(db, actorId)} さんが予定を仮押さえしました。行けるかどうかを画面で返事してください。\n${holds.map(when).join("\n")}`
+      : `お客様が日程の候補から選びました。内容を確かめて予定を確定してください。\n${holds.map(when).join("\n")}${note ? `\nお客様のメモ: ${note.slice(0, 500)}` : ""}`;
+  return build(db, "schedule_hold", to, subject, body, `/schedule/planning?tab=holds`, {});
 }

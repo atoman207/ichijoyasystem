@@ -14,6 +14,7 @@ import { canManageChatbot } from "@/lib/auth/permissions";
 import { ensureChatbotData } from "@/lib/chatbot/build";
 import { chatbotStats, listQa } from "@/lib/chatbot/store";
 import { pendingDocs, trainState } from "@/lib/chatbot/train";
+import { QualityPanel } from "@/components/chatbot/QualityPanel";
 
 /** AI の応答待ち (最大 50 秒) のため、処理時間の上限を 60 秒にする */
 export const maxDuration = 60;
@@ -25,18 +26,20 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<R
   const status = aiStatus();
   const enabled = status.enabled;
   const manage = canManageChatbot(user);
-  const tab = sp.tab === "draft" ? "draft" : sp.tab === "history" ? "history" : sp.tab === "bot" && manage ? "bot" : "chat";
+  const tab = sp.tab === "draft" ? "draft" : sp.tab === "history" ? "history" : sp.tab === "bot" && manage ? "bot" : sp.tab === "quality" && manage ? "quality" : "chat";
   const knowledgeCount = db.knowledge.filter((k) => k.active).length;
   return (
     <div>
       <PageHeader title="AI アシスタント" badge={<Badge tone={enabled ? "good" : "neutral"}>{enabled ? `${status.label} 接続中 (${status.model})` : "サンプルモード"}</Badge>} />
       <LinkTabs
         current={tab === "chat" ? "/ai" : `/ai?tab=${tab}`}
-        items={[{ href: "/ai", label: "質問・検索・分析" }, { href: "/ai?tab=history", label: "相談の履歴" }, { href: "/ai?tab=draft", label: "文書の作成" }, ...(manage ? [{ href: "/ai?tab=bot", label: "チャットボットの管理" }] : [])]}
+        items={[{ href: "/ai", label: "質問・検索・分析" }, { href: "/ai?tab=history", label: "相談の履歴" }, { href: "/ai?tab=draft", label: "文書の作成" }, ...(manage ? [{ href: "/ai?tab=bot", label: "チャットボットの管理" }, { href: "/ai?tab=quality", label: "品質・費用" }] : [])]}
       />
       <Flash msg={sp.msg} err={sp.err} />
       {tab === "bot" ? (
         <BotTab sp={sp} enabled={enabled} db={db} />
+      ) : tab === "quality" ? (
+        <QualityPanel db={db} sp={sp} />
       ) : tab === "history" ? (
         <ChatHistory user={user} db={db} sp={sp} />
       ) : tab === "draft" ? (

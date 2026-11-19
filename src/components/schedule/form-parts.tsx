@@ -225,8 +225,19 @@ export function ConflictPanel({
   ackLabel: string;
 }) {
   const conflicts = fresh ? (report?.conflicts ?? []) : [];
+  const impacts = fresh ? (report?.impacts ?? []) : [];
   return (
     <div className="space-y-3" aria-live="polite">
+      {impacts.length > 0 && (
+        <div className="rounded-lg border border-warn/40 bg-warn-soft/50 px-3 py-2 text-xs text-warn-ink">
+          <p className="font-semibold">後続の予定・製造・期限への影響</p>
+          <ul className="mt-1 space-y-0.5">
+            {impacts.map((m) => (
+              <li key={m}>・{m}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="flex items-center gap-2">
         <CalendarCheck className="h-4 w-4 text-accent" aria-hidden />
         <h2 className="text-sm font-semibold text-ink">担当者の空き状況</h2>

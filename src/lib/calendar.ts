@@ -376,6 +376,9 @@ export interface ConflictQuery {
   caseRef?: string;
   repeat?: RepeatRule;
   repeatUntil?: string;
+  /** 種類と店舗 (後続の予定・製造・期限への影響を調べる) */
+  kind?: ScheduleEvent["kind"];
+  storeId?: ScheduleEvent["storeId"];
 }
 
 export interface ConflictItem {
@@ -425,4 +428,6 @@ export interface ConflictReport {
   day: string;
   /** 繰り返しを含めた登録件数 */
   occurrences: number;
+  /** 後続の予定・製造の予定・期限・お客様の希望・勤務日への影響 (src/lib/scheduling/impact.ts) */
+  impacts?: string[];
 }

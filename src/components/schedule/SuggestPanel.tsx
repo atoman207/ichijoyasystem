@@ -9,6 +9,14 @@ import type { SuggestCandidate, SuggestResult, SuggestSlot } from "@/lib/schedul
 import { suggestScheduleSlots } from "@/lib/actions/schedule";
 import { shortDate, isDateKey } from "@/lib/calendar";
 import { Field, Input, Select, buttonClass } from "@/components/ui";
+import { HoldButton } from "@/components/scheduling/CandidateView";
+
+/** "order:o_1" → { orderId: "o_1" } */
+function caseIds(v?: string): { orderId?: string; quoteId?: string; inquiryId?: string } {
+  const m = v?.match(/^(order|quote|inquiry):(.+)$/);
+  if (!m) return {};
+  return m[1] === "order" ? { orderId: m[2] } : m[1] === "quote" ? { quoteId: m[2] } : { inquiryId: m[2] };
+}
 
 /**
  * AI 予定候補日の提案 (予定の入力フォームの右側)
@@ -38,6 +46,8 @@ export function SuggestPanel({
   location,
   assigneeIds,
   eventId,
+  title,
+  memo,
   onApply,
 }: {
   kind: ScheduleKind;
@@ -47,6 +57,9 @@ export function SuggestPanel({
   location?: string;
   assigneeIds: string[];
   eventId?: string;
+  /** 件名・メモ (作業の内容の推定に使う) */
+  title?: string;
+  memo?: string;
   onApply: (c: SuggestCandidate) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -78,8 +91,10 @@ export function SuggestPanel({
     from: isDateKey(from) ? from : undefined,
     days: Number(days) || undefined,
     eventId,
+    title: title?.trim() || undefined,
+    memo: memo?.trim() || undefined,
   };
-  const key = JSON.stringify(query);
+  const key = JSON.stringify({ ...query, title: undefined, memo: undefined });
   const stale = Boolean(result && result.key !== key);
 
   const run = () => {
@@ -96,6 +111,7 @@ export function SuggestPanel({
     });
   };
 
+  const canHold = !eventId;
   const idOf = (c: SuggestCandidate) => `${c.date}|${c.slot}|${c.startTime ?? ""}|${c.assigneeIds.join(",")}`;
   const data = result?.data;
 
@@ -196,8 +212,14 @@ export function SuggestPanel({
                       <p className="mt-0.5 flex items-center gap-1 text-xs text-ink-2">
                         <Users className="h-3.5 w-3.5 shrink-0" aria-hidden />
                         <span className="truncate">{(c.assigneeNames ?? []).join("・") || "-"}</span>
-                        {c.travelMin !== undefined && <span className="shrink-0 text-ink-3">・移動 約 {c.travelMin} 分</span>}
+                        {c.travelMin !== undefined && <span className="shrink-0 text-ink-3">・移動 約 {c.travelMin} 分{c.travelSource === "google" ? " (道路)" : ""}</span>}
                       </p>
+                      {(c.readyDate || (c.resourceNames && c.resourceNames.length > 0)) && (
+                        <p className="mt-0.5 text-[11px] text-ink-3">
+                          {c.resourceNames && c.resourceNames.length > 0 ? `車両: ${c.resourceNames.join("・")}` : ""}
+                          {c.readyDate ? `${c.resourceNames?.length ? "・" : ""}製造の完成 ${shortDate(c.readyDate)}` : ""}
+                        </p>
+                      )}
                     </div>
                     <span className={clsx("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tnum", scoreTone(c.score))} title="効率の点数 (0〜100)">
                       {c.score} 点
@@ -255,7 +277,20 @@ export function SuggestPanel({
               </Link>
             </details>
           )}
-          <p className="text-[11px] text-ink-3">反映したあと「予定を登録する」で保存します。担当者の予定の重複は下の欄で確認できます。</p>
+          {data.work && (
+            <p className="text-[11px] text-ink-3">
+              作業: {data.work.label}
+              {data.work.source !== "spec" && <span> (推定。案件の「作業の内容」で登録できます)</span>}
+            </p>
+          )}
+          {data.candidates.length > 0 && canHold && (
+            <HoldButton
+              base={{ storeId, kind, title: title?.trim() || undefined, customerId: customerId || undefined, location: location || undefined, ...caseIds(caseValue) }}
+              candidates={data.candidates.slice(0, 3)}
+              label="上位 3 件を仮押さえ (担当者に確認)"
+            />
+          )}
+          <p className="text-[11px] text-ink-3">反映したあと「予定を登録する」で保存します。担当者の予定の重複は下の欄で確認できます。仮押さえは担当者・お客様の確認のあと 予定表 →「計画」で確定します。</p>
         </div>
       )}
     </div>
