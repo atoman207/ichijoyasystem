@@ -202,11 +202,13 @@ export async function deleteUser(id: string, formData: FormData) {
   redirect(withMsg(safeReturn(str(formData, "listTo"), USERS), `${label} さんのアカウントを削除しました。`));
 }
 
-/** 新規登録の申請を承認する (ロール・所属は承認する人の権限の範囲で変えられる) */
+/**
+ * 新規登録の申請を承認する (ロール・所属は承認する人の権限の範囲で変えられる)。
+ * テスト期間中のアカウントの変更の停止 (accountEditLocked) の対象外: 止めると申請した社員がログインできないため
+ */
 export async function approveSignup(id: string, formData: FormData) {
   const back = safeReturn(str(formData, "returnTo"), USERS);
   const actor = await requireManager(back);
-  assertUnlocked(back);
   let name = "";
   await mutate((db) => {
     const u = db.users.find((x) => x.id === id && x.signupStatus === "pending");
@@ -229,11 +231,10 @@ export async function approveSignup(id: string, formData: FormData) {
   redirect(withMsg(back, `${name} さんの新規登録を承認しました。登録したログイン ID とパスワードでログインできることを本人に伝えてください。`));
 }
 
-/** 新規登録の申請を却下する (申請の記録は消える。変更履歴には残る) */
+/** 新規登録の申請を却下する (申請の記録は消える。変更履歴には残る)。承認と同じく、アカウントの変更の停止の対象外 */
 export async function rejectSignup(id: string, formData: FormData) {
   const back = safeReturn(str(formData, "returnTo"), USERS);
   const actor = await requireManager(back);
-  assertUnlocked(back);
   let name = "";
   await mutate((db) => {
     const u = db.users.find((x) => x.id === id && x.signupStatus === "pending");

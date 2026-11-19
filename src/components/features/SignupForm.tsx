@@ -32,6 +32,19 @@ export function SignupForm({ stores }: { stores: { id: StoreId; name: string; co
   const choices = storeRole ? stores.filter((s) => s.id !== "hq") : stores;
   const [storeId, setStoreId] = useState<StoreId>(stores.find((s) => s.id !== "hq")?.id ?? "koshi");
   const store = choices.some((s) => s.id === storeId) ? storeId : (storeRole ? choices[0]?.id : "hq") ?? storeId;
+  // 入力した内容は、送信して誤り (確認用のパスワードの違いなど) が返ってきても消さない。
+  // React はフォームの送信後に、値を持たない (非制御の) 欄を空に戻すため、欄の値をここで持つ
+  const [fields, setFields] = useState({ name: "", kana: "", email: "", password: "", confirm: "", note: "" });
+  const [clientError, setClientError] = useState("");
+  const field = (key: keyof typeof fields) => ({
+    name: key,
+    value: fields[key],
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      setFields((f) => ({ ...f, [key]: e.target.value }));
+      setClientError("");
+    },
+  });
+  const error = clientError || state.error;
 
   if (state.done) {
     return (
@@ -51,7 +64,21 @@ export function SignupForm({ stores }: { stores: { id: StoreId; name: string; co
   }
 
   return (
-    <form action={formAction} encType="multipart/form-data" className="space-y-5">
+    <form
+      action={formAction}
+      encType="multipart/form-data"
+      className="space-y-5"
+      onSubmit={(e) => {
+        // 送る前に分かる誤りは、その場で知らせる (入力は消さない)
+        if (fields.password.length < 8) {
+          e.preventDefault();
+          setClientError("パスワードは 8 文字以上にしてください。");
+        } else if (fields.password !== fields.confirm) {
+          e.preventDefault();
+          setClientError("確認用のパスワードが一致しません。もう一度入力してください。");
+        }
+      }}
+    >
       <div className="hidden" aria-hidden>
         <label>
           ウェブサイト <input name="website" tabIndex={-1} autoComplete="off" />
@@ -114,27 +141,27 @@ export function SignupForm({ stores }: { stores: { id: StoreId; name: string; co
       <div className="grid grid-cols-1 gap-3 border-t border-line pt-5 sm:grid-cols-2">
         <label className="block">
           <span className="label">氏名 *</span>
-          <input name="name" required maxLength={60} className="field" autoComplete="name" />
+          <input {...field("name")} required maxLength={60} className="field" autoComplete="name" />
         </label>
         <label className="block">
           <span className="label">フリガナ</span>
-          <input name="kana" maxLength={60} className="field" />
+          <input {...field("kana")} maxLength={60} className="field" />
         </label>
         <label className="block sm:col-span-2">
           <span className="label">ログイン ID (メールアドレス推奨) *</span>
-          <input name="email" required maxLength={120} className="field" autoComplete="username" autoCapitalize="none" spellCheck={false} placeholder="例: yamada@example.jp" />
+          <input {...field("email")} required maxLength={120} className="field" autoComplete="username" autoCapitalize="none" spellCheck={false} placeholder="例: yamada@example.jp" />
         </label>
         <label className="block">
           <span className="label">パスワード (8 文字以上) *</span>
-          <input name="password" type="password" required minLength={8} className="field" autoComplete="new-password" />
+          <input {...field("password")} type="password" required minLength={8} className="field" autoComplete="new-password" />
         </label>
         <label className="block">
           <span className="label">パスワード (確認) *</span>
-          <input name="confirm" type="password" required minLength={8} className="field" autoComplete="new-password" />
+          <input {...field("confirm")} type="password" required minLength={8} className="field" autoComplete="new-password" />
         </label>
         <label className="block sm:col-span-2">
           <span className="label">承認する人へのメモ (任意)</span>
-          <textarea name="note" maxLength={400} rows={2} className="field" placeholder="例: 4 月入社の営業です。店長の〇〇さんに確認済み" />
+          <textarea {...field("note")} maxLength={400} rows={2} className="field" placeholder="例: 4 月入社の営業です。店長の〇〇さんに確認済み" />
         </label>
         <label className="block sm:col-span-2">
           <span className="label">顔写真 (任意)</span>
@@ -144,14 +171,14 @@ export function SignupForm({ stores }: { stores: { id: StoreId; name: string; co
             accept="image/jpeg,image/png,image/webp"
             className="field h-auto py-2"
           />
-          <span className="mt-1 block text-[11px] text-ink-3">JPEG / PNG / WebP、512 KB まで。申請時に登録しておくと、承認後すぐに顔写真が表示されます。</span>
+          <span className="mt-1 block text-[11px] text-ink-3">JPEG / PNG / WebP、512 KB まで。申請時に登録しておくと、承認後すぐに顔写真が表示されます。{state.error ? " (申請をやり直すときは、写真を選び直してください)" : ""}</span>
         </label>
       </div>
 
-      {state.error && (
+      {error && (
         <div role="alert" className="flex items-start gap-2 rounded-xl border border-critical/30 bg-critical-soft px-3 py-2.5 text-sm text-critical-ink">
           <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-          {state.error}
+          {error}
         </div>
       )}
 

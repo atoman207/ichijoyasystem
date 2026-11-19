@@ -39,7 +39,7 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
 
   return (
     <div className="space-y-4">
-      {locked && <Note tone="warn">テスト期間中のため、現在はアカウントの情報 (氏名・ログイン ID・役職・電話・ロール・所属・有効と無効) の変更、アカウントの追加・削除、パスワードの再設定はできません。</Note>}
+      {locked && <Note tone="warn">テスト期間中のため、現在はアカウントの情報 (氏名・ログイン ID・役職・電話・ロール・所属・有効と無効) の変更、アカウントの追加・削除、パスワードの再設定はできません。新規登録の申請の承認・却下はできます。</Note>}
       {manager && (signups.length > 0 || otherSignups > 0) && (
         <Card id="signups" padded={false}>
           <div className="px-5 pt-5">
@@ -69,12 +69,7 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
                       </div>
                       {u.signupNote && <p className="mt-1 rounded-lg bg-subtle px-3 py-2 text-xs whitespace-pre-wrap text-ink-2">{u.signupNote}</p>}
                     </div>
-                    {locked ? (
-                      <div className="flex flex-wrap items-start gap-2">
-                        {lockBtn("承認する")}
-                        {lockBtn("却下", "ghost")}
-                      </div>
-                    ) : (
+                    {/* 新規登録の申請の承認・却下は、テスト期間中のアカウントの変更の停止の対象外 */}
                     <div className="flex flex-wrap items-end gap-2">
                       <form action={approveSignup.bind(null, u.id)} className="flex flex-wrap items-end gap-2">
                         {back}
@@ -91,7 +86,6 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
                         <Button type="submit" size="sm" variant="ghost">却下</Button>
                       </form>
                     </div>
-                    )}
                   </li>
                 );
               })}
