@@ -37,7 +37,10 @@ create table if not exists stores (
   address text,
   phone text,
   manager_user_id text,
-  color text not null
+  color text not null,
+  opened_on date,
+  closed_on date,
+  merged_into text
 );
 comment on table stores is '店舗';
 
@@ -861,6 +864,284 @@ create table if not exists map_document_links (
 );
 comment on table map_document_links is '地図の PDF と場所の結び付け (1 つの PDF を複数の場所から参照)';
 
+-- 管理会計の設定 (配分率・端数・未確定の扱い。適用期間つき)
+create table if not exists mgmt_rules (
+  id text primary key,
+  key text not null,
+  value text not null,
+  valid_from date not null,
+  valid_to date,
+  status text not null check (status in ('confirmed','provisional')),
+  note text,
+  created_by text not null,
+  created_at timestamptz not null
+);
+comment on table mgmt_rules is '管理会計の設定 (配分率・端数・未確定の扱い。適用期間つき)';
+
+-- 品目 (管理会計の 7 区分)
+create table if not exists item_categories (
+  id text primary key,
+  name text not null,
+  sort integer not null default 0,
+  active boolean not null default true,
+  note text,
+  updated_at timestamptz
+);
+comment on table item_categories is '品目 (管理会計の 7 区分)';
+
+-- 営業エリア (町名 → 担当店舗。履歴つき)
+create table if not exists sales_areas (
+  id text primary key,
+  municipality text not null default '',
+  town text not null,
+  store_id text not null references stores(id),
+  valid_from date not null,
+  valid_to date,
+  source text not null check (source in ('import','manual')),
+  source_ref text,
+  note text,
+  created_by text not null,
+  created_at timestamptz not null
+);
+comment on table sales_areas is '営業エリア (町名 → 担当店舗。履歴つき)';
+
+-- 売上の帰属 (受注店舗・施工店舗・営業エリアの店舗・工事の区分・税区分)
+create table if not exists order_attributions (
+  id text primary key,
+  order_id text not null unique,
+  area_store_id text,
+  area_key text,
+  received_store_id text not null references stores(id),
+  work_store_id text not null references stores(id),
+  work_kind text not null check (work_kind in ('normal','reform')),
+  hq_special boolean,
+  tax_category text,
+  note text,
+  updated_by text not null,
+  updated_at timestamptz not null
+);
+comment on table order_attributions is '売上の帰属 (受注店舗・施工店舗・営業エリアの店舗・工事の区分・税区分)';
+
+-- 店舗別売上の調整 (内部受注・本部の特殊配分・手入力。店舗の合計は 0)
+create table if not exists sales_adjustments (
+  id text primary key,
+  number text not null unique,
+  kind text not null check (kind in ('internal_order','hq_special','manual')),
+  order_id text,
+  date date,
+  from_store_id text not null references stores(id),
+  to_store_id text not null references stores(id),
+  work_kind text,
+  base_amount numeric,
+  base text,
+  rate_bp integer,
+  rate_source text,
+  rule_ids text[] not null default '{}',
+  rounding text,
+  amount numeric not null,
+  treatment text,
+  provisional boolean not null default false,
+  status text not null check (status in ('active','reversed')),
+  reversal_of text,
+  reversed_by text,
+  reason text,
+  created_by text not null,
+  created_at timestamptz not null
+);
+comment on table sales_adjustments is '店舗別売上の調整 (内部受注・本部の特殊配分・手入力。店舗の合計は 0)';
+
+-- 材料マスタ (畳表・畳縁・畳床・化学畳表・副資材・クロスなど)
+create table if not exists materials (
+  id text primary key,
+  code text not null,
+  name text not null,
+  kind text not null,
+  spec text,
+  unit text not null,
+  thickness numeric,
+  size text,
+  item_category text not null,
+  supplier_code text,
+  active boolean not null default true,
+  note text,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+comment on table materials is '材料マスタ (畳表・畳縁・畳床・化学畳表・副資材・クロスなど)';
+
+-- 材料の原価単価の履歴 (仮原価・原価単価。適用開始日つき)
+create table if not exists material_costs (
+  id text primary key,
+  material_id text not null references materials(id),
+  unit_cost numeric not null,
+  kind text not null check (kind in ('provisional','standard')),
+  valid_from date not null,
+  valid_to date,
+  note text,
+  created_by text not null,
+  created_at timestamptz not null
+);
+comment on table material_costs is '材料の原価単価の履歴 (仮原価・原価単価。適用開始日つき)';
+
+-- 材料構成 (BOM: 商品 1 単位あたりの材料と使用量)
+create table if not exists boms (
+  id text primary key,
+  product_id text,
+  match_name text,
+  name text not null,
+  lines jsonb not null default '[]',
+  valid_from date not null,
+  valid_to date,
+  note text,
+  created_by text not null,
+  created_at timestamptz not null
+);
+comment on table boms is '材料構成 (BOM: 商品 1 単位あたりの材料と使用量)';
+
+-- 材料の使用・原価 (受注ごと。予想 → 使用予定 → 実績)
+create table if not exists material_usages (
+  id text primary key,
+  order_id text not null,
+  store_id text not null references stores(id),
+  material_id text,
+  material_kind text not null,
+  item_category text not null,
+  qty numeric not null,
+  unit_cost numeric,
+  cost_id text,
+  amount numeric,
+  stage text not null check (stage in ('estimate','planned','actual')),
+  source text not null,
+  bom_id text,
+  product_label text,
+  sheets numeric,
+  spec jsonb,
+  needs_review boolean,
+  review_note text,
+  status text not null check (status in ('active','superseded','reversed')),
+  date date not null,
+  stock_move_id text,
+  reversal_of text,
+  created_by text not null,
+  created_at timestamptz not null,
+  confirmed_by text,
+  confirmed_at timestamptz
+);
+comment on table material_usages is '材料の使用・原価 (受注ごと。予想 → 使用予定 → 実績)';
+
+-- 在庫の移動 (受入・店舗間の移動・使用・返品・廃棄・棚卸の調整)
+create table if not exists stock_moves (
+  id text primary key,
+  number text not null unique,
+  date date not null,
+  kind text not null check (kind in ('receive','transfer','use','return','dispose','adjust')),
+  material_id text not null references materials(id),
+  qty numeric not null,
+  unit_cost numeric not null,
+  amount numeric not null,
+  from_loc text,
+  to_loc text,
+  store_id text not null references stores(id),
+  order_id text,
+  purchase_id text,
+  purchase_item_id text,
+  usage_id text,
+  status text not null check (status in ('draft','confirmed','reversed')),
+  reversal_of text,
+  reversed_by text,
+  note text,
+  created_by text not null,
+  created_at timestamptz not null,
+  approved_by text,
+  approved_at timestamptz
+);
+comment on table stock_moves is '在庫の移動 (受入・店舗間の移動・使用・返品・廃棄・棚卸の調整)';
+
+-- 仕入明細の振り分け (読み取り・自動判定・確定した振り分けを別々に保存)
+create table if not exists purchase_line_allocs (
+  id text primary key,
+  purchase_id text not null,
+  item_id text not null,
+  line_no integer not null,
+  ocr jsonb not null,
+  ai jsonb,
+  splits jsonb not null default '[]',
+  status text not null check (status in ('unassigned','needs_review','confirmed')),
+  reason text,
+  confirmed_by text,
+  confirmed_at timestamptz,
+  updated_at timestamptz not null
+);
+comment on table purchase_line_allocs is '仕入明細の振り分け (読み取り・自動判定・確定した振り分けを別々に保存)';
+
+-- 経費の区分 (店舗独自経費・共通経費 (案分) と費目)
+create table if not exists expense_classes (
+  id text primary key,
+  expense_id text not null unique,
+  alloc_class text not null check (alloc_class in ('store','common')),
+  cost_kind text not null,
+  note text,
+  updated_by text not null,
+  updated_at timestamptz not null
+);
+comment on table expense_classes is '経費の区分 (店舗独自経費・共通経費 (案分) と費目)';
+
+-- 管理会計の手入力 (人件費・管理経費・共通経費・材料の差額調整・予算)
+create table if not exists mgmt_entries (
+  id text primary key,
+  month text not null,
+  store_id text not null references stores(id),
+  kind text not null check (kind in ('labor','store_expense','common_expense','other_mgmt','material_adjust','budget')),
+  metric text,
+  item_category text,
+  amount numeric not null,
+  note text,
+  status text not null check (status in ('active','reversed')),
+  reversal_of text,
+  reversed_by text,
+  created_by text not null,
+  created_at timestamptz not null
+);
+comment on table mgmt_entries is '管理会計の手入力 (人件費・管理経費・共通経費・材料の差額調整・予算)';
+
+-- 共通経費の案分の計算・確定 (基準の粗利益・率・結果・使った設定を保存)
+create table if not exists allocation_runs (
+  id text primary key,
+  number text not null unique,
+  month text not null,
+  status text not null check (status in ('draft','held','confirmed','superseded')),
+  method text not null,
+  method_reason text,
+  target_store_ids text[] not null default '{}',
+  pool jsonb not null default '[]',
+  pool_total numeric not null,
+  basis jsonb not null default '[]',
+  basis_total numeric not null,
+  results jsonb not null default '[]',
+  rounding text not null,
+  hold_reason text,
+  rules jsonb not null default '{}',
+  correction_of text,
+  superseded_by text,
+  reason text,
+  created_by text not null,
+  created_at timestamptz not null,
+  confirmed_by text,
+  confirmed_at timestamptz
+);
+comment on table allocation_runs is '共通経費の案分の計算・確定 (基準の粗利益・率・結果・使った設定を保存)';
+
+-- 月次確定 (確定時の店舗別損益の写しと、確定・解除の履歴)
+create table if not exists period_closes (
+  id text primary key,
+  month text not null unique,
+  status text not null check (status in ('closed','open')),
+  snapshot jsonb,
+  history jsonb not null default '[]',
+  updated_at timestamptz not null
+);
+comment on table period_closes is '月次確定 (確定時の店舗別損益の写しと、確定・解除の履歴)';
+
 -- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)
 -- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する
 alter table stores add column if not exists code text not null;
@@ -872,6 +1153,9 @@ alter table stores add column if not exists address text;
 alter table stores add column if not exists phone text;
 alter table stores add column if not exists manager_user_id text;
 alter table stores add column if not exists color text not null;
+alter table stores add column if not exists opened_on date;
+alter table stores add column if not exists closed_on date;
+alter table stores add column if not exists merged_into text;
 alter table users add column if not exists name text not null;
 alter table users add column if not exists kana text not null default '';
 alter table users add column if not exists email text not null unique;
@@ -1476,6 +1760,194 @@ alter table map_document_links add column if not exists document_id text not nul
 alter table map_document_links add column if not exists location_id text not null references map_locations(id) on delete cascade;
 alter table map_document_links add column if not exists linked_by text not null;
 alter table map_document_links add column if not exists linked_at timestamptz not null;
+alter table mgmt_rules add column if not exists key text not null;
+alter table mgmt_rules add column if not exists value text not null;
+alter table mgmt_rules add column if not exists valid_from date not null;
+alter table mgmt_rules add column if not exists valid_to date;
+alter table mgmt_rules add column if not exists status text not null check (status in ('confirmed','provisional'));
+alter table mgmt_rules add column if not exists note text;
+alter table mgmt_rules add column if not exists created_by text not null;
+alter table mgmt_rules add column if not exists created_at timestamptz not null;
+alter table item_categories add column if not exists name text not null;
+alter table item_categories add column if not exists sort integer not null default 0;
+alter table item_categories add column if not exists active boolean not null default true;
+alter table item_categories add column if not exists note text;
+alter table item_categories add column if not exists updated_at timestamptz;
+alter table sales_areas add column if not exists municipality text not null default '';
+alter table sales_areas add column if not exists town text not null;
+alter table sales_areas add column if not exists store_id text not null references stores(id);
+alter table sales_areas add column if not exists valid_from date not null;
+alter table sales_areas add column if not exists valid_to date;
+alter table sales_areas add column if not exists source text not null check (source in ('import','manual'));
+alter table sales_areas add column if not exists source_ref text;
+alter table sales_areas add column if not exists note text;
+alter table sales_areas add column if not exists created_by text not null;
+alter table sales_areas add column if not exists created_at timestamptz not null;
+alter table order_attributions add column if not exists order_id text not null unique;
+alter table order_attributions add column if not exists area_store_id text;
+alter table order_attributions add column if not exists area_key text;
+alter table order_attributions add column if not exists received_store_id text not null references stores(id);
+alter table order_attributions add column if not exists work_store_id text not null references stores(id);
+alter table order_attributions add column if not exists work_kind text not null check (work_kind in ('normal','reform'));
+alter table order_attributions add column if not exists hq_special boolean;
+alter table order_attributions add column if not exists tax_category text;
+alter table order_attributions add column if not exists note text;
+alter table order_attributions add column if not exists updated_by text not null;
+alter table order_attributions add column if not exists updated_at timestamptz not null;
+alter table sales_adjustments add column if not exists number text not null unique;
+alter table sales_adjustments add column if not exists kind text not null check (kind in ('internal_order','hq_special','manual'));
+alter table sales_adjustments add column if not exists order_id text;
+alter table sales_adjustments add column if not exists date date;
+alter table sales_adjustments add column if not exists from_store_id text not null references stores(id);
+alter table sales_adjustments add column if not exists to_store_id text not null references stores(id);
+alter table sales_adjustments add column if not exists work_kind text;
+alter table sales_adjustments add column if not exists base_amount numeric;
+alter table sales_adjustments add column if not exists base text;
+alter table sales_adjustments add column if not exists rate_bp integer;
+alter table sales_adjustments add column if not exists rate_source text;
+alter table sales_adjustments add column if not exists rule_ids text[] not null default '{}';
+alter table sales_adjustments add column if not exists rounding text;
+alter table sales_adjustments add column if not exists amount numeric not null;
+alter table sales_adjustments add column if not exists treatment text;
+alter table sales_adjustments add column if not exists provisional boolean not null default false;
+alter table sales_adjustments add column if not exists status text not null check (status in ('active','reversed'));
+alter table sales_adjustments add column if not exists reversal_of text;
+alter table sales_adjustments add column if not exists reversed_by text;
+alter table sales_adjustments add column if not exists reason text;
+alter table sales_adjustments add column if not exists created_by text not null;
+alter table sales_adjustments add column if not exists created_at timestamptz not null;
+alter table materials add column if not exists code text not null;
+alter table materials add column if not exists name text not null;
+alter table materials add column if not exists kind text not null;
+alter table materials add column if not exists spec text;
+alter table materials add column if not exists unit text not null;
+alter table materials add column if not exists thickness numeric;
+alter table materials add column if not exists size text;
+alter table materials add column if not exists item_category text not null;
+alter table materials add column if not exists supplier_code text;
+alter table materials add column if not exists active boolean not null default true;
+alter table materials add column if not exists note text;
+alter table materials add column if not exists created_at timestamptz not null;
+alter table materials add column if not exists updated_at timestamptz not null;
+alter table material_costs add column if not exists material_id text not null references materials(id);
+alter table material_costs add column if not exists unit_cost numeric not null;
+alter table material_costs add column if not exists kind text not null check (kind in ('provisional','standard'));
+alter table material_costs add column if not exists valid_from date not null;
+alter table material_costs add column if not exists valid_to date;
+alter table material_costs add column if not exists note text;
+alter table material_costs add column if not exists created_by text not null;
+alter table material_costs add column if not exists created_at timestamptz not null;
+alter table boms add column if not exists product_id text;
+alter table boms add column if not exists match_name text;
+alter table boms add column if not exists name text not null;
+alter table boms add column if not exists lines jsonb not null default '[]';
+alter table boms add column if not exists valid_from date not null;
+alter table boms add column if not exists valid_to date;
+alter table boms add column if not exists note text;
+alter table boms add column if not exists created_by text not null;
+alter table boms add column if not exists created_at timestamptz not null;
+alter table material_usages add column if not exists order_id text not null;
+alter table material_usages add column if not exists store_id text not null references stores(id);
+alter table material_usages add column if not exists material_id text;
+alter table material_usages add column if not exists material_kind text not null;
+alter table material_usages add column if not exists item_category text not null;
+alter table material_usages add column if not exists qty numeric not null;
+alter table material_usages add column if not exists unit_cost numeric;
+alter table material_usages add column if not exists cost_id text;
+alter table material_usages add column if not exists amount numeric;
+alter table material_usages add column if not exists stage text not null check (stage in ('estimate','planned','actual'));
+alter table material_usages add column if not exists source text not null;
+alter table material_usages add column if not exists bom_id text;
+alter table material_usages add column if not exists product_label text;
+alter table material_usages add column if not exists sheets numeric;
+alter table material_usages add column if not exists spec jsonb;
+alter table material_usages add column if not exists needs_review boolean;
+alter table material_usages add column if not exists review_note text;
+alter table material_usages add column if not exists status text not null check (status in ('active','superseded','reversed'));
+alter table material_usages add column if not exists date date not null;
+alter table material_usages add column if not exists stock_move_id text;
+alter table material_usages add column if not exists reversal_of text;
+alter table material_usages add column if not exists created_by text not null;
+alter table material_usages add column if not exists created_at timestamptz not null;
+alter table material_usages add column if not exists confirmed_by text;
+alter table material_usages add column if not exists confirmed_at timestamptz;
+alter table stock_moves add column if not exists number text not null unique;
+alter table stock_moves add column if not exists date date not null;
+alter table stock_moves add column if not exists kind text not null check (kind in ('receive','transfer','use','return','dispose','adjust'));
+alter table stock_moves add column if not exists material_id text not null references materials(id);
+alter table stock_moves add column if not exists qty numeric not null;
+alter table stock_moves add column if not exists unit_cost numeric not null;
+alter table stock_moves add column if not exists amount numeric not null;
+alter table stock_moves add column if not exists from_loc text;
+alter table stock_moves add column if not exists to_loc text;
+alter table stock_moves add column if not exists store_id text not null references stores(id);
+alter table stock_moves add column if not exists order_id text;
+alter table stock_moves add column if not exists purchase_id text;
+alter table stock_moves add column if not exists purchase_item_id text;
+alter table stock_moves add column if not exists usage_id text;
+alter table stock_moves add column if not exists status text not null check (status in ('draft','confirmed','reversed'));
+alter table stock_moves add column if not exists reversal_of text;
+alter table stock_moves add column if not exists reversed_by text;
+alter table stock_moves add column if not exists note text;
+alter table stock_moves add column if not exists created_by text not null;
+alter table stock_moves add column if not exists created_at timestamptz not null;
+alter table stock_moves add column if not exists approved_by text;
+alter table stock_moves add column if not exists approved_at timestamptz;
+alter table purchase_line_allocs add column if not exists purchase_id text not null;
+alter table purchase_line_allocs add column if not exists item_id text not null;
+alter table purchase_line_allocs add column if not exists line_no integer not null;
+alter table purchase_line_allocs add column if not exists ocr jsonb not null;
+alter table purchase_line_allocs add column if not exists ai jsonb;
+alter table purchase_line_allocs add column if not exists splits jsonb not null default '[]';
+alter table purchase_line_allocs add column if not exists status text not null check (status in ('unassigned','needs_review','confirmed'));
+alter table purchase_line_allocs add column if not exists reason text;
+alter table purchase_line_allocs add column if not exists confirmed_by text;
+alter table purchase_line_allocs add column if not exists confirmed_at timestamptz;
+alter table purchase_line_allocs add column if not exists updated_at timestamptz not null;
+alter table expense_classes add column if not exists expense_id text not null unique;
+alter table expense_classes add column if not exists alloc_class text not null check (alloc_class in ('store','common'));
+alter table expense_classes add column if not exists cost_kind text not null;
+alter table expense_classes add column if not exists note text;
+alter table expense_classes add column if not exists updated_by text not null;
+alter table expense_classes add column if not exists updated_at timestamptz not null;
+alter table mgmt_entries add column if not exists month text not null;
+alter table mgmt_entries add column if not exists store_id text not null references stores(id);
+alter table mgmt_entries add column if not exists kind text not null check (kind in ('labor','store_expense','common_expense','other_mgmt','material_adjust','budget'));
+alter table mgmt_entries add column if not exists metric text;
+alter table mgmt_entries add column if not exists item_category text;
+alter table mgmt_entries add column if not exists amount numeric not null;
+alter table mgmt_entries add column if not exists note text;
+alter table mgmt_entries add column if not exists status text not null check (status in ('active','reversed'));
+alter table mgmt_entries add column if not exists reversal_of text;
+alter table mgmt_entries add column if not exists reversed_by text;
+alter table mgmt_entries add column if not exists created_by text not null;
+alter table mgmt_entries add column if not exists created_at timestamptz not null;
+alter table allocation_runs add column if not exists number text not null unique;
+alter table allocation_runs add column if not exists month text not null;
+alter table allocation_runs add column if not exists status text not null check (status in ('draft','held','confirmed','superseded'));
+alter table allocation_runs add column if not exists method text not null;
+alter table allocation_runs add column if not exists method_reason text;
+alter table allocation_runs add column if not exists target_store_ids text[] not null default '{}';
+alter table allocation_runs add column if not exists pool jsonb not null default '[]';
+alter table allocation_runs add column if not exists pool_total numeric not null;
+alter table allocation_runs add column if not exists basis jsonb not null default '[]';
+alter table allocation_runs add column if not exists basis_total numeric not null;
+alter table allocation_runs add column if not exists results jsonb not null default '[]';
+alter table allocation_runs add column if not exists rounding text not null;
+alter table allocation_runs add column if not exists hold_reason text;
+alter table allocation_runs add column if not exists rules jsonb not null default '{}';
+alter table allocation_runs add column if not exists correction_of text;
+alter table allocation_runs add column if not exists superseded_by text;
+alter table allocation_runs add column if not exists reason text;
+alter table allocation_runs add column if not exists created_by text not null;
+alter table allocation_runs add column if not exists created_at timestamptz not null;
+alter table allocation_runs add column if not exists confirmed_by text;
+alter table allocation_runs add column if not exists confirmed_at timestamptz;
+alter table period_closes add column if not exists month text not null unique;
+alter table period_closes add column if not exists status text not null check (status in ('closed','open'));
+alter table period_closes add column if not exists snapshot jsonb;
+alter table period_closes add column if not exists history jsonb not null default '[]';
+alter table period_closes add column if not exists updated_at timestamptz not null;
 
 -- 索引 (検索・読み込みの並び順)
 create index if not exists stores_load_order_idx on stores (code, id);
@@ -1565,6 +2037,30 @@ create index if not exists map_documents_load_order_idx on map_documents (upload
 create index if not exists map_document_links_document_id_idx on map_document_links (document_id);
 create index if not exists map_document_links_location_id_idx on map_document_links (location_id);
 create index if not exists map_document_links_load_order_idx on map_document_links (linked_at, id);
+create index if not exists mgmt_rules_load_order_idx on mgmt_rules (key, valid_from, id);
+create index if not exists item_categories_load_order_idx on item_categories (sort, id);
+create index if not exists sales_areas_store_id_idx on sales_areas (store_id);
+create index if not exists sales_areas_load_order_idx on sales_areas (town, valid_from, id);
+create index if not exists order_attributions_load_order_idx on order_attributions (order_id, id);
+create index if not exists sales_adjustments_order_id_idx on sales_adjustments (order_id);
+create index if not exists sales_adjustments_date_idx on sales_adjustments (date);
+create index if not exists sales_adjustments_load_order_idx on sales_adjustments (created_at, id);
+create index if not exists materials_load_order_idx on materials (code, id);
+create index if not exists material_costs_load_order_idx on material_costs (material_id, valid_from, id);
+create index if not exists boms_load_order_idx on boms (name, valid_from, id);
+create index if not exists material_usages_order_id_idx on material_usages (order_id);
+create index if not exists material_usages_load_order_idx on material_usages (created_at, id);
+create index if not exists stock_moves_material_id_date_idx on stock_moves (material_id, date);
+create index if not exists stock_moves_store_id_idx on stock_moves (store_id);
+create index if not exists stock_moves_purchase_id_idx on stock_moves (purchase_id);
+create index if not exists stock_moves_load_order_idx on stock_moves (date, created_at, id);
+create index if not exists purchase_line_allocs_purchase_id_item_id_idx on purchase_line_allocs (purchase_id, item_id);
+create index if not exists purchase_line_allocs_load_order_idx on purchase_line_allocs (purchase_id, line_no, id);
+create index if not exists expense_classes_load_order_idx on expense_classes (expense_id, id);
+create index if not exists mgmt_entries_month_idx on mgmt_entries (month);
+create index if not exists mgmt_entries_load_order_idx on mgmt_entries (month, created_at, id);
+create index if not exists allocation_runs_load_order_idx on allocation_runs (month, created_at, id);
+create index if not exists period_closes_load_order_idx on period_closes (month, id);
 
 -- 後から not null を外した列 (データは変えない。外した後に実行しても変化なし)
 alter table comm_logs alter column customer_id drop not null;
@@ -1689,6 +2185,51 @@ grant select, insert, update, delete on table map_documents to service_role;
 alter table map_document_links enable row level security;
 revoke all on table map_document_links from anon, authenticated;
 grant select, insert, update, delete on table map_document_links to service_role;
+alter table mgmt_rules enable row level security;
+revoke all on table mgmt_rules from anon, authenticated;
+grant select, insert, update, delete on table mgmt_rules to service_role;
+alter table item_categories enable row level security;
+revoke all on table item_categories from anon, authenticated;
+grant select, insert, update, delete on table item_categories to service_role;
+alter table sales_areas enable row level security;
+revoke all on table sales_areas from anon, authenticated;
+grant select, insert, update, delete on table sales_areas to service_role;
+alter table order_attributions enable row level security;
+revoke all on table order_attributions from anon, authenticated;
+grant select, insert, update, delete on table order_attributions to service_role;
+alter table sales_adjustments enable row level security;
+revoke all on table sales_adjustments from anon, authenticated;
+grant select, insert, update, delete on table sales_adjustments to service_role;
+alter table materials enable row level security;
+revoke all on table materials from anon, authenticated;
+grant select, insert, update, delete on table materials to service_role;
+alter table material_costs enable row level security;
+revoke all on table material_costs from anon, authenticated;
+grant select, insert, update, delete on table material_costs to service_role;
+alter table boms enable row level security;
+revoke all on table boms from anon, authenticated;
+grant select, insert, update, delete on table boms to service_role;
+alter table material_usages enable row level security;
+revoke all on table material_usages from anon, authenticated;
+grant select, insert, update, delete on table material_usages to service_role;
+alter table stock_moves enable row level security;
+revoke all on table stock_moves from anon, authenticated;
+grant select, insert, update, delete on table stock_moves to service_role;
+alter table purchase_line_allocs enable row level security;
+revoke all on table purchase_line_allocs from anon, authenticated;
+grant select, insert, update, delete on table purchase_line_allocs to service_role;
+alter table expense_classes enable row level security;
+revoke all on table expense_classes from anon, authenticated;
+grant select, insert, update, delete on table expense_classes to service_role;
+alter table mgmt_entries enable row level security;
+revoke all on table mgmt_entries from anon, authenticated;
+grant select, insert, update, delete on table mgmt_entries to service_role;
+alter table allocation_runs enable row level security;
+revoke all on table allocation_runs from anon, authenticated;
+grant select, insert, update, delete on table allocation_runs to service_role;
+alter table period_closes enable row level security;
+revoke all on table period_closes from anon, authenticated;
+grant select, insert, update, delete on table period_closes to service_role;
 
 -- 書き込みのたびにリビジョンを +1 (他のサーバーインスタンスが変更を検知して読み直す)
 create or replace function public.bump_revision() returns bigint

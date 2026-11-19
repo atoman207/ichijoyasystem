@@ -6,6 +6,9 @@
  * エンティティ同士が ID で関連付き、1 か所の更新が全画面に反映される。
  */
 
+import type { AllocationRun, Bom, ExpenseClass, ItemCategory, Material, MaterialCost, MaterialUsage, MgmtEntry, MgmtRule, OrderAttribution, PeriodClose, PurchaseLineAlloc, SalesAdjustment, SalesArea, StockMove } from "./types-mgmt";
+export type * from "./types-mgmt";
+
 export type Role = "admin" | "store_manager" | "store_staff" | "hq_staff";
 
 /** 店舗 ID (4 店舗 + 本社/坪井ショールーム) */
@@ -23,6 +26,10 @@ export interface Store {
   managerUserId?: string;
   /** グラフ・バッジ用の系列色 (固定順・入れ替えない) */
   color: string;
+  /** 管理部門としての開設日・閉鎖日・統合先 (管理会計。閉鎖・統合後も過去の数字は残る) */
+  openedOn?: string;
+  closedOn?: string;
+  mergedInto?: StoreId;
 }
 
 export interface User {
@@ -1479,6 +1486,22 @@ export interface Database {
   mapLocationRefs: MapLocationRef[];
   mapDocuments: MapDocument[];
   mapDocumentLinks: MapDocumentLink[];
+  /* 管理会計 (types-mgmt.ts) */
+  mgmtRules: MgmtRule[];
+  itemCategories: ItemCategory[];
+  salesAreas: SalesArea[];
+  orderAttributions: OrderAttribution[];
+  salesAdjustments: SalesAdjustment[];
+  materials: Material[];
+  materialCosts: MaterialCost[];
+  boms: Bom[];
+  materialUsages: MaterialUsage[];
+  stockMoves: StockMove[];
+  purchaseLineAllocs: PurchaseLineAlloc[];
+  expenseClasses: ExpenseClass[];
+  mgmtEntries: MgmtEntry[];
+  allocationRuns: AllocationRun[];
+  periodCloses: PeriodClose[];
 }
 
 export type CollectionName = Exclude<keyof Database, "meta">;

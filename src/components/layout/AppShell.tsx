@@ -70,6 +70,7 @@ import {
   X,
   type LucideIcon,
   MapPinned,
+  Scale,
 } from "lucide-react";
 import { Avatar, Badge } from "@/components/ui";
 import { IchijoyaLogo } from "@/components/brand/Logo";
@@ -106,6 +107,7 @@ export type NavIcon =
   | "purchaseOrders"
   | "fax"
   | "maps"
+  | "management"
   | "help";
 
 const ICONS: Record<NavIcon, LucideIcon> = {
@@ -139,6 +141,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   purchaseOrders: ClipboardList,
   fax: Printer,
   help: CircleHelp,
+  management: Scale,
 };
 
 export interface NavItem {

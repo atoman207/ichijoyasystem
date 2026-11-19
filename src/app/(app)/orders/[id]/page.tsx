@@ -27,6 +27,8 @@ import { lineGroupName, lineGroups } from "@/lib/line-groups";
 import { linkLineGroup, unlinkLineGroup } from "@/lib/actions/line-groups";
 import { FaxHistoryCard, PurchaseOrderTable } from "@/components/fax/FaxParts";
 import { MapInfoCard } from "@/components/maps/MapInfoCard";
+import { canViewMgmtStore } from "@/lib/mgmt/access";
+import { MgmtOrderCard } from "@/components/features/MgmtOrderCard";
 
 const STEPS = ["pending_approval", "confirmed", "scheduled", "in_progress", "completed", "invoiced", "paid"] as const;
 
@@ -170,6 +172,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               </ul>
             )}
           </Card>
+
+          {canViewMgmtStore(user, o.storeId) && <MgmtOrderCard db={db} order={o} />}
 
           {o.amounts && (
             <Card>

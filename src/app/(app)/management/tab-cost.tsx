@@ -1,0 +1,200 @@
+import Link from "next/link";
+import { fmtDate, yen } from "@/lib/format";
+import { salesFacts } from "@/lib/assistant/facts";
+import { costingLines, countedUsages, planUsage, MATERIAL_KIND_LABEL, STAGE_LABEL, SIZE_LABEL } from "@/lib/mgmt/costing";
+import { canRecordUsage } from "@/lib/mgmt/access";
+import { recordOrderCost } from "@/lib/actions/mgmt";
+import { Badge, Button, Card, CardHeader, Field, Input, Note, Select, Table, Td, Th, Tr } from "@/components/ui";
+import { Money, PeriodForm, back, qs, type Ctx } from "./parts";
+
+export function CostTab({ ctx }: { ctx: Ctx }) {
+  const { db } = ctx;
+  const facts = salesFacts(db).byId;
+  const visible = (id: string) => !ctx.storeIds || ctx.storeIds.includes(id);
+  const orderParam = ctx.sp.order ? db.orders.find((o) => o.id === ctx.sp.order || o.number === ctx.sp.order) : undefined;
+  const orders = db.orders.filter((o) => o.status !== "cancelled" && (o.salesDate ?? o.contractDate) >= ctx.from && (o.salesDate ?? o.contractDate) <= ctx.to && visible(o.storeId));
+  const rows = orders
+    .map((o) => {
+      const used = countedUsages(db, o.id);
+      const fact = facts.get(o.id);
+      const tatami = (fact?.amounts.tatami ?? (o.category === "tatami" ? o.total : 0)) > 0;
+      return { o, used, tatami, legacy: !used.length && Boolean(o.tatamiCost) };
+    })
+    .filter((r) => r.tatami || r.used.length);
+  const status = (r: (typeof rows)[number]) => (r.used.length ? (r.used.some((u) => u.needsReview) ? "review" : r.used[0].stage) : r.legacy ? "legacy" : "none");
+  const counts = { none: 0, review: 0, estimate: 0, planned: 0, actual: 0, legacy: 0 } as Record<string, number>;
+  for (const r of rows) counts[status(r)]++;
+  const filter = ctx.sp.status ?? "";
+  const list = rows.filter((r) => !filter || status(r) === filter);
+  const docoMaterials = db.materials.filter((m) => m.active && m.kind === "doko");
+
+  return (
+    <div className="space-y-4">
+      <PeriodForm ctx={ctx} />
+      <Note>
+        材料原価 = 使用数量 × その日の単価 (材料構成 (BOM) から計算)。半畳は材料ごとの係数、副資材は 1 枚 (半畳も 1 枚) あたりの設定の単価。<strong>畳床は製造仕様 (種類・厚み・規格) を選ぶまで「要確認」</strong>で、推測の金額は入れません。段階は 予想原価 → 使用予定 → 実績 で、受注ごとに一番進んだ段階だけを原価に数えます (二重に数えない)。売上台帳から移行した受注は、移行した畳原価をそのまま使います。
+      </Note>
+      <div className="flex flex-wrap gap-2 text-xs">
+        {[["", `すべて (${rows.length})`], ["none", `未計算 (${counts.none})`], ["review", `要確認 (${counts.review})`], ["estimate", `予想 (${counts.estimate})`], ["planned", `使用予定 (${counts.planned})`], ["actual", `実績 (${counts.actual})`], ["legacy", `移行の畳原価 (${counts.legacy})`]].map(([k, l]) => (
+          <Link key={k} href={qs(ctx, { status: k || undefined })} className={`rounded-full border px-2.5 py-1 ${filter === k ? "border-accent bg-accent-soft" : "border-line"}`}>
+            {l}
+          </Link>
+        ))}
+      </div>
+      {orderParam && <OrderCosting ctx={ctx} orderId={orderParam.id} docoIds={docoMaterials.map((m) => m.id)} />}
+      <Table minWidth="min-w-[820px]">
+        <thead>
+          <tr>
+            <Th>受注</Th>
+            <Th>売上計上日</Th>
+            <Th>店舗</Th>
+            <Th align="right">売上 (税込)</Th>
+            <Th>原価の段階</Th>
+            <Th align="right">材料原価</Th>
+            <Th />
+          </tr>
+        </thead>
+        <tbody>
+          {list.slice(0, 150).map((r) => {
+            const st = status(r);
+            const amount = r.used.length ? r.used.reduce((a, u) => a + (u.amount ?? 0), 0) : r.legacy ? Math.round(r.o.tatamiCost ?? 0) : null;
+            return (
+              <Tr key={r.o.id}>
+                <Td>
+                  <Link className="text-accent hover:underline" href={`/orders/${r.o.id}`}>{r.o.number}</Link>
+                  <div className="text-xs text-ink-2">{r.o.title}</div>
+                </Td>
+                <Td>{r.o.salesDate ? fmtDate(r.o.salesDate) : "未完了"}</Td>
+                <Td>{db.stores.find((s) => s.id === r.o.storeId)?.shortName}</Td>
+                <Td align="right">{yen(r.o.total)}</Td>
+                <Td>
+                  {st === "review" ? <Badge tone="warn">要確認</Badge> : st === "none" ? <Badge tone="neutral">未計算</Badge> : st === "legacy" ? <Badge tone="info">移行の畳原価</Badge> : <Badge tone={st === "actual" ? "good" : "info"}>{STAGE_LABEL[st as "actual"]}</Badge>}
+                </Td>
+                <Td align="right"><Money v={amount} /></Td>
+                <Td>
+                  <Link className="text-xs text-accent hover:underline" href={qs(ctx, { order: r.o.id }) + "#costing"}>原価を見る・登録</Link>
+                </Td>
+              </Tr>
+            );
+          })}
+        </tbody>
+      </Table>
+      {list.length > 150 && <p className="text-xs text-ink-2">先頭の 150 件を表示しています。</p>}
+    </div>
+  );
+}
+
+function OrderCosting({ ctx, orderId, docoIds }: { ctx: Ctx; orderId: string; docoIds: string[] }) {
+  const { db } = ctx;
+  const o = db.orders.find((x) => x.id === orderId)!;
+  if (ctx.storeIds && !ctx.storeIds.includes(o.storeId)) return <Note tone="warn">この受注は見られません。</Note>;
+  const fact = salesFacts(db).byId.get(o.id);
+  const lines = costingLines(db, o, fact);
+  const date = o.salesDate ?? ctx.today;
+  const plan = planUsage(db, lines, date);
+  const all = db.materialUsages.filter((u) => u.orderId === o.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const counted = new Set(countedUsages(db, o.id).map((u) => u.id));
+  const docos = db.materials.filter((m) => docoIds.includes(m.id));
+  const editable = canRecordUsage(ctx.user, o);
+  return (
+    <Card id="costing">
+      <CardHeader title={`材料原価: ${o.number} ${o.title}`} description={`明細 ${lines.length} 行 · ${date} 時点の単価で計算${o.tatamiCost ? ` · 移行の畳原価 ${yen(Math.round(o.tatamiCost))}` : ""}`} />
+      {lines.length === 0 && <Note tone="warn">原価を計算できる明細がありません (見積の明細・売上台帳の明細がない受注)。</Note>}
+      {plan.unmatched.length > 0 && <Note tone="warn">材料構成のない畳の明細: {plan.unmatched.map((l) => `${l.label} ×${l.qty}`).join("・")} — 材料・単価・材料構成のタブで材料構成を登録してください。</Note>}
+      {editable && plan.usages.length > 0 && (
+        <form action={recordOrderCost} className="space-y-3">
+          {back(ctx, { order: o.id })}
+          <input type="hidden" name="orderId" value={o.id} />
+          <Table minWidth="min-w-[760px]">
+            <thead>
+              <tr>
+                <Th>明細</Th>
+                <Th>材料</Th>
+                <Th align="right">数量</Th>
+                <Th align="right">単価</Th>
+                <Th align="right">金額</Th>
+                <Th>計算</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {plan.usages.map((u) => (
+                <Tr key={u.lineKey}>
+                  <Td className="text-xs">{u.productLabel} ×{u.sheets}</Td>
+                  <Td>
+                    {MATERIAL_KIND_LABEL[u.materialKind]}
+                    {u.needsReview && u.materialKind === "doko" && (
+                      <div className="mt-1">
+                        <Select name={`spec:${u.lineKey}`} defaultValue="">
+                          <option value="">畳床の仕様を選ぶ…</option>
+                          {docos.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name} {m.thickness ? `${m.thickness}mm` : ""} {m.size ? SIZE_LABEL[m.size] ?? m.size : ""}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                    )}
+                  </Td>
+                  <Td align="right">{u.qty}</Td>
+                  <Td align="right">{u.unitCost !== undefined ? yen(u.unitCost) : "-"}</Td>
+                  <Td align="right"><Money v={u.amount} /></Td>
+                  <Td className="text-xs">{u.needsReview ? <span className="text-warn-ink">要確認: {u.reviewNote}</span> : u.explain}</Td>
+                </Tr>
+              ))}
+            </tbody>
+          </Table>
+          <div className="flex flex-wrap items-end gap-2">
+            <Field label="登録する段階">
+              <Select name="stage" defaultValue={o.salesDate ? "actual" : "planned"}>
+                <option value="estimate">予想原価 (見積)</option>
+                <option value="planned">使用予定 (施工・製造)</option>
+                <option value="actual">使用実績 (確認済み)</option>
+              </Select>
+            </Field>
+            <Button type="submit">この内容で登録</Button>
+            <span className="text-xs text-ink-2">畳床の仕様を選んだ行は、その材料の単価で計算し直して登録します。</span>
+          </div>
+        </form>
+      )}
+      {all.length > 0 && (
+        <details className="mt-4 text-sm" open>
+          <summary className="cursor-pointer text-accent">登録した原価の行 ({all.length} 行・原価に数えるのは一番進んだ段階の有効な行)</summary>
+          <Table minWidth="min-w-[760px]" className="mt-2">
+            <thead>
+              <tr>
+                <Th>段階</Th>
+                <Th>材料</Th>
+                <Th align="right">数量</Th>
+                <Th align="right">単価 (当時)</Th>
+                <Th align="right">金額</Th>
+                <Th>状態</Th>
+                <Th>登録</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {all.map((u) => (
+                <Tr key={u.id}>
+                  <Td>{STAGE_LABEL[u.stage]}</Td>
+                  <Td>
+                    {db.materials.find((m) => m.id === u.materialId)?.name ?? MATERIAL_KIND_LABEL[u.materialKind]}
+                    {u.spec?.thickness ? <span className="text-xs text-ink-2"> {u.spec.thickness}mm {u.spec.size ? SIZE_LABEL[u.spec.size] ?? u.spec.size : ""}</span> : null}
+                  </Td>
+                  <Td align="right">{u.qty}</Td>
+                  <Td align="right">{u.unitCost !== undefined ? yen(u.unitCost) : "-"}</Td>
+                  <Td align="right"><Money v={u.amount} /></Td>
+                  <Td>{counted.has(u.id) ? <Badge tone="good">原価に数える</Badge> : <Badge tone="neutral">{u.status === "superseded" ? "次の段階で置き換え" : u.status === "reversed" ? "訂正で取消し" : "-"}</Badge>}{u.needsReview && <Badge tone="warn">要確認</Badge>}</Td>
+                  <Td className="text-xs">{u.createdAt.slice(0, 10)} {db.users.find((x) => x.id === u.createdBy)?.name}</Td>
+                </Tr>
+              ))}
+            </tbody>
+          </Table>
+        </details>
+      )}
+      <form method="get" className="mt-3 flex items-end gap-2">
+        <input type="hidden" name="tab" value="cost" />
+        <Field label="ほかの受注を開く (受注番号)"><Input name="order" /></Field>
+        <Button type="submit" variant="secondary">開く</Button>
+      </form>
+    </Card>
+  );
+}

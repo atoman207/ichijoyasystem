@@ -7,6 +7,7 @@ import { avatarUrl } from "@/lib/account-rules";
 import { ROLE_LABEL, APPROVAL_TYPE_LABEL } from "@/lib/constants";
 import { AppShell, type NavItem, type NotificationItem } from "@/components/layout/AppShell";
 import { logout } from "@/lib/actions/auth";
+import { canViewMgmt } from "@/lib/mgmt/access";
 import { yen } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -60,6 +61,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   nav.push({ href: "/kpi", label: "KPI (アンケート・クレーム・口コミ・インセンティブ)", short: "KPI", icon: "kpi", group: "管理" });
   if (canViewReports(user)) {
     nav.push({ href: "/reports", label: "経営ダッシュボード (売上・受注・施工・請求・経費)", short: "経営", icon: "reports", group: "管理" });
+  }
+  if (canViewMgmt(user)) {
+    nav.push({ href: "/management", label: "管理会計 (店舗別損益・内部受注・材料原価・在庫・共通経費の案分)", short: "管理会計", icon: "management", group: "管理" });
   }
   if (canExportData(user)) {
     nav.push({ href: "/data", label: "データ入出力 (CSV・スプレッドシート)", short: "入出力", icon: "dataio", group: "管理" });

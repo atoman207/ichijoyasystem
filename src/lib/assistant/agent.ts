@@ -13,6 +13,8 @@ import { permissionHints } from "@/lib/chatbot/permission-hints";
 import { describeTables, runSql, sqlTable, tableList } from "@/lib/datastore/sql";
 import { METRICS, VIEWS } from "@/lib/datastore/model";
 import { businessOverview } from "./overview";
+import { managementAccounting } from "./mgmt-tool";
+import { canViewMgmt } from "@/lib/mgmt/access";
 import { mirrorReady } from "@/lib/datastore/mirror";
 
 /**
@@ -145,6 +147,26 @@ function tools(user: User): ToolDef[] {
         required: ["subject", "from", "to"],
       },
     },
+    ...(canViewMgmt(user)
+      ? [
+          {
+            name: "management_accounting",
+            description:
+              "管理会計 (店舗別独立採算) の集計を読む (読み取り専用・管理会計の画面と同じ計算)。view: store_pnl = 店舗別損益 (外部売上・内部受注などの調整・管理売上・材料費・外注費・粗利益・材料原価率・人件費・経費・共通経費の案分額・損益と前年同期比) / items = 品目別 (畳・襖・リフォーム・カーテン類・自社商品・その他・諸経費 の売上・材料費・粗利益・材料原価率、店舗 × 品目) / internal_orders = 内部受注・本部の特殊配分の金額 / allocation = 共通経費の案分の結果 (month) / pending = 未確認の仕入明細・要確認の原価・未確定の案分 / trend = 12 か月の推移 / settings = 配分率などの設定と未確定の項目。「店舗別の粗利益」「合志店の畳の材料原価率」「内部受注の金額」「前年より粗利益が減った店舗」「未確認の仕入請求書」「共通経費の案分結果」はこれを使う。",
+            parameters: {
+              type: "object",
+              properties: {
+                view: { type: "string", enum: ["store_pnl", "items", "internal_orders", "allocation", "pending", "trend", "settings"] },
+                from: { type: "string", description: "期間の始まり YYYY-MM-DD (省略 = 今年の 1 月 1 日)" },
+                to: { type: "string", description: "期間の終わり YYYY-MM-DD (省略 = 今日)" },
+                store: { type: "string", description: "1 店舗だけ (id または名前)" },
+                month: { type: "string", description: "allocation の月 YYYY-MM" },
+              },
+              required: ["view"],
+            },
+          } satisfies ToolDef,
+        ]
+      : []),
     {
       name: "business_overview",
       description:
@@ -222,6 +244,16 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     "10. 日本語のです・ます調で、簡潔に。見出しは使わず、必要なら短い箇条書き (・) と **太字** を使う。Markdown の表は書かない (表は画面に出る)。",
     "11. 過去に同じような相談がありそうなら search_history で確かめてもよい。ただし古い回答の数字はそのまま使わず、必要なら調べ直す。",
     "",
+    ...(canViewMgmt(user)
+      ? [
+          "## 管理会計 (店舗別独立採算) の質問",
+          "- 店舗別の損益・粗利益・材料費・外注費・材料原価率・内部受注・共通経費の案分・未確認の仕入明細・前年より粗利益が減った店舗 は management_accounting で調べる (経営ダッシュボードの「簡易粗利」とは定義が違う。管理会計は 粗利益 = 管理売上 − 材料費 − 外注費、金額は税抜)。",
+          "- 粗利益・損益は management_accounting の数字を使う。business_overview の「簡易粗利」(税込・売上 − 仕入 − 経費) や analyze の「粗利」(売上 − 記録された原価) とは定義が違うので混ぜない。売上の数字を粗利益として書かない。",
+          "- 回答には 対象期間・金額の税 (税抜/税込)・集計の条件・確定か暫定か を書く。暫定の理由 (未確定の設定・要確認の明細・未確定の案分) も一言添える。金額は道具の結果をそのまま使い、計算し直さない。",
+          "- 管理会計のデータを変える操作はしない (登録・確定は /management の画面で人が行う)。",
+          "",
+        ]
+      : []),
     "## 総合的に分析する質問 (「状況は？」「なぜ減った？」「課題と改善策は？」「店舗を比べて」「振り返って」など)",
     "1. まず business_overview で全体像をつかむ (期間・店舗は質問に合わせる)。",
     "2. 目立つ点 (増減・偏り・ばらつき) を 2〜4 つ選び、analyze・query_database で軸を変えて掘り下げる (店舗・月・種別・商品・担当者・受付経路・顧客・前年同期との比較など)。売上だけでなく、問い合わせ→見積→受注の流れ・未入金・経費と仕入・アンケートとクレーム・予定の混み具合も、関係があれば見る。",
@@ -371,6 +403,13 @@ function makeExecutor(db: Database, user: User, now: Date, out: { tables: Analys
         for (const x of rows.slice(0, 2)) addSource({ label: `過去の相談: ${x.question.slice(0, 30)}`, href: `/ai?tab=history&id=${x.id}`, kind: "過去の相談" });
         return rows.map((x) => `- ${x.at.slice(0, 10)} ${x.userName}: Q「${x.question}」\n  A: ${x.answer.replace(/\n/g, " ").slice(0, 400)} [履歴](/ai?tab=history&id=${x.id})`).join("\n");
       }
+      case "management_accounting": {
+        out.usedData = true;
+        const text = managementAccounting(db, user, { view: str(a.view, 20), from: str(a.from, 10), to: str(a.to, 10), store: str(a.store, 20), month: str(a.month, 7) }, toDateKey(now));
+        out.tools.push({ name: "管理会計", summary: `${str(a.view) ?? "store_pnl"} ${str(a.store) ?? ""} ${str(a.from) ?? ""}〜${str(a.to) ?? ""}`.trim() });
+        addSource({ label: "管理会計 (店舗別損益・品目別・案分)", href: `/management?tab=${str(a.view) === "items" ? "items" : str(a.view) === "allocation" ? "alloc" : str(a.view) === "pending" ? "purchases" : str(a.view) === "internal_orders" ? "sales" : "pnl"}`, kind: "集計" });
+        return text;
+      }
       case "business_overview": {
         out.usedData = true;
         const text = businessOverview(db, user, { from: str(a.from, 10), to: str(a.to, 10), store: str(a.store, 20) }, now);
@@ -435,6 +474,9 @@ function toMessages(history: AgentTurn[], question: string): { role: "user" | "a
 const ANALYTICAL = /なぜ|原因|分析|傾向|課題|改善|対策|比較|比べ|総合|振り返|レポート|強み|弱み|見通し|予測|どうだった|どうすれば|(会社|全社|店舗|経営|業績|全体|今年|今月|今期|先月|去年|昨年)[^。？?]{0,15}(状況|どう|まとめ|評価)/;
 const isAnalytical = (q: string) => ANALYTICAL.test(q) && !/(?<!お客)様/.test(q);
 
+/** 管理会計で答える質問 (管理会計を見られる人だけ) */
+const MGMT_QUESTION = /粗利|損益|利益|原価率|材料費|外注費|内部受注|案分|按分|共通経費|独立採算|管理会計|管理売上|仕入請求書|仕入明細/;
+
 export async function runAgent(db: Database, user: User, history: AgentTurn[], question: string, opts: { now?: Date; prefetchGuides?: boolean } = {}): Promise<AgentReply> {
   const deep = isAnalytical(question);
   const now = opts.now ?? new Date();
@@ -452,7 +494,13 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
     messages[messages.length - 1] = { role: "user", content: `${question}\n\n---\n参考資料 (システムが自動で探した使い方・社内資料。操作の案内はここに書かれた画面・ボタンの名前と手順だけを使う。足りなければ search_guides で探し直す)\n${guides.slice(0, 12000)}` };
   }
   // 総合的な分析は、全体像を先に用意する (1 回分の往復を省き、必ず全体から考える)
-  if (deep) {
+  // 管理会計の質問 (店舗別の粗利益・損益・原価率・内部受注・案分): 管理会計の店舗別損益を先に渡す (経営ダッシュボードの簡易粗利と混ぜない)
+  const mgmtQ = canViewMgmt(user) && MGMT_QUESTION.test(question);
+  if (mgmtQ) {
+    const pnl = await execute({ id: "mgmt", name: "management_accounting", args: { view: /品目|畳|襖|リフォーム|カーテン|自社商品|原価率/.test(question) ? "items" : "store_pnl" } });
+    const last = messages[messages.length - 1];
+    messages[messages.length - 1] = { role: "user", content: `${last.content}\n\n---\n管理会計の集計 (management_accounting の結果。今年の 1 月 1 日〜今日。期間・店舗・見方が違う質問なら management_accounting を呼び直す。粗利益・損益はこの数字を使い、business_overview の「簡易粗利」や売上を粗利益として書かない)\n${pnl}` };
+  } else if (deep) {
     const overview = await execute({ id: "overview", name: "business_overview", args: {} });
     const last = messages[messages.length - 1];
     messages[messages.length - 1] = { role: "user", content: `${last.content}\n\n---\n会社の全体像 (business_overview の結果。今年の 1 月 1 日〜今日。期間が違う質問なら business_overview を呼び直す)\n${overview}` };
@@ -470,7 +518,7 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
     });
   let res = await loop(messages);
   // 総合的な分析で掘り下げが足りないとき (全体像だけで答えた) は、もう一度だけ確かめさせて書き直す
-  const drill = () => res.calls.filter((c) => ["analyze", "query_database", "get_record", "search_records", "list_schedule"].includes(c.name)).length;
+  const drill = () => res.calls.filter((c) => ["analyze", "query_database", "get_record", "search_records", "list_schedule", "management_accounting"].includes(c.name)).length + (mgmtQ ? 2 : 0);
   if (deep && drill() < 2 && Date.now() - t0 < 60_000) {
     const first = res;
     res = await loop([

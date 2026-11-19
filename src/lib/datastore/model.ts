@@ -574,6 +574,18 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
     v("fax_messages", `select * from main.fax_messages where user_id = ${me} or assigned_user_id = ${me} or (store_id = ${store} and (direction = 'outbound' or triage in ('auto', 'accepted')))`),
     // 見せない表 (変更履歴・送信履歴・設定・資料台帳・FAX 番号・地図・検索の索引)
     ...["audit_logs", "deliveries", "settings", "source_files", "fax_numbers", "map_locations", "map_location_refs", "map_documents", "map_document_links", "search_docs", "_rowhash"].map(none),
+    // 管理会計 (src/lib/mgmt/access.ts と同じ範囲): 店長は自店舗の行と設定・マスタ、店舗スタッフは品目・営業エリアだけ
+    ...(manager
+      ? [
+          v("sales_adjustments", `select * from main.sales_adjustments where from_store_id = ${store} or to_store_id = ${store}`),
+          ...["material_usages", "mgmt_entries"].map(byStore),
+          v("stock_moves", `select * from main.stock_moves where store_id = ${store} or from_loc = ${sq(`store:${user.storeId}`)} or to_loc = ${sq(`store:${user.storeId}`)}`),
+          v("order_attributions", `select * from main.order_attributions where order_id in (select id from main.orders where store_id = ${store}) or received_store_id = ${store} or work_store_id = ${store}`),
+          v("expense_classes", `select * from main.expense_classes where expense_id in (select id from main.expenses where store_id = ${store})`),
+          // 案分・月次確定の写し・仕入明細の振り分けは全店舗の数字を含むため見せない
+          ...["allocation_runs", "period_closes", "purchase_line_allocs"].map(none),
+        ]
+      : ["sales_adjustments", "material_usages", "mgmt_entries", "stock_moves", "order_attributions", "expense_classes", "allocation_runs", "period_closes", "purchase_line_allocs", "mgmt_rules", "materials", "material_costs", "boms"].map(none)),
   ];
 }
 
@@ -633,6 +645,11 @@ export const GLOSSARY: [string, string][] = [
   ["商品・価格表・単価の標準・マスタ", "products / v_products"],
   ["FAX・ファックス", "fax_messages / v_fax"],
   ["休み・休業日・定休日", "company_holidays / v_holidays"],
+  ["管理会計・店舗別損益・独立採算・管理売上・粗利益 (管理会計)・材料原価率・案分", "道具 management_accounting を使う (計算は画面と同じ。SQL で計算し直さない)"],
+  ["内部受注・店舗間の売上配分・本部の特殊配分", "sales_adjustments (依頼元 from_store_id に +amount、施工店舗 to_store_id に −amount。reversal_of があれば取消しの行)"],
+  ["材料原価・材料構成・畳表の仮原価・畳床", "materials・material_costs (単価の履歴)・boms・material_usages (受注ごと。stage と status)"],
+  ["在庫・材料移動", "stock_moves (from_loc → to_loc。store:<店舗>)"],
+  ["仕入明細の振り分け・未確認の仕入請求書", "purchase_line_allocs (status = confirmed / needs_review / unassigned)"],
 ];
 
 const CODE_KINDS: [string, string][] = [

@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canPay, canRegisterPurchase, canViewPurchase, skipsApproval } from "@/lib/auth/permissions";
+import { canEditMgmt } from "@/lib/mgmt/access";
 import { userName } from "@/lib/db/queries";
 import { deletePurchase, markPurchasePaid, reschedulePurchase, submitPurchase } from "@/lib/actions/purchases";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
@@ -42,6 +43,13 @@ export default async function PurchaseDetailPage({ params, searchParams }: { par
         description={<span className="inline-flex flex-wrap items-center gap-2"><StoreTag store={db.stores.find((s) => s.id === p.storeId)} /> · 請求日 {fmtDate(p.invoiceDate)} · 支払予定日 {fmtDate(payDateOf(p))} · 登録 {userName(p.registeredBy)}</span>}
         back={{ href: "/purchases", label: "仕入・買掛一覧" }}
       />
+      {canEditMgmt(user) && (
+        <p className="mb-3 text-sm">
+          <a className="text-accent hover:underline" href={`/management?tab=purchases&purchase=${p.id}#lines`}>
+            管理会計: 明細の振り分け (店舗・案件・品目・費用区分){db.purchaseLineAllocs.some((a) => a.purchaseId === p.id) ? ` — 確定 ${db.purchaseLineAllocs.filter((a) => a.purchaseId === p.id && a.status === "confirmed").length}/${db.purchaseLineAllocs.filter((a) => a.purchaseId === p.id).length}` : " — 未判定"}
+          </a>
+        </p>
+      )}
       {pending && (
         <Card className="mb-4 border-warn/40 bg-warn-soft/40">
           <CardHeader title="支払依頼 (管理者の承認待ち)" description={`申請 ${userName(pending.requestedBy)} ${fmtDateTime(pending.createdAt)}${pending.requestComment ? ` · ${pending.requestComment}` : ""}`} />

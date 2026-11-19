@@ -1,6 +1,9 @@
 import type { Database } from "./types";
 import { normTime } from "@/lib/calendar";
 
+/** 管理会計のコレクション (後から追加。無ければ空で作る) */
+export const MGMT_COLLECTIONS = ["mgmtRules", "itemCategories", "salesAreas", "orderAttributions", "salesAdjustments", "materials", "materialCosts", "boms", "materialUsages", "stockMoves", "purchaseLineAllocs", "expenseClasses", "mgmtEntries", "allocationRuns", "periodCloses"] as const;
+
 /** 現在のデータ形式のバージョン (seed.ts の meta.version もこの値) */
 export const DATA_VERSION = 3;
 
@@ -14,7 +17,7 @@ export const DATA_VERSION = 3;
 export function migrateDb(db: Database): Database {
   const version = db.meta?.version ?? 1;
   if (version < 2) migrateV2(db);
-  for (const key of ["holidays", "surveys", "qualityIssues", "reviews", "sourceFiles", "photoAlbums", "settings", "attachments", "cashEntries", "deliveries", "knowledge", "purchaseOrders", "faxMessages", "faxNumbers", "mapLocations", "mapLocationRefs", "mapDocuments", "mapDocumentLinks"] as const) {
+  for (const key of ["holidays", "surveys", "qualityIssues", "reviews", "sourceFiles", "photoAlbums", "settings", "attachments", "cashEntries", "deliveries", "knowledge", "purchaseOrders", "faxMessages", "faxNumbers", "mapLocations", "mapLocationRefs", "mapDocuments", "mapDocumentLinks", ...MGMT_COLLECTIONS] as const) {
     if (!Array.isArray(db[key])) (db as unknown as Record<string, unknown[]>)[key] = [];
   }
   if (version < DATA_VERSION) db.meta = { ...db.meta, version: DATA_VERSION };

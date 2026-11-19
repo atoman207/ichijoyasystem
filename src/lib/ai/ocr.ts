@@ -30,6 +30,11 @@ export interface LineItem {
   productId?: string;
   /** 読みにくい・判断が難しい行 (担当者が書類と見比べて確認する) */
   uncertain?: boolean;
+  /** 仕入請求書の明細: 品番・明細に書かれた店舗名・現場名・備考 (管理会計の明細の振り分けに使う) */
+  code?: string;
+  storeName?: string;
+  siteName?: string;
+  lineNote?: string;
 }
 
 export interface OcrResult {
@@ -67,6 +72,14 @@ const ITEM_PROPS: Record<string, Schema> = {
   amount: n("金額 (円。値引きの行はマイナス)"),
 };
 const LINE_ITEM = obj(ITEM_PROPS);
+/** 仕入請求書の明細 (店舗・案件・品目への振り分けに使う項目を足す) */
+const SUPPLIER_LINE_ITEM = obj({
+  ...ITEM_PROPS,
+  code: s("品番・商品コード (例: SP7566)"),
+  storeName: s("明細に書かれた店舗名・納品先の店舗"),
+  siteName: s("明細に書かれた現場名・邸名・お客様名"),
+  lineNote: s("明細の備考"),
+});
 const ENUM = (values: readonly string[], d: string): Schema => ({ type: "string", enum: [...values, ""], description: `${d} (○が付いていなければ空文字)` });
 
 const COMMON = {
@@ -168,7 +181,7 @@ const SCHEMAS: Record<DocumentKind, Schema> = {
     invoiceDate: s(`請求日の${DATE}`),
     dueDate: s(`支払期限の${DATE}`),
     registrationNumber: s("適格請求書の登録番号 (T と 13 桁の数字)"),
-    items: arr(LINE_ITEM, "請求の明細"),
+    items: arr(SUPPLIER_LINE_ITEM, "請求の明細 (1 行ずつ。店舗名・現場名が明細ごとに書かれていれば行ごとに)"),
     subtotal: n("税抜の合計 (円)"),
     taxAmount: n("消費税額 (円)"),
     amount: n("請求金額 (税込の合計。円)"),
@@ -372,6 +385,10 @@ export function normalizeItems(raw: unknown, products: Product[]): LineItem[] {
       unitPrice: unitPrice ?? (amount !== undefined && (qty === undefined || qty === 1) ? amount : undefined),
       amount: amount !== undefined ? Math.round(amount) : undefined,
       productId: p?.id,
+      ...(toStr(r.code) ? { code: toStr(r.code) } : {}),
+      ...(toStr(r.storeName) ? { storeName: toStr(r.storeName) } : {}),
+      ...(toStr(r.siteName) ? { siteName: toStr(r.siteName) } : {}),
+      ...(toStr(r.lineNote) ? { lineNote: toStr(r.lineNote) } : {}),
       ...(r.uncertain === true || (qty !== undefined && unitPrice !== undefined && amount !== undefined && Math.abs(Math.round(qty * unitPrice) - amount) > 1) ? { uncertain: true } : {}),
     });
   }

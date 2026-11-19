@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
+import { duplicatePurchase } from "@/lib/mgmt/purchase-lines";
 import type { Approval, Database, PurchaseInvoice, PurchaseItem, StoreId, User } from "@/lib/db/types";
 import { AUTO_APPROVAL_NOTE, settleOwnApproval } from "@/lib/approval-decide";
 import { toDateKey } from "@/lib/format";
@@ -157,6 +158,9 @@ export async function createPurchase(formData: FormData) {
     const documentId = str(formData, "documentId");
     const doc = documentId ? db.documents.find((d) => d.id === documentId) : undefined;
     if (doc && (doc.linkedId || doc.status === "discarded")) fail("/capture?doc=" + doc.id, "この取込書類はすでに登録済み (または破棄済み) です。");
+    // 二重登録の防止: 同じ仕入先・同じ請求書番号の仕入 (却下を除く) があれば断る (同じ請求書の再取込で仕入・原価が重複しない)
+    const dup = supplierId ? duplicatePurchase(db, supplierId, f.supplierInvoiceNo) : undefined;
+    if (dup) fail(back, `同じ仕入先・同じ請求書番号 (${f.supplierInvoiceNo}) の仕入が登録済みです (${dup.number})。二重に登録しないよう確かめてください。`);
     const p: PurchaseInvoice = {
       id,
       number: nextNumber(db, "AP", db.purchases, f.invoiceDate),
@@ -216,6 +220,8 @@ export async function updatePurchase(id: string, formData: FormData) {
     if (p.status !== "received" && p.status !== "disputed") fail(`/purchases/${id}`, "支払依頼の前 (受領) と差戻し (照会中) の請求書のみ修正できます。");
     const f = readFields(db, user, formData, back, p);
     if (!f.supplierId) fail(back, "仕入先は一覧から選んでください。");
+    const dup = duplicatePurchase(db, f.supplierId, f.supplierInvoiceNo, p.id);
+    if (dup) fail(back, `同じ仕入先・同じ請求書番号 (${f.supplierInvoiceNo}) の仕入が登録済みです (${dup.number})。`);
     const before = { ...p };
     Object.assign(p, {
       supplierId: f.supplierId,

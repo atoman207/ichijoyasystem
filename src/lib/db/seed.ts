@@ -162,6 +162,21 @@ export function createSeed(now = new Date()): Database {
     mapLocationRefs: [],
     mapDocuments: [],
     mapDocumentLinks: [],
+    mgmtRules: [],
+    itemCategories: [],
+    salesAreas: [],
+    orderAttributions: [],
+    salesAdjustments: [],
+    materials: [],
+    materialCosts: [],
+    boms: [],
+    materialUsages: [],
+    stockMoves: [],
+    purchaseLineAllocs: [],
+    expenseClasses: [],
+    mgmtEntries: [],
+    allocationRuns: [],
+    periodCloses: [],
   };
   const ctx: Ctx = { now, today, rand, db, counters: {}, busy: new Map() };
 

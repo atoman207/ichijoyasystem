@@ -16,6 +16,7 @@
     "db:migrate": "node scripts/import/generate-schema.mjs && node scripts/import/migrate.mjs",
     "typecheck": "tsc --noEmit",
     "test:maps": "node scripts/tests/maps/address.test.mjs && node scripts/tests/maps/logic.test.mjs && node scripts/tests/maps/batch.test.mjs",
+    "test:mgmt": "node scripts/tests/mgmt/mgmt.test.mjs",
     "chatbot:catalog": "node scripts/chatbot/extract-ui.mjs"
   },
   "dependencies": {
