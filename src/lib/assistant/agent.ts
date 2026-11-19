@@ -12,6 +12,7 @@ import { scheduleSuggestTool } from "./schedule-tool";
 import { permissionHints } from "@/lib/chatbot/permission-hints";
 import { describeTables, runSql, sqlTable, tableList } from "@/lib/datastore/sql";
 import { METRICS, VIEWS } from "@/lib/datastore/model";
+import { businessOverview } from "./overview";
 import { mirrorReady } from "@/lib/datastore/mirror";
 
 /**
@@ -145,6 +146,20 @@ function tools(user: User): ToolDef[] {
       },
     },
     {
+      name: "business_overview",
+      description:
+        "会社 (または 1 店舗) の全体像を 1 回で得る: 売上・受注・問い合わせ→見積→受注・施工完了・請求・入金・未入金・経費・仕入・簡易粗利、月別・店舗別・種別・受付経路・担当者別、お客様アンケート・クレーム・口コミ、いま対応が要るもの (承認待ち・未対応の問い合わせ・期日超過・今後 7 日の予定)。数字は経営ダッシュボード・KPI の画面と同じ。「今の状況は？」「今年はどう？」「課題は？」「店舗を比べて」のような広い質問・総合的な分析の最初に使う。",
+      parameters: {
+        type: "object",
+        properties: {
+          from: { type: "string", description: "期間の始まり YYYY-MM-DD (省略 = 今年の 1 月 1 日)" },
+          to: { type: "string", description: "期間の終わり YYYY-MM-DD (省略 = 今日)" },
+          store: { type: "string", description: "1 店舗だけ見るとき (id または名前)" },
+        },
+        required: [],
+      },
+    },
+    {
       name: "search_guides",
       description: "システムの使い方・画面の場所・操作の手順・権限・承認ルール・社内資料 (業務ルール・議事録・マニュアル・商品知識・価格・施工方法) を探す。操作方法の質問や、分析を画面で行う方法 (経営ダッシュボード・CSV 出力など) を案内するときに使う。",
       parameters: { type: "object", properties: { query: { type: "string", description: "探す内容 (例: 見積の修正 方法 / 店舗別 商品別 売上 集計)" } }, required: ["query"] },
@@ -207,6 +222,13 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     "10. 日本語のです・ます調で、簡潔に。見出しは使わず、必要なら短い箇条書き (・) と **太字** を使う。Markdown の表は書かない (表は画面に出る)。",
     "11. 過去に同じような相談がありそうなら search_history で確かめてもよい。ただし古い回答の数字はそのまま使わず、必要なら調べ直す。",
     "",
+    "## 総合的に分析する質問 (「状況は？」「なぜ減った？」「課題と改善策は？」「店舗を比べて」「振り返って」など)",
+    "1. まず business_overview で全体像をつかむ (期間・店舗は質問に合わせる)。",
+    "2. 目立つ点 (増減・偏り・ばらつき) を 2〜4 つ選び、analyze・query_database で軸を変えて掘り下げる (店舗・月・種別・商品・担当者・受付経路・顧客・前年同期との比較など)。売上だけでなく、問い合わせ→見積→受注の流れ・未入金・経費と仕入・アンケートとクレーム・予定の混み具合も、関係があれば見る。",
+    "3. 大事な数字は、別の道具・別の集計でもう一度確かめる (例: analyze の合計と query_database の合計が合うか)。合わないときは、定義の違い (売上計上日と契約日・税込など) を確かめて正しい方を使う。",
+    "4. 答えは「結論 → 根拠の数字 → 考えられる理由 (推測は「推測ですが」と明記) → 次の打ち手 → データの限界 (原価の範囲・明細のある受注だけ など)」の順に、見出しを使わず短くまとめる。",
+    "5. データにないこと (競合・天候・社員の事情など) は断定しない。必要なら「システムには記録がありません」と書く。",
+    "",
     "## 道具の使い方のこつ",
     "- 顧客の質問 (「○○様の施工履歴」「前回の担当者」) は search_records (types: customer) → get_record (type: customer)。",
     "- 「似たような工事」は search_records で工事内容・品名の言葉を探す (types: order, quote)。",
@@ -228,6 +250,7 @@ function systemPrompt(db: Database, user: User, now: Date): string {
           "- 結果が 0 件・思ったより少ないときは、名前の表記 (like '%…%')・期間・状態の条件を見直して、もう 1 回だけ調べ直す。それでも無ければ「記録がありません」と答える。",
           "- 数字は結果の表の値をそのまま書く (丸めるときは「約」を付ける)。どの定義・期間で数えたかを一言添える。",
           "- SQL の誤りが返ってきたら、誤りの内容を読んで直して呼び直す。",
+          "- 状態・種類・受付経路などのコードは推測しない。分からなければ describe_database のコードの一覧で確かめる (例: 承認の承認待ちは pending、経費の承認待ちは pending_approval)。",
         ]
           .filter(Boolean)
           .join("\n")
@@ -348,6 +371,13 @@ function makeExecutor(db: Database, user: User, now: Date, out: { tables: Analys
         for (const x of rows.slice(0, 2)) addSource({ label: `過去の相談: ${x.question.slice(0, 30)}`, href: `/ai?tab=history&id=${x.id}`, kind: "過去の相談" });
         return rows.map((x) => `- ${x.at.slice(0, 10)} ${x.userName}: Q「${x.question}」\n  A: ${x.answer.replace(/\n/g, " ").slice(0, 400)} [履歴](/ai?tab=history&id=${x.id})`).join("\n");
       }
+      case "business_overview": {
+        out.usedData = true;
+        const text = businessOverview(db, user, { from: str(a.from, 10), to: str(a.to, 10), store: str(a.store, 20) }, now);
+        out.tools.push({ name: "全体像", summary: `${str(a.store) ?? "全体"} ${str(a.from) ?? "今年"}〜${str(a.to) ?? "今日"}` });
+        addSource({ label: "全体像 (経営ダッシュボード・KPI と同じ集計)", href: "/reports", kind: "集計" });
+        return text;
+      }
       case "describe_database": {
         if (!canUseSql(user)) return "この道具は使えません。";
         out.tools.push({ name: "データモデル", summary: (strs(a.tables, 12) ?? []).join("・") || "全体" });
@@ -398,7 +428,15 @@ function toMessages(history: AgentTurn[], question: string): { role: "user" | "a
   return [...turns, { role: "user", content: question }];
 }
 
+/**
+ * 総合的な分析の質問 (全体像を先に渡し、道具の回数と考える深さを増やす)。
+ * 1 人のお客様についての質問 (「○○様の工事の状況」) は、会社の全体像が要らないので除く
+ */
+const ANALYTICAL = /なぜ|原因|分析|傾向|課題|改善|対策|比較|比べ|総合|振り返|レポート|強み|弱み|見通し|予測|どうだった|どうすれば|(会社|全社|店舗|経営|業績|全体|今年|今月|今期|先月|去年|昨年)[^。？?]{0,15}(状況|どう|まとめ|評価)/;
+const isAnalytical = (q: string) => ANALYTICAL.test(q) && !/(?<!お客)様/.test(q);
+
 export async function runAgent(db: Database, user: User, history: AgentTurn[], question: string, opts: { now?: Date; prefetchGuides?: boolean } = {}): Promise<AgentReply> {
+  const deep = isAnalytical(question);
   const now = opts.now ?? new Date();
   const t0 = Date.now();
   const out = { tables: [] as AnalysisResult[], sources: [] as AgentSource[], tools: [] as AgentReply["tools"], usedData: false, usedKnowledge: false, docKeys: [] as string[] };
@@ -413,15 +451,35 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
     out.tools.pop();
     messages[messages.length - 1] = { role: "user", content: `${question}\n\n---\n参考資料 (システムが自動で探した使い方・社内資料。操作の案内はここに書かれた画面・ボタンの名前と手順だけを使う。足りなければ search_guides で探し直す)\n${guides.slice(0, 12000)}` };
   }
-  const res = await runToolLoop({
-    system: systemPrompt(db, user, now),
-    messages,
-    tools: tools(user),
-    execute,
-    maxRounds: 7,
-    maxTokens: 3000,
-    deadlineMs: Number(process.env.ASSISTANT_DEADLINE_MS) || 120_000,
-  });
+  // 総合的な分析は、全体像を先に用意する (1 回分の往復を省き、必ず全体から考える)
+  if (deep) {
+    const overview = await execute({ id: "overview", name: "business_overview", args: {} });
+    const last = messages[messages.length - 1];
+    messages[messages.length - 1] = { role: "user", content: `${last.content}\n\n---\n会社の全体像 (business_overview の結果。今年の 1 月 1 日〜今日。期間が違う質問なら business_overview を呼び直す)\n${overview}` };
+  }
+  const loop = (msgs: { role: "user" | "assistant"; content: string }[]) =>
+    runToolLoop({
+      system: systemPrompt(db, user, now),
+      messages: msgs,
+      tools: tools(user),
+      execute,
+      maxRounds: deep ? 12 : 8,
+      effort: deep ? "medium" : "low",
+      maxTokens: 3000,
+      deadlineMs: Number(process.env.ASSISTANT_DEADLINE_MS) || (deep ? 170_000 : 120_000),
+    });
+  let res = await loop(messages);
+  // 総合的な分析で掘り下げが足りないとき (全体像だけで答えた) は、もう一度だけ確かめさせて書き直す
+  const drill = () => res.calls.filter((c) => ["analyze", "query_database", "get_record", "search_records", "list_schedule"].includes(c.name)).length;
+  if (deep && drill() < 2 && Date.now() - t0 < 60_000) {
+    const first = res;
+    res = await loop([
+      ...messages,
+      { role: "assistant", content: first.text },
+      { role: "user", content: "この下書きの大事な点 (結論とその理由) を、analyze か query_database で 2 つ以上の観点 (店舗・月・種別・商品・担当者・受付経路・顧客・前年同期との比較など) から掘り下げて確かめ、数字を確かめた最終の回答に書き直してください。下書きにあった全体の要点 (業績・未入金・問い合わせ・お客様の評価・いま対応が要るもの のうち関係するもの) は数字ごと残し、比べる質問では比べた全部の店舗・項目の数字を並べてください。下書きと違う結果になったら、確かめた数字のほうを使ってください。書き直したことや確かめた手順には触れず、質問への最終の回答だけを書いてください。" },
+    ]);
+    res = { ...res, calls: [...first.calls, ...res.calls], rounds: first.rounds + res.rounds };
+  }
   // 先に探した使い方の資料は、データを調べて答えたときは根拠から外す (関係のない資料が並ばないように)
   if (out.usedData && prefetched.length) out.sources = out.sources.filter((x) => !prefetched.includes(x));
   let text = res.text

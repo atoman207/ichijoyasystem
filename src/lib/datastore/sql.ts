@@ -5,7 +5,62 @@ import { TABLES, snake } from "@/lib/db/schema";
 import { AMOUNT_KEYS, AMOUNT_LABEL } from "@/lib/assistant/facts";
 import type { AnalysisColumn, AnalysisResult, Cell } from "@/lib/assistant/analyze";
 import { mirrorPath, mirrorReady } from "./mirror";
-import { VIEWS, dataModelText, scopeStatements, viewStatements } from "./model";
+import { CODE_COLUMNS, VIEWS, dataModelText, labelRows, scopeStatements, viewStatements } from "./model";
+
+/**
+ * 「列 = 'コード'」「列 in ('…')」のコードが、その列の正しいコードか確かめる。誤り (推測したコード・日本語の名前) なら、
+ * 使えるコードの一覧を返す (AI が直して呼び直す。0 件の答えを避ける)。
+ * どの表の列か分かるときだけ確かめる (「別名.列」は FROM・JOIN の別名から、別名なしの列は参照する表がすべてコードの表のとき)。
+ * 一覧にないコードでも、実際のデータにある値 (移行データの古いコードなど) は通す (runSql が確かめる: probes)
+ */
+export interface CodeProbe {
+  /** その列を持つ表 (どれかにその値があれば正しい) */
+  tables: string[];
+  col: string;
+  value: string;
+  message: string;
+}
+const NOT_ALIAS = new Set(["where", "join", "left", "right", "inner", "outer", "cross", "natural", "on", "using", "group", "order", "limit", "having", "union", "except", "intersect", "window", "as"]);
+
+export function checkCodes(sql: string): CodeProbe[] {
+  const tables = new Map<string, string>(); // 別名・表名 → 表名
+  const referenced = new Set<string>();
+  for (const m of sql.matchAll(/\b(?:from|join)\s+([a-z_]\w*)(?:\s+(?:as\s+)?([a-z_]\w*))?/gi)) {
+    const t = m[1].toLowerCase();
+    referenced.add(t);
+    tables.set(t, t);
+    const alias = m[2]?.toLowerCase();
+    if (alias && !NOT_ALIAS.has(alias)) tables.set(alias, t);
+  }
+  if (![...referenced].some((t) => CODE_COLUMNS[t])) return [];
+  const allCodeTables = [...referenced].every((t) => CODE_COLUMNS[t]);
+  const codes = new Map<string, Map<string, string>>();
+  for (const [kind, code, label] of labelRows()) {
+    if (!codes.has(kind)) codes.set(kind, new Map());
+    codes.get(kind)!.set(code, label);
+  }
+  const problems: CodeProbe[] = [];
+  const re = /(?:\b([a-z_]\w*)\.)?\b([a-z_]\w*)\s*(?:=|<>|!=|\bin\s*\(|\bnot\s+in\s*\()\s*((?:'(?:[^']|'')*'\s*,?\s*)+)/gi;
+  for (const m of sql.matchAll(re)) {
+    const col = m[2].toLowerCase();
+    let owners: string[];
+    if (m[1]) {
+      const t = tables.get(m[1].toLowerCase());
+      owners = t && CODE_COLUMNS[t]?.[col] ? [t] : [];
+    } else owners = allCodeTables ? [...referenced].filter((t) => CODE_COLUMNS[t][col]) : [];
+    if (!owners.length) continue;
+    const kinds = [...new Set(owners.map((t) => CODE_COLUMNS[t][col]))];
+    const values = [...m[3].matchAll(/'((?:[^']|'')*)'/g)].map((x) => x[1].replace(/''/g, "'"));
+    for (const v of values) {
+      if (kinds.some((k) => codes.get(k)?.has(v))) continue;
+      const list = kinds.map((k) => [...(codes.get(k) ?? new Map<string, string>())].map(([c, l]) => `${c}=${l}`).join(", ")).join(" / ");
+      problems.push({ tables: owners, col, value: v, message: `${col} = '${v}' はこの列のコードではありません。使えるコード: ${list}` });
+    }
+  }
+  return problems;
+}
+
+const CODE_HINT = "(コードで条件を書き直してください。日本語の名前で絞るときは *_label の列を使います)";
 
 /**
  * VPS のデータベース (mirror.ts) への読み取り専用の SQL (AI アシスタントの道具 query_database)
@@ -31,6 +86,11 @@ try {
   // 閲覧範囲の覆いと統合ビュー (一時ビュー) を作ってから、読み取りだけにする
   for (const s of workerData.setup) db.exec(s);
   db.exec("pragma query_only = 1;");
+  // 一覧にないコード: 実際のデータにもなければ、使えるコードを返して書き直してもらう
+  const wrong = workerData.probes.filter((p) => !p.tables.some((t) => {
+    try { return db.prepare("select 1 from " + t + " where " + p.col + " = ? limit 1").get(p.value) !== undefined; } catch { return false; }
+  }));
+  if (wrong.length) throw new Error(wrong.map((p) => p.message).join("\\n") + "\\n" + workerData.hint);
   const stmt = db.prepare(workerData.sql);
   const columns = typeof stmt.columns === "function" ? stmt.columns().map((c) => c.name) : null;
   const rows = [];
@@ -84,9 +144,10 @@ export async function runSql(raw: string, user: Pick<User, "id" | "role" | "stor
   if (!mirrorReady()) return { ok: false, error: "VPS のデータベースを準備中です。少し待ってから、もう一度お試しください。", columns: [], rows: [], more: false, ms: 0 };
   const checked = checkSql(raw);
   if ("error" in checked) return { ok: false, error: checked.error, columns: [], rows: [], more: false, ms: 0 };
+  const probes = checkCodes(checked.sql);
   return new Promise<SqlResult>((resolve) => {
     const setup = [...scopeStatements(user), ...viewStatements()];
-    const worker = new Worker(WORKER, { eval: true, workerData: { file: mirrorPath(), sql: checked.sql, limit: MAX_ROWS, setup } });
+    const worker = new Worker(WORKER, { eval: true, workerData: { file: mirrorPath(), sql: checked.sql, limit: MAX_ROWS, setup, probes, hint: CODE_HINT } });
     let done = false;
     const finish = (r: Omit<SqlResult, "ms">) => {
       if (done) return;

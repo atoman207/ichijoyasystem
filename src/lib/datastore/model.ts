@@ -18,6 +18,13 @@ import {
   QUOTE_STATUS,
   ROLE_LABEL,
   SCHEDULE_KIND,
+  CASH_SOURCE_LABEL,
+  DOCUMENT_KIND_LABEL,
+  DOCUMENT_STATUS,
+  FAX_STATUS,
+  FAX_TRIAGE,
+  TASK_STATUS,
+  THREAD_KIND_LABEL,
 } from "@/lib/constants";
 import { AMOUNT_KEYS, AMOUNT_LABEL } from "@/lib/assistant/facts";
 
@@ -58,6 +65,30 @@ export function labelRows(): [string, string, string][] {
     expense_method: labelOf(EXPENSE_METHOD_LABEL),
     purchase_pay_method: labelOf(PURCHASE_PAY_METHOD_LABEL),
     amount_category: AMOUNT_KEYS.map((k) => [k, AMOUNT_LABEL[k]]),
+    quality_kind: [
+      ["rework", "手直し"],
+      ["claim", "クレーム"],
+      ["claim_rework", "クレーム・手直し"],
+    ],
+    quality_status: [
+      ["open", "対応中"],
+      ["resolved", "解決"],
+    ],
+    cash_direction: [
+      ["in", "入金"],
+      ["out", "出金"],
+    ],
+    cash_source: labelOf(CASH_SOURCE_LABEL),
+    document_kind: labelOf(DOCUMENT_KIND_LABEL),
+    document_status: labelOf(DOCUMENT_STATUS),
+    thread_kind: labelOf(THREAD_KIND_LABEL),
+    task_status: labelOf(TASK_STATUS),
+    fax_status: labelOf(FAX_STATUS),
+    fax_triage: labelOf(FAX_TRIAGE),
+    required_role: [
+      ["store_manager", "店長"],
+      ["admin", "管理者"],
+    ],
     customer_type: [
       ["individual", "個人"],
       ["corporate", "法人"],
@@ -65,6 +96,51 @@ export function labelRows(): [string, string, string][] {
   };
   return Object.entries(kinds).flatMap(([kind, rows]) => rows.map(([code, label]) => [kind, code, label] as [string, string, string]));
 }
+
+/**
+ * コードの列 (表・ビュー → 列 → コードの種類)。SQL の「列 = 'コード'」が正しいコードか確かめるのに使う (sql.ts の checkCodes)
+ */
+export const CODE_COLUMNS: Record<string, Record<string, string>> = {
+  orders: { status: "order_status", category: "category" },
+  quotes: { status: "quote_status", category: "category" },
+  inquiries: { status: "inquiry_status", channel: "channel", category: "category" },
+  invoices: { status: "invoice_status" },
+  payments: { method: "payment_method" },
+  expenses: { status: "expense_status", payment_method: "expense_method" },
+  purchases: { status: "purchase_status" },
+  purchase_orders: { status: "purchase_order_status" },
+  approvals: { status: "approval_status", type: "approval_type", required_role: "required_role" },
+  schedule_events: { kind: "schedule_kind" },
+  users: { role: "role" },
+  customers: { type: "customer_type", first_contact_channel: "channel", preferred_channel: "channel" },
+  comm_logs: { channel: "channel" },
+  quality_issues: { kind: "quality_kind", status: "quality_status" },
+  cash_entries: { direction: "cash_direction", source: "cash_source" },
+  documents: { kind: "document_kind", status: "document_status" },
+  threads: { kind: "thread_kind", task_status: "task_status" },
+  fax_messages: { status: "fax_status", triage: "fax_triage" },
+  products: { category: "category" },
+  sales_orders: { status: "order_status" },
+  v_customers: { customer_type: "customer_type", first_contact_channel: "channel" },
+  v_cases: { inquiry_status: "inquiry_status", channel: "channel", quote_status: "quote_status", order_status: "order_status", category: "category", invoice_status: "invoice_status" },
+  v_schedule: { kind: "schedule_kind" },
+  v_inquiries: { channel: "channel", category: "category", status: "inquiry_status" },
+  v_quotes: { category: "category", status: "quote_status" },
+  v_invoices: { status: "invoice_status" },
+  v_payments: { method: "payment_method" },
+  v_expenses: { status: "expense_status", payment_method: "expense_method" },
+  v_purchases: { status: "purchase_status" },
+  v_purchase_orders: { status: "purchase_order_status" },
+  v_comm_logs: { channel: "channel" },
+  v_quality: { kind: "quality_kind", status: "quality_status" },
+  v_cashbook: { direction: "cash_direction", source: "cash_source" },
+  v_approvals: { type: "approval_type", status: "approval_status", required_role: "required_role" },
+  v_threads: { kind: "thread_kind", task_status: "task_status" },
+  v_documents: { kind: "document_kind", status: "document_status" },
+  v_products: { category: "category" },
+  v_staff: { role: "role" },
+  v_fax: { status: "fax_status", triage: "fax_triage" },
+};
 
 export const LABELS_SQL = "create table if not exists _labels (kind text not null, code text not null, label text not null, primary key (kind, code));";
 
@@ -299,6 +375,165 @@ export const VIEWS: ViewDef[] = [
       select os.staff_name, so.order_id, so.number order_number, so.sales_date, so.contract_date, so.store_id, so.store_name, so.customer_name, so.total, so.title
       from order_staff os join sales_orders so on so.order_id = os.order_id`,
   },
+  {
+    name: "v_surveys",
+    label: "お客様アンケート (はがき。評価・担当者・コメント)",
+    description: "アンケート 1 枚 = 1 行。answered_on (回答日)・store_id・store_name・order_number・customer_name・phone_score (①電話対応)・sales_score (②営業対応)・craftsman_score (③職人対応)・finish_score (④仕上がり) (いずれも 5 段階)・sales_name (営業担当)・craftsman_name (担当職人)・would_use_again (また利用したいか)・priorities (重視したこと)・media (知ったきっかけ)・comment (お客様の声)・comment_tone (praise=お褒め/request=要望/complaint=不満/neutral)",
+    sql: `
+      select sv.id survey_id, coalesce(sv.answered_on, substr(sv.received_at, 1, 10)) answered_on, sv.store_id, s.name store_name, o.number order_number, c.name customer_name,
+             sv.phone_score, sv.sales_score, sv.craftsman_score, sv.finish_score,
+             coalesce(su.name, sv.sales_name) sales_name, coalesce(cu.name, sv.craftsman_name) craftsman_name,
+             sv.would_use_again, sv.priorities, sv.media, sv.comment, sv.comment_tone, sv.postcard_no
+      from survey_responses sv
+      left join stores s on s.id = sv.store_id
+      left join orders o on o.id = sv.order_id
+      left join customers c on c.id = sv.customer_id
+      left join users su on su.id = sv.sales_user_id
+      left join users cu on cu.id = sv.craftsman_user_id`,
+  },
+  {
+    name: "v_quality",
+    label: "クレーム・手直し (原因・対策・担当者つき)",
+    description: "1 件 = 1 行。number・occurred_on・kind と kind_label (手直し/クレーム/クレーム・手直し)・points・store_id・store_name・order_number・customer_name・description・cause (原因)・countermeasure (対策)・status と status_label (対応中/解決)・resolved_on・responsible (担当者の名前)・counted (0=集計に入れない)",
+    sql: `
+      select q.id quality_id, q.number, q.occurred_on, q.kind, ${L("quality_kind", "q", "kind")} kind_label, q.points, q.store_id, s.name store_name, o.number order_number, c.name customer_name,
+             q.description, q.cause, q.countermeasure, q.status, ${L("quality_status", "q", "status")} status_label, q.resolved_on,
+             ${NAMES("q.responsible_user_ids")} responsible, coalesce(q.counted, 1) counted, q.category
+      from quality_issues q
+      left join stores s on s.id = q.store_id
+      left join orders o on o.id = q.order_id
+      left join customers c on c.id = q.customer_id`,
+  },
+  {
+    name: "v_reviews",
+    label: "Google 口コミ (店舗・社員・評価)",
+    description: "口コミ 1 件 = 1 行。posted_on・store_id・store_name・staff (名前の挙がった社員)・reviewer_name・rating (★)・comment・has_photo・points・order_number",
+    sql: `
+      select r.id review_id, r.posted_on, r.store_id, s.name store_name, u.name staff, r.reviewer_name, r.rating, r.comment, coalesce(r.has_photo, 0) has_photo, r.points, o.number order_number
+      from google_reviews r
+      left join stores s on s.id = r.store_id
+      left join users u on u.id = r.user_id
+      left join orders o on o.id = r.order_id`,
+  },
+  {
+    name: "v_cashbook",
+    label: "現金出納帳 (店舗の手元現金の入出金)",
+    description: "1 件 = 1 行。number・date・store_id・store_name・direction と direction_label (入金/出金)・amount・account (科目)・counterparty (相手)・description (摘要)・source と source_label (手入力・入金・経費の精算など)・recorded_by",
+    sql: `
+      select x.id cash_id, x.number, x.date, x.store_id, s.name store_name, x.direction, ${L("cash_direction", "x", "direction")} direction_label, x.amount, x.account, x.counterparty, x.description,
+             x.source, ${L("cash_source", "x", "source")} source_label, u.name recorded_by
+      from cash_entries x
+      left join stores s on s.id = x.store_id
+      left join users u on u.id = x.recorded_by`,
+  },
+  {
+    name: "v_approvals",
+    label: "承認 (申請・承認者・状態)",
+    description: "承認 1 件 = 1 行。type と type_label (見積・契約・経費・支払など)・title・amount・store_id・store_name・requested_by (申請者)・required_role と _label (店長/管理者)・status と status_label (承認待ち/承認/差戻し/却下)・request_comment・created_at・decided_by・decided_at・decision_comment",
+    sql: `
+      select a.id approval_id, a.type, ${L("approval_type", "a", "type")} type_label, a.title, a.amount, a.store_id, s.name store_name, ru.name requested_by,
+             a.required_role, ${L("required_role", "a", "required_role")} required_role_label, a.status, ${L("approval_status", "a", "status")} status_label,
+             a.request_comment, a.created_at, du.name decided_by, a.decided_at, a.decision_comment
+      from approvals a
+      left join stores s on s.id = a.store_id
+      left join users ru on ru.id = a.requested_by
+      left join users du on du.id = a.decided_by`,
+  },
+  {
+    name: "v_threads",
+    label: "社内連絡・業務依頼 (スレッドと最新の投稿)",
+    description: "スレッド 1 件 = 1 行。title・kind と kind_label (依頼/報告/質問/お知らせ)・store_name・created_by・participants・assignees (依頼先)・due_date・task_status と task_status_label・status (open/done)・related_label (関係する案件など)・message_count・last_message・last_message_at・updated_at",
+    sql: `
+      select t.id thread_id, t.title, t.kind, ${L("thread_kind", "t", "kind")} kind_label, t.store_id, s.name store_name, cu.name created_by,
+             ${NAMES("t.participants")} participants, ${NAMES("t.assignee_ids")} assignees, t.due_date, t.task_status, ${L("task_status", "t", "task_status")} task_status_label,
+             t.status, t.related_label, (select count(*) from messages m where m.thread_id = t.id) message_count,
+             (select m.body from messages m where m.thread_id = t.id order by m.at desc limit 1) last_message,
+             (select max(m.at) from messages m where m.thread_id = t.id) last_message_at, t.updated_at
+      from threads t
+      left join stores s on s.id = t.store_id
+      left join users cu on cu.id = t.created_by`,
+  },
+  {
+    name: "v_attachments",
+    label: "資料・写真 (登録先・顧客・説明つき。ファイルの中身は入っていない)",
+    description: "ファイル 1 件 = 1 行。file_name・kind (photo/file)・parent_type (登録先の種類: customer・inquiry・quote・order・expense・purchase・document)・parent_id・customer_name・store_name・caption (説明)・taken_at・uploaded_by・uploaded_at・size",
+    sql: `
+      select f.id attachment_id, f.file_name, f.kind, f.parent_type, f.parent_id, c.name customer_name, f.store_id, s.name store_name, f.caption, f.taken_at,
+             u.name uploaded_by, f.uploaded_at, f.size, f.content_type
+      from attachments f
+      left join customers c on c.id = f.customer_id
+      left join stores s on s.id = f.store_id
+      left join users u on u.id = f.uploaded_by`,
+  },
+  {
+    name: "v_documents",
+    label: "書類取込 (紙→データ。読み取りの状態と登録先)",
+    description: "取り込んだ書類 1 件 = 1 行。kind と kind_label (手書き見積・レシート・請求書・アンケートなど)・file_name・status と status_label・store_name・uploaded_by・uploaded_at・linked_type・linked_id・confidence (読み取りの確からしさ)",
+    sql: `
+      select d.id document_id, d.kind, ${L("document_kind", "d", "kind")} kind_label, d.file_name, d.status, ${L("document_status", "d", "status")} status_label,
+             d.store_id, s.name store_name, u.name uploaded_by, d.uploaded_at, d.linked_type, d.linked_id, d.confidence
+      from documents d
+      left join stores s on s.id = d.store_id
+      left join users u on u.id = d.uploaded_by`,
+  },
+  {
+    name: "v_products",
+    label: "商品マスタ (品名・等級・サイズ・単価)",
+    description: "商品 1 件 = 1 行。category と category_label・name・grade・size_label・unit・unit_price (税抜の標準単価)・description・active (1=使用中)。実際に売れた単価は sales_items",
+    sql: `
+      select p.id product_id, p.category, ${L("category", "p", "category")} category_label, p.name, p.grade, p.size_label, p.unit, p.unit_price, p.description, coalesce(p.active, 1) active
+      from products p`,
+  },
+  {
+    name: "v_staff",
+    label: "社員 (ロール・所属)",
+    description: "社員 1 人 = 1 行。user_id・name・kana・role と role_label・store_id・store_name・title (役職)・active (1=在籍)",
+    sql: `
+      select u.id user_id, u.name, u.kana, u.role, ${L("role", "u", "role")} role_label, u.store_id, s.name store_name, u.title, coalesce(u.active, 1) active
+      from users u
+      left join stores s on s.id = u.store_id`,
+  },
+  {
+    name: "v_suppliers",
+    label: "仕入先・協力業者 (取引の件数と金額つき)",
+    description: "仕入先 1 社 = 1 行。supplier_id・name・kind (supplier=仕入先/partner=協力業者)・category (取扱品目)・phone・fax・contact_name・payment_terms・purchase_count・purchase_total (仕入の合計・税込)・last_purchase_date・po_count (発注書の数)・last_po_date・active",
+    sql: `
+      select sp.id supplier_id, sp.name, sp.kind, sp.category, sp.phone, sp.fax, sp.contact_name, sp.payment_terms,
+             (select count(*) from purchases p where p.supplier_id = sp.id and p.status <> 'rejected') purchase_count,
+             (select coalesce(sum(p.amount), 0) from purchases p where p.supplier_id = sp.id and p.status <> 'rejected') purchase_total,
+             (select max(p.invoice_date) from purchases p where p.supplier_id = sp.id) last_purchase_date,
+             (select count(*) from purchase_orders po where po.supplier_id = sp.id and po.status <> 'cancelled') po_count,
+             (select max(po.issued_on) from purchase_orders po where po.supplier_id = sp.id) last_po_date,
+             coalesce(sp.active, 1) active
+      from suppliers sp`,
+  },
+  {
+    name: "v_fax",
+    label: "FAX の送受信 (相手・状態・AI の要約)",
+    description: "FAX 1 件 = 1 行。number・direction (inbound=受信/outbound=送信)・at・status と status_label・triage と triage_label (受信の仕分け)・remote_name・remote_number・supplier_name・customer_name・store_name・document_type と summary (AI の読み取り)",
+    sql: `
+      select fx.id fax_id, fx.number, fx.direction, fx.at, fx.status, ${L("fax_status", "fx", "status")} status_label, fx.triage, ${L("fax_triage", "fx", "triage")} triage_label,
+             fx.remote_name, fx.remote_number, sp.name supplier_name, c.name customer_name, fx.store_id, s.name store_name,
+             json_extract(fx.ai, '$.documentType') document_type, json_extract(fx.ai, '$.summary') summary
+      from fax_messages fx
+      left join suppliers sp on sp.id = fx.supplier_id
+      left join customers c on c.id = fx.customer_id
+      left join stores s on s.id = fx.store_id`,
+  },
+  {
+    name: "v_knowledge",
+    label: "社内資料 (業務ルール・議事録・マニュアル・価格など。見られる範囲のものだけ)",
+    description: "資料 1 件 = 1 行。title・category・record_date (議事録の日付)・body (本文)・tags・updated_at。言葉で探すときは body like '%…%'",
+    sql: `
+      select k.id knowledge_id, k.title, k.category, k.record_date, k.body, k.tags, k.updated_at
+      from knowledge k where coalesce(k.active, 1) = 1`,
+  },
+  {
+    name: "v_holidays",
+    label: "会社の休業日",
+    description: "休業日 1 日 = 1 行。date・label",
+    sql: `select h.date, h.label from company_holidays h`,
+  },
 ];
 
 /* ================================================================== */
@@ -360,7 +595,8 @@ export const METRICS: { name: string; definition: string }[] = [
   { name: "粗利", definition: "売上 − 記録された原価 (tatami_cost + purchase_cost)。襖・障子などの材料原価は記録がなく、粗利は実際より大きく出ることを必ず添える" },
   { name: "簡易粗利 (経営ダッシュボード)", definition: "売上 − 仕入 (purchases の amount、請求日) − 経費 (expenses の承認済・精算済の amount)" },
   { name: "担当者別の売上", definition: "v_staff_sales (order_staff と sales_orders) で sum(total) group by staff_name。1 件に複数の担当者がいるとそれぞれに全額を数える" },
-  { name: "未入金・売掛", definition: "v_invoices の balance (total − paid_amount)。状態が 発行済・一部入金・期日超過 のもの。期日超過は is_overdue = 1" },
+  { name: "未入金・売掛", definition: "v_invoices の balance (total − paid_amount)。状態が 発行済・一部入金・期日超過 のもの。期日超過は is_overdue = 1。お客様ごとの未入金残高は v_customers.receivable (その人の請求の残高の合計。MAX ではなく合計)" },
+  { name: "人・店舗・顧客ごとの合計", definition: "ごとの合計は sum() で数える (1 件の最大 max() と取り違えない)。件数は count(*)、平均は avg() か 合計÷件数" },
   { name: "成約率", definition: "受注になった見積 ÷ 結果が出た見積 (受注・失注・期限切れ)。v_quotes の status と order_number" },
   { name: "前回の担当者", definition: "v_customers の last_staff (最後の受注の担当者)・last_workers (施工担当)" },
 ];
@@ -386,6 +622,17 @@ export const GLOSSARY: [string, string][] = [
   ["口コミ・レビュー", "google_reviews"],
   ["社員・スタッフ・職人・担当", "users (名前で結合)"],
   ["店舗: 合志・中央・西・玉名・本社", "store_id = koshi・chuo・nishi・tamana・hq (store_name に店舗名)"],
+  ["アンケート・はがき・お客様の評価・満足度", "survey_responses / v_surveys"],
+  ["クレーム・手直し・不具合・やり直し", "quality_issues / v_quality"],
+  ["口コミ・レビュー・Google", "google_reviews / v_reviews"],
+  ["現金・手元現金・出納", "cash_entries / v_cashbook"],
+  ["承認・申請・決裁", "approvals / v_approvals"],
+  ["社内連絡・業務依頼・メッセージ・報告", "threads・messages / v_threads"],
+  ["写真・資料・ファイル・添付", "attachments / v_attachments"],
+  ["書類取込・読み取り・紙の書類", "documents / v_documents"],
+  ["商品・価格表・単価の標準・マスタ", "products / v_products"],
+  ["FAX・ファックス", "fax_messages / v_fax"],
+  ["休み・休業日・定休日", "company_holidays / v_holidays"],
 ];
 
 const CODE_KINDS: [string, string][] = [
@@ -402,6 +649,16 @@ const CODE_KINDS: [string, string][] = [
   ["payment_method", "入金の方法 (method)"],
   ["expense_method", "経費の支払方法"],
   ["role", "社員のロール (role)"],
+  ["quality_kind", "クレーム・手直しの種類"],
+  ["quality_status", "クレーム・手直しの状態"],
+  ["approval_type", "承認の種類"],
+  ["approval_status", "承認の状態"],
+  ["cash_direction", "現金の入出金"],
+  ["document_kind", "取込書類の種類"],
+  ["thread_kind", "社内連絡の種類"],
+  ["task_status", "業務依頼の状態"],
+  ["fax_status", "FAX の状態"],
+  ["fax_triage", "受信 FAX の仕分け"],
 ];
 
 function codeLines(): string[] {
