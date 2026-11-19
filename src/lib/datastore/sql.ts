@@ -1,9 +1,11 @@
 import "server-only";
 import { Worker } from "node:worker_threads";
+import type { User } from "@/lib/db/types";
 import { TABLES, snake } from "@/lib/db/schema";
 import { AMOUNT_KEYS, AMOUNT_LABEL } from "@/lib/assistant/facts";
 import type { AnalysisColumn, AnalysisResult, Cell } from "@/lib/assistant/analyze";
 import { mirrorPath, mirrorReady } from "./mirror";
+import { VIEWS, dataModelText, scopeStatements, viewStatements } from "./model";
 
 /**
  * VPS のデータベース (mirror.ts) への読み取り専用の SQL (AI アシスタントの道具 query_database)
@@ -11,7 +13,9 @@ import { mirrorPath, mirrorReady } from "./mirror";
  * - SELECT (WITH から始まるものを含む) の 1 文だけ。読み取り専用で開き (readOnly・query_only)、書き換えはできない
  * - 別のスレッド (worker) で実行し、15 秒を超えたら止める (重い問い合わせでもサーバーの応答を止めない)
  * - 返す行は 500 行まで
- * 全店舗のデータが見えるため、使えるのは全店舗を閲覧できるロール (管理者・本部スタッフ) だけ (agent.ts で判定)
+ * - 問い合わせの前に、統合データモデル (model.ts) の一時ビューを作る。全店舗を見られない人は、その前に生の表を
+ *   閲覧範囲で絞った一時ビューで覆う (同じ名前の一時ビューが優先されるため、SQL もビューも範囲の内側になる)。
+ *   覆いを外す「main.表」の書き方は断る
  */
 
 const TIMEOUT_MS = 15_000;
@@ -23,7 +27,10 @@ const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
 let db;
 try {
   db = new DatabaseSync(workerData.file, { readOnly: true });
-  db.exec("pragma query_only = 1; pragma busy_timeout = 5000;");
+  db.exec("pragma busy_timeout = 5000;");
+  // 閲覧範囲の覆いと統合ビュー (一時ビュー) を作ってから、読み取りだけにする
+  for (const s of workerData.setup) db.exec(s);
+  db.exec("pragma query_only = 1;");
   const stmt = db.prepare(workerData.sql);
   const columns = typeof stmt.columns === "function" ? stmt.columns().map((c) => c.name) : null;
   const rows = [];
@@ -66,17 +73,20 @@ export function checkSql(raw: string): { sql: string } | { error: string } {
   if (/\b(attach|detach|pragma|vacuum|insert|update|delete|drop|create|alter|reindex|load_extension|savepoint|release|begin|commit|rollback)\b/i.test(outside) || /\breplace\s+into\b/i.test(outside)) {
     return { error: "読み取り (SELECT) 以外の命令は使えません。" };
   }
+  // 「main.表」は閲覧範囲の覆いを外すため使えない (どの書き方でも)
+  if (/(?:\bmain|"main"|\[main\]|`main`)\s*\./i.test(outside)) return { error: "表の名前に main. は付けないでください (そのまま 表の名前 で書きます)。" };
   sql = sql.replace(/\s+/g, " ");
   return { sql };
 }
 
-export async function runSql(raw: string): Promise<SqlResult> {
+export async function runSql(raw: string, user: Pick<User, "id" | "role" | "storeId">): Promise<SqlResult> {
   const t0 = Date.now();
   if (!mirrorReady()) return { ok: false, error: "VPS のデータベースを準備中です。少し待ってから、もう一度お試しください。", columns: [], rows: [], more: false, ms: 0 };
   const checked = checkSql(raw);
   if ("error" in checked) return { ok: false, error: checked.error, columns: [], rows: [], more: false, ms: 0 };
   return new Promise<SqlResult>((resolve) => {
-    const worker = new Worker(WORKER, { eval: true, workerData: { file: mirrorPath(), sql: checked.sql, limit: MAX_ROWS } });
+    const setup = [...scopeStatements(user), ...viewStatements()];
+    const worker = new Worker(WORKER, { eval: true, workerData: { file: mirrorPath(), sql: checked.sql, limit: MAX_ROWS, setup } });
     let done = false;
     const finish = (r: Omit<SqlResult, "ms">) => {
       if (done) return;
@@ -121,6 +131,7 @@ const NOTES: Record<string, string> = {
 /** 表の一覧 (道具の説明に入れる短いもの) */
 export function tableList(): string {
   return [
+    ...VIEWS.map((v) => `${v.name} (統合ビュー: ${v.label.replace(/\s*\(.*$/, "")})`),
     "sales_orders (分析用: 受注ごとの売上・種別の内訳・原価・担当者)",
     "sales_items (分析用: 明細。商品・数量・単価・金額)",
     "order_staff (分析用: 受注と担当者)",
@@ -128,9 +139,12 @@ export function tableList(): string {
   ].join(", ");
 }
 
-/** 表の列 (describe_database の結果) */
-export function describeTables(names: string[]): string {
-  const wanted = names.length ? names : ["sales_orders", "sales_items", "order_staff", "orders", "customers", "schedule_events"];
+/** データモデルと表の列 (describe_database の結果)。names を省くと統合データモデルの全体 */
+export function describeTables(names: string[], user: Pick<User, "role">): string {
+  const views = names.filter((n) => VIEWS.some((v) => v.name === n));
+  const tables = names.filter((n) => !VIEWS.some((v) => v.name === n));
+  if (!tables.length) return dataModelText(user, views);
+  const wanted = tables;
   const derived: Record<string, string[]> = {
     sales_orders: ["order_id", "number", "sales_date", "contract_date", "status", "store_id", "store_name", "customer_id", "customer_code", "customer_name", "customer_type", "area", "title", "total", ...AMOUNT_KEYS.map((k) => `amt_${k}`), "tatami_cost", "purchase_cost", "staff_names", "worker_names", "item_source"],
     sales_items: ["order_id", "line_no", "sales_date", "store_id", "customer_id", "category", "product", "qty", "unit_price", "amount"],

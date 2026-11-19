@@ -11,6 +11,7 @@ import { getRecord, lastSearchSource, listSchedule, searchAll, storeScopeNote, R
 import { scheduleSuggestTool } from "./schedule-tool";
 import { permissionHints } from "@/lib/chatbot/permission-hints";
 import { describeTables, runSql, sqlTable, tableList } from "@/lib/datastore/sql";
+import { METRICS, VIEWS } from "@/lib/datastore/model";
 import { mirrorReady } from "@/lib/datastore/mirror";
 
 /**
@@ -61,8 +62,11 @@ const strs = (v: unknown, max = 10) => (Array.isArray(v) ? v.filter((x): x is st
 
 const TYPES = Object.keys(RECORD_TYPE_LABEL);
 
-/** VPS のデータベースへの SQL を使える (全店舗のデータが見えるロールだけ。店舗のロールは店舗の範囲の道具を使う) */
-const canUseSql = (user: User) => canSeeAllStores(user) && process.env.ICHIJOYA_DATA_DB !== "off";
+/**
+ * VPS のデータベース (統合データモデル) への SQL を使える。全員 (店舗のロールは、表とビューが自店舗の範囲で覆われる:
+ * src/lib/datastore/model.ts の scopeStatements)
+ */
+const canUseSql = (user: User) => user.active !== false && process.env.ICHIJOYA_DATA_DB !== "off";
 
 function tools(user: User): ToolDef[] {
   const list: ToolDef[] = [
@@ -128,6 +132,7 @@ function tools(user: User): ToolDef[] {
           customers: { type: "array", items: { type: "string" }, description: "顧客名・コードの一部で絞る (仕入では仕入先名)" },
           staff: { type: "array", items: { type: "string" }, description: "担当者・施工担当の名前で絞る" },
           areas: { type: "array", items: { type: "string" }, description: "地区・住所の一部で絞る" },
+          statuses: { type: "array", items: { type: "string" }, description: "状態のコードで絞る (例: 問い合わせの未対応・対応中 = new・in_progress / 見積の失注 = rejected / 経費の承認待ち = pending_approval / 受注の施工完了 = completed)。コードの一覧は describe_database" },
           compare: { type: "string", enum: ["none", "previous_year", "previous_period"] },
           only: { type: "string", enum: ["decreased", "increased"] },
           sort_by: { type: "string", description: "並べ替える指標 (例: sales・sales_diff)。label = 軸の順" },
@@ -155,12 +160,12 @@ function tools(user: User): ToolDef[] {
     list.push(
       {
         name: "describe_database",
-        description: "VPS のデータベース (システムの全データの写し。SQLite) の表の列と意味を見る。query_database で SQL を書く前に、使う表を確かめる。",
-        parameters: { type: "object", properties: { tables: { type: "array", items: { type: "string" }, description: "表の名前 (省略 = 主な表: sales_orders・sales_items・order_staff・orders・customers・schedule_events)" } }, required: [] },
+        description: "一畳屋の統合データモデル (VPS のデータベース) を見る。省略すると、統合ビュー (v_*) の一覧と列・表どうしのつながり・指標の定義 (売上・粗利・受注…)・言葉と表の対応を返す。表の名前を渡すと、その表の全部の列を返す。query_database の前に使う。",
+        parameters: { type: "object", properties: { tables: { type: "array", items: { type: "string" }, description: "列を見たい表・ビューの名前 (省略 = データモデルの全体)" } }, required: [] },
       },
       {
         name: "query_database",
-        description: `VPS のデータベース (システムの全データの写し。SQLite) に読み取りの SQL (SELECT の 1 文) で問い合わせ、結果の表を得る。analyze で出せない集計・条件の組み合わせ・件数の確認・記録の突き合わせに使う。結果の表は画面に表示される。表: ${tableList()}。まず describe_database で列を確かめる。売上は sales_orders (受注ごと)・sales_items (明細) を使い、キャンセルは入っていない。日付は 'YYYY-MM-DD' の文字列で比べる。結果は 500 行まで。`,
+        description: `VPS のデータベース (システムの全データと統合ビュー。SQLite) に読み取りの SQL (SELECT の 1 文) で問い合わせ、結果の表を得る。件数・一覧・条件の組み合わせ・記録の突き合わせ・自由な集計に使う。結果の表は画面に表示される。まず統合ビュー (名前と日本語の状態つき) を使う: ${VIEWS.map((v) => v.name).join(", ")}。ほかの表: ${tableList()}。列が分からなければ describe_database。日付は 'YYYY-MM-DD' の文字列で比べる。表の名前に main. を付けない。結果は 500 行まで。`,
         parameters: {
           type: "object",
           properties: {
@@ -193,7 +198,7 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     "2. 調べても見つからないとき・データがないときは、そのことをはっきり書く (例:「システムには○○の記録がありません」)。判断できないときもそう書く。",
     "3. 根拠になった記録は、道具の結果にある [番号や名前](/画面のパス) のリンクをそのまま本文に付ける。資料から答えたときは「(社内資料: タイトル)」のように示す。",
     "4. analyze の結果の表とグラフは画面に自動で表示される。本文では表を書き写さず、要点 (合計・上位・増減・目立つ点) を 3〜6 行でまとめる。前提は、その集計の「注記」に書かれているものだけを一言添える (注記にない前提を書かない)。どの期間で集計したかを必ず書く。",
-    "5. 「今年」= 1 月 1 日〜今日、「昨年」= 前年の 1/1〜12/31、「今月」「先月」は暦の月、「過去 3 年間」= 今年を含む 3 暦年 (年ごとに比較) のように解釈し、解釈した期間を書く。期間の指定がなければ直近 12 か月。",
+    "5. 「今年」= 1 月 1 日〜今日、「昨年」= 前年の 1/1〜12/31、「今月」「先月」は暦の月、「過去 3 年間」= 今年を含む 3 暦年 (年ごとに比較) のように解釈し、解釈した期間を書く。期間の指定がないときは、件数・人数・一覧・順位 (一番多い〜など) は登録されている全期間で数え、売上の推移・比較の分析だけは直近 12 か月にする。どちらの場合も、数えた期間を書く。",
     "5b. 「比較して」は、質問にある軸 (店舗・商品・担当者など) どうしの比較のこと。前年・前の期間との比較 (compare) は、質問に「前年」「昨年」「前期」「去年と」などの言葉があるときだけ使う。",
     "6. 直接集計できないとき (データがない・軸がない・権限がない) は、その理由を書き、search_guides で調べて、経営ダッシュボード・CSV 出力などの画面で目的の集計にたどり着く手順を案内する。",
     "7. 操作方法の質問は、質問に付いた「参考資料」か search_guides の結果に書かれている画面・ボタン・手順だけで答える (一般的なシステムの知識で補わない)。「メニュー → 画面 → ボタン」の順に番号付きの手順で、画面・ボタンの名前は資料の表記のまま「」で書く。資料に書かれていない操作は「使い方の資料には見当たりません」と書き、店長・管理者への確認を勧める。権限がない操作は、誰に頼めばよいかを書く。",
@@ -210,7 +215,22 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     "- 売上の分析は analyze (subject: sales)。商品名は表記ゆれがあるので、まず品名の一覧を見てから絞る。",
     scheduleSuggestTool ? "- 新しい案件・訪問の予定の候補日は suggest_schedule。" : "",
     canUseSql(user)
-      ? "- analyze の軸・指標で表せない集計 (複数の表の組み合わせ・細かい条件・件数の確認) は、describe_database で列を確かめてから query_database で SQL を書いて調べる。数字は必ず結果の表から書く。SQL の誤りが返ってきたら直して呼び直す。"
+      ? [
+          "",
+          "## 統合データモデル (VPS のデータベース。query_database で SQL を書いて読む)",
+          `統合ビュー: ${VIEWS.map((v) => `${v.name} = ${v.label}`).join(" / ")}`,
+          `指標の定義: ${METRICS.map((m) => m.name).join("・")} (詳しくは describe_database)`,
+          canSeeAllStores(user) ? "" : "この人の閲覧範囲 (自店舗) のデータだけが入っている。",
+          "## 正確に答える手順",
+          "- 件数・一覧・合計・「前回の〜」「〜のお客様は何人」のようなデータの質問は、推測せず query_database (統合ビュー) か analyze で数えてから答える。顧客・案件の詳しい中身は get_record。",
+          "- 質問の条件 (状態・期間・店舗・人・種類など) は 1 つも落とさない。analyze の引数で表せない条件があるときは query_database で SQL に書く。",
+          "- SQL を書く前に describe_database で、使うビューの列と指標の定義を確かめる (1 回の会話で 1 度でよい)。",
+          "- 結果が 0 件・思ったより少ないときは、名前の表記 (like '%…%')・期間・状態の条件を見直して、もう 1 回だけ調べ直す。それでも無ければ「記録がありません」と答える。",
+          "- 数字は結果の表の値をそのまま書く (丸めるときは「約」を付ける)。どの定義・期間で数えたかを一言添える。",
+          "- SQL の誤りが返ってきたら、誤りの内容を読んで直して呼び直す。",
+        ]
+          .filter(Boolean)
+          .join("\n")
       : "",
   ]
     .filter((l) => l !== "")
@@ -274,6 +294,7 @@ function makeExecutor(db: Database, user: User, now: Date, out: { tables: Analys
           customers: strs(a.customers),
           staff: strs(a.staff),
           areas: strs(a.areas),
+          statuses: strs(a.statuses),
           compare: str(a.compare) as AnalysisSpec["compare"],
           only: str(a.only) as AnalysisSpec["only"],
           sort_by: str(a.sort_by, 40),
@@ -329,16 +350,16 @@ function makeExecutor(db: Database, user: User, now: Date, out: { tables: Analys
       }
       case "describe_database": {
         if (!canUseSql(user)) return "この道具は使えません。";
-        out.tools.push({ name: "データベースの表", summary: (strs(a.tables, 12) ?? []).join("・") || "主な表" });
-        return describeTables(strs(a.tables, 12) ?? []);
+        out.tools.push({ name: "データモデル", summary: (strs(a.tables, 12) ?? []).join("・") || "全体" });
+        return describeTables(strs(a.tables, 12) ?? [], user);
       }
       case "query_database": {
-        if (!canUseSql(user)) return "この道具は使えません (全店舗のデータを見られるロールだけ)。";
+        if (!canUseSql(user)) return "この道具は使えません。";
         if (!mirrorReady()) return "VPS のデータベースを準備中です。analyze・search_records を使ってください。";
         out.usedData = true;
         const sql = str(a.sql, 8000) ?? "";
         const title = str(a.title, 60) ?? "データベースの集計";
-        const r = await runSql(sql);
+        const r = await runSql(sql, user);
         if (!r.ok) {
           out.tools.push({ name: "データベース (SQL)", summary: `誤り: ${(r.error ?? "").slice(0, 80)}` });
           return `SQL を実行できませんでした: ${r.error}\nSQL: ${sql}`;

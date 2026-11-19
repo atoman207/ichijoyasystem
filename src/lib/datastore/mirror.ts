@@ -7,6 +7,7 @@ import { TABLES, snake, type TableDef } from "@/lib/db/schema";
 import { BACKEND, getDb, onDataChange, syncDb, type DataChange } from "@/lib/db/store";
 import { AMOUNT_KEYS, AMOUNT_LABEL, salesFacts, type OrderFact } from "@/lib/assistant/facts";
 import { searchEntries, setSearchProvider, type Entry, type SearchProvider } from "@/lib/assistant/search";
+import { LABELS_SQL, labelRows } from "./model";
 
 /**
  * VPS のデータベース (システムの全データの写し。AI アシスタント「質問する」が検索・集計に使う)
@@ -18,6 +19,7 @@ import { searchEntries, setSearchProvider, type Entry, type SearchProvider } fro
  *   1) システムの全テーブル (Supabase と同じ表名・列名。配列・入れ子は JSON の文字列。パスワードのハッシュは入れない)
  *   2) 分析用の表: sales_orders (受注ごとの売上・種別の内訳・原価・担当者)・sales_items (明細 1 行ずつ)・order_staff (担当者)
  *   3) 横断検索の索引: search_docs + search_fts (FTS5 trigram)
+ *   4) コードの日本語名: _labels (統合データモデル model.ts のビューが使う)
  * - 正本は Supabase。システムでの書き込み・他のインスタンスの変更・全件の読み込みのたびに通知を受けて (store.ts の onDataChange)、
  *   変わった行だけを書き込む。起動時と通知の取りこぼしのあとは、行ごとのハッシュ (_rowhash) で全体を突き合わせる (reconcile)
  * - 写しなので、消えても Supabase から作り直せる (AI アシスタント → チャットボットの管理 →「作り直す」)
@@ -115,6 +117,7 @@ create table if not exists search_docs (
 create virtual table if not exists search_fts using fts5 (head, body, content = 'search_docs', content_rowid = 'rowid', tokenize = 'trigram');
 create trigger if not exists search_docs_ai after insert on search_docs begin insert into search_fts (rowid, head, body) values (new.rowid, new.head, new.body); end;
 create trigger if not exists search_docs_ad after delete on search_docs begin insert into search_fts (search_fts, rowid, head, body) values ('delete', old.rowid, old.head, old.body); end;
+${LABELS_SQL}
 `;
 
 function schemaHash(): string {
@@ -146,6 +149,15 @@ function createSchema(db: SqliteDb) {
   `);
 }
 
+/** コードの日本語名 (画面と同じ。constants.ts を変えたら次の起動で入れ直す) */
+function writeLabels(db: SqliteDb) {
+  inTx(db, () => {
+    db.exec("delete from _labels");
+    const ins = db.prepare("insert or replace into _labels (kind, code, label) values (?, ?, ?)");
+    for (const r of labelRows()) ins.run(...r);
+  });
+}
+
 function open(): SqliteDb {
   if (st.db) return st.db;
   const file = mirrorPath();
@@ -171,6 +183,7 @@ function open(): SqliteDb {
   } else {
     createSchema(db);
   }
+  writeLabels(db);
   st.db = db;
   return db;
 }

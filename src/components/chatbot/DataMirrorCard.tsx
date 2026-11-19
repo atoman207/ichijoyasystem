@@ -1,6 +1,7 @@
 import "server-only";
 import { Database } from "lucide-react";
 import { mirrorStatus } from "@/lib/datastore/mirror";
+import { METRICS, VIEWS } from "@/lib/datastore/model";
 import { rebuildDataMirror } from "@/lib/actions/chatbot";
 import { fmtDateTime } from "@/lib/format";
 import { Badge, Button, Card, CardHeader } from "@/components/ui";
@@ -44,6 +45,27 @@ export function DataMirrorCard() {
           </ul>
         </details>
       )}
+      <details className="mt-3 text-xs">
+        <summary className="cursor-pointer select-none text-ink-2 hover:text-ink">統合データモデル (AI が読むビューと指標の定義)</summary>
+        <div className="mt-2 space-y-2 text-ink-2">
+          <p>生の表の上に、業務の流れ (問い合わせ → 見積 → 受注・施工 → 請求 → 入金) と顧客 360°・予定などを名前と日本語の状態つきでまとめたビューを重ねています。AI は質問した人の閲覧範囲 (店舗のロールは自店舗) の内側で、このビューに SQL で問い合わせて答えます。</p>
+          <ul className="space-y-0.5">
+            {VIEWS.map((v) => (
+              <li key={v.name}>
+                <span className="font-mono text-ink">{v.name}</span> {v.label}
+              </li>
+            ))}
+          </ul>
+          <p className="font-medium text-ink">指標の定義</p>
+          <ul className="space-y-0.5">
+            {METRICS.map((m) => (
+              <li key={m.name}>
+                <span className="text-ink">{m.name}</span>: {m.definition.replace(/SQL:.*$/, "")}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </details>
       <form action={rebuildDataMirror} className="mt-3 flex flex-wrap items-center gap-3">
         <Button type="submit" size="sm" variant="secondary">作り直す</Button>
         <span className="text-[11px] text-ink-3">ふだんは不要です (Supabase の内容から全部入れ直します。1〜3 分。そのあいだ検索はメモリの索引を使います)</span>

@@ -1,0 +1,447 @@
+import "server-only";
+import type { Role, StoreId, User } from "@/lib/db/types";
+import { canSeeAllStores } from "@/lib/auth/permissions";
+import {
+  APPROVAL_STATUS,
+  APPROVAL_TYPE_LABEL,
+  CATEGORY_LABEL,
+  CHANNEL_LABEL,
+  EXPENSE_METHOD_LABEL,
+  EXPENSE_STATUS,
+  INQUIRY_STATUS,
+  INVOICE_STATUS,
+  ORDER_STATUS,
+  PAYMENT_METHOD_LABEL,
+  PURCHASE_ORDER_STATUS,
+  PURCHASE_PAY_METHOD_LABEL,
+  PURCHASE_STATUS,
+  QUOTE_STATUS,
+  ROLE_LABEL,
+  SCHEDULE_KIND,
+} from "@/lib/constants";
+import { AMOUNT_KEYS, AMOUNT_LABEL } from "@/lib/assistant/facts";
+
+/**
+ * システムの全データの「統合データモデル」(AI アシスタントが正確に答えるための意味の層)
+ * ------------------------------------------------------------
+ * VPS のデータベース (mirror.ts) の生の表の上に、次の 3 つを重ねる:
+ *  1) _labels: 状態・受付経路・種別・予定の種類などのコードと、画面と同じ日本語の名前 (constants.ts から作る)
+ *  2) 統合ビュー (v_*): 業務の流れ (問い合わせ → 見積 → 受注・施工 → 請求 → 入金) と顧客 360°・予定・経費などを、
+ *     名前と日本語の状態つきで 1 行にまとめたもの。AI は表の結合を組み立てずに、これを読めば正しく答えられる
+ *  3) データ辞書 (dataModelText): 表と列の意味・表どうしのつながり・指標の定義 (売上・粗利・受注…)・言葉の言い換え
+ * ビューは問い合わせのたびに一時ビュー (TEMP VIEW) として作る。全店舗を見られない人には、その前に生の表を
+ * 閲覧範囲で絞った一時ビューで覆う (scopeStatements)。そのためビューも自動で閲覧範囲の内側になる
+ */
+
+/* ================================================================== */
+/* 1) ラベル                                                             */
+/* ================================================================== */
+
+const labelOf = (m: Record<string, string | { label: string }>) => Object.entries(m).map(([code, v]) => [code, typeof v === "string" ? v : v.label] as [string, string]);
+
+export function labelRows(): [string, string, string][] {
+  const kinds: Record<string, [string, string][]> = {
+    order_status: labelOf(ORDER_STATUS),
+    quote_status: labelOf(QUOTE_STATUS),
+    inquiry_status: labelOf(INQUIRY_STATUS),
+    invoice_status: labelOf(INVOICE_STATUS),
+    expense_status: labelOf(EXPENSE_STATUS),
+    purchase_status: labelOf(PURCHASE_STATUS),
+    purchase_order_status: labelOf(PURCHASE_ORDER_STATUS),
+    approval_status: labelOf(APPROVAL_STATUS),
+    approval_type: labelOf(APPROVAL_TYPE_LABEL),
+    channel: labelOf(CHANNEL_LABEL),
+    category: labelOf(CATEGORY_LABEL),
+    schedule_kind: labelOf(SCHEDULE_KIND),
+    role: labelOf(ROLE_LABEL),
+    payment_method: labelOf(PAYMENT_METHOD_LABEL),
+    expense_method: labelOf(EXPENSE_METHOD_LABEL),
+    purchase_pay_method: labelOf(PURCHASE_PAY_METHOD_LABEL),
+    amount_category: AMOUNT_KEYS.map((k) => [k, AMOUNT_LABEL[k]]),
+    customer_type: [
+      ["individual", "個人"],
+      ["corporate", "法人"],
+    ],
+  };
+  return Object.entries(kinds).flatMap(([kind, rows]) => rows.map(([code, label]) => [kind, code, label] as [string, string, string]));
+}
+
+export const LABELS_SQL = "create table if not exists _labels (kind text not null, code text not null, label text not null, primary key (kind, code));";
+
+/* ================================================================== */
+/* 2) 統合ビュー                                                          */
+/* ================================================================== */
+
+const L = (kind: string, alias: string, col: string) => `(select label from _labels where kind = '${kind}' and code = ${alias}.${col})`;
+const NAMES = (jsonCol: string) => `(select group_concat(u.name, '・') from json_each(${jsonCol}) j join users u on u.id = j.value)`;
+const TODAY = "date('now', 'localtime')";
+
+export interface ViewDef {
+  name: string;
+  label: string;
+  /** AI 向けの説明 (何が 1 行か・主な列・使い方) */
+  description: string;
+  sql: string;
+}
+
+export const VIEWS: ViewDef[] = [
+  {
+    name: "v_customers",
+    label: "顧客 360° (顧客ごとの連絡先・担当・受注の回数と累計売上・最初と最後の受注・前回の担当者・問い合わせ・未入金)",
+    description:
+      "顧客 1 人 = 1 行。customer_id・code・name・kana・customer_type (individual/corporate) と customer_type_label (個人/法人)・phone・other_phones (ほかの連絡先)・address・area・store_id・store_name・assigned_staff (顧客の担当)・first_contact_channel と first_contact_channel_label・trade_stopped (1=取引停止)・registered_on・order_count・lifetime_sales (累計売上・税込)・first_order_date・last_order_date・last_order_number・last_order_title・last_staff (前回の担当者)・last_workers (前回の施工担当)・inquiry_count・open_inquiries・last_inquiry_at・receivable (未入金残高)・overdue (期日超過)",
+    sql: `
+      with ord as (
+        select customer_id, count(*) order_count, sum(total) lifetime_sales, min(coalesce(sales_date, contract_date)) first_order_date, max(coalesce(sales_date, contract_date)) last_order_date
+        from orders where status <> 'cancelled' group by customer_id
+      ), lastord as (
+        select customer_id, number last_order_number, title last_order_title, staff_names last_staff, worker_names last_workers from (
+          select o.customer_id, o.number, o.title, so.staff_names, so.worker_names,
+                 row_number() over (partition by o.customer_id order by coalesce(o.sales_date, o.contract_date) desc, o.created_at desc) rn
+          from orders o left join sales_orders so on so.order_id = o.id where o.status <> 'cancelled'
+        ) where rn = 1
+      ), inq as (
+        select customer_id, count(*) inquiry_count, sum(status in ('new', 'in_progress', 'quoted')) open_inquiries, max(received_at) last_inquiry_at
+        from inquiries where customer_id is not null group by customer_id
+      ), inv as (
+        select customer_id,
+               sum(case when status in ('issued', 'partially_paid', 'overdue') then total - paid_amount else 0 end) receivable,
+               sum(case when status in ('issued', 'partially_paid', 'overdue') and due_date < ${TODAY} then total - paid_amount else 0 end) overdue
+        from invoices group by customer_id
+      )
+      select c.id customer_id, c.code, c.name, c.kana, c.type customer_type, ${L("customer_type", "c", "type")} customer_type_label, c.phone,
+             (select group_concat(coalesce(json_extract(j.value, '$.relation'), '') || ' ' || coalesce(json_extract(j.value, '$.name') || ' ', '') || coalesce(json_extract(j.value, '$.phone'), ''), ' / ') from json_each(c.contacts) j) other_phones,
+             c.email, c.postal_code, c.address, c.area, c.store_id, s.name store_name, au.name assigned_staff,
+             c.first_contact_channel, ${L("channel", "c", "first_contact_channel")} first_contact_channel_label, coalesce(c.trade_stopped, 0) trade_stopped, c.trade_stop_note, c.notes,
+             substr(c.created_at, 1, 10) registered_on,
+             coalesce(ord.order_count, 0) order_count, coalesce(ord.lifetime_sales, 0) lifetime_sales, ord.first_order_date, ord.last_order_date,
+             lastord.last_order_number, lastord.last_order_title, lastord.last_staff, lastord.last_workers,
+             coalesce(inq.inquiry_count, 0) inquiry_count, coalesce(inq.open_inquiries, 0) open_inquiries, inq.last_inquiry_at,
+             coalesce(inv.receivable, 0) receivable, coalesce(inv.overdue, 0) overdue
+      from customers c
+      left join stores s on s.id = c.store_id
+      left join users au on au.id = c.assigned_user_id
+      left join ord on ord.customer_id = c.id
+      left join lastord on lastord.customer_id = c.id
+      left join inq on inq.customer_id = c.id
+      left join inv on inv.customer_id = c.id`,
+  },
+  {
+    name: "v_cases",
+    label: "案件の流れ (問い合わせ → 見積 → 受注・施工 → 請求 → 入金 を 1 行に)",
+    description:
+      "案件 1 件 = 1 行。case_type = order (受注あり)/quote (見積まで)/inquiry (問い合わせだけ)。inquiry_number・inquiry_date・inquiry_status と _label・channel と channel_label・quote_number・quote_date・quote_total・quote_status と _label・order_number・contract_date・order_status と order_status_label・scheduled_start・sales_date (売上計上日=施工完了)・total (受注金額・税込)・title・category と category_label・site_address・staff (担当者)・workers (施工担当)・invoice_number・invoice_date・due_date・invoice_status と _label・paid_amount・balance (未入金)・last_payment_date・store_id・store_name・customer_name・customer_code。「どこで止まっている案件か」「見積から受注までの日数」などに使う",
+    sql: `
+      select 'order' case_type, o.id case_id,
+             i.number inquiry_number, substr(i.received_at, 1, 10) inquiry_date, i.status inquiry_status, ${L("inquiry_status", "i", "status")} inquiry_status_label,
+             i.channel, ${L("channel", "i", "channel")} channel_label,
+             q.number quote_number, coalesce(q.issued_at, substr(q.created_at, 1, 10)) quote_date, q.total quote_total, q.status quote_status, ${L("quote_status", "q", "status")} quote_status_label,
+             o.number order_number, o.contract_date, o.status order_status, ${L("order_status", "o", "status")} order_status_label, o.scheduled_start, o.sales_date, o.total,
+             o.title, o.category, ${L("category", "o", "category")} category_label, o.site_address, so.staff_names staff, so.worker_names workers,
+             inv.number invoice_number, inv.issue_date invoice_date, inv.due_date, inv.status invoice_status, ${L("invoice_status", "inv", "status")} invoice_status_label, inv.paid_amount, (inv.total - inv.paid_amount) balance,
+             (select max(p.date) from payments p where p.invoice_id = inv.id) last_payment_date,
+             o.store_id, s.name store_name, o.customer_id, c.name customer_name, c.code customer_code
+      from orders o
+      left join quotes q on q.id = o.quote_id
+      left join inquiries i on i.id = q.inquiry_id
+      left join invoices inv on inv.id = (select x.id from invoices x where x.order_id = o.id and x.status <> 'void' order by x.issue_date desc limit 1)
+      left join sales_orders so on so.order_id = o.id
+      left join stores s on s.id = o.store_id
+      left join customers c on c.id = o.customer_id
+      union all
+      select 'quote', q.id,
+             i.number, substr(i.received_at, 1, 10), i.status, ${L("inquiry_status", "i", "status")},
+             i.channel, ${L("channel", "i", "channel")},
+             q.number, coalesce(q.issued_at, substr(q.created_at, 1, 10)), q.total, q.status, ${L("quote_status", "q", "status")},
+             null, null, null, null, null, null, null,
+             q.title, q.category, ${L("category", "q", "category")}, q.site_address, (select name from users where id = coalesce(q.estimator_id, q.created_by)), null,
+             null, null, null, null, null, null, null, null,
+             q.store_id, s.name, q.customer_id, c.name, c.code
+      from quotes q
+      left join inquiries i on i.id = q.inquiry_id
+      left join stores s on s.id = q.store_id
+      left join customers c on c.id = q.customer_id
+      where q.order_id is null and not exists (select 1 from orders o where o.quote_id = q.id)
+      union all
+      select 'inquiry', i.id,
+             i.number, substr(i.received_at, 1, 10), i.status, ${L("inquiry_status", "i", "status")},
+             i.channel, ${L("channel", "i", "channel")},
+             null, null, null, null, null,
+             null, null, null, null, null, null, null,
+             i.summary, i.category, ${L("category", "i", "category")}, null, (select name from users where id = i.assigned_user_id), null,
+             null, null, null, null, null, null, null, null,
+             i.store_id, s.name, i.customer_id, coalesce(c.name, i.contact_name), c.code
+      from inquiries i
+      left join stores s on s.id = i.store_id
+      left join customers c on c.id = i.customer_id
+      where i.quote_id is null`,
+  },
+  {
+    name: "v_schedule",
+    label: "予定 (担当者・店舗・顧客・受注の名前つき)",
+    description:
+      "予定 1 件 = 1 行。event_id・date・end_date・time (開始時刻または 午前/午後/終日)・end_time・kind (コード) と kind_label (引き取り・納品など)・title・store_id・store_name・company_wide (1=全社共通)・assignees (担当者の名前。「・」区切り)・customer_name・order_number・location・memo。期間は date (と end_date) で絞る",
+    sql: `
+      select e.id event_id, e.date, e.end_date, coalesce(e.start_time, case e.slot when 'am' then '午前' when 'pm' then '午後' end, '終日') time, e.end_time,
+             e.kind, ${L("schedule_kind", "e", "kind")} kind_label, e.title, e.store_id, s.name store_name, coalesce(e.company_wide, 0) company_wide,
+             ${NAMES("e.assignee_ids")} assignees, e.customer_id, c.name customer_name, o.number order_number, e.location, e.memo
+      from schedule_events e
+      left join stores s on s.id = e.store_id
+      left join customers c on c.id = e.customer_id
+      left join orders o on o.id = e.order_id`,
+  },
+  {
+    name: "v_inquiries",
+    label: "問い合わせ (受付経路・状態・担当者の名前つき)",
+    description: "問い合わせ 1 件 = 1 行。number・received_date・channel と channel_label・category と category_label・status と status_label・summary・customer_name (未登録は contact_name)・contact_phone・store_id・store_name・assigned_staff・next_action・next_action_due・quote_number・result・area",
+    sql: `
+      select i.id inquiry_id, i.number, substr(i.received_at, 1, 10) received_date, i.received_at, i.channel, ${L("channel", "i", "channel")} channel_label,
+             i.category, ${L("category", "i", "category")} category_label, i.status, ${L("inquiry_status", "i", "status")} status_label,
+             i.summary, coalesce(c.name, i.contact_name) customer_name, i.customer_id, i.contact_phone,
+             i.store_id, s.name store_name, u.name assigned_staff, i.next_action, i.next_action_due, q.number quote_number, i.result, i.area
+      from inquiries i
+      left join customers c on c.id = i.customer_id
+      left join stores s on s.id = i.store_id
+      left join users u on u.id = i.assigned_user_id
+      left join quotes q on q.id = i.quote_id`,
+  },
+  {
+    name: "v_quotes",
+    label: "見積 (顧客・見積担当・状態の名前つき)",
+    description: "見積 1 件 = 1 行。number・quote_date・customer_name・store_id・store_name・title・category と category_label・total (税込)・status と status_label・estimator (見積担当)・valid_until・order_number・site_address",
+    sql: `
+      select q.id quote_id, q.number, coalesce(q.issued_at, substr(q.created_at, 1, 10)) quote_date, c.name customer_name, q.customer_id, q.store_id, s.name store_name,
+             q.title, q.category, ${L("category", "q", "category")} category_label, q.total, q.status, ${L("quote_status", "q", "status")} status_label,
+             (select name from users where id = coalesce(q.estimator_id, q.created_by)) estimator, q.valid_until, o.number order_number, q.site_address
+      from quotes q
+      left join customers c on c.id = q.customer_id
+      left join stores s on s.id = q.store_id
+      left join orders o on o.id = q.order_id`,
+  },
+  {
+    name: "v_invoices",
+    label: "請求 (未入金残高・期日超過の判定つき)",
+    description: "請求 1 件 = 1 行 (無効は除く)。number・issue_date・due_date・customer_name・store_id・store_name・order_number・total・paid_amount・balance (未入金)・status と status_label・is_overdue (1=今日の時点で期日超過)・expected_date (入金予定日)",
+    sql: `
+      select v.id invoice_id, v.number, v.issue_date, v.due_date, c.name customer_name, v.customer_id, v.store_id, s.name store_name, o.number order_number,
+             v.total, v.paid_amount, (v.total - v.paid_amount) balance, v.status, ${L("invoice_status", "v", "status")} status_label,
+             case when v.status in ('issued', 'partially_paid', 'overdue') and v.due_date < ${TODAY} and v.total > v.paid_amount then 1 else 0 end is_overdue,
+             v.expected_date
+      from invoices v
+      left join customers c on c.id = v.customer_id
+      left join stores s on s.id = v.store_id
+      left join orders o on o.id = v.order_id
+      where v.status <> 'void'`,
+  },
+  {
+    name: "v_payments",
+    label: "入金 (請求・顧客・店舗の名前つき)",
+    description: "入金 1 件 = 1 行。date・amount・method と method_label (支払方法)・invoice_number・customer_name・store_id・store_name・memo",
+    sql: `
+      select p.id payment_id, p.date, p.amount, p.method, ${L("payment_method", "p", "method")} method_label, v.number invoice_number, c.name customer_name, v.customer_id, v.store_id, s.name store_name, p.memo
+      from payments p
+      join invoices v on v.id = p.invoice_id
+      left join customers c on c.id = v.customer_id
+      left join stores s on s.id = v.store_id`,
+  },
+  {
+    name: "v_expenses",
+    label: "経費 (申請者・状態の名前つき)",
+    description: "経費 1 件 = 1 行。number・date・store_id・store_name・submitter・vendor (支払先)・account (勘定科目)・amount (税込)・status と status_label・payment_method と payment_method_label・description。集計は status in ('approved','paid') (承認済・精算済)",
+    sql: `
+      select e.id expense_id, e.number, e.date, e.store_id, s.name store_name, u.name submitter, e.vendor, e.account, e.amount, e.tax_amount,
+             e.status, ${L("expense_status", "e", "status")} status_label, e.payment_method, ${L("expense_method", "e", "payment_method")} payment_method_label, e.description
+      from expenses e
+      left join stores s on s.id = e.store_id
+      left join users u on u.id = e.submitted_by`,
+  },
+  {
+    name: "v_purchases",
+    label: "仕入 (仕入先・状態・案件の名前つき)",
+    description: "仕入請求 1 件 = 1 行。number・invoice_date・due_date・supplier_name・store_id・store_name・amount (税込)・account・description・status と status_label・order_number (ひも付いた案件)",
+    sql: `
+      select p.id purchase_id, p.number, p.invoice_date, p.due_date, sp.name supplier_name, p.supplier_id, p.store_id, s.name store_name, p.amount, p.account, p.description,
+             p.status, ${L("purchase_status", "p", "status")} status_label, o.number order_number
+      from purchases p
+      left join suppliers sp on sp.id = p.supplier_id
+      left join stores s on s.id = p.store_id
+      left join orders o on o.id = p.order_id`,
+  },
+  {
+    name: "v_purchase_orders",
+    label: "発注書 (仕入先・明細の要約つき)",
+    description: "発注書 1 枚 = 1 行。number・issued_on・supplier_name・store_id・store_name・status と status_label・lines (明細: 品名×数量)・order_numbers (明細の案件番号)",
+    sql: `
+      select po.id purchase_order_id, po.number, po.issued_on, sp.name supplier_name, po.supplier_id, po.store_id, s.name store_name, po.status, ${L("purchase_order_status", "po", "status")} status_label,
+             (select group_concat(coalesce(json_extract(j.value, '$.name'), '') || '×' || coalesce(json_extract(j.value, '$.qty'), '') || coalesce(json_extract(j.value, '$.unit'), ''), '、') from json_each(po.lines) j) lines,
+             (select group_concat(distinct json_extract(j.value, '$.orderNumber')) from json_each(po.lines) j) order_numbers
+      from purchase_orders po
+      left join suppliers sp on sp.id = po.supplier_id
+      left join stores s on s.id = po.store_id`,
+  },
+  {
+    name: "v_comm_logs",
+    label: "連絡履歴 (お客様・協力業者とのやりとり)",
+    description: "やりとり 1 件 = 1 行。at・channel と channel_label・direction (inbound=受/outbound=発)・customer_name・supplier_name・contact_name・subject・body・staff",
+    sql: `
+      select l.id comm_id, l.at, l.channel, ${L("channel", "l", "channel")} channel_label, l.direction,
+             c.name customer_name, l.customer_id, sp.name supplier_name, l.contact_name, l.subject, l.body, u.name staff, coalesce(l.store_id, c.store_id) store_id
+      from comm_logs l
+      left join customers c on c.id = l.customer_id
+      left join suppliers sp on sp.id = l.supplier_id
+      left join users u on u.id = l.user_id`,
+  },
+  {
+    name: "v_staff_sales",
+    label: "担当者ごとの売上 (受注と担当者を結合済み)",
+    description: "受注 × 担当者 = 1 行 (1 件に複数の担当者がいるときはそれぞれに全額)。staff_name (空白なしの氏名。例: 中村花子)・order_number・sales_date・contract_date・store_id・store_name・customer_name・total。担当者別の売上は sum(total) group by staff_name。人で絞るときは staff_name like '%中村花子%' (空白を除いた名前)",
+    sql: `
+      select os.staff_name, so.order_id, so.number order_number, so.sales_date, so.contract_date, so.store_id, so.store_name, so.customer_name, so.total, so.title
+      from order_staff os join sales_orders so on so.order_id = os.order_id`,
+  },
+];
+
+/* ================================================================== */
+/* 閲覧範囲 (全店舗を見られない人は、生の表をその人の範囲で覆う)                  */
+/* ================================================================== */
+
+const sq = (v: string) => `'${v.replace(/'/g, "''")}'`;
+
+/** 店舗のロールの閲覧範囲で、生の表を覆う一時ビュー。全店舗を見られる人は空 (覆わない) */
+export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): string[] {
+  if (canSeeAllStores(user as User)) return [];
+  const store = sq(user.storeId as StoreId);
+  const me = sq(user.id);
+  const manager = user.role === "store_manager";
+  const v = (name: string, sql: string) => `create temp view ${name} as ${sql};`;
+  const none = (name: string) => v(name, `select * from main.${name} where 0`);
+  const byStore = (name: string) => v(name, `select * from main.${name} where store_id = ${store}`);
+  const knowledgeVis: Record<Role, string> = { admin: "", hq_staff: "", store_manager: "('all', 'manager')", store_staff: "('all')" };
+  return [
+    // 店舗の表
+    ...["customers", "inquiries", "quotes", "orders", "invoices", "cash_entries", "quality_issues", "survey_responses", "google_reviews", "attachments", "approvals", "documents", "purchase_orders", "photo_albums", "sales_orders", "sales_items"].map(byStore),
+    v("payments", "select * from main.payments where invoice_id in (select id from main.invoices where store_id = " + store + ")"),
+    v("order_staff", `select * from main.order_staff where order_id in (select order_id from main.sales_orders where store_id = ${store})`),
+    // 経費: 店長は自店舗、店舗スタッフは自分の申請 / 仕入: 店長は自店舗 / 仕入先: 店長のみ
+    v("expenses", `select * from main.expenses where ${manager ? `store_id = ${store}` : `submitted_by = ${me}`}`),
+    manager ? byStore("purchases") : none("purchases"),
+    manager ? v("suppliers", "select * from main.suppliers") : none("suppliers"),
+    // 連絡履歴: 見える顧客のもの・店舗のもの (仕入先とのやりとりは店長)
+    v("comm_logs", `select * from main.comm_logs where customer_id in (select id from main.customers where store_id = ${store}) or (customer_id is null and supplier_id is null and store_id = ${store})${manager ? ` or (customer_id is null and supplier_id is not null)` : ""}`),
+    // 社内連絡: 自店舗・全社・参加/作成したもの
+    v("threads", `select * from main.threads where store_id is null or store_id = ${store} or created_by = ${me} or participants like ${sq(`%"${user.id}"%`)}`),
+    v("messages", `select * from main.messages where thread_id in (select id from main.threads where store_id is null or store_id = ${store} or created_by = ${me} or participants like ${sq(`%"${user.id}"%`)})`),
+    // 社内資料: 見られる人の設定
+    v("knowledge", `select * from main.knowledge where active = 1 and (visibility is null or visibility in ${knowledgeVis[user.role]})`),
+    // 社員: 名前・ロール・所属だけ
+    v("users", "select id, name, kana, role, store_id, title, active from main.users"),
+    // FAX: 自店舗の送信・仕分け済みの受信、担当・登録したもの
+    v("fax_messages", `select * from main.fax_messages where user_id = ${me} or assigned_user_id = ${me} or (store_id = ${store} and (direction = 'outbound' or triage in ('auto', 'accepted')))`),
+    // 見せない表 (変更履歴・送信履歴・設定・資料台帳・FAX 番号・地図・検索の索引)
+    ...["audit_logs", "deliveries", "settings", "source_files", "fax_numbers", "map_locations", "map_location_refs", "map_documents", "map_document_links", "search_docs", "_rowhash"].map(none),
+  ];
+}
+
+/** 統合ビューを作る一時ビューの文 (閲覧範囲で覆ったあとに作るので、ビューも範囲の内側になる) */
+export function viewStatements(): string[] {
+  return VIEWS.map((v) => `create temp view ${v.name} as ${v.sql.trim()};`);
+}
+
+/* ================================================================== */
+/* 3) データ辞書                                                          */
+/* ================================================================== */
+
+/** 指標の定義 (画面・経営ダッシュボードと同じ) */
+export const METRICS: { name: string; definition: string }[] = [
+  { name: "売上", definition: "受注の金額 (税込) を売上計上日 (sales_date = 施工完了日) で数える。キャンセルは除く。SQL: select sum(total) from sales_orders where sales_date between …" },
+  { name: "受注金額・受注件数", definition: "契約日 (contract_date) で数える (キャンセルを除く)。sales_orders の contract_date" },
+  { name: "種別ごとの売上", definition: "sales_orders の amt_tatami (畳)・amt_fusuma (襖)・amt_shoji (障子)・amt_amido (網戸)・amt_curtain (カーテン)・amt_cloth (クロス)・amt_own (自社商品・小売)・amt_misc (諸経費・雑工事)・amt_discount (値引)。合計すると total" },
+  { name: "商品別の売上・数量・平均単価", definition: "sales_items (明細のある受注だけ)。平均単価 = sum(amount) / sum(qty)。品名は表記ゆれがあるので product like '%きずな%' のように探す" },
+  { name: "粗利", definition: "売上 − 記録された原価 (tatami_cost + purchase_cost)。襖・障子などの材料原価は記録がなく、粗利は実際より大きく出ることを必ず添える" },
+  { name: "簡易粗利 (経営ダッシュボード)", definition: "売上 − 仕入 (purchases の amount、請求日) − 経費 (expenses の承認済・精算済の amount)" },
+  { name: "担当者別の売上", definition: "v_staff_sales (order_staff と sales_orders) で sum(total) group by staff_name。1 件に複数の担当者がいるとそれぞれに全額を数える" },
+  { name: "未入金・売掛", definition: "v_invoices の balance (total − paid_amount)。状態が 発行済・一部入金・期日超過 のもの。期日超過は is_overdue = 1" },
+  { name: "成約率", definition: "受注になった見積 ÷ 結果が出た見積 (受注・失注・期限切れ)。v_quotes の status と order_number" },
+  { name: "前回の担当者", definition: "v_customers の last_staff (最後の受注の担当者)・last_workers (施工担当)" },
+];
+
+/** 言葉の言い換え (質問の言葉 → 表・列) */
+export const GLOSSARY: [string, string][] = [
+  ["お客様・顧客・得意先・施主", "customers / v_customers"],
+  ["案件・工事・現場・施工・受注・契約", "orders / sales_orders / v_cases"],
+  ["売上・売り上げ・実績", "sales_orders (sales_date)"],
+  ["見積・見積書・お見積り", "quotes / v_quotes"],
+  ["問い合わせ・依頼・相談・反響・TEL", "inquiries / v_inquiries"],
+  ["請求・請求書・売掛・未入金・督促", "invoices / v_invoices"],
+  ["入金・支払い (お客様から)", "payments / v_payments"],
+  ["予定・スケジュール・引き取り・納品・現地調査・訪問", "schedule_events / v_schedule"],
+  ["経費・レシート・精算", "expenses / v_expenses"],
+  ["仕入・買掛・材料費・外注 (請求)", "purchases / v_purchases"],
+  ["発注・発注書・注文 (仕入先へ)", "purchase_orders / v_purchase_orders"],
+  ["仕入先・協力業者・業者・取引先", "suppliers"],
+  ["連絡・やりとり・電話の記録・着信", "comm_logs / v_comm_logs"],
+  ["議事録・会議・決定事項・ルール・マニュアル", "knowledge (category・record_date)"],
+  ["クレーム・手直し", "quality_issues"],
+  ["アンケート・お客様の声", "survey_responses"],
+  ["口コミ・レビュー", "google_reviews"],
+  ["社員・スタッフ・職人・担当", "users (名前で結合)"],
+  ["店舗: 合志・中央・西・玉名・本社", "store_id = koshi・chuo・nishi・tamana・hq (store_name に店舗名)"],
+];
+
+const CODE_KINDS: [string, string][] = [
+  ["inquiry_status", "問い合わせの状態"],
+  ["quote_status", "見積の状態"],
+  ["order_status", "受注の状態"],
+  ["invoice_status", "請求の状態"],
+  ["expense_status", "経費の状態"],
+  ["purchase_status", "仕入の状態"],
+  ["purchase_order_status", "発注書の状態"],
+  ["channel", "受付経路 (channel)"],
+  ["category", "種別 (category)"],
+  ["schedule_kind", "予定の種類 (kind)"],
+  ["payment_method", "入金の方法 (method)"],
+  ["expense_method", "経費の支払方法"],
+  ["role", "社員のロール (role)"],
+];
+
+function codeLines(): string[] {
+  const rows = labelRows();
+  return CODE_KINDS.map(([kind, name]) => `- ${name}: ${rows.filter((r) => r[0] === kind).map((r) => `${r[1]}=${r[2]}`).join(", ")}`);
+}
+
+/** AI に渡すデータ辞書 (describe_database で返す。topic で表・ビューを絞れる) */
+export function dataModelText(user: Pick<User, "role">, topics: string[] = []): string {
+  const scoped = !canSeeAllStores(user as User);
+  const want = topics.map((t) => t.toLowerCase());
+  const views = want.length ? VIEWS.filter((v) => want.some((t) => v.name.includes(t) || v.label.includes(t))) : VIEWS;
+  return [
+    "# 一畳屋 統合データモデル",
+    "業務の流れ: 問い合わせ (inquiries) → 見積 (quotes) → 受注・施工 (orders) → 請求 (invoices) → 入金 (payments)。顧客 (customers) と予定 (schedule_events) がすべてにつながる。",
+    "つながり: quotes.inquiry_id → inquiries.id / orders.quote_id → quotes.id / invoices.order_id → orders.id / payments.invoice_id → invoices.id / *.customer_id → customers.id / *.store_id → stores.id / schedule_events.order_id → orders.id / purchases.order_id → orders.id / 社員は users.id (JSON の配列 assignee_ids・worker_ids は json_each で展開)",
+    scoped ? "※ あなたの閲覧範囲 (自店舗) のデータだけが入っています。ほかの店舗の数字は出せません。" : "",
+    "",
+    "## まず使う統合ビュー (名前・日本語の状態つき。結合を組み立てなくてよい)",
+    ...views.map((v) => `- ${v.name}: ${v.label}\n  ${v.description}`),
+    "",
+    "## 分析用の表",
+    "- sales_orders: 受注 1 件 = 1 行 (キャンセルを除く)。sales_date・contract_date・store_id・store_name・customer_name・total・amt_*・tatami_cost・purchase_cost・staff_names・worker_names・area",
+    "- sales_items: 明細 1 行 = 1 行。product・category・qty・unit_price・amount・sales_date・store_id",
+    "- order_staff: 受注と担当者",
+    "",
+    "## 指標の定義 (必ずこの定義で数える)",
+    ...METRICS.map((m) => `- ${m.name}: ${m.definition}`),
+    "",
+    "## 言葉と表",
+    ...GLOSSARY.map(([w, t]) => `- ${w} → ${t}`),
+    "",
+    "## コードと日本語の名前 (状態・受付経路などの列にはコードが入る。_label の列が日本語。条件はコードで書く: 例 status = 'pending_approval')",
+    ...codeLines(),
+    "- 日付は 'YYYY-MM-DD' の文字列、日時は ISO (UTC)。今日は date('now','localtime')。金額は税込。真偽は 0/1",
+    "",
+    "## 人の名前の比べ方 (必ず)",
+    "- 分析用の表の担当者名 (sales_orders.staff_names・order_staff.staff_name・v_staff_sales.staff_name) は空白なし (例: 中村花子)。ほかの列 (assignees・workers・assigned_staff・users.name) は空白あり (例: 中村 花子)",
+    "- 人の名前で絞るときは、両方の空白を除いて比べる: replace(replace(列, ' ', ''), '　', '') like '%中村花子%'。姓だけ (like '%中村%') でもよいが、同じ姓の人に注意",
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
+}

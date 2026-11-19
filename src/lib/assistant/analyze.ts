@@ -38,6 +38,8 @@ export interface AnalysisSpec {
   title?: string;
   /** VPS のデータベースへの SQL で集計したとき (query_database) */
   sql?: string;
+  /** 状態で絞る (コード。例: 問い合わせ new・in_progress / 経費 pending_approval)。省略時は既定 (売上はキャンセル以外、経費は承認済・精算済、仕入は却下以外) */
+  statuses?: string[];
 }
 
 export type ColumnKind = "text" | "yen" | "count" | "number" | "percent";
@@ -319,6 +321,7 @@ function salesAtoms(ctx: Ctx, spec: AnalysisSpec, from: string, to: string, need
   let tatamiCosted = 0;
   for (const f of facts) {
     if (!ctx.stores.has(f.storeId)) continue;
+    if (spec.statuses?.length && !spec.statuses.includes(f.status)) continue;
     const date = basis === "contract" ? f.contractDate : f.salesDate;
     if (!date || date < from || date > to) continue;
     if (customers.length) {
@@ -387,11 +390,12 @@ function otherAtoms(ctx: Ctx, subject: Subject, spec: AnalysisSpec, from: string
   const cats = spec.categories?.length ? spec.categories : null;
   const catOk = (c: string) => !cats || cats.some((k) => k === c || matchAny(CATEGORY_LABEL[c as keyof typeof CATEGORY_LABEL], [k]));
   const area = (customerId?: string) => db.customers.find((c) => c.id === customerId)?.area;
+  const statusOk = (st: string, fallback: (st: string) => boolean) => (spec.statuses?.length ? spec.statuses.includes(st) : fallback(st));
   switch (subject) {
     case "inquiries": {
       const won = new Set(db.orders.filter((o) => o.status !== "cancelled").map((o) => o.quoteId).filter(Boolean) as string[]);
       for (const i of db.inquiries) {
-        if (!ctx.stores.has(i.storeId) || !inR(i.receivedAt) || !customerOk(i.customerId) || !staffOk([i.assignedUserId, i.createdBy]) || !catOk(i.category)) continue;
+        if (!ctx.stores.has(i.storeId) || !inR(i.receivedAt) || !customerOk(i.customerId) || !staffOk([i.assignedUserId, i.createdBy]) || !catOk(i.category) || !statusOk(i.status, () => true)) continue;
         out.push({ date: i.receivedAt.slice(0, 10), store: i.storeId, customerId: i.customerId, dims: { channel: CHANNEL_LABEL[i.channel], category: CATEGORY_LABEL[i.category], status: INQUIRY_STATUS[i.status].label, staff: ctx.userName(i.assignedUserId), area: i.area || area(i.customerId) || "(不明)", customer: i.customerId ? ctx.customerLabel(i.customerId) : i.contactName }, v: { won: i.status === "won" || (i.quoteId && won.has(i.quoteId)) ? 1 : 0 } });
       }
       break;
@@ -399,7 +403,7 @@ function otherAtoms(ctx: Ctx, subject: Subject, spec: AnalysisSpec, from: string
     case "quotes":
       for (const q of db.quotes) {
         const d = q.issuedAt ?? q.createdAt;
-        if (!ctx.stores.has(q.storeId) || !inR(d) || !customerOk(q.customerId) || !staffOk([q.estimatorId, q.createdBy]) || !catOk(q.category)) continue;
+        if (!ctx.stores.has(q.storeId) || !inR(d) || !customerOk(q.customerId) || !staffOk([q.estimatorId, q.createdBy]) || !catOk(q.category) || !statusOk(q.status, () => true)) continue;
         const wonQ = Boolean(q.orderId) || q.status === "accepted";
         const decided = wonQ || q.status === "rejected" || q.status === "expired";
         out.push({ date: d.slice(0, 10), store: q.storeId, customerId: q.customerId, dims: { category: CATEGORY_LABEL[q.category], status: QUOTE_STATUS[q.status].label, staff: ctx.userName(q.estimatorId ?? q.createdBy), customer: ctx.customerLabel(q.customerId) }, v: { amount: q.total, won: wonQ ? 1 : 0, decided: decided ? 1 : 0 } });
@@ -407,14 +411,14 @@ function otherAtoms(ctx: Ctx, subject: Subject, spec: AnalysisSpec, from: string
       break;
     case "expenses":
       for (const e of db.expenses) {
-        if (!ctx.stores.has(e.storeId) || !inR(e.date) || !["approved", "paid"].includes(e.status) || !canViewExpense(user, e) || !staffOk([e.submittedBy])) continue;
+        if (!ctx.stores.has(e.storeId) || !inR(e.date) || !statusOk(e.status, (st) => ["approved", "paid"].includes(st)) || !canViewExpense(user, e) || !staffOk([e.submittedBy])) continue;
         if (spec.products?.length && !matchAny(`${e.account} ${e.vendor} ${e.description}`, spec.products)) continue;
         out.push({ date: e.date, store: e.storeId, dims: { account: e.account || "(未設定)", staff: ctx.userName(e.submittedBy), vendor: e.vendor || "(不明)", method: { cash: "現金", card: "カード", transfer: "振込" }[e.paymentMethod] ?? e.paymentMethod }, v: { amount: e.amount } });
       }
       break;
     case "purchases":
       for (const p of db.purchases) {
-        if (!ctx.stores.has(p.storeId) || !inR(p.invoiceDate) || p.status === "rejected" || !canViewPurchase(user, p)) continue;
+        if (!ctx.stores.has(p.storeId) || !inR(p.invoiceDate) || !statusOk(p.status, (st) => st !== "rejected") || !canViewPurchase(user, p)) continue;
         const sup = db.suppliers.find((s) => s.id === p.supplierId)?.name ?? "(不明)";
         if (spec.customers?.length && !matchAny(sup, spec.customers)) continue;
         if (spec.products?.length && !matchAny(`${p.description} ${(p.items ?? []).map((i) => i.name).join(" ")}`, spec.products)) continue;
