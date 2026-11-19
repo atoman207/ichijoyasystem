@@ -7,9 +7,11 @@ import { runToolLoop, type ToolCall, type ToolDef } from "@/lib/ai/provider";
 import { searchKnowledge } from "@/lib/knowledge";
 import { listChatLogs, searchDocs } from "@/lib/chatbot/store";
 import { analysisCatalog, analysisText, runAnalysis, type AnalysisResult, type AnalysisSpec } from "./analyze";
-import { getRecord, listSchedule, searchAll, storeScopeNote, RECORD_TYPE_LABEL } from "./search";
+import { getRecord, lastSearchSource, listSchedule, searchAll, storeScopeNote, RECORD_TYPE_LABEL } from "./search";
 import { scheduleSuggestTool } from "./schedule-tool";
 import { permissionHints } from "@/lib/chatbot/permission-hints";
+import { describeTables, runSql, sqlTable, tableList } from "@/lib/datastore/sql";
+import { mirrorReady } from "@/lib/datastore/mirror";
 
 /**
  * 社内 AI アシスタント (画面左下の「質問する」と AI アシスタントの画面)
@@ -59,7 +61,10 @@ const strs = (v: unknown, max = 10) => (Array.isArray(v) ? v.filter((x): x is st
 
 const TYPES = Object.keys(RECORD_TYPE_LABEL);
 
-function tools(includeSchedule: boolean): ToolDef[] {
+/** VPS のデータベースへの SQL を使える (全店舗のデータが見えるロールだけ。店舗のロールは店舗の範囲の道具を使う) */
+const canUseSql = (user: User) => canSeeAllStores(user) && process.env.ICHIJOYA_DATA_DB !== "off";
+
+function tools(user: User): ToolDef[] {
   const list: ToolDef[] = [
     {
       name: "search_records",
@@ -145,7 +150,28 @@ function tools(includeSchedule: boolean): ToolDef[] {
       parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
     },
   ];
-  if (includeSchedule && scheduleSuggestTool) list.push(scheduleSuggestTool.def);
+  if (scheduleSuggestTool) list.push(scheduleSuggestTool.def);
+  if (canUseSql(user)) {
+    list.push(
+      {
+        name: "describe_database",
+        description: "VPS のデータベース (システムの全データの写し。SQLite) の表の列と意味を見る。query_database で SQL を書く前に、使う表を確かめる。",
+        parameters: { type: "object", properties: { tables: { type: "array", items: { type: "string" }, description: "表の名前 (省略 = 主な表: sales_orders・sales_items・order_staff・orders・customers・schedule_events)" } }, required: [] },
+      },
+      {
+        name: "query_database",
+        description: `VPS のデータベース (システムの全データの写し。SQLite) に読み取りの SQL (SELECT の 1 文) で問い合わせ、結果の表を得る。analyze で出せない集計・条件の組み合わせ・件数の確認・記録の突き合わせに使う。結果の表は画面に表示される。表: ${tableList()}。まず describe_database で列を確かめる。売上は sales_orders (受注ごと)・sales_items (明細) を使い、キャンセルは入っていない。日付は 'YYYY-MM-DD' の文字列で比べる。結果は 500 行まで。`,
+        parameters: {
+          type: "object",
+          properties: {
+            sql: { type: "string", description: "SQLite の SELECT 文 (1 文。WITH 可)" },
+            title: { type: "string", description: "結果の表の見出し (例: 2026年 店舗別・担当者別の売上)" },
+          },
+          required: ["sql", "title"],
+        },
+      },
+    );
+  }
   return list;
 }
 
@@ -183,6 +209,9 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     "- 仕入先・発注履歴は search_records (types: supplier) → get_record (type: supplier)。",
     "- 売上の分析は analyze (subject: sales)。商品名は表記ゆれがあるので、まず品名の一覧を見てから絞る。",
     scheduleSuggestTool ? "- 新しい案件・訪問の予定の候補日は suggest_schedule。" : "",
+    canUseSql(user)
+      ? "- analyze の軸・指標で表せない集計 (複数の表の組み合わせ・細かい条件・件数の確認) は、describe_database で列を確かめてから query_database で SQL を書いて調べる。数字は必ず結果の表から書く。SQL の誤りが返ってきたら直して呼び直す。"
+      : "",
   ]
     .filter((l) => l !== "")
     .join("\n");
@@ -204,7 +233,7 @@ function makeExecutor(db: Database, user: User, now: Date, out: { tables: Analys
       case "search_records": {
         out.usedData = true;
         const r = searchAll(db, user, { query: str(a.query) ?? "", types: strs(a.types, 20), from: str(a.from), to: str(a.to), store: str(a.store), limit: typeof a.limit === "number" ? a.limit : undefined });
-        out.tools.push({ name: "横断検索", summary: `${str(a.query) || "(言葉なし)"}${strs(a.types)?.length ? ` [${strs(a.types)!.map((t) => RECORD_TYPE_LABEL[t as keyof typeof RECORD_TYPE_LABEL] ?? t).join("・")}]` : ""} → ${r.total} 件` });
+        out.tools.push({ name: lastSearchSource === "database" ? "横断検索 (VPS のデータベース)" : "横断検索", summary: `${str(a.query) || "(言葉なし)"}${strs(a.types)?.length ? ` [${strs(a.types)!.map((t) => RECORD_TYPE_LABEL[t as keyof typeof RECORD_TYPE_LABEL] ?? t).join("・")}]` : ""} → ${r.total} 件` });
         for (const h of r.hits.slice(0, 4)) addSource({ label: h.label, href: h.href, kind: h.typeLabel });
         if (!r.total) return "見つかりませんでした (閲覧できる範囲の記録に当てはまるものはありません)。言葉を変える・減らす、種類を変えて探し直すこともできます。";
         return `${r.total} 件${r.partial ? " (すべての言葉を含む記録はなく、一部の言葉で探した結果)" : ""}。種類別: ${Object.entries(r.counts).map(([k, v]) => `${RECORD_TYPE_LABEL[k as keyof typeof RECORD_TYPE_LABEL]} ${v}`).join("、")}\n${r.hits.map((h) => `- [${h.typeLabel}] id=${h.id} ${h.href ? `[${h.label}](${h.href})` : h.label} ${h.date ? `(${h.date})` : ""}: ${h.snippet}`).join("\n")}`;
@@ -298,6 +327,28 @@ function makeExecutor(db: Database, user: User, now: Date, out: { tables: Analys
         for (const x of rows.slice(0, 2)) addSource({ label: `過去の相談: ${x.question.slice(0, 30)}`, href: `/ai?tab=history&id=${x.id}`, kind: "過去の相談" });
         return rows.map((x) => `- ${x.at.slice(0, 10)} ${x.userName}: Q「${x.question}」\n  A: ${x.answer.replace(/\n/g, " ").slice(0, 400)} [履歴](/ai?tab=history&id=${x.id})`).join("\n");
       }
+      case "describe_database": {
+        if (!canUseSql(user)) return "この道具は使えません。";
+        out.tools.push({ name: "データベースの表", summary: (strs(a.tables, 12) ?? []).join("・") || "主な表" });
+        return describeTables(strs(a.tables, 12) ?? []);
+      }
+      case "query_database": {
+        if (!canUseSql(user)) return "この道具は使えません (全店舗のデータを見られるロールだけ)。";
+        if (!mirrorReady()) return "VPS のデータベースを準備中です。analyze・search_records を使ってください。";
+        out.usedData = true;
+        const sql = str(a.sql, 8000) ?? "";
+        const title = str(a.title, 60) ?? "データベースの集計";
+        const r = await runSql(sql);
+        if (!r.ok) {
+          out.tools.push({ name: "データベース (SQL)", summary: `誤り: ${(r.error ?? "").slice(0, 80)}` });
+          return `SQL を実行できませんでした: ${r.error}\nSQL: ${sql}`;
+        }
+        const t = sqlTable(r, sql, title);
+        if (out.tables.length < 4) out.tables.push(t);
+        out.tools.push({ name: "データベース (SQL)", summary: `${title} → ${r.rows.length} 行 (${r.ms}ms)` });
+        addSource({ label: `${title} (VPS のデータベース)`, kind: "データベース" });
+        return `${analysisText(t, 60)}`;
+      }
       case "suggest_schedule": {
         if (!scheduleSuggestTool) return "予定の候補日の提案は、まだ使えません。";
         out.usedData = true;
@@ -344,7 +395,7 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   const res = await runToolLoop({
     system: systemPrompt(db, user, now),
     messages,
-    tools: tools(true),
+    tools: tools(user),
     execute,
     maxRounds: 7,
     maxTokens: 3000,

@@ -9,6 +9,7 @@ import { DraftForm } from "@/components/features/DraftForm";
 import Link from "@/components/ui/Link";
 import { Badge, Card, CardHeader, Flash, LinkTabs, PageHeader } from "@/components/ui";
 import { ChatbotAdmin } from "@/components/chatbot/ChatbotAdmin";
+import { DataMirrorCard } from "@/components/chatbot/DataMirrorCard";
 import { canManageChatbot } from "@/lib/auth/permissions";
 import { ensureChatbotData } from "@/lib/chatbot/build";
 import { chatbotStats, listQa } from "@/lib/chatbot/store";
@@ -83,5 +84,10 @@ function BotTab({ sp, enabled, db }: { sp: Record<string, string | undefined>; e
   ensureChatbotData(db);
   const page = Math.max(1, Number(sp.page) || 1);
   const { rows, total } = listQa({ q: sp.q, origin: sp.origin, flagged: sp.flagged === "1", limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
-  return <ChatbotAdmin stats={chatbotStats()} train={trainState()} pending={pendingDocs().length} aiEnabled={enabled} list={{ rows, total, page, size: PAGE_SIZE }} sp={sp} />;
+  return (
+    <div className="space-y-4">
+      <DataMirrorCard />
+      <ChatbotAdmin stats={chatbotStats()} train={trainState()} pending={pendingDocs().length} aiEnabled={enabled} list={{ rows, total, page, size: PAGE_SIZE }} sp={sp} />
+    </div>
+  );
 }

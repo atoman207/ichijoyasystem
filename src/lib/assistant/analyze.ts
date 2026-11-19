@@ -36,6 +36,8 @@ export interface AnalysisSpec {
   limit?: number;
   pivot?: boolean;
   title?: string;
+  /** VPS のデータベースへの SQL で集計したとき (query_database) */
+  sql?: string;
 }
 
 export type ColumnKind = "text" | "yen" | "count" | "number" | "percent";

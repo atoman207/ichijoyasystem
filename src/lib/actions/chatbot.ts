@@ -164,6 +164,18 @@ export async function deleteChatbotQa(id: number, formData: FormData) {
   redirect(withMsg(to, "回答を削除しました。"));
 }
 
+/** VPS のデータベース (システムの全データの写し) を作り直す。時間がかかるので、始めたらすぐに戻る */
+export async function rebuildDataMirror() {
+  const user = await requireManager();
+  const { rebuildMirror } = await import("@/lib/datastore/mirror");
+  void rebuildMirror().catch((err) => console.error("[mirror] rebuild failed:", err));
+  await mutate((db) => {
+    addAudit(db, { userId: user.id, action: "update", entity: "ai", entityId: "data-mirror", entityLabel: "VPS のデータベース", summary: "VPS のデータベース (AI が検索・集計に使うシステムの全データの写し) を作り直し", storeId: user.storeId });
+  });
+  revalidatePath("/ai");
+  redirect(withMsg(BACK, "VPS のデータベースの作り直しを始めました。1〜3 分ほどで終わります (画面を再読み込みすると状況を確認できます)。"));
+}
+
 /** システムの説明 (使い方・権限・画面・社内資料) から、資料と自動の質問を作り直す */
 export async function rebuildChatbot() {
   const user = await requireManager();

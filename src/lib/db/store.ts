@@ -75,6 +75,33 @@ const state: StoreState = (g.__ichijoyaStore ??= { revision: 0, checkedAt: 0, qu
 
 const COLLECTIONS = TABLES.map((t) => t.collection);
 
+/* ---------------- 変更の通知 (VPS のデータベース src/lib/datastore/mirror.ts が受け取る) ---------------- */
+
+/**
+ * データの変更: rows = 行の追加・変更と削除 / reload = 全体 (または collection の表全体) を読み直した。
+ * 書き込み (mutate)・他のインスタンスの変更の取り込み (catchUp)・全件の読み込みのたびに知らせる
+ */
+export type DataChange = { kind: "rows"; collection: string; upserts: Entity[]; deletes: string[] } | { kind: "reload"; collection?: string };
+type DataListener = (changes: DataChange[]) => void;
+const gl = globalThis as typeof globalThis & { __ichijoyaDataListeners?: Set<DataListener> };
+const listeners: Set<DataListener> = (gl.__ichijoyaDataListeners ??= new Set());
+
+export function onDataChange(fn: DataListener): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function emit(changes: DataChange[]) {
+  if (!changes.length) return;
+  for (const fn of listeners) {
+    try {
+      fn(changes);
+    } catch (err) {
+      console.warn("[db] change listener failed:", (err as Error).message);
+    }
+  }
+}
+
 function collection(db: Database, name: string): Entity[] {
   return (db as unknown as Record<string, Entity[]>)[name] ?? [];
 }
@@ -93,6 +120,7 @@ function install(db: Database, revision: number) {
   state.cache = buildCache(state.db);
   state.revision = revision;
   state.checkedAt = Date.now();
+  emit([{ kind: "reload" }]);
 }
 
 /** mutate と取り直しを 1 件ずつ順番に実行する */
@@ -184,12 +212,14 @@ async function catchUp(from: number, to: number): Promise<boolean> {
   }
   const db = state.db!;
   const all = db as unknown as Record<string, Entity[]>;
+  const notices: DataChange[] = [];
   for (const [name, m] of ops) {
     const f = fetched.get(name)!;
     // 配列は作り直す (ID の索引 queries.ts の byId は配列ごとにキャッシュしているため)
     if (f.full) {
       all[name] = f.rows;
       state.cache!.set(name, { ids: f.rows.map((r) => r.id), json: new Map(f.rows.map((r) => [r.id, JSON.stringify(r)])) });
+      notices.push({ kind: "reload", collection: name });
       continue;
     }
     const got = new Map(f.rows.map((r) => [r.id, r]));
@@ -218,7 +248,9 @@ async function catchUp(from: number, to: number): Promise<boolean> {
     cache.ids = next.map((r) => r.id);
     state.cache!.set(name, cache);
     all[name] = next;
+    notices.push({ kind: "rows", collection: name, upserts: f.rows, deletes: [...m].filter(([id]) => !got.has(id)).map(([id]) => id) });
   }
+  emit(notices);
   state.revision = to;
   state.checkedAt = Date.now();
   const changed = [...ops.values()].reduce((a, m) => a + m.size, 0);
@@ -264,6 +296,7 @@ async function loadFromSnapshot(): Promise<boolean> {
   state.revision = header.revision;
   state.checkedAt = Date.now();
   state.snapshotRevision = header.revision;
+  emit([{ kind: "reload" }]);
   if (rev > header.revision && !(await catchUp(header.revision, rev))) return false;
   console.info(`[db] loaded ${rowCount()} rows from the local snapshot (revision ${header.revision}${rev > header.revision ? ` → ${rev}` : ""}) in ${Date.now() - started}ms`);
   return true;
@@ -447,6 +480,7 @@ export function mutate<T>(fn: (db: Database) => T): Promise<T> {
       }
     }
     state.cache = changes.next;
+    emit(COLLECTIONS.filter((n) => changes.upserts.has(n) || changes.deletes.has(n)).map((n) => ({ kind: "rows" as const, collection: n, upserts: changes.upserts.get(n) ?? [], deletes: changes.deletes.get(n) ?? [] })));
     return result;
   });
 }

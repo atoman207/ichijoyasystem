@@ -62,7 +62,7 @@ export const RECORD_TYPE_LABEL: Record<RecordType, string> = {
   file: "資料台帳",
 };
 
-interface Entry {
+export interface Entry {
   type: RecordType;
   id: string;
   /** 正規化した本文 (検索用) */
@@ -123,12 +123,49 @@ function buildIndex(db: Database): Entry[] {
   return out;
 }
 
+/** 横断検索の索引 (記録ごとの見出しと本文。VPS のデータベースの search_docs にも同じものを入れる) */
+export function searchEntries(db: Database): Entry[] {
+  return index(db);
+}
+
 function index(db: Database): Entry[] {
   const sig = signature(db);
   if (g.__ichijoyaSearchIndex?.sig === sig) return g.__ichijoyaSearchIndex.entries;
   const entries = buildIndex(db);
   g.__ichijoyaSearchIndex = { sig, entries };
   return entries;
+}
+
+const COLLECTION_OF: Record<RecordType, keyof Database> = {
+  customer: "customers",
+  inquiry: "inquiries",
+  quote: "quotes",
+  order: "orders",
+  invoice: "invoices",
+  payment: "payments",
+  schedule: "schedule",
+  expense: "expenses",
+  purchase: "purchases",
+  supplier: "suppliers",
+  purchase_order: "purchaseOrders",
+  comm: "commLogs",
+  thread: "threads",
+  knowledge: "knowledge",
+  quality: "qualityIssues",
+  survey: "surveys",
+  review: "reviews",
+  fax: "faxMessages",
+  photo: "photoAlbums",
+  file: "sourceFiles",
+};
+/** ID の一覧 (配列ごと。追加・削除で件数が変わったら作り直す) */
+const idCache = new WeakMap<object, { len: number; ids: Set<string> }>();
+function recordExists(db: Database, e: Entry): boolean {
+  const rows = db[COLLECTION_OF[e.type]] as unknown as { id: string }[];
+  if (!Array.isArray(rows)) return false;
+  let c = idCache.get(rows);
+  if (!c || c.len !== rows.length) idCache.set(rows, (c = { len: rows.length, ids: new Set(rows.map((r) => r.id)) }));
+  return c.ids.has(e.id);
 }
 
 /** 記録ごとの閲覧権限 (画面と同じ判定) */
@@ -353,6 +390,18 @@ export function queryTerms(q: string): string[] {
   ].slice(0, 8);
 }
 
+/**
+ * 検索の候補を VPS のデータベース (src/lib/datastore/mirror.ts の search_docs・search_fts) から取る関数。
+ * データベースが使えないとき (準備中・サンプルデータ) は undefined を返し、メモリの索引で探す
+ */
+export type SearchProvider = (q: { terms: string[]; mode: "and" | "or"; types: RecordType[]; storeId?: string; from?: string; to?: string; limit: number }) => Entry[] | undefined;
+const gp = globalThis as typeof globalThis & { __ichijoyaSearchProvider?: SearchProvider };
+export function setSearchProvider(fn: SearchProvider | undefined): void {
+  gp.__ichijoyaSearchProvider = fn;
+}
+/** 最後の検索をどこで行ったか (回答の根拠の表示用) */
+export let lastSearchSource: "database" | "memory" = "memory";
+
 export function searchAll(db: Database, user: User, opts: SearchOptions): SearchResult {
   const terms = queryTerms(opts.query ?? "");
   const types = new Set((opts.types ?? []).filter((t): t is RecordType => t in RECORD_TYPE_LABEL));
@@ -360,7 +409,20 @@ export function searchAll(db: Database, user: User, opts: SearchOptions): Search
   const from = opts.from && /^\d{4}-\d{2}-\d{2}$/.test(opts.from) ? opts.from : "";
   const to = opts.to && /^\d{4}-\d{2}-\d{2}$/.test(opts.to) ? opts.to : "";
   const limit = Math.min(40, Math.max(1, opts.limit ?? 15));
-  const pool = index(db).filter((e) => (!types.size || types.has(e.type)) && (!store || e.storeId === store.id) && (!from || e.date >= from) && (!to || (e.date && e.date <= to)));
+  const inMemory = () => index(db).filter((e) => (!types.size || types.has(e.type)) && (!store || e.storeId === store.id) && (!from || e.date >= from) && (!to || (e.date && e.date <= to)));
+  // VPS のデータベースで候補を探す (なければメモリの索引)
+  const provider = gp.__ichijoyaSearchProvider;
+  const fromDb = (mode: "and" | "or") => {
+    try {
+      return provider?.({ terms, mode, types: [...types], storeId: store?.id, from: from || undefined, to: to || undefined, limit: 4000 });
+    } catch (err) {
+      console.warn("[search] database search failed, using memory:", (err as Error).message);
+      return undefined;
+    }
+  };
+  const dbPool = fromDb("and");
+  lastSearchSource = dbPool ? "database" : "memory";
+  let pool = dbPool ?? inMemory();
   const score = (e: Entry, needAll: boolean): number => {
     if (!terms.length) return 1;
     let s = 0;
@@ -378,9 +440,11 @@ export function searchAll(db: Database, user: User, opts: SearchOptions): Search
   let found = pool.map((e) => ({ e, s: score(e, true) })).filter((x) => x.s > 0);
   if (!found.length && terms.length > 1) {
     partial = true;
+    if (dbPool) pool = fromDb("or") ?? inMemory();
     found = pool.map((e) => ({ e, s: score(e, false) })).filter((x) => x.s > terms.length * 3);
   }
-  found = found.filter((x) => canSee(db, user, x.e));
+  // 閲覧の権限は、システムの今の記録で確かめる (データベースの写しにあっても、消された記録は出さない)
+  found = found.filter((x) => recordExists(db, x.e) && canSee(db, user, x.e));
   const counts: Partial<Record<RecordType, number>> = {};
   for (const x of found) counts[x.e.type] = (counts[x.e.type] ?? 0) + 1;
   // 点数の高い順 → 新しい順 (言葉のない一覧 (予定の一覧など) は日付の順)

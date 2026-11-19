@@ -123,16 +123,16 @@ function areaOf(db: Database, o: Order, customerArea: Map<string, string>): stri
 }
 
 function buildOrderFacts(db: Database): OrderFact[] {
-  const userName = new Map(db.users.map((u) => [u.id, u.name.replace(/[\s　]+/g, "")]));
-  const customerArea = new Map(db.customers.filter((c) => c.area).map((c) => [c.id, c.area!]));
-  const quoteById = new Map(db.quotes.map((q) => [q.id, q]));
-  const productCat = new Map(db.products.map((p) => [p.id, CATEGORY_TO_AMOUNT[p.category] ?? "misc"]));
-  const invoiceByOrder = new Map(db.invoices.filter((i) => i.status !== "void" && i.items?.length).map((i) => [i.orderId, i]));
+  const userName = new Map((db.users ?? []).map((u) => [u.id, u.name.replace(/[\s　]+/g, "")]));
+  const customerArea = new Map((db.customers ?? []).filter((c) => c.area).map((c) => [c.id, c.area!]));
+  const quoteById = new Map((db.quotes ?? []).map((q) => [q.id, q]));
+  const productCat = new Map((db.products ?? []).map((p) => [p.id, CATEGORY_TO_AMOUNT[p.category] ?? "misc"]));
+  const invoiceByOrder = new Map((db.invoices ?? []).filter((i) => i.status !== "void" && i.items?.length).map((i) => [i.orderId, i]));
   const purchaseByOrder = new Map<string, number>();
-  for (const p of db.purchases) if (p.orderId && p.status !== "rejected") purchaseByOrder.set(p.orderId, (purchaseByOrder.get(p.orderId) ?? 0) + p.amount);
+  for (const p of db.purchases ?? []) if (p.orderId && p.status !== "rejected") purchaseByOrder.set(p.orderId, (purchaseByOrder.get(p.orderId) ?? 0) + p.amount);
 
   const out: OrderFact[] = [];
-  for (const o of db.orders) {
+  for (const o of db.orders ?? []) {
     if (o.status === "cancelled") continue;
     const date = o.salesDate ?? o.contractDate;
     let items: ItemFact[] = [];
@@ -195,9 +195,9 @@ const g = globalThis as typeof globalThis & { __ichijoyaSalesFacts?: { sig: stri
 
 function signature(db: Database): string {
   let latest = "";
-  for (const o of db.orders) if (o.updatedAt > latest) latest = o.updatedAt;
-  for (const p of db.purchases) if (p.updatedAt > latest) latest = p.updatedAt;
-  return [db.orders.length, db.quotes.length, db.purchases.length, db.invoices.length, latest].join("|");
+  for (const o of db.orders ?? []) if (o.updatedAt > latest) latest = o.updatedAt;
+  for (const p of db.purchases ?? []) if (p.updatedAt > latest) latest = p.updatedAt;
+  return [db.orders?.length, db.quotes?.length, db.purchases?.length, db.invoices?.length, latest].join("|");
 }
 
 /** 売上の分析用データ (キャンセルを除く全受注。閲覧範囲の絞り込みは呼び出し側で行う) */
