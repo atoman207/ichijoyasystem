@@ -49,3 +49,29 @@ export function IchijoyaLogo({
     </svg>
   );
 }
+
+/**
+ * 一畳屋のマーク (ロゴの左の図形だけ。正方形に近い 1.36 : 1)。アイコン・アバター用 (例: チャットボットの顔)。
+ * 色は IchijoyaLogo と同じ (黒 + 赤のアクセント / white は白一色)
+ */
+export function IchijoyaMark({ variant = "color", className, title = "" }: { variant?: "color" | "white"; className?: string; title?: string }) {
+  const ink = variant === "white" ? "#ffffff" : "#000000";
+  const accent = variant === "white" ? "#ffffff" : LOGO_ACCENT;
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 112.03 82.16"
+      fill={ink}
+      className={className}
+      role={title ? "img" : undefined}
+      aria-label={title || undefined}
+      aria-hidden={title ? undefined : true}
+      focusable="false"
+    >
+      <path d="M10.58,47.25C7,45,3.39,42.92,0,41.08,18.67,30.94,42.18,13.69,56,0c2.51,2.49,5.35,5.1,8.41,7.76C50.44,20.28,27.65,37,10.58,47.25Z" />
+      <path fill={accent} d="M56,59.75c-3.22-2.49-6.58-5-10-7.56,13-9.62,27.8-20.43,38.9-28.34,3.65,2.61,7.36,5.16,11,7.56C84.05,39,68.87,49.79,56,59.75Z" />
+      <path d="M69.2,70.38c-2.58-2.19-5.44-4.52-8.48-6.94a417.47,417.47,0,0,1,40.73-28.53c3.63,2.25,7.19,4.32,10.58,6.17A291.89,291.89,0,0,0,69.2,70.38Z" />
+      <path d="M79.51,19.87c-3.57-2.67-7-5.39-10.31-8.09C57.59,21.61,40.38,34.47,25.53,44.52h0c-3.3,2.24-6.49,4.33-9.47,6.23,3.68,2.4,7.39,4.94,11,7.56A250,250,0,0,1,56,82.16c2.51-2.49,5.35-5.1,8.41-7.76C56.8,67.57,46.55,59.49,36,51.9,50.24,41.65,67.38,29,79.51,19.87Z" />
+    </svg>
+  );
+}

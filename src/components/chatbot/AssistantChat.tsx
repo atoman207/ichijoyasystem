@@ -2,23 +2,31 @@
 
 import { Fragment, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import clsx from "clsx";
-import { Bot, Database, FileSearch, Loader2, SendHorizontal, Sparkles, Table2, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Database, FileSearch, Loader2, Mic, SendHorizontal, Sparkles, Square, Table2, ThumbsDown, ThumbsUp, UserRound, Volume2, VolumeX, X } from "lucide-react";
 import Link from "@/components/ui/Link";
+import { Avatar } from "@/components/ui";
+import { IchijoyaMark } from "@/components/brand/Logo";
 import { askChatbotAction, rateChatbotAnswer } from "@/lib/actions/chatbot";
 import type { AnalysisResult, AnalysisSpec } from "@/lib/assistant/analyze";
 import { AnalysisTable } from "./AnalysisTable";
+import { browserCanListen, browserCanSpeak, canRecord, useRecorder, useSpeaker, type VoiceMode } from "./voice";
 
 /**
  * 「質問する」の会話 (画面左下のチャットボットと AI アシスタントの画面で共通)
  * - 会話はこのタブのあいだだけブラウザに保存する (sessionStorage)。サーバーには相談の履歴として残る (AI アシスタント → 相談の履歴)
  * - 集計の表・グラフ、回答の根拠 (記録・資料・集計)、調べた内容を回答の下に表示する
  * - 続けて質問すると、前の回答で使った集計の条件を引き継ぐ (「店舗別にして」「前年と比べて」)
+ * - 音声: マイクのボタンで話して質問し (話し終わると自動で送る)、回答を 20 代の日本人女性の声で読み上げる (./voice.ts)。
+ *   声で聞いた質問の回答は自動で読み上げる。「読み上げ」をオンにすると、文字で聞いた回答も読み上げる
+ * - 顔: AI は一畳屋のマーク、質問した人はログインしている人の顔写真 (なければ名前の頭文字)
  */
 
 type Source = "database" | "data" | "smalltalk" | "ai" | "agent" | "analysis" | "docs" | "none";
 interface Msg {
   role: "user" | "assistant";
   content: string;
+  /** 声で聞いた質問 */
+  voice?: boolean;
   source?: Source;
   links?: { label: string; href: string }[];
   suggestions?: string[];
@@ -31,6 +39,7 @@ interface Msg {
 }
 
 const STORAGE = "ichijoya-chatbot";
+const READ_ALOUD = "ichijoya-chatbot-read-aloud";
 const STARTERS = ["今年の店舗別の売上と粗利を比較して", "来週の合志店の予定は？", "前年同期と比べて売上が減っている商品は？", "見積の作り方を教えて"];
 const PAGE_STARTERS = [
   "今年4月1日から10月31日までの店舗別売上と粗利を比較して",
@@ -133,10 +142,40 @@ export function useChatState(storageKey = STORAGE) {
   return { msgs, setMsgs, convId, open, setOpen, reset };
 }
 
+/** AI の顔 (一畳屋のマーク) */
+export function BotAvatar({ size = 28 }: { size?: number }) {
+  return (
+    <span className="grid shrink-0 place-items-center rounded-full border border-line bg-white shadow-sm" style={{ width: size, height: size }} aria-hidden>
+      <IchijoyaMark className="h-auto w-[62%]" />
+    </span>
+  );
+}
+
+export interface ChatUser {
+  id: string;
+  name: string;
+  /** 顔写真の URL (/api/avatars/…)。なければ名前の頭文字 */
+  avatarSrc?: string;
+}
+
+function UserAvatar({ user }: { user?: ChatUser }) {
+  if (!user) {
+    return (
+      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-subtle text-ink-3" aria-hidden>
+        <UserRound className="h-4 w-4" />
+      </span>
+    );
+  }
+  return <Avatar name={user.name} id={user.id} size={28} src={user.avatarSrc} />;
+}
+
+const fmtSec = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
 export function AssistantConversation({
   state,
   guest = false,
   userName,
+  user,
   variant = "widget",
   wide = false,
   inputRef,
@@ -144,6 +183,8 @@ export function AssistantConversation({
   state: ReturnType<typeof useChatState>;
   guest?: boolean;
   userName?: string;
+  /** ログインしている人 (質問の横に顔写真を出す) */
+  user?: ChatUser;
   variant?: "widget" | "page";
   wide?: boolean;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
@@ -155,6 +196,46 @@ export function AssistantConversation({
   const listRef = useRef<HTMLDivElement>(null);
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const ref = inputRef ?? ownRef;
+
+  // ---- 音声: サーバーの音声 (ログインした社員) かブラウザーの音声か ----
+  const [voice, setVoice] = useState<{ tts: VoiceMode; stt: VoiceMode }>({ tts: "none", stt: "none" });
+  const [readAloud, setReadAloud] = useState(false);
+  useEffect(() => {
+    const tts: VoiceMode = browserCanSpeak() ? "browser" : "none";
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 保存した設定はブラウザでしか読めない
+      setReadAloud(localStorage.getItem(READ_ALOUD) === "1");
+    } catch {
+      /* 保存なし */
+    }
+    if (guest) {
+      setVoice({ tts, stt: browserCanListen() ? "browser" : "none" });
+      return;
+    }
+    let alive = true;
+    fetch("/api/assistant/voice", { cache: "no-store" })
+      .then((r) => (r.ok ? (r.json() as Promise<{ tts?: boolean; stt?: boolean }>) : null))
+      .then((s) => alive && setVoice({ tts: s?.tts ? "server" : tts, stt: s?.stt && canRecord() ? "server" : browserCanListen() ? "browser" : "none" }))
+      .catch(() => alive && setVoice({ tts, stt: browserCanListen() ? "browser" : "none" }));
+    return () => {
+      alive = false;
+    };
+  }, [guest]);
+  const toggleRead = () => {
+    const next = !readAloud;
+    setReadAloud(next);
+    try {
+      localStorage.setItem(READ_ALOUD, next ? "1" : "0");
+    } catch {
+      /* 保存できない */
+    }
+    if (!next) speaker.stop();
+  };
+
+  const speaker = useSpeaker(voice.tts);
+  const sendRef = useRef<(text: string, opts?: { voice?: boolean }) => void>(() => {});
+  const recorder = useRecorder(voice.stt, (text) => sendRef.current(text, { voice: true }));
+  const recording = recorder.state === "recording" || recorder.state === "starting";
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -170,20 +251,36 @@ export function AssistantConversation({
     };
   }, [pending]);
 
-  const send = (text: string) => {
+  const send = (text: string, opts: { voice?: boolean } = {}) => {
     const q = text.trim();
     if (!q || pending) return;
+    speaker.stop();
+    speaker.unlock();
     const history = msgs.map(({ role, content, tables }) => ({ role, content, specs: tables?.map((t) => t.spec as AnalysisSpec) }));
-    setMsgs((m) => [...m, { role: "user", content: q }]);
+    // 回答の位置 (読み上げに使う): 今の会話 + 質問 の次
+    const answerIndex = msgs.length + 1;
+    const speakAnswer = Boolean(opts.voice) || readAloud;
+    setMsgs((m) => [...m, { role: "user", content: q, voice: opts.voice || undefined }]);
     setInput("");
     startTransition(async () => {
       try {
-        const r = await askChatbotAction(history, q, convId);
+        const r = await askChatbotAction(history, q, convId, { voice: Boolean(opts.voice) });
         setMsgs((m) => [...m, { role: "assistant", content: r.answer, source: r.source as Source, links: r.links, suggestions: r.suggestions, qaId: r.qaId, logId: r.logId, tables: r.tables, sources: r.sources, tools: r.tools }]);
+        if (speakAnswer && voice.tts !== "none") void speaker.speak(answerIndex, r.answer, Boolean(r.tables?.length));
       } catch {
         setMsgs((m) => [...m, { role: "assistant", content: "通信に失敗しました。画面を再読み込みしてから、もう一度お試しください。", source: "none" }]);
       }
     });
+  };
+  useEffect(() => {
+    sendRef.current = send;
+  });
+
+  const startVoice = () => {
+    // 押した操作の中で、あとから回答を再生できるようにしておく (iPhone など)
+    speaker.stop();
+    speaker.unlock();
+    recorder.start();
   };
 
   const rate = (index: number, good: boolean) => {
@@ -193,17 +290,16 @@ export function AssistantConversation({
     void rateChatbotAnswer(msg.qaId, good, msg.logId);
   };
 
-  const first = (userName ?? "").split(/[\s　]/)[0] || userName;
+  const first = (user?.name ?? userName ?? "").split(/[\s　]/)[0] || userName;
   const starters = guest ? GUEST_STARTERS : variant === "page" ? PAGE_STARTERS : STARTERS;
   const bubbleMax = wide || variant === "page" ? "max-w-[92%]" : "max-w-[85%]";
+  const voiceError = recorder.error || speaker.error;
 
   return (
     <>
       <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto bg-canvas px-3 py-4" aria-live="polite">
         <div className="flex gap-2">
-          <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-accent-soft text-accent">
-            <Bot className="h-4 w-4" aria-hidden />
-          </span>
+          <BotAvatar />
           <div className={clsx(bubbleMax, "rounded-2xl rounded-tl-sm border border-line bg-panel px-3 py-2 text-sm leading-relaxed text-ink")}>
             {guest ? (
               <>
@@ -218,6 +314,7 @@ export function AssistantConversation({
                 操作の手順、お客様・案件・予定・議事録の検索、売上や粗利の集計 (期間・店舗・商品・顧客・担当者を自由に組み合わせ) にお答えします。回答には根拠の記録を付けます。
               </>
             )}
+            {voice.stt !== "none" && <span className="mt-1 block text-xs text-ink-3">マイクのボタンを押すと、声で質問できます (回答も読み上げます)。</span>}
           </div>
         </div>
         {msgs.length === 0 && (
@@ -231,16 +328,18 @@ export function AssistantConversation({
         )}
         {msgs.map((m, i) =>
           m.role === "user" ? (
-            <div key={i} className="flex justify-end">
-              <div className={clsx(bubbleMax, "rounded-2xl rounded-tr-sm bg-accent px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap text-white")}>{m.content}</div>
+            <div key={i} className="flex justify-end gap-2">
+              <div className={clsx(bubbleMax, "rounded-2xl rounded-tr-sm bg-accent px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap text-white")}>
+                {m.voice && <Mic className="mr-1 inline h-3.5 w-3.5 -translate-y-px opacity-80" aria-label="声で質問" />}
+                {m.content}
+              </div>
+              <UserAvatar user={user} />
             </div>
           ) : (
             <div key={i} className="flex gap-2">
-              <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-accent-soft text-accent">
-                <Bot className="h-4 w-4" aria-hidden />
-              </span>
+              <BotAvatar />
               <div className={clsx("min-w-0 space-y-1.5", m.tables?.length ? "flex-1" : bubbleMax)}>
-                <div className="rounded-2xl rounded-tl-sm border border-line bg-panel px-3 py-2 text-sm leading-relaxed break-words text-ink">
+                <div className={clsx("rounded-2xl rounded-tl-sm border bg-panel px-3 py-2 text-sm leading-relaxed break-words text-ink", speaker.speakingId === i ? "border-accent/50 ring-2 ring-accent/15" : "border-line")}>
                   <RichText text={m.content} />
                 </div>
                 {m.tables?.map((t, ti) => (
@@ -302,9 +401,23 @@ export function AssistantConversation({
                       {SOURCE_LABEL[m.source]!.label}
                     </span>
                   )}
-                  {(m.qaId || m.logId) && (
-                    <span className="ml-auto flex items-center gap-0.5">
-                      {m.rated ? (
+                  <span className="ml-auto flex items-center gap-0.5">
+                    {voice.tts !== "none" &&
+                      (speaker.speakingId === i ? (
+                        <button type="button" onClick={speaker.stop} className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-accent-ink hover:bg-accent-soft" aria-label="読み上げを止める" title="読み上げを止める">
+                          <Square className="h-3 w-3 fill-current" aria-hidden /> 止める
+                        </button>
+                      ) : speaker.loadingId === i ? (
+                        <span className="grid h-6 w-6 place-items-center" aria-label="読み上げの準備中">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                        </span>
+                      ) : (
+                        <button type="button" onClick={() => void speaker.speak(i, m.content, Boolean(m.tables?.length))} className="grid h-6 w-6 place-items-center rounded hover:bg-accent-soft hover:text-accent-ink" aria-label="回答を読み上げる" title="回答を読み上げる">
+                          <Volume2 className="h-3.5 w-3.5" aria-hidden />
+                        </button>
+                      ))}
+                    {(m.qaId || m.logId) &&
+                      (m.rated ? (
                         <span>{m.rated === "up" ? "ありがとうございます" : "改善に使います"}</span>
                       ) : (
                         <>
@@ -315,9 +428,8 @@ export function AssistantConversation({
                             <ThumbsDown className="h-3.5 w-3.5" aria-hidden />
                           </button>
                         </>
-                      )}
-                    </span>
-                  )}
+                      ))}
+                  </span>
                 </div>
               </div>
             </div>
@@ -331,13 +443,67 @@ export function AssistantConversation({
         )}
       </div>
 
+      {(recorder.state !== "idle" || voiceError) && (
+        <div className="border-t border-line bg-panel px-3 py-2 text-xs" role="status" aria-live="polite">
+          {recorder.state === "transcribing" ? (
+            <span className="flex items-center gap-2 text-ink-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> 声を文字にしています…
+            </span>
+          ) : recording ? (
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2.5 w-2.5 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-critical opacity-60" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-critical" />
+              </span>
+              <span className="shrink-0 font-medium text-ink">{recorder.state === "starting" ? "マイクを準備しています…" : "お話しください"}</span>
+              <span className="tnum shrink-0 text-ink-3">{fmtSec(recorder.seconds)}</span>
+              <span className="h-1.5 min-w-8 flex-1 overflow-hidden rounded-full bg-subtle" aria-hidden>
+                <span className="block h-full rounded-full bg-accent transition-[width] duration-100" style={{ width: `${Math.round(recorder.level * 100)}%` }} />
+              </span>
+              <button type="button" onClick={recorder.cancel} className="shrink-0 rounded-md px-2 py-0.5 text-ink-2 hover:bg-subtle" title="録音をやめる (送らない)">
+                やめる
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2 text-critical-ink">
+              <span className="min-w-0 flex-1">{voiceError}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  recorder.clearError();
+                  speaker.clearError();
+                }}
+                className="grid h-5 w-5 shrink-0 place-items-center rounded hover:bg-critical-soft"
+                aria-label="閉じる"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            </div>
+          )}
+          {recording && recorder.interim && <p className="mt-1 truncate text-ink-2">{recorder.interim}</p>}
+          {recording && !recorder.interim && recorder.state === "recording" && <p className="mt-1 text-ink-3">話し終わると自動で送ります。すぐに送るときはもう一度マイクを押してください。</p>}
+        </div>
+      )}
+
       <form
-        className="flex items-end gap-2 border-t border-line bg-panel p-2.5"
+        className="flex items-end gap-1.5 border-t border-line bg-panel p-2.5"
         onSubmit={(e) => {
           e.preventDefault();
           send(input);
         }}
       >
+        {voice.tts !== "none" && (
+          <button
+            type="button"
+            onClick={toggleRead}
+            className={clsx("grid h-10 w-9 shrink-0 place-items-center rounded-xl", readAloud ? "bg-accent-soft text-accent-ink" : "text-ink-3 hover:bg-subtle hover:text-ink")}
+            aria-pressed={readAloud}
+            aria-label={readAloud ? "回答の読み上げ: オン" : "回答の読み上げ: オフ"}
+            title={readAloud ? "回答を自動で読み上げる: オン (押すとオフ)" : "回答を自動で読み上げる: オフ (声で聞いた質問は読み上げます)"}
+          >
+            {readAloud ? <Volume2 className="h-4 w-4" aria-hidden /> : <VolumeX className="h-4 w-4" aria-hidden />}
+          </button>
+        )}
         <textarea
           ref={ref}
           value={input}
@@ -350,11 +516,23 @@ export function AssistantConversation({
           }}
           rows={variant === "page" ? 2 : 1}
           maxLength={1000}
-          placeholder="質問を入力 (Enter で送信 / Shift+Enter で改行)"
+          placeholder={voice.stt !== "none" ? "質問を入力、またはマイクで話す" : "質問を入力 (Enter で送信 / Shift+Enter で改行)"}
           aria-label="質問"
-          className="max-h-32 min-h-10 flex-1 resize-none rounded-xl border border-line bg-subtle px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:border-accent focus:bg-panel focus:outline-none"
+          className="max-h-32 min-h-10 min-w-0 flex-1 resize-none rounded-xl border border-line bg-subtle px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:border-accent focus:bg-panel focus:outline-none"
         />
-        <button type="submit" disabled={pending || !input.trim()} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent text-white hover:bg-accent-hover disabled:opacity-40" aria-label="送信">
+        {voice.stt !== "none" && (
+          <button
+            type="button"
+            onClick={recording ? recorder.stop : startVoice}
+            disabled={pending || recorder.state === "transcribing"}
+            className={clsx("grid h-10 w-10 shrink-0 place-items-center rounded-xl disabled:opacity-40", recording ? "animate-pulse bg-critical text-white hover:bg-critical/90" : "border border-accent/40 text-accent hover:bg-accent-soft")}
+            aria-label={recording ? "話し終えて送る" : "声で質問する"}
+            title={recording ? "話し終えて送る" : "声で質問する (マイク)"}
+          >
+            {recorder.state === "transcribing" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : recording ? <Square className="h-4 w-4 fill-current" aria-hidden /> : <Mic className="h-4 w-4" aria-hidden />}
+          </button>
+        )}
+        <button type="submit" disabled={pending || !input.trim() || recording} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent text-white hover:bg-accent-hover disabled:opacity-40" aria-label="送信">
           <SendHorizontal className="h-4 w-4" aria-hidden />
         </button>
       </form>

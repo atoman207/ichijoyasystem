@@ -748,7 +748,7 @@ export function AppShell({
       <main id="main-content" className={MAIN_PAD}>
         <div className={MAIN_INNER}>{children}</div>
       </main>
-      <ChatbotWidget userName={user.name} />
+      <ChatbotWidget userName={user.name} userId={user.id} avatarSrc={user.avatarSrc} />
       <ScrollTopButton />
     </div>
   );

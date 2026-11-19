@@ -505,6 +505,8 @@ export interface ChatLogPayload {
   /** 使った道具 (名前と条件の要約) */
   tools?: { name: string; summary: string }[];
   provider?: string;
+  /** 声で聞いた質問 (音声入力) */
+  voice?: boolean;
 }
 
 export interface ChatLogRow {

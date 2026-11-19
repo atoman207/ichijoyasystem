@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import clsx from "clsx";
-import { Bot, Eraser, History, Maximize2, MessageCircleQuestion, Minimize2, X } from "lucide-react";
+import { Eraser, History, Maximize2, MessageCircleQuestion, Minimize2, X } from "lucide-react";
 import Link from "@/components/ui/Link";
-import { AssistantConversation, useChatState } from "./AssistantChat";
+import { AssistantConversation, BotAvatar, useChatState } from "./AssistantChat";
 
 /**
  * 画面左下の「質問する」(すべての画面に常に表示)。
@@ -13,7 +13,7 @@ import { AssistantConversation, useChatState } from "./AssistantChat";
  */
 
 /** guest: ログイン前の公開ページ用 (個人データ・社内資料は答えず、使い方の案内に限る) */
-export function ChatbotWidget({ userName, guest = false }: { userName?: string; guest?: boolean }) {
+export function ChatbotWidget({ userName, userId, avatarSrc, guest = false }: { userName?: string; userId?: string; avatarSrc?: string; guest?: boolean }) {
   const state = useChatState();
   const { open, setOpen, msgs, reset } = state;
   const [wide, setWide] = useState(false);
@@ -67,9 +67,7 @@ export function ChatbotWidget({ userName, guest = false }: { userName?: string; 
           )}
         >
           <header className="flex items-center gap-2 border-b border-line bg-accent-strong px-4 py-3 text-white">
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/15">
-              <Bot className="h-5 w-5" aria-hidden />
-            </span>
+            <BotAvatar size={36} />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold">{guest ? "システム案内" : "社内 AI アシスタント"}</p>
               <p className="truncate text-[11px] text-white/75">{guest ? "使い方・画面の場所・ログインについてお答えします" : "使い方・検索・売上の分析・社内資料にお答えします"}</p>
@@ -91,7 +89,7 @@ export function ChatbotWidget({ userName, guest = false }: { userName?: string; 
               <X className="h-4 w-4" aria-hidden />
             </button>
           </header>
-          <AssistantConversation state={state} guest={guest} userName={userName} variant="widget" wide={wide} inputRef={inputRef} />
+          <AssistantConversation state={state} guest={guest} userName={userName} user={!guest && userId && userName ? { id: userId, name: userName, avatarSrc } : undefined} variant="widget" wide={wide} inputRef={inputRef} />
         </section>
       )}
     </>

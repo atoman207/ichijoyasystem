@@ -4,7 +4,7 @@ import { Eraser } from "lucide-react";
 import { AssistantConversation, useChatState } from "./AssistantChat";
 
 /** AI アシスタントの画面の会話 (画面左下のチャットボットとは別の会話) */
-export function AssistantPage({ userName }: { userName: string }) {
+export function AssistantPage({ userName, userId, avatarSrc }: { userName: string; userId: string; avatarSrc?: string }) {
   const state = useChatState("ichijoya-assistant-page");
   return (
     <div className="flex h-[calc(100dvh-13rem)] min-h-[560px] flex-col overflow-hidden rounded-2xl border border-line bg-panel">
@@ -16,7 +16,7 @@ export function AssistantPage({ userName }: { userName: string }) {
           </button>
         )}
       </div>
-      <AssistantConversation state={state} userName={userName} variant="page" />
+      <AssistantConversation state={state} userName={userName} user={{ id: userId, name: userName, avatarSrc }} variant="page" />
     </div>
   );
 }

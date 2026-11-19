@@ -33,7 +33,7 @@ function cleanSpecs(v: unknown): AnalysisSpec[] | undefined {
 }
 
 /** 画面左下のチャットボット (「質問する」) への質問 (ログイン前のトップページからも使える) */
-export async function askChatbotAction(history: ChatTurn[], question: string, convId?: string): Promise<BotReply> {
+export async function askChatbotAction(history: ChatTurn[], question: string, convId?: string, opts?: { voice?: boolean }): Promise<BotReply> {
   const user = await getSessionUser();
   const db = user ? getDb() : await syncDb();
   const q = String(question ?? "").trim();
@@ -43,7 +43,7 @@ export async function askChatbotAction(history: ChatTurn[], question: string, co
     .slice(-8)
     .map((h) => ({ role: h.role, content: h.content.slice(0, 3000), specs: user && h.role === "assistant" ? cleanSpecs(h.specs) : undefined }));
   try {
-    return await askChatbot(db, user, turns, q, { convId: typeof convId === "string" ? convId.slice(0, 64) : undefined });
+    return await askChatbot(db, user, turns, q, { convId: typeof convId === "string" ? convId.slice(0, 64) : undefined, voice: opts?.voice === true });
   } catch (err) {
     console.error("[chatbot] failed:", err);
     return { answer: "ごめんなさい、いま回答を用意できませんでした。少し時間をおいてもう一度お試しください。", links: [], source: "none", suggestions: [] };

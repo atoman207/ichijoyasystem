@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db/store";
 import { aiStatus } from "@/lib/ai/provider";
 import { DRAFT_FORMAT_LABEL, DRAFT_TEMPLATES } from "@/lib/ai/draft";
 import { AssistantPage } from "@/components/chatbot/AssistantPage";
+import { avatarUrl } from "@/lib/account-rules";
 import { ChatHistory } from "@/components/chatbot/ChatHistory";
 import { DraftForm } from "@/components/features/DraftForm";
 import Link from "@/components/ui/Link";
@@ -42,7 +43,7 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<R
       ) : (
         <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-4">
           <div className="@4xl:col-span-3">
-            <AssistantPage userName={user.name} />
+            <AssistantPage userName={user.name} userId={user.id} avatarSrc={avatarUrl(user)} />
             {!enabled && <p className="mt-2 text-xs text-ink-3">AI のキーが設定されていないため、集計の質問は言葉の決まりで読み取り、使い方は資料から答えます。</p>}
           </div>
           <div className="space-y-4">

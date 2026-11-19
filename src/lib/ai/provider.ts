@@ -536,3 +536,104 @@ function parseJson<T>(text: string): T {
     throw new AiError("bad_output", "AI の応答を読み取れませんでした。もう一度お試しください。", t.slice(0, 200));
   }
 }
+
+/* ================================================================== */
+/* 音声 (「質問する」の読み上げと音声入力)。OpenAI の音声 API を使う                         */
+/* ================================================================== */
+
+/**
+ * 音声に使う OpenAI のキー。Claude には音声の API がないため、Claude を使う設定でも OpenAI のキーがあれば音声に使う。
+ * OpenAI のキーがないときは、画面がブラウザーの音声機能 (読み上げ・音声認識) に切り替える
+ */
+function openAiVoiceKey(): string | null {
+  const names = [...KEY_VARS, ...Object.keys(process.env).filter((n) => KEY_PATTERN.test(n) && !(KEY_VARS as readonly string[]).includes(n)).sort()];
+  for (const name of names) {
+    const key = cleanKey(process.env[name]);
+    if (!key || /^(your|xxx|sk-\.\.\.|<)/i.test(key)) continue;
+    if (providerOfKey(name, key) === "openai") return key;
+  }
+  return null;
+}
+
+export function voiceEnabled(): boolean {
+  return openAiVoiceKey() !== null && process.env.AI_VOICE?.trim().toLowerCase() !== "off";
+}
+
+/** 読み上げの声: 20 代の日本人女性 (明るく・やわらかく・聞き取りやすく) */
+const TTS_INSTRUCTIONS =
+  "20代の日本人女性の声で読み上げてください。明るくやわらかい声で、ていねいで親しみのある話し方にします。自然な標準語のイントネーションで、聞き取りやすい少しゆっくりめの速さにしてください。数字・金額・日付・固有名詞は正確に、はっきり読んでください。";
+const TTS_MODELS = () => [...new Set([process.env.OPENAI_TTS_MODEL?.trim(), "gpt-4o-mini-tts", "tts-1"].filter(Boolean) as string[])];
+const STT_MODELS = () => [...new Set([process.env.OPENAI_STT_MODEL?.trim(), "gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"].filter(Boolean) as string[])];
+let workingTtsModel: string | undefined;
+let workingSttModel: string | undefined;
+
+async function voiceFetch(path: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const base = (process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1").replace(/\/$/, "");
+  try {
+    return await fetch(`${base}${path}`, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    if ((err as Error).name === "TimeoutError" || (err as Error).name === "AbortError") throw new AiError("timeout", "音声の処理に時間がかかりすぎました。もう一度お試しください。");
+    throw new AiError("api", MSG.network, (err as Error).message);
+  }
+}
+
+async function voiceError(res: Response): Promise<AiError> {
+  const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+  const msg = body?.error?.message ?? `HTTP ${res.status}`;
+  if (res.status === 401 || res.status === 403) return new AiError("auth", MSG.auth, msg);
+  if (res.status === 429) return /quota|billing|insufficient/i.test(msg) ? new AiError("quota", "AI の利用枠を超えています。OpenAI の請求設定を確認してください。", msg) : new AiError("rate_limit", MSG.busy, msg);
+  if (res.status === 404 || (res.status === 400 && /model/i.test(msg))) return new AiError("unsupported", "音声のモデルを利用できません。", msg);
+  return new AiError("api", "音声の処理に失敗しました。時間をおいて、もう一度お試しください。", msg);
+}
+
+/** 文字 → 音声 (mp3)。text は読み上げ用に整えたもの (src/lib/speech-text.ts の forSpeech) */
+export async function synthesizeSpeech(text: string): Promise<{ audio: ArrayBuffer; contentType: string; model: string }> {
+  const key = openAiVoiceKey();
+  if (!key) throw new AiError("config", "音声の読み上げには OpenAI の API キーが必要です。");
+  const voice = process.env.OPENAI_TTS_VOICE?.trim() || "nova";
+  const models = [...new Set([workingTtsModel, ...TTS_MODELS()].filter(Boolean) as string[])];
+  let last: AiError | undefined;
+  for (const model of models) {
+    const res = await voiceFetch(
+      "/audio/speech",
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        // tts-1 は instructions に対応しないため、付けるのは gpt-4o 系だけ
+        body: JSON.stringify({ model, voice, input: text, response_format: "mp3", ...(/^gpt-/.test(model) ? { instructions: TTS_INSTRUCTIONS } : {}) }),
+      },
+      30_000,
+    );
+    if (res.ok) {
+      workingTtsModel = model;
+      return { audio: await res.arrayBuffer(), contentType: res.headers.get("content-type") || "audio/mpeg", model };
+    }
+    last = await voiceError(res);
+    if (last.code !== "unsupported") throw last;
+  }
+  throw last ?? new AiError("unsupported", "音声のモデルを利用できません。");
+}
+
+/** 音声 → 文字 (日本語)。hint は聞き取りの手がかりの言葉 (社名・店舗名・社員名など) */
+export async function transcribeAudio(audio: Blob, fileName: string, hint: string): Promise<{ text: string; model: string }> {
+  const key = openAiVoiceKey();
+  if (!key) throw new AiError("config", "音声入力には OpenAI の API キーが必要です。");
+  const models = [...new Set([workingSttModel, ...STT_MODELS()].filter(Boolean) as string[])];
+  let last: AiError | undefined;
+  for (const model of models) {
+    const form = new FormData();
+    form.append("model", model);
+    form.append("language", "ja");
+    form.append("prompt", hint.slice(0, 800));
+    form.append("file", audio, fileName);
+    const res = await voiceFetch("/audio/transcriptions", { method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form }, 45_000);
+    if (res.ok) {
+      workingSttModel = model;
+      const body = (await res.json().catch(() => null)) as { text?: string } | null;
+      return { text: (body?.text ?? "").trim(), model };
+    }
+    last = await voiceError(res);
+    if (last.code !== "unsupported") throw last;
+  }
+  throw last ?? new AiError("unsupported", "音声認識のモデルを利用できません。");
+}

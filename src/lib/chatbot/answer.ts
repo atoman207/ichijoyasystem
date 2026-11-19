@@ -146,7 +146,7 @@ const isKnowledgeQa = (m: QaMatch) => m.qa.sourceKeys.some((k) => k.startsWith("
  * チャットボットに答える。user が null のときはログイン前 (公開ホームなど)。
  * ログイン前は個人のデータ (予定・売上など) と社内資料は答えず、使い方・画面の案内に限る。
  */
-export async function askChatbot(db: Database, user: User | null, history: ChatTurn[], raw: string, opts: { convId?: string } = {}): Promise<BotReply> {
+export async function askChatbot(db: Database, user: User | null, history: ChatTurn[], raw: string, opts: { convId?: string; voice?: boolean } = {}): Promise<BotReply> {
   const t0 = Date.now();
   const q = raw.trim().slice(0, 1000);
   const norm = normalizeQuestion(q);
@@ -163,7 +163,7 @@ export async function askChatbot(db: Database, user: User | null, history: ChatT
     // 相談の履歴 (ログインした社員だけ。あいさつは残さない)
     if (user && r.source !== "smalltalk") {
       try {
-        const payload: ChatLogPayload = { links: r.links, sources: r.sources, tools: r.tools, tables: r.tables };
+        const payload: ChatLogPayload = { links: r.links, sources: r.sources, tools: r.tools, tables: r.tables, voice: opts.voice || undefined };
         r.logId = insertChatLog({ convId: opts.convId, userId: user.id, userName: user.name, role: user.role, storeId: user.storeId, question: q, answer: r.answer, source: r.source, payload, ms });
       } catch (err) {
         console.warn("[chatbot] chat log failed:", (err as Error).message);

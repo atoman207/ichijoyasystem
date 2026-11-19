@@ -6,6 +6,7 @@ const nextConfig: NextConfig = {
   // 開発中の表示 (左下の N) は、左下のチャットボットのボタンと重なるので出さない
   devIndicators: false,
   // セキュリティのヘッダー (nginx を通さず IP アドレス:3000 で直接開いたときにも付ける。HSTS は HTTPS の nginx が付ける)
+  // マイクは自分のサイトだけ許可する (「質問する」の音声入力)
   async headers() {
     return [
       {
@@ -14,7 +15,7 @@ const nextConfig: NextConfig = {
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "SAMEORIGIN" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          { key: "Permissions-Policy", value: "camera=(self), microphone=(), geolocation=()" },
+          { key: "Permissions-Policy", value: "camera=(self), microphone=(self), geolocation=()" },
         ],
       },
     ];
