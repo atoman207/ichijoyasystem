@@ -273,13 +273,11 @@ export async function runToolLoop(req: ToolLoopRequest): Promise<ToolLoopResult>
       const uses = res.blocks.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use");
       if (!uses.length || last) return { text: res.text, provider: "claude", model, rounds: round, calls, ms: Date.now() - t0 };
       messages.push({ role: "assistant", content: res.blocks as Anthropic.Beta.BetaContentBlockParam[] });
-      const results: Anthropic.Beta.BetaToolResultBlockParam[] = [];
-      for (const u of uses) {
-        const call = { id: u.id, name: u.name, args: (u.input && typeof u.input === "object" ? u.input : {}) as Record<string, unknown> };
-        calls.push(call);
-        const out = await req.execute(call).catch((e: Error) => `エラー: ${e.message}`);
-        results.push({ type: "tool_result", tool_use_id: u.id, content: out.slice(0, 24_000) });
-      }
+      // 同じ回の道具は並べて実行する (SQL は別スレッドなので待ち時間が重ならない)。結果の順番は呼ばれた順のまま
+      const batch = uses.map((u) => ({ id: u.id, name: u.name, args: (u.input && typeof u.input === "object" ? u.input : {}) as Record<string, unknown> }));
+      calls.push(...batch);
+      const outs = await Promise.all(batch.map((call) => req.execute(call).catch((e: Error) => `エラー: ${e.message}`)));
+      const results: Anthropic.Beta.BetaToolResultBlockParam[] = batch.map((call, i) => ({ type: "tool_result", tool_use_id: call.id, content: outs[i].slice(0, 24_000) }));
       messages.push({ role: "user", content: results });
     }
   }
@@ -292,12 +290,11 @@ export async function runToolLoop(req: ToolLoopRequest): Promise<ToolLoopResult>
     const res = await openAiCall(c, { messages, maxTokens: req.maxTokens ?? 3000, effort, tools, noToolUse: last, deadlineMs: Math.max(8_000, left() - 2_000) });
     if (!res.toolCalls?.length || last) return { text: res.text, provider: "openai", model: res.model, rounds: round, calls, ms: Date.now() - t0 };
     messages.push({ role: "assistant", content: res.text || null, tool_calls: res.toolCalls });
-    for (const tc of res.toolCalls) {
-      const call = { id: tc.id, name: tc.function.name, args: parseArgs(tc.function.arguments) };
-      calls.push(call);
-      const out = await req.execute(call).catch((e: Error) => `エラー: ${e.message}`);
-      messages.push({ role: "tool", tool_call_id: tc.id, content: out.slice(0, 24_000) });
-    }
+    // 同じ回の道具は並べて実行する (結果の順番は呼ばれた順のまま)
+    const batch = res.toolCalls.map((tc) => ({ id: tc.id, name: tc.function.name, args: parseArgs(tc.function.arguments) }));
+    calls.push(...batch);
+    const outs = await Promise.all(batch.map((call) => req.execute(call).catch((e: Error) => `エラー: ${e.message}`)));
+    batch.forEach((call, i) => messages.push({ role: "tool", tool_call_id: call.id, content: outs[i].slice(0, 24_000) }));
   }
 }
 

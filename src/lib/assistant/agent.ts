@@ -9,6 +9,8 @@ import { listChatLogs, searchDocs } from "@/lib/chatbot/store";
 import { analysisCatalog, analysisText, runAnalysis, type AnalysisResult, type AnalysisSpec } from "./analyze";
 import { getRecord, lastSearchSource, listSchedule, searchAll, storeScopeNote, RECORD_TYPE_LABEL } from "./search";
 import { scheduleSuggestTool, scheduleTools } from "./schedule-tool";
+import { checkCalcInputs, evaluate, formatCalc } from "./calc";
+import { forecast, type ForecastSubject } from "./forecast";
 import { permissionHints } from "@/lib/chatbot/permission-hints";
 import { describeTables, runSql, sqlTable, tableList } from "@/lib/datastore/sql";
 import { METRICS, VIEWS } from "@/lib/datastore/model";
@@ -47,6 +49,27 @@ export interface AgentSource {
   href?: string;
   kind: string;
 }
+
+/** 回答を作っている途中の知らせ (画面の「考えています」の表示に使う。/api/assistant/ask が順に送る) */
+export type AgentProgress =
+  | { type: "phase"; phase: "prepare" | "thinking" | "checking" | "done"; label: string }
+  | { type: "tool"; id: string; name: string; label: string; status: "start" | "done"; summary?: string };
+
+/** 道具の名前 → 画面に出す「いま何をしているか」 */
+export const TOOL_PROGRESS_LABEL: Record<string, string> = {
+  search_records: "記録を検索",
+  get_record: "記録の詳細を確認",
+  list_schedule: "予定を確認",
+  analyze: "集計",
+  query_database: "データベースで集計",
+  describe_database: "データの構成を確認",
+  business_overview: "会社の全体像を把握",
+  search_guides: "使い方・社内資料を検索",
+  search_history: "過去の相談を検索",
+  management_accounting: "管理会計を集計",
+  calculate: "計算",
+  forecast: "過去の実績から予測を計算",
+};
 
 export interface AgentReply {
   answer: string;
@@ -201,6 +224,37 @@ function tools(user: User): ToolDef[] {
       parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
     },
   ];
+  list.push(
+    {
+      name: "calculate",
+      description:
+        "電卓。道具の結果の数字どうしの差・合計・比・割合・増減率・平均を正確に計算する (自分で暗算しない)。式の数字は、それまでの道具の結果にある数字だけを使う (推測した数字は断られる)。使える書き方: + - * / ( )・round(x, 桁)・floor・ceil・abs・min・max・sum(…)・avg(…)・pct(a, b) = a÷b×100 (割合 %)・growth(新, 旧) = (新−旧)÷旧×100 (増減率 %)。例: pct(5280550, 15326190) / growth(1790250, 1271050) / 15326190 - 12000000",
+      parameters: {
+        type: "object",
+        properties: {
+          expression: { type: "string", description: "計算する式" },
+          label: { type: "string", description: "何の計算か (例: 合志店の売上の割合)" },
+        },
+        required: ["expression", "label"],
+      },
+    },
+    {
+      name: "forecast",
+      description:
+        "過去の実績から、これからの月 (今月を含む) の売上・件数・金額を決まった方法で予測する: 前年同月の実績 × 直近 12 か月の伸び、直近 3 か月の平均、今月の今日までのペース、受注残 (施工予定の受注。売上だけ)。予測 (中心) と幅・前年同月・受注残の表を返し、画面に表とグラフが出る。表の行は今月から始まり「(今月)」「(来月)」「(再来月)」と書いてあるので、質問の月の行を選んで答える (「来月」は (来月) の行。今月の行と取り違えない)。「来月の売上の見込み」「今年の着地」「年末までにどれくらい」「来月の問い合わせは何件くらい」はこれを使い、自分で数字を作らない。",
+      parameters: {
+        type: "object",
+        properties: {
+          subject: { type: "string", enum: ["sales", "inquiries", "quotes", "expenses", "purchases", "payments"], description: "何を予測するか (既定 sales)" },
+          metric: { type: "string", description: "指標 (analyze の指標の名前。省略 = 売上は sales、ほかは件数か金額)" },
+          months: { type: "integer", description: "今月から何か月分 (1〜12、既定 3。今年の着地は 12 月までの月数)" },
+          stores: { type: "array", items: { type: "string" }, description: "店舗で絞る (id または名前)" },
+          categories: { type: "array", items: { type: "string" }, description: "種別で絞る" },
+        },
+        required: [],
+      },
+    },
+  );
   for (const t of scheduleTools) list.push(t.def);
   if (canUseSql(user)) {
     list.push(
@@ -240,7 +294,8 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     `## 社員 (いま有効なアカウント)\n${staff.join("、")}\n(移行した過去の売上の担当者には、退職した社員の名前もあります)`,
     "",
     "## 答え方のルール",
-    "1. 数字・日付・名前・件数などの事実は、必ず道具で調べた結果だけを使う。推測で補わない。計算 (合計・比較・割合・平均) は analyze で行い、自分で計算しない。",
+    "1. 数字・日付・名前・件数などの事実は、必ず道具で調べた結果だけを使う。推測で補わない。計算 (合計・比較・割合・平均) は analyze で行い、自分で計算しない。道具の結果の数字どうしの差・比・割合・増減率・平均は calculate で計算する (暗算しない)。",
+    "1b. これからの見込み・予測 (来月の売上・今年の着地・来月の問い合わせの件数など) は forecast で計算する。予測は「予測 (中心)」と幅をそのまま書き、予測であること・計算の方法 (前年同月 × 伸び・直近の平均・今月のペース・受注残) と前提を一言添える。forecast で出せない予測は「システムの記録からは計算できません」と書き、数字を作らない。",
     "2. 調べても見つからないとき・データがないときは、そのことをはっきり書く (例:「システムには○○の記録がありません」)。判断できないときもそう書く。",
     "2b. 質問の条件 (来年発売・新しい・特定の時期・特定の人や店舗など) に合う記録がないときは、近い記録を条件に合うものとして答えない。「条件に合う記録はありません」と先に書き、参考に近い記録を出すときは、条件に合わないこと (例: 現在の商品マスタの商品で、来年発売の情報ではない) をはっきり書く。",
     "3. 根拠になった記録は、道具の結果にある [番号や名前](/画面のパス) のリンクをそのまま本文に付ける。資料から答えたときは「(社内資料: タイトル)」のように示す。",
@@ -312,7 +367,7 @@ function specSummary(s: AnalysisSpec): string {
 /** 質問に期間の言葉があるか (ない件数・一覧・順位は全期間で数える: 答え方のルール 5・5a) */
 const PERIOD_WORDS = /今日|本日|昨日|明日|今週|先週|来週|今月|先月|来月|今年|昨年|去年|来年|今期|前期|年度|上期|下期|直近|最近|過去|以降|以前|期間|\d+\s*(年|月|日)|\d{4}[-/]|年間|か月|ヶ月|カ月|週間|四半期/;
 
-function makeExecutor(db: Database, user: User, now: Date, out: { tables: AnalysisResult[]; sources: AgentSource[]; tools: AgentReply["tools"]; usedData: boolean; usedKnowledge: boolean; docKeys: string[] }, opts: { periodless?: boolean } = {}) {
+function makeExecutor(db: Database, user: User, now: Date, out: { tables: AnalysisResult[]; sources: AgentSource[]; tools: AgentReply["tools"]; usedData: boolean; usedKnowledge: boolean; docKeys: string[] }, opts: { periodless?: boolean; evidence?: () => number[] } = {}) {
   const addSource = (s: AgentSource) => {
     if (out.sources.some((x) => x.href === s.href && x.label === s.label)) return;
     if (out.sources.length < 20) out.sources.push(s);
@@ -427,6 +482,38 @@ function makeExecutor(db: Database, user: User, now: Date, out: { tables: Analys
         addSource({ label: "管理会計 (店舗別損益・品目別・案分)", href: `/management?tab=${str(a.view) === "items" ? "items" : str(a.view) === "allocation" ? "alloc" : str(a.view) === "pending" ? "purchases" : str(a.view) === "internal_orders" ? "sales" : "pnl"}`, kind: "集計" });
         return text;
       }
+      case "calculate": {
+        const expr = str(a.expression, 1000) ?? "";
+        const label = str(a.label, 60) ?? "計算";
+        // 式の数字は、それまでの道具の結果・質問にあるものだけ (推測した数字を電卓に通して根拠があるように見せない)
+        const missing = checkCalcInputs(expr, opts.evidence?.() ?? []);
+        if (missing.length) {
+          out.tools.push({ name: "計算", summary: `断りました: ${missing.join("・")} は道具の結果にない数字` });
+          return `計算できません: 式の数字 ${missing.join("・")} は、これまでの道具の結果にありません。先に analyze・query_database などで調べてから、その結果の数字で計算してください。`;
+        }
+        const r = evaluate(expr);
+        if (!r.ok) {
+          out.tools.push({ name: "計算", summary: `式の誤り: ${r.error}` });
+          return `計算できません: ${r.error}
+式: ${expr}`;
+        }
+        out.tools.push({ name: "計算", summary: `${label}: ${expr} = ${formatCalc(r.value)}` });
+        return `【計算: ${label}】
+${expr} = ${formatCalc(r.value)}
+(四捨五入して書くときは「約」を付ける。割合・増減率は % を付ける)`;
+      }
+      case "forecast": {
+        out.usedData = true;
+        const r = forecast(db, user, { subject: str(a.subject, 20) as ForecastSubject | undefined, metric: str(a.metric, 40), months: typeof a.months === "number" ? a.months : undefined, stores: strs(a.stores), categories: strs(a.categories) }, now);
+        if (!r.ok) {
+          out.tools.push({ name: "予測", summary: `できませんでした: ${r.error}` });
+          return `予測できませんでした: ${r.error}${r.hint ? `\nヒント: ${r.hint}` : ""}`;
+        }
+        if (out.tables.length < 4) out.tables.push(r);
+        out.tools.push({ name: "予測", summary: r.title });
+        addSource({ label: r.title, kind: "集計" });
+        return analysisText(r, 24);
+      }
       case "business_overview": {
         out.usedData = true;
         const text = businessOverview(db, user, { from: str(a.from, 10), to: str(a.to, 10), store: str(a.store, 20) }, now);
@@ -490,8 +577,9 @@ function toMessages(history: AgentTurn[], question: string): { role: "user" | "a
  * 総合的な分析の質問 (全体像を先に渡し、道具の回数と考える深さを増やす)。
  * 1 人のお客様についての質問 (「○○様の工事の状況」) は、会社の全体像が要らないので除く
  */
-// 「どうすれば」は操作の質問 (「請求書を発行するにはどうすれば」) にも使うので、業績の言葉と組になったときだけ
-const ANALYTICAL = /なぜ|原因|分析|傾向|課題|改善|対策|比較|比べ|総合|振り返|レポート|強み|弱み|見通し|予測|どうだった|(売上|業績|利益|粗利|成約|集客|問い合わせ|受注|客単価|リピート|評価|クレーム|口コミ|未入金|回収|経営)[^。？?]{0,20}(どうすれば|どうしたら)|(どうすれば|どうしたら)[^。？?]{0,12}(伸び|増え|上が|改善|減ら|良く|よく)|(会社|全社|店舗|経営|業績|全体|今年|今月|今期|先月|去年|昨年)[^。？?]{0,15}(状況|どう|まとめ|評価)/;
+// 「どうすれば」は操作の質問 (「請求書を発行するにはどうすれば」) にも使うので、業績の言葉と組になったときだけ。
+// 「予測」「見通し」は forecast の道具で直接計算できるので、全体像の先読みをしない (速く答える)
+const ANALYTICAL = /なぜ|原因|分析|傾向|課題|改善|対策|比較|比べ|総合|振り返|レポート|強み|弱み|どうだった|(売上|業績|利益|粗利|成約|集客|問い合わせ|受注|客単価|リピート|評価|クレーム|口コミ|未入金|回収|経営)[^。？?]{0,20}(どうすれば|どうしたら)|(どうすれば|どうしたら)[^。？?]{0,12}(伸び|増え|上が|改善|減ら|良く|よく)|(会社|全社|店舗|経営|業績|全体|今年|今月|今期|先月|去年|昨年)[^。？?]{0,15}(状況|どう|まとめ|評価)/;
 const isAnalytical = (q: string) => ANALYTICAL.test(q) && !/(?<!お客)様/.test(q);
 
 /** 管理会計で答える質問 (管理会計を見られる人だけ) */
@@ -512,7 +600,14 @@ function guideDocsText(): string {
   return docsCache.text;
 }
 
-export async function runAgent(db: Database, user: User, history: AgentTurn[], question: string, opts: { now?: Date; prefetchGuides?: boolean; dataQuestion?: boolean; voice?: boolean } = {}): Promise<AgentReply> {
+export async function runAgent(db: Database, user: User, history: AgentTurn[], question: string, opts: { now?: Date; prefetchGuides?: boolean; dataQuestion?: boolean; voice?: boolean; onProgress?: (e: AgentProgress) => void } = {}): Promise<AgentReply> {
+  const progress = (e: AgentProgress) => {
+    try {
+      opts.onProgress?.(e);
+    } catch {
+      /* 画面への知らせの失敗で回答を止めない */
+    }
+  };
   const deep = isAnalytical(question);
   const now = opts.now ?? new Date();
   const t0 = Date.now();
@@ -520,10 +615,18 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   // 道具の結果は回答の確かめ (guard.ts) の根拠にする
   const toolOutputs: string[] = [];
   const lastAsked = [...history].reverse().find((h) => h.role === "user")?.content ?? "";
-  const executeTool = makeExecutor(db, user, now, out, { periodless: !PERIOD_WORDS.test(question) && !PERIOD_WORDS.test(lastAsked) });
+  const historyText = history.map((h) => h.content).join("\n");
+  const executeTool = makeExecutor(db, user, now, out, {
+    periodless: !PERIOD_WORDS.test(question) && !PERIOD_WORDS.test(lastAsked),
+    evidence: () => buildEvidence([...toolOutputs, question, historyText], out.tables).values,
+  });
   const execute = async (call: ToolCall) => {
+    const label = TOOL_PROGRESS_LABEL[call.name] ?? SCHEDULE_TOOL_LABEL[call.name] ?? "調べています";
+    progress({ type: "tool", id: call.id, name: call.name, label, status: "start" });
+    const before = out.tools.length;
     const r = await executeTool(call);
     toolOutputs.push(r);
+    progress({ type: "tool", id: call.id, name: call.name, label, status: "done", summary: out.tools.length > before ? out.tools[out.tools.length - 1].summary.slice(0, 120) : undefined });
     return r;
   };
   const messages = toMessages(history, question);
@@ -534,6 +637,7 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   }
   // 操作の質問は、使い方の資料を先に探して質問に添える (AI が資料を見ずに一般的な手順を答えないように)
   let prefetched: AgentSource[] = [];
+  if (opts.prefetchGuides || deep || (canViewMgmt(user) && MGMT_QUESTION.test(question))) progress({ type: "phase", phase: "prepare", label: "関係する資料・データを用意しています" });
   if (opts.prefetchGuides) {
     const before = out.sources.length;
     const guides = await execute({ id: "prefetch", name: "search_guides", args: { query: question } });
@@ -564,9 +668,10 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
       maxTokens: 3000,
       deadlineMs: Number(process.env.ASSISTANT_DEADLINE_MS) || (deep ? 170_000 : 120_000),
     });
+  progress({ type: "phase", phase: "thinking", label: "質問を読み解いています" });
   let res = await loop(messages);
   // 総合的な分析で掘り下げが足りないとき (全体像だけで答えた) は、もう一度だけ確かめさせて書き直す
-  const drill = () => res.calls.filter((c) => ["analyze", "query_database", "get_record", "search_records", "list_schedule", "management_accounting"].includes(c.name)).length + (mgmtQ ? 2 : 0);
+  const drill = () => res.calls.filter((c) => ["analyze", "query_database", "get_record", "search_records", "list_schedule", "management_accounting", "forecast", "calculate"].includes(c.name)).length + (mgmtQ ? 2 : 0);
   if (deep && drill() < 2 && Date.now() - t0 < 60_000) {
     const first = res;
     res = await loop([
@@ -577,7 +682,6 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
     res = { ...res, calls: [...first.calls, ...res.calls], rounds: first.rounds + res.rounds };
   }
   // 回答を道具の結果と突き合わせる (根拠のない数字・リンク・画面の名前・実行したような書き方)。問題があれば 1 回だけ確かめ直させる
-  const historyText = history.map((h) => h.content).join("\n");
   const verify = (answer: string) =>
     checkAnswer(answer, buildEvidence([...toolOutputs, question, historyText], out.tables, out.sources.map((x) => x.href)), {
       question,
@@ -591,6 +695,7 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   if (issues.some((i) => i.severity !== "low") && Date.now() - t0 < 100_000) {
     const first = res;
     checks.retried = true;
+    progress({ type: "phase", phase: "checking", label: "数字と根拠を確かめ直しています" });
     try {
       const again = await loop([...messages, { role: "assistant", content: first.text }, { role: "user", content: retryInstruction(issues) }]);
       const after = verify(again.text);

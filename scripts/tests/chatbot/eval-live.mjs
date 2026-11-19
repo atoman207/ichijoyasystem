@@ -59,6 +59,11 @@ for (const r of E.evalResults(runId)) {
 console.log(`\n正答率 ${(m.accuracy * 100).toFixed(1)}% (${m.passed}/${m.total}) / 数字の一致 ${m.numericRate === null ? "-" : `${(m.numericRate * 100).toFixed(1)}%`} / 道具 ${m.toolRate === null ? "-" : `${(m.toolRate * 100).toFixed(0)}%`} / 根拠 ${m.evidenceRate === null ? "-" : `${(m.evidenceRate * 100).toFixed(0)}%`}`);
 console.log(`権限違反 ${m.violations} / 存在しない画面 ${m.badScreens} / 根拠のない数字 ${m.ungrounded} / 答えられない ${m.unknownRate ?? "-"} / 断る ${m.refuseRate ?? "-"}`);
 console.log(`回答時間 平均 ${(m.avgMs / 1000).toFixed(1)}s・p95 ${(m.p95Ms / 1000).toFixed(1)}s / トークン ${m.tokens.toLocaleString()} / 費用の見込み ${Math.round(m.costJpy)} 円 (単価が分かるモデルだけ) / 全体 ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+{
+  const S = await imp("lib/chatbot/store.ts");
+  const u = S.chatbotDb().prepare("select count(*) n, sum(input_tokens) i, sum(cached_tokens) c, avg(ms) ms from ai_calls where kind = 'eval' and ok = 1").get();
+  console.log(`AI の呼び出し ${u.n} 回 (1 回の平均 ${(Number(u.ms) / 1000).toFixed(2)}s) / 入力のうちキャッシュから読んだ割合 ${u.i ? ((Number(u.c) / Number(u.i)) * 100).toFixed(0) : 0}%`);
+}
 for (const a of E.ACCEPTANCE) console.log(`  ${a.pass(m) ? "合格" : "未達"} ${a.label} (基準 ${a.target})`);
 fs.rmSync(work, { recursive: true, force: true });
 process.exit(0);

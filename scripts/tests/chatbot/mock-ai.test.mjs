@@ -81,7 +81,7 @@ section("道具の呼び出し (OpenAI): 集計してから答える");
   ok(r.tables?.length === 1 && r.sources?.length >= 1, "表と根拠を画面に出す");
   eq(r.checks?.issues ?? [], [], "確かめで問題なし");
   const tools = requests[0].body.tools.map((t) => t.function.name);
-  const READ_ONLY = ["search_records", "get_record", "list_schedule", "analyze", "management_accounting", "business_overview", "search_guides", "search_history", "suggest_schedule", "plan_schedule", "day_route", "schedule_holds", "schedule_setup", "describe_database", "query_database"];
+  const READ_ONLY = ["search_records", "get_record", "list_schedule", "analyze", "management_accounting", "business_overview", "search_guides", "search_history", "suggest_schedule", "plan_schedule", "day_route", "schedule_holds", "schedule_setup", "describe_database", "query_database", "calculate", "forecast"];
   ok(tools.every((t) => READ_ONLY.includes(t)) && !tools.some((t) => /create|update|delete|approve|send|write|insert|register|pay/i.test(t)), `AI に渡す道具は読み取りだけ (${tools.length} 個)`);
   const calls = aiCallsSince(c0);
   ok(calls.length === 2 && calls.every((c) => c.kind === "assistant" && c.ok === 1 && c.input_tokens === 1200 && c.cached_tokens === 200), "AI の呼び出しをトークン数つきで記録 (目的 = AI アシスタント)");
@@ -185,6 +185,43 @@ section("今月の予算を超えたら AI を呼ばない");
 }
 
 /* ================================================================== */
+section("計算と予測の道具: 道具の結果の数字で計算する・推測した数字は断る・途中の知らせ");
+{
+  resetBreaker();
+  requests.length = 0;
+  const events = [];
+  const ytdNum = Math.round(ytd);
+  handler = (e) => {
+    const toolMsgs = msgs(e).filter((m) => m.role === "tool");
+    if (toolMsgs.length === 0) return oaTools([{ name: "analyze", args: analyzeArgs }]);
+    if (toolMsgs.length === 1) return oaTools([{ name: "calculate", args: { expression: `${ytdNum} / 2`, label: "半分" } }, { name: "calculate", args: { expression: "98765432 - 1", label: "推測した数字" } }]);
+    return oaText(`売上合計 ${ytdText} の半分は ${Math.round(ytdNum / 2).toLocaleString("ja-JP")}円 です。`);
+  };
+  const r = await askChatbot(db, admin, [], "今年の売上合計の半分はいくら？", { onProgress: (ev) => events.push(ev) });
+  const toolOut = requests.flatMap((x) => msgs(x).filter((m) => m.role === "tool").map((m) => String(m.content)));
+  ok(toolOut.some((t) => t.includes(`= ${Math.round(ytdNum / 2).toLocaleString("ja-JP")}`) || t.includes(`= ${(ytdNum / 2).toLocaleString("ja-JP", { maximumFractionDigits: 2 })}`)), "道具の結果の数字で計算する");
+  ok(toolOut.some((t) => t.includes("98765432") && t.includes("道具の結果にありません")), "道具の結果にない数字の計算は断る");
+  ok(r.answer.includes(Math.round(ytdNum / 2).toLocaleString("ja-JP")) && !(r.checks?.issues ?? []).some((i) => i.kind === "number"), "計算の結果は根拠のある数字として扱う (注記なし)");
+  ok(events.some((e) => e.type === "phase" && e.phase === "thinking"), "途中の知らせ: 考えはじめ");
+  const starts = events.filter((e) => e.type === "tool" && e.status === "start").map((e) => e.name);
+  const dones = events.filter((e) => e.type === "tool" && e.status === "done");
+  ok(starts.includes("analyze") && starts.filter((n) => n === "calculate").length === 2, "途中の知らせ: 道具ごとの開始");
+  ok(dones.length === starts.length && dones.every((e) => e.label), "途中の知らせ: 道具ごとの完了 (表示名つき)");
+
+  requests.length = 0;
+  handler = (e) => {
+    const t = msgs(e).filter((m) => m.role === "tool").map((m) => String(m.content));
+    if (!t.length) return oaTools([{ name: "forecast", args: { subject: "sales", months: 2 } }]);
+    const m = t[0].match(/\| ([^|]*今月[^|]*) \| (¥[\d,]+) \|/);
+    return oaText(`今月の売上の予測 (中心) は ${m ? m[2].replace("¥", "") : "?"}円 です (前年同月の実績 × 伸びと今月のペースからの推定)。`);
+  };
+  const f = await askChatbot(db, admin, [], "今月の売上の着地の見込みは？");
+  ok(f.tables?.some((t) => t.title.includes("予測")), "予測の表を出す");
+  const fr = f.tables.find((t) => t.title.includes("予測"));
+  ok(String(fr.rows[0].k0).includes("(今月)") && String(fr.rows[1].k0).includes("(来月)"), "予測の表の行に (今月)・(来月) を書く (AI が月を取り違えないように)");
+  ok(/予測 \(中心\) は [\d,]+円/.test(f.answer) && !(f.checks?.issues ?? []).some((i) => i.kind === "number"), "予測の数字も根拠のある数字として扱う");
+}
+
 section("会話の続き: 前の集計の条件を AI に渡す");
 {
   resetBreaker();

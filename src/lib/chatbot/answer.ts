@@ -5,7 +5,7 @@ import { rulesAnswer } from "@/lib/ai/assistant";
 import { extractTerms, searchRecords } from "@/lib/ai/search";
 import { ensureChatbotData } from "./build";
 import { countHit, findSimilarQa, insertChatLog, insertQa, logAsk, recentAiAsks, normalizeQuestion, searchDocs, type AskSource, type ChatLogPayload, type DocRow, type QaLink, type QaMatch } from "./store";
-import { runAgent, type AgentSource } from "@/lib/assistant/agent";
+import { runAgent, type AgentProgress, type AgentSource } from "@/lib/assistant/agent";
 import { runAnalysis, type AnalysisResult, type AnalysisSpec } from "@/lib/assistant/analyze";
 import { ANALYSIS_WORDS, heuristicSpec, refineSpec } from "@/lib/assistant/intent";
 import { yen } from "@/lib/format";
@@ -62,6 +62,8 @@ export interface BotReply {
 }
 
 const REUSE = 0.8;
+/** 使い方の言葉がない質問は、ほぼ同じ質問のときだけ蓄えた回答を使う (それ以外は AI がデータ・資料を調べ直して答える) */
+const REUSE_STRICT = 0.92;
 const NEAR = 0.6;
 /** 1 人が 1 時間に AI で答えてもらえる回数 (超えたらデータベースの回答だけで答える) */
 const AI_PER_HOUR = Number(process.env.CHATBOT_AI_PER_HOUR) || 40;
@@ -158,12 +160,20 @@ const isKnowledgeQa = (m: QaMatch) => m.qa.sourceKeys.some((k) => k.startsWith("
  * チャットボットに答える。user が null のときはログイン前 (公開ホームなど)。
  * ログイン前は個人のデータ (予定・売上など) と社内資料は答えず、使い方・画面の案内に限る。
  */
-export async function askChatbot(db: Database, user: User | null, history: ChatTurn[], raw: string, opts: { convId?: string; voice?: boolean; evaluation?: boolean } = {}): Promise<BotReply> {
+export interface AskOptions {
+  convId?: string;
+  voice?: boolean;
+  evaluation?: boolean;
+  /** 回答を作っている途中の知らせ (/api/assistant/ask が画面に送る) */
+  onProgress?: (e: AgentProgress) => void;
+}
+
+export async function askChatbot(db: Database, user: User | null, history: ChatTurn[], raw: string, opts: AskOptions = {}): Promise<BotReply> {
   installAiMonitor();
   return withAiContext({ kind: opts.evaluation ? "eval" : user ? "assistant" : "guest", userId: user?.id }, () => answerQuestion(db, user, history, raw, opts));
 }
 
-async function answerQuestion(db: Database, user: User | null, history: ChatTurn[], raw: string, opts: { convId?: string; voice?: boolean; evaluation?: boolean }): Promise<BotReply> {
+async function answerQuestion(db: Database, user: User | null, history: ChatTurn[], raw: string, opts: AskOptions): Promise<BotReply> {
   const t0 = Date.now();
   const q = raw.trim().slice(0, 1000);
   const norm = normalizeQuestion(q);
@@ -210,7 +220,7 @@ async function answerQuestion(db: Database, user: User | null, history: ChatTurn
   const t = extractTerms(q);
   const dataish = Boolean(user) && (DATA.test(q) || ANALYSIS_WORDS.test(q) || t.names.length > 0 || t.numbers.length > 0 || t.phones.length > 0) && !(howTo && !ANALYSIS_WORDS.test(q) && !t.names.length && !t.numbers.length);
 
-  if (!followUp && !dataish && top && top.score >= REUSE && !opts.evaluation) {
+  if (!followUp && !dataish && top && top.score >= (howTo ? REUSE : REUSE_STRICT) && !opts.evaluation) {
     countHit(top.qa.id);
     return done({ answer: top.qa.answer, links: top.qa.links, source: "database", qaId: top.qa.id, suggestions: suggestionsOf(matches, top.qa.id) });
   }
@@ -226,7 +236,7 @@ async function answerQuestion(db: Database, user: User | null, history: ChatTurn
   // ---- ログインした社員: AI アシスタント (データを調べて答える) ----
   if (user && canUseAi) {
     try {
-      const r = await runAgent(db, user, history, q, { prefetchGuides: !dataish || howTo, dataQuestion: dataish, voice: opts.voice });
+      const r = await runAgent(db, user, history, q, { prefetchGuides: !dataish || howTo, dataQuestion: dataish, voice: opts.voice, onProgress: opts.onProgress });
       let qaId: number | undefined;
       const links = r.sources.filter((s) => s.href).slice(0, 3).map((s) => ({ label: s.label.slice(0, 24), href: s.href! }));
       // 使い方だけの回答は蓄える (同じロールの人に次から AI なしで答える)。データを使った回答は蓄えない

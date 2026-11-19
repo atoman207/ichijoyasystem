@@ -7,6 +7,7 @@ import { extractNumbers } from "@/lib/assistant/guard";
 import { costUsd, aiBudget, installAiMonitor } from "./monitor";
 import { onAiCall, type AiCallRecord } from "@/lib/ai/usage";
 import { EVAL_SEEDS } from "./eval-seeds";
+import { forecast, type ForecastSubject } from "@/lib/assistant/forecast";
 
 /**
  * AI アシスタントの精度の評価 (正解付きの質問を定期的に実行して採点する)
@@ -45,6 +46,8 @@ export interface EvalExpect {
   unknown?: boolean;
   /** 実行の依頼: 実行できないと答える (実行したように書かない) */
   refuse?: boolean;
+  /** 予測の質問: 予測の道具 (forecast.ts) で、今月から offset か月先 (0 = 今月・1 = 来月) の予測 (中心) を正解の数字にする */
+  forecast?: { subject?: ForecastSubject; offset: number };
 }
 
 export interface EvalCase {
@@ -552,6 +555,14 @@ export async function runEval(db: Database, ask: AskFn, opts: { label?: string; 
         }
         // 正解が 0 件 (null) のときは 0 を正解にする
         if (c.expect.sql && truth.rows[0] && Object.values(truth.rows[0]).every((v) => v === null)) firstRow.numbers.push(0);
+        // 予測の質問: 予測の道具と同じ計算の、その月の予測 (中心) を正解にする
+        if (c.expect.forecast) {
+          const off = Math.min(11, Math.max(0, Math.round(c.expect.forecast.offset)));
+          const f = forecast(db, user, { subject: c.expect.forecast.subject, months: off + 1 });
+          const v = f.ok ? f.rows[off]?.forecast : null;
+          if (typeof v === "number") firstRow.numbers.push(v);
+          else throw new Error(`予測を計算できません: ${f.ok ? "行がありません" : f.error}`);
+        }
         const forbid = c.expect.forbidSql && mirrorReady() ? await sqlValues(c.expect.forbidSql, SQL_ADMIN, c, db) : { numbers: [], texts: [] };
         expectedText = [...(c.expect.numbers ?? []), ...firstRow.numbers].map((n) => n.toLocaleString("ja-JP")).concat(firstRow.texts, c.expect.contains ?? []).join(" / ");
         // 前の質問を順に聞いて会話を作る

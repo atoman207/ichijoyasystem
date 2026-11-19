@@ -389,6 +389,51 @@ section("next build と同じ SWC で src のすべてのファイルを読め�
 }
 
 /* ================================================================== */
+section("計算の道具 (calculate): 暗算させず、道具の結果の数字だけで正確に計算する");
+{
+  const C = await imp("lib/assistant/calc.ts");
+  const v = (e) => C.evaluate(e);
+  eq(v("15,326,190 - 12,000,000"), { ok: true, value: 3326190 }, "カンマ区切りの数字の差");
+  eq(v("(100 + 50) * 2 / 3"), { ok: true, value: 100 }, "四則演算と括弧の順番");
+  eq(v("-5 + 3"), { ok: true, value: -2 }, "負の数");
+  ok(Math.abs(v("pct(5280550, 15326190)").value - 34.4544) < 0.001, "割合 pct(a, b) = a ÷ b × 100");
+  ok(Math.abs(v("growth(1790250, 1271050)").value - 40.8481) < 0.001, "増減率 growth(新, 旧)");
+  eq(v("round(avg(1, 2, 4), 1)"), { ok: true, value: 2.3 }, "平均と丸め");
+  eq(v("sum(1, 2, 3) + max(4, 9) - min(2, 7)"), { ok: true, value: 13 }, "合計・最大・最小");
+  eq(v("10 × 3 ÷ 5"), { ok: true, value: 6 }, "× と ÷ も読む");
+  ok(!v("1 / 0").ok && v("1 / 0").error.includes("0 で割る"), "0 で割らない");
+  ok(!v("pct(1, 0)").ok, "割合の分母が 0 なら断る");
+  ok(!v("process.exit(1)").ok && !v("2 ** 3").ok && !v("constructor").ok, "決まった関数と四則演算以外は読まない (eval しない)");
+  eq(C.checkCalcInputs("pct(5280550, 15326190) * 100", [15326190]), ["5280550"], "道具の結果にない数字は使わせない (100 のような定数は確かめない)");
+  eq(C.checkCalcInputs("15326190 / 12 * 1000", [15326190]), [], "月数・千円への換算の定数は確かめない");
+  eq(C.formatCalc(3326190), "3,326,190", "結果はカンマ区切り");
+}
+
+section("予測の道具 (forecast): 過去の実績から決まった方法で計算する");
+{
+  const F = await imp("lib/assistant/forecast.ts");
+  const now = new Date();
+  const r = F.forecast(db, admin, { subject: "sales", months: 3 }, now);
+  ok(r.ok && r.rows.length === 3, "今月から 3 か月の予測");
+  const cur = r.rows[0];
+  ok(String(cur.k0).includes("今月") && cur.forecast >= cur.actual_mtd, `今月の予測は今日までの実績を下回らない (${cur.forecast} ≥ ${cur.actual_mtd})`);
+  ok(r.rows.every((x) => x.low === null || x.high === null || (x.low <= x.forecast && x.forecast <= x.high)), "予測 (中心) は幅の中");
+  // 前年同月の実績は analyze と同じ数え方
+  const ym = (d) => d.toLocaleDateString("sv-SE", { timeZone: "Asia/Tokyo" }).slice(0, 7);
+  const lyMonth = (() => { const d = new Date(now); d.setDate(1); d.setMonth(d.getMonth() + 1 - 12); return ym(d); })();
+  const lyRaw = live.filter((o) => o.salesDate?.startsWith(lyMonth)).reduce((a, o) => a + o.total, 0);
+  const nextRow = r.rows[1];
+  ok(nextRow.last_year === null ? lyRaw === 0 : Math.round(nextRow.last_year) === Math.round(lyRaw), `前年同月 (${lyMonth}) の実績が生のデータと一致`);
+  ok(r.notes.some((n) => n.includes("推定")) && r.notes.some((n) => n.includes("前年同月")), "予測であることと方法を注記に書く");
+  const inq = F.forecast(db, admin, { subject: "inquiries", months: 2 }, now);
+  ok(inq.ok && inq.columns.some((c) => c.kind === "count"), "問い合わせの件数も予測できる");
+  const tooEarly = F.forecast(db, admin, { subject: "sales", months: 3 }, new Date("2000-03-15T12:00:00+09:00"));
+  ok(!tooEarly.ok && tooEarly.error.includes("3 か月以上"), "実績が足りないときは予測しない (数字を作らない)");
+  const st = F.forecast(db, staff, { subject: "sales", months: 2 }, now);
+  const stAll = A.runAnalysis(db, staff, { subject: "sales", metrics: ["sales"], group_by: ["store"], from: "2000-01-01", to: today });
+  ok(st.ok && stAll.ok && stAll.rows.length <= 1, "店舗スタッフの予測は自店舗の実績だけで計算する (analyze と同じ閲覧範囲)");
+}
+
 section("データの品質");
 {
   const checks = DQ.dataQualityChecks(db);

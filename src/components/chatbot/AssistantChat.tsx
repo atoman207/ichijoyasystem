@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import clsx from "clsx";
-import { AudioLines, Database, FileSearch, Loader2, Mic, SendHorizontal, Sparkles, Square, Table2, ThumbsDown, ThumbsUp, UserRound, Volume2, VolumeX, X } from "lucide-react";
+import { ArrowDown, AudioLines, Check, Copy, Database, FileSearch, Loader2, Mic, SendHorizontal, Sparkles, Square, Table2, ThumbsDown, ThumbsUp, Timer, UserRound, Volume2, VolumeX, X } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { Avatar } from "@/components/ui";
 import { IchijoyaMark } from "@/components/brand/Logo";
@@ -11,6 +11,8 @@ import type { AnalysisResult, AnalysisSpec } from "@/lib/assistant/analyze";
 import { AnalysisTable } from "./AnalysisTable";
 import { browserCanListen, browserCanSpeak, canRecord, RATES, useRecorder, useSpeaker, type RecResult, type VoiceMode } from "./voice";
 import { isStopPhrase } from "@/lib/speech-text";
+import type { AgentProgress } from "@/lib/assistant/agent";
+import { applyProgress, fmtSeconds, newProgress, rememberAnswerMs, ThinkingProgress, type ProgressState } from "./ThinkingProgress";
 
 /**
  * 「質問する」の会話 (画面左下のチャットボットと AI アシスタントの画面で共通)
@@ -40,22 +42,74 @@ interface Msg {
   tables?: AnalysisResult[];
   sources?: { label: string; href?: string; kind: string }[];
   tools?: { name: string; summary: string }[];
+  /** 質問から回答までの時間 (ミリ秒) */
+  ms?: number;
+}
+
+type Reply = Awaited<ReturnType<typeof askChatbotAction>>;
+
+/** 途中で切れた (回答の作成はサーバーで始まっている) ので、もう一度送り直さない */
+class StreamBroken extends Error {}
+
+/**
+ * 質問を /api/assistant/ask に送り、途中の知らせ (道具を使うたび) を受けながら回答を待つ。
+ * 使えないとき (古いサーバー・通信の中継で溜められるなど) は、知らせが 1 つも届く前なら呼び出し元が Server Action に切り替える
+ */
+async function askStream(body: { history: unknown; question: string; convId: string; voice: boolean }, onEvent: (e: AgentProgress) => void): Promise<Reply> {
+  const res = await fetch("/api/assistant/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" });
+  if (!res.ok || !res.body || !(res.headers.get("content-type") ?? "").includes("ndjson")) throw new Error("stream unavailable");
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let started = false;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (value) buf += dec.decode(value, { stream: true });
+      for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line) continue;
+        const m = JSON.parse(line) as { type: "progress"; event: AgentProgress } | { type: "done"; reply: Reply };
+        started = true;
+        if (m.type === "progress") onEvent(m.event);
+        else if (m.type === "done") return m.reply;
+      }
+      if (done) break;
+    }
+  } catch (err) {
+    if (started) throw new StreamBroken((err as Error).message);
+    throw err;
+  }
+  if (started) throw new StreamBroken("stream ended");
+  throw new Error("stream ended");
 }
 
 const STORAGE = "ichijoya-chatbot";
 const READ_ALOUD = "ichijoya-chatbot-read-aloud";
-const STARTERS = ["今年の店舗別の売上と粗利を比較して", "来週の合志店の予定は？", "前年同期と比べて売上が減っている商品は？", "見積の作り方を教えて"];
-const PAGE_STARTERS = [
-  "今年4月1日から10月31日までの店舗別売上と粗利を比較して",
-  "過去3年間の畳の品目別売上を比較して",
-  "合志店の「きずな」の今年の販売数量と平均単価は？",
-  "任意の期間の顧客別売上ランキングを出して (今年)",
-  "前年同期と比べて売上が減っている商品は？",
-  "来週の合志店の予定を教えて",
-  "店長会議で決まったことを教えて",
-  "問い合わせから入金までの操作手順を教えて",
+/** 表示ラベルを短くし、押すと送る全文は question。ウィジェットの最初の画面が読みやすくなる */
+const STARTERS: { label: string; question: string }[] = [
+  { label: "店舗別の売上と粗利", question: "今年の店舗別の売上と粗利を比較して" },
+  { label: "来週の合志店の予定", question: "来週の合志店の予定は？" },
+  { label: "売上が減っている商品", question: "前年同期と比べて売上が減っている商品は？" },
+  { label: "見積の作り方", question: "見積の作り方を教えて" },
 ];
-const GUEST_STARTERS = ["このシステムは何ができる？", "ログインの仕方は？", "新規登録の流れは？", "見積の作り方を教えて"];
+const PAGE_STARTERS: { label: string; question: string }[] = [
+  { label: "期間の店舗別売上・粗利", question: "今年4月1日から10月31日までの店舗別売上と粗利を比較して" },
+  { label: "畳の品目別売上 (3年)", question: "過去3年間の畳の品目別売上を比較して" },
+  { label: "きずなの数量・単価", question: "合志店の「きずな」の今年の販売数量と平均単価は？" },
+  { label: "顧客別売上ランキング", question: "任意の期間の顧客別売上ランキングを出して (今年)" },
+  { label: "売上が減っている商品", question: "前年同期と比べて売上が減っている商品は？" },
+  { label: "来週の合志店の予定", question: "来週の合志店の予定を教えて" },
+  { label: "店長会議の決定事項", question: "店長会議で決まったことを教えて" },
+  { label: "問い合わせから入金まで", question: "問い合わせから入金までの操作手順を教えて" },
+];
+const GUEST_STARTERS: { label: string; question: string }[] = [
+  { label: "何ができる？", question: "このシステムは何ができる？" },
+  { label: "ログインの仕方", question: "ログインの仕方は？" },
+  { label: "新規登録の流れ", question: "新規登録の流れは？" },
+  { label: "見積の作り方", question: "見積の作り方を教えて" },
+];
 
 const SOURCE_LABEL: Partial<Record<Source, { label: string; icon: ReactNode; className: string }>> = {
   agent: { label: "システムのデータを調べて回答", icon: <FileSearch className="h-3 w-3" aria-hidden />, className: "bg-good-soft text-good-ink" },
@@ -196,10 +250,20 @@ export function AssistantConversation({
   const { msgs, setMsgs, convId } = state;
   const [input, setInput] = useState("");
   const [pending, startTransition] = useTransition();
-  const [elapsed, setElapsed] = useState(0);
+  const [progress, setProgress] = useState<ProgressState | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const [copied, setCopied] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const ref = inputRef ?? ownRef;
+
+  // 入力欄の高さを内容に合わせる (最大 8 行くらい)
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 40), 128)}px`;
+  }, [input, ref]);
 
   // ---- 音声: サーバーの音声 (ログインした社員) かブラウザーの音声か ----
   const [voice, setVoice] = useState<{ tts: VoiceMode; stt: VoiceMode }>({ tts: "none", stt: "none" });
@@ -306,19 +370,28 @@ export function AssistantConversation({
     if (recorder.state === "idle") recorder.start();
   };
 
-  useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-  }, [msgs, pending]);
+  const scrollToBottom = (smooth = true) => {
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    setAtBottom(true);
+  };
 
   useEffect(() => {
-    if (!pending) return;
-    const t0 = Date.now();
-    const id = setInterval(() => setElapsed(Math.round((Date.now() - t0) / 1000)), 1000);
-    return () => {
-      clearInterval(id);
-      setElapsed(0);
-    };
-  }, [pending]);
+    if (atBottom) scrollToBottom(true);
+    // 新しいメッセージで下端にいるときだけ追従 (上にスクロールして読んでいるときは邪魔しない)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- atBottom の最新値で追従を決める
+  }, [msgs, pending]);
+
+  const copyAnswer = async (index: number, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(index);
+      window.setTimeout(() => setCopied((v) => (v === index ? null : v)), 1600);
+    } catch {
+      /* 権限なしなど */
+    }
+  };
 
   const send = (text: string, opts: { voice?: boolean } = {}) => {
     const q = text.trim();
@@ -337,13 +410,29 @@ export function AssistantConversation({
     const speakAnswer = Boolean(opts.voice) || readAloud || talkRef.current;
     setMsgs((m) => [...m, { role: "user", content: q, voice: opts.voice || undefined }]);
     setInput("");
+    setProgress(newProgress());
     startTransition(async () => {
+      const t0 = Date.now();
       try {
-        const r = await askChatbotAction(history, q, convId, { voice: Boolean(opts.voice) });
-        setMsgs((m) => [...m, { role: "assistant", content: r.answer, source: r.source as Source, links: r.links, suggestions: r.suggestions, qaId: r.qaId, logId: r.logId, tables: r.tables, sources: r.sources, tools: r.tools }]);
+        // ログインした社員: 途中の知らせつき (いま何を調べているかを表示)。使えなければ Server Action
+        let r: Reply;
+        if (guest) r = await askChatbotAction(history, q, convId, { voice: Boolean(opts.voice) });
+        else {
+          try {
+            r = await askStream({ history, question: q, convId, voice: Boolean(opts.voice) }, (e) => setProgress((p) => (p ? applyProgress(p, e) : p)));
+          } catch (err) {
+            if (err instanceof StreamBroken) throw err;
+            r = await askChatbotAction(history, q, convId, { voice: Boolean(opts.voice) });
+          }
+        }
+        const ms = Date.now() - t0;
+        rememberAnswerMs(ms);
+        setProgress(null);
+        setMsgs((m) => [...m, { role: "assistant", content: r.answer, source: r.source as Source, links: r.links, suggestions: r.suggestions, qaId: r.qaId, logId: r.logId, tables: r.tables, sources: r.sources, tools: r.tools, ms }]);
         if (speakAnswer && voice.tts !== "none") void speaker.speak(answerIndex, r.answer, Boolean(r.tables?.length), { brief: talkRef.current, onEnd: () => talkRef.current && listenAgain() });
         else if (talkRef.current) listenAgain();
       } catch {
+        setProgress(null);
         setMsgs((m) => [...m, { role: "assistant", content: "通信に失敗しました。画面を再読み込みしてから、もう一度お試しください。", source: "none" }]);
         if (talkRef.current) endTalk("通信に失敗したため、会話モードを終えました。");
       }
@@ -374,149 +463,201 @@ export function AssistantConversation({
 
   return (
     <>
-      <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto bg-canvas px-3 py-4" aria-live="polite">
-        <div className="flex gap-2">
-          <BotAvatar />
-          <div className={clsx(bubbleMax, "rounded-2xl rounded-tl-sm border border-line bg-panel px-3 py-2 text-sm leading-relaxed text-ink")}>
-            {guest ? (
-              <>
-                こんにちは。一畳屋 統合業務システムの案内です。
-                <br />
-                システムの使い方や画面の場所、ログイン・新規登録についてお答えします。予定や売上などのデータは、ログイン後に聞けます。
-              </>
-            ) : (
-              <>
-                {first} さん、お疲れさまです。業務で分からないことは、まずここで聞いてください。
-                <br />
-                操作の手順、お客様・案件・予定・議事録の検索、売上や粗利の集計 (期間・店舗・商品・顧客・担当者を自由に組み合わせ) にお答えします。回答には根拠の記録を付けます。
-              </>
-            )}
-            {voice.stt !== "none" && <span className="mt-1 block text-xs text-ink-3">マイクのボタンを押すと、声で質問できます (回答も読み上げます)。</span>}
-          </div>
-        </div>
-        {msgs.length === 0 && (
-          <div className="flex flex-wrap gap-1.5 pl-9">
-            {starters.map((s) => (
-              <button key={s} type="button" onClick={() => send(s)} className="rounded-full border border-accent/30 bg-panel px-3 py-1 text-left text-xs text-accent-ink hover:bg-accent-soft">
-                {s}
-              </button>
-            ))}
-          </div>
-        )}
-        {msgs.map((m, i) =>
-          m.role === "user" ? (
-            <div key={i} className="flex justify-end gap-2">
-              <div className={clsx(bubbleMax, "rounded-2xl rounded-tr-sm bg-accent px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap text-white")}>
-                {m.voice && <Mic className="mr-1 inline h-3.5 w-3.5 -translate-y-px opacity-80" aria-label="声で質問" />}
-                {m.content}
-              </div>
-              <UserAvatar user={user} />
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={listRef}
+          className="h-full space-y-3 overflow-y-auto overscroll-contain bg-canvas px-3 py-4 scroll-smooth"
+          aria-live="polite"
+          onScroll={() => {
+            const el = listRef.current;
+            if (!el) return;
+            setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 96);
+          }}
+        >
+          <div className="flex gap-2">
+            <BotAvatar />
+            <div className={clsx(bubbleMax, "rounded-2xl rounded-tl-sm border border-line bg-panel px-3 py-2.5 text-sm leading-relaxed text-ink")}>
+              {guest ? (
+                <>
+                  こんにちは。システムの使い方・ログイン・新規登録についてお答えします。
+                  {variant === "page" && <span className="mt-1 block text-xs text-ink-3">予定や売上などのデータは、ログイン後に聞けます。</span>}
+                </>
+              ) : variant === "widget" ? (
+                <>
+                  {first} さん、お疲れさまです。使い方・検索・売上の集計など、気軽に聞いてください。
+                  {voice.stt !== "none" && <span className="mt-1 block text-xs text-ink-3">マイクで声の質問もできます。</span>}
+                </>
+              ) : (
+                <>
+                  {first} さん、お疲れさまです。操作の手順、お客様・案件・予定の検索、売上や粗利の集計にお答えします。回答には根拠を付けます。
+                  {voice.stt !== "none" && <span className="mt-1 block text-xs text-ink-3">マイクのボタンで声の質問ができます。回答も読み上げます。</span>}
+                </>
+              )}
             </div>
-          ) : (
-            <div key={i} className="flex gap-2">
-              <BotAvatar />
-              <div className={clsx("min-w-0 space-y-1.5", m.tables?.length ? "flex-1" : bubbleMax)}>
-                <div className={clsx("rounded-2xl rounded-tl-sm border bg-panel px-3 py-2 text-sm leading-relaxed break-words text-ink", speaker.speakingId === i ? "border-accent/50 ring-2 ring-accent/15" : "border-line")}>
-                  <RichText text={m.content} />
-                </div>
-                {m.tables?.map((t, ti) => (
-                  <AnalysisTable key={`${i}-${ti}`} result={t} compact={variant === "widget" && !wide} />
+          </div>
+          {msgs.length === 0 && (
+            <div className="space-y-1.5 pl-9">
+              <p className="text-[11px] font-medium text-ink-3">よくある質問</p>
+              <div className="flex flex-wrap gap-1.5">
+                {starters.map((s) => (
+                  <button
+                    key={s.question}
+                    type="button"
+                    disabled={pending}
+                    title={s.question}
+                    onClick={() => send(s.question)}
+                    className="rounded-full border border-accent/25 bg-panel px-3 py-1.5 text-left text-xs text-accent-ink transition hover:border-accent/50 hover:bg-accent-soft disabled:opacity-40"
+                  >
+                    {s.label}
+                  </button>
                 ))}
-                {m.links && m.links.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {m.links.map((l) => (
-                      <Link key={l.href} href={l.href} className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-ink hover:bg-accent hover:text-white">
-                        {l.label} →
-                      </Link>
-                    ))}
-                  </div>
-                )}
-                {m.sources && m.sources.length > 0 && (
-                  <details className="rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs text-ink-2">
-                    <summary className="cursor-pointer select-none font-medium text-ink-2 hover:text-ink">回答の根拠 ({m.sources.length})</summary>
-                    <ul className="mt-1.5 space-y-1">
-                      {m.sources.map((s, si) => (
-                        <li key={si} className="flex items-start gap-1.5">
-                          <span className="shrink-0 rounded bg-subtle px-1.5 py-px text-[10px] text-ink-3">{s.kind}</span>
-                          {s.href ? (
-                            <Link href={s.href} className="min-w-0 text-accent hover:underline">
-                              {s.label}
-                            </Link>
-                          ) : (
-                            <span className="min-w-0">{s.label}</span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                    {m.tools && m.tools.length > 0 && (
-                      <div className="mt-1.5 border-t border-line pt-1.5 text-[11px] text-ink-3">
-                        <p className="font-medium">調べた内容</p>
-                        <ul>
-                          {m.tools.map((t, ti) => (
-                            <li key={ti}>
-                              ・{t.name}: {t.summary}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </details>
-                )}
-                {m.suggestions && m.suggestions.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {m.suggestions.map((s) => (
-                      <button key={s} type="button" onClick={() => send(s)} className="rounded-full border border-line bg-panel px-2.5 py-0.5 text-left text-xs text-ink-2 hover:border-accent/40 hover:text-accent-ink">
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <div className="flex items-center gap-2 text-[11px] text-ink-3">
-                  {m.source && SOURCE_LABEL[m.source] && (
-                    <span className={clsx("inline-flex items-center gap-1 rounded-full px-2 py-0.5", SOURCE_LABEL[m.source]!.className)}>
-                      {SOURCE_LABEL[m.source]!.icon}
-                      {SOURCE_LABEL[m.source]!.label}
-                    </span>
-                  )}
-                  <span className="ml-auto flex items-center gap-0.5">
-                    {voice.tts !== "none" &&
-                      (speaker.speakingId === i ? (
-                        <button type="button" onClick={speaker.stop} className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-accent-ink hover:bg-accent-soft" aria-label="読み上げを止める" title="読み上げを止める">
-                          <Square className="h-3 w-3 fill-current" aria-hidden /> 止める
-                        </button>
-                      ) : speaker.loadingId === i ? (
-                        <span className="grid h-6 w-6 place-items-center" aria-label="読み上げの準備中">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                        </span>
-                      ) : (
-                        <button type="button" onClick={() => void speaker.speak(i, m.content, Boolean(m.tables?.length))} className="grid h-6 w-6 place-items-center rounded hover:bg-accent-soft hover:text-accent-ink" aria-label="回答を読み上げる" title="回答を読み上げる">
-                          <Volume2 className="h-3.5 w-3.5" aria-hidden />
-                        </button>
-                      ))}
-                    {(m.qaId || m.logId) &&
-                      (m.rated ? (
-                        <span>{m.rated === "up" ? "ありがとうございます" : "改善に使います"}</span>
-                      ) : (
-                        <>
-                          <button type="button" onClick={() => rate(i, true)} className="grid h-6 w-6 place-items-center rounded hover:bg-good-soft hover:text-good-ink" aria-label="役に立った" title="役に立った">
-                            <ThumbsUp className="h-3.5 w-3.5" aria-hidden />
-                          </button>
-                          <button type="button" onClick={() => rate(i, false)} className="grid h-6 w-6 place-items-center rounded hover:bg-critical-soft hover:text-critical-ink" aria-label="違っていた" title="違っていた">
-                            <ThumbsDown className="h-3.5 w-3.5" aria-hidden />
-                          </button>
-                        </>
-                      ))}
-                  </span>
-                </div>
               </div>
             </div>
-          ),
-        )}
-        {pending && (
-          <div className="flex items-center gap-2 pl-9 text-xs text-ink-3">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-            {guest ? "回答を考えています…" : elapsed < 4 ? "回答を考えています…" : `データを調べています… (${elapsed} 秒。集計は 1 分ほどかかることがあります)`}
-          </div>
+          )}
+          {msgs.map((m, i) =>
+            m.role === "user" ? (
+              <div key={i} className="flex justify-end gap-2">
+                <div className={clsx(bubbleMax, "rounded-2xl rounded-tr-sm bg-accent px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap text-white")}>
+                  {m.voice && <Mic className="mr-1 inline h-3.5 w-3.5 -translate-y-px opacity-80" aria-label="声で質問" />}
+                  {m.content}
+                </div>
+                <UserAvatar user={user} />
+              </div>
+            ) : (
+              <div key={i} className="flex gap-2">
+                <BotAvatar />
+                <div className={clsx("min-w-0 space-y-1.5", m.tables?.length ? "flex-1" : bubbleMax)}>
+                  <div className={clsx("rounded-2xl rounded-tl-sm border bg-panel px-3 py-2.5 text-sm leading-relaxed break-words text-ink", speaker.speakingId === i ? "border-accent/50 ring-2 ring-accent/15" : "border-line")}>
+                    <RichText text={m.content} />
+                  </div>
+                  {m.tables?.map((t, ti) => (
+                    <AnalysisTable key={`${i}-${ti}`} result={t} compact={variant === "widget" && !wide} />
+                  ))}
+                  {m.links && m.links.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {m.links.map((l) => (
+                        <Link key={l.href} href={l.href} className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-ink hover:bg-accent hover:text-white">
+                          {l.label} →
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                  {m.sources && m.sources.length > 0 && (
+                    <details className="rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs text-ink-2">
+                      <summary className="cursor-pointer select-none font-medium text-ink-2 hover:text-ink">回答の根拠 ({m.sources.length})</summary>
+                      <ul className="mt-1.5 space-y-1">
+                        {m.sources.map((s, si) => (
+                          <li key={si} className="flex items-start gap-1.5">
+                            <span className="shrink-0 rounded bg-subtle px-1.5 py-px text-[10px] text-ink-3">{s.kind}</span>
+                            {s.href ? (
+                              <Link href={s.href} className="min-w-0 text-accent hover:underline">
+                                {s.label}
+                              </Link>
+                            ) : (
+                              <span className="min-w-0">{s.label}</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                      {m.tools && m.tools.length > 0 && (
+                        <div className="mt-1.5 border-t border-line pt-1.5 text-[11px] text-ink-3">
+                          <p className="font-medium">調べた内容</p>
+                          <ul>
+                            {m.tools.map((t, ti) => (
+                              <li key={ti}>
+                                ・{t.name}: {t.summary}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </details>
+                  )}
+                  {m.suggestions && m.suggestions.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {m.suggestions.map((s) => (
+                        <button key={s} type="button" disabled={pending} onClick={() => send(s)} className="rounded-full border border-line bg-panel px-2.5 py-0.5 text-left text-xs text-ink-2 hover:border-accent/40 hover:text-accent-ink disabled:opacity-40">
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-ink-3">
+                    {m.source && SOURCE_LABEL[m.source] && (
+                      <span className={clsx("inline-flex items-center gap-1 rounded-full px-2 py-0.5", SOURCE_LABEL[m.source]!.className)}>
+                        {SOURCE_LABEL[m.source]!.icon}
+                        <span className={variant === "widget" ? "max-sm:sr-only" : undefined}>{SOURCE_LABEL[m.source]!.label}</span>
+                      </span>
+                    )}
+                    {typeof m.ms === "number" && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-subtle px-2 py-0.5 tabular-nums" title={m.tools?.length ? `調べた内容 ${m.tools.length} 件` : undefined}>
+                        <Timer className="h-3 w-3" aria-hidden />
+                        {fmtSeconds(m.ms)}
+                        {m.tools?.length ? <span className="max-sm:hidden">・調べた内容 {m.tools.length} 件</span> : null}
+                      </span>
+                    )}
+                    <span className="ml-auto flex items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => void copyAnswer(i, m.content)}
+                        className="grid h-6 w-6 place-items-center rounded hover:bg-subtle hover:text-ink"
+                        aria-label={copied === i ? "コピーしました" : "回答をコピー"}
+                        title={copied === i ? "コピーしました" : "回答をコピー"}
+                      >
+                        {copied === i ? <Check className="h-3.5 w-3.5 text-good" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+                      </button>
+                      {voice.tts !== "none" &&
+                        (speaker.speakingId === i ? (
+                          <button type="button" onClick={speaker.stop} className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-accent-ink hover:bg-accent-soft" aria-label="読み上げを止める" title="読み上げを止める">
+                            <Square className="h-3 w-3 fill-current" aria-hidden /> 止める
+                          </button>
+                        ) : speaker.loadingId === i ? (
+                          <span className="grid h-6 w-6 place-items-center" aria-label="読み上げの準備中">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                          </span>
+                        ) : (
+                          <button type="button" onClick={() => void speaker.speak(i, m.content, Boolean(m.tables?.length))} className="grid h-6 w-6 place-items-center rounded hover:bg-accent-soft hover:text-accent-ink" aria-label="回答を読み上げる" title="回答を読み上げる">
+                            <Volume2 className="h-3.5 w-3.5" aria-hidden />
+                          </button>
+                        ))}
+                      {(m.qaId || m.logId) &&
+                        (m.rated ? (
+                          <span className="px-1">{m.rated === "up" ? "ありがとうございます" : "改善に使います"}</span>
+                        ) : (
+                          <>
+                            <button type="button" onClick={() => rate(i, true)} className="grid h-6 w-6 place-items-center rounded hover:bg-good-soft hover:text-good-ink" aria-label="役に立った" title="役に立った">
+                              <ThumbsUp className="h-3.5 w-3.5" aria-hidden />
+                            </button>
+                            <button type="button" onClick={() => rate(i, false)} className="grid h-6 w-6 place-items-center rounded hover:bg-critical-soft hover:text-critical-ink" aria-label="違っていた" title="違っていた">
+                              <ThumbsDown className="h-3.5 w-3.5" aria-hidden />
+                            </button>
+                          </>
+                        ))}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ),
+          )}
+          {pending && progress && (
+            <div className="flex gap-2" aria-busy="true">
+              <BotAvatar />
+              <div className={clsx(bubbleMax, "min-w-0 flex-1")}>
+                <ThinkingProgress state={progress} guest={guest} />
+              </div>
+            </div>
+          )}
+        </div>
+        {!atBottom && (
+          <button
+            type="button"
+            onClick={() => scrollToBottom(true)}
+            className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-line bg-panel px-3 py-1.5 text-xs font-medium text-ink-2 shadow-md hover:bg-subtle hover:text-ink"
+            aria-label="最新のメッセージへ"
+          >
+            <ArrowDown className="h-3.5 w-3.5" aria-hidden />
+            最新へ
+          </button>
         )}
       </div>
 
@@ -591,79 +732,99 @@ export function AssistantConversation({
       )}
 
       <form
-        className="flex items-end gap-1.5 border-t border-line bg-panel p-2.5"
+        className="border-t border-line bg-panel pb-[max(0.5rem,env(safe-area-inset-bottom))]"
         onSubmit={(e) => {
           e.preventDefault();
           send(input);
         }}
       >
-        {voice.tts !== "none" && (
-          <button
-            type="button"
-            onClick={toggleRead}
-            className={clsx("grid h-10 w-9 shrink-0 place-items-center rounded-xl", readAloud ? "bg-accent-soft text-accent-ink" : "text-ink-3 hover:bg-subtle hover:text-ink")}
-            aria-pressed={readAloud}
-            aria-label={readAloud ? "回答の読み上げ: オン" : "回答の読み上げ: オフ"}
-            title={readAloud ? "回答を自動で読み上げる: オン (押すとオフ)" : "回答を自動で読み上げる: オフ (声で聞いた質問は読み上げます)"}
-          >
-            {readAloud ? <Volume2 className="h-4 w-4" aria-hidden /> : <VolumeX className="h-4 w-4" aria-hidden />}
-          </button>
+        {/* 音声の副操作は入力欄の上にまとめ、送信・マイクを押しやすくする */}
+        {voice.tts !== "none" ? (
+          <div className="flex items-center gap-1 border-b border-line/70 px-2.5 pt-1.5 pb-1">
+            <button
+              type="button"
+              onClick={toggleRead}
+              className={clsx("inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] font-medium", readAloud ? "bg-accent-soft text-accent-ink" : "text-ink-3 hover:bg-subtle hover:text-ink")}
+              aria-pressed={readAloud}
+              aria-label={readAloud ? "回答の読み上げ: オン" : "回答の読み上げ: オフ"}
+              title={readAloud ? "回答を自動で読み上げる: オン" : "回答を自動で読み上げる: オフ (声の質問は読み上げます)"}
+            >
+              {readAloud ? <Volume2 className="h-3.5 w-3.5" aria-hidden /> : <VolumeX className="h-3.5 w-3.5" aria-hidden />}
+              読み上げ
+            </button>
+            {(readAloud || talk) && (
+              <button
+                type="button"
+                onClick={() => speaker.setRate(RATES[(RATES.indexOf(speaker.rate as (typeof RATES)[number]) + 1) % RATES.length])}
+                className="inline-flex h-7 items-center rounded-lg px-2 text-[11px] font-semibold text-ink-2 tnum hover:bg-subtle"
+                aria-label={`読み上げの速さ ${speaker.rate} 倍`}
+                title="読み上げの速さ (押すと変更)"
+              >
+                {speaker.rate}×
+              </button>
+            )}
+            {voice.stt !== "none" && (
+              <button
+                type="button"
+                onClick={toggleTalk}
+                disabled={pending && !talk}
+                className={clsx("inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] font-medium disabled:opacity-40", talk ? "bg-accent text-white" : "text-ink-3 hover:bg-subtle hover:text-ink")}
+                aria-pressed={talk}
+                aria-label={talk ? "会話モードを終える" : "会話モード"}
+                title={talk ? "会話モードを終える (Esc)" : "会話モード: 話す → 読み上げ → また聞く"}
+              >
+                <AudioLines className="h-3.5 w-3.5" aria-hidden />
+                会話
+              </button>
+            )}
+            <span className="ml-auto hidden text-[10px] text-ink-3 sm:inline">Enter 送信 · Shift+Enter 改行</span>
+          </div>
+        ) : (
+          <div className="hidden items-center justify-end border-b border-line/70 px-2.5 pt-1.5 pb-1 sm:flex">
+            <span className="text-[10px] text-ink-3">Enter 送信 · Shift+Enter 改行</span>
+          </div>
         )}
-        {voice.tts !== "none" && (readAloud || talk) && (
-          <button
-            type="button"
-            onClick={() => speaker.setRate(RATES[(RATES.indexOf(speaker.rate as (typeof RATES)[number]) + 1) % RATES.length])}
-            className="grid h-10 w-9 shrink-0 place-items-center rounded-xl text-[11px] font-semibold text-ink-2 tnum hover:bg-subtle"
-            aria-label={`読み上げの速さ ${speaker.rate} 倍 (押すと変わります)`}
-            title="読み上げの速さ (押すと 0.9 → 1 → 1.2 → 1.4 倍)"
-          >
-            {speaker.rate}×
+        <div className="flex items-end gap-1.5 p-2.5">
+          <div className="relative min-w-0 flex-1">
+            <textarea
+              ref={ref}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  send(input);
+                }
+              }}
+              rows={1}
+              maxLength={1000}
+              placeholder={voice.stt !== "none" ? "質問を入力、またはマイクで話す" : "質問を入力してください"}
+              aria-label="質問"
+              disabled={pending || recording}
+              className="max-h-32 min-h-10 w-full resize-none rounded-xl border border-line bg-subtle px-3 py-2.5 text-sm leading-snug text-ink placeholder:text-ink-3 focus:border-accent focus:bg-panel focus:outline-none disabled:opacity-60"
+            />
+            {input.length >= 800 && (
+              <span className={clsx("pointer-events-none absolute right-2 bottom-1.5 text-[10px] tnum", input.length >= 980 ? "text-critical-ink" : "text-ink-3")} aria-live="polite">
+                {input.length}/1000
+              </span>
+            )}
+          </div>
+          {voice.stt !== "none" && (
+            <button
+              type="button"
+              onClick={recording ? recorder.stop : startVoice}
+              disabled={pending || recorder.state === "transcribing"}
+              className={clsx("grid h-10 w-10 shrink-0 place-items-center rounded-xl disabled:opacity-40", recording ? "animate-pulse bg-critical text-white hover:bg-critical/90" : "border border-accent/40 text-accent hover:bg-accent-soft")}
+              aria-label={recording ? "話し終えて送る" : "声で質問する"}
+              title={recording ? "話し終えて送る" : "声で質問する (マイク)"}
+            >
+              {recorder.state === "transcribing" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : recording ? <Square className="h-4 w-4 fill-current" aria-hidden /> : <Mic className="h-4 w-4" aria-hidden />}
+            </button>
+          )}
+          <button type="submit" disabled={pending || !input.trim() || recording} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent text-white hover:bg-accent-hover disabled:opacity-40" aria-label="送信">
+            {pending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <SendHorizontal className="h-4 w-4" aria-hidden />}
           </button>
-        )}
-        <textarea
-          ref={ref}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              send(input);
-            }
-          }}
-          rows={variant === "page" ? 2 : 1}
-          maxLength={1000}
-          placeholder={voice.stt !== "none" ? "質問を入力、またはマイクで話す" : "質問を入力 (Enter で送信 / Shift+Enter で改行)"}
-          aria-label="質問"
-          className="max-h-32 min-h-10 min-w-0 flex-1 resize-none rounded-xl border border-line bg-subtle px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:border-accent focus:bg-panel focus:outline-none"
-        />
-        {voice.stt !== "none" && voice.tts !== "none" && (
-          <button
-            type="button"
-            onClick={toggleTalk}
-            disabled={pending && !talk}
-            className={clsx("grid h-10 w-9 shrink-0 place-items-center rounded-xl disabled:opacity-40", talk ? "bg-accent text-white" : "text-ink-3 hover:bg-subtle hover:text-ink")}
-            aria-pressed={talk}
-            aria-label={talk ? "会話モードを終える" : "会話モード (話す → 読み上げ → また聞く をくり返す)"}
-            title={talk ? "会話モードを終える (Esc)" : "会話モード: 手を使わずに続けて相談する"}
-          >
-            <AudioLines className="h-4 w-4" aria-hidden />
-          </button>
-        )}
-        {voice.stt !== "none" && (
-          <button
-            type="button"
-            onClick={recording ? recorder.stop : startVoice}
-            disabled={pending || recorder.state === "transcribing"}
-            className={clsx("grid h-10 w-10 shrink-0 place-items-center rounded-xl disabled:opacity-40", recording ? "animate-pulse bg-critical text-white hover:bg-critical/90" : "border border-accent/40 text-accent hover:bg-accent-soft")}
-            aria-label={recording ? "話し終えて送る" : "声で質問する"}
-            title={recording ? "話し終えて送る" : "声で質問する (マイク)"}
-          >
-            {recorder.state === "transcribing" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : recording ? <Square className="h-4 w-4 fill-current" aria-hidden /> : <Mic className="h-4 w-4" aria-hidden />}
-          </button>
-        )}
-        <button type="submit" disabled={pending || !input.trim() || recording} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent text-white hover:bg-accent-hover disabled:opacity-40" aria-label="送信">
-          <SendHorizontal className="h-4 w-4" aria-hidden />
-        </button>
+        </div>
       </form>
     </>
   );

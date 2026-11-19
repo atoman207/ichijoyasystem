@@ -16,10 +16,13 @@ const chromePath = ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "
 const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Tokyo" });
 const year = today.slice(0, 4);
 let seq = 0;
+// 返事を少し遅らせて、待っているあいだの表示 (考えています・経過時間・道具の進み) を確かめられるようにする
+const MOCK_DELAY = Number(process.env.MOCK_AI_DELAY_MS) || 1500;
 const mock = http.createServer((req, res) => {
   let raw = "";
   req.on("data", (c) => (raw += c));
-  req.on("end", () => {
+  req.on("end", async () => {
+    await new Promise((r) => setTimeout(r, MOCK_DELAY));
     const body = JSON.parse(raw || "{}");
     const msgs = body.messages ?? [];
     const last = msgs.at(-1);
@@ -62,18 +65,42 @@ for (const [label, viewport] of [
 ]) {
   console.log(`\n■ ${label} (${viewport.width}px)`);
   const { ctx, page } = await session(viewport, "yamada@ichijoya.example");
-  // 画面左下の「質問する」
+  // 画面左下の「質問する」→ 画面の中央にモーダルで開く
+  const streamed = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/assistant/ask")) streamed.push(r.url());
+  });
   await page.getByRole("button", { name: "チャットボットに質問する" }).click();
+  const dialog = page.getByRole("dialog", { name: "社内 AI アシスタント" });
+  await dialog.waitFor();
+  await page.waitForTimeout(300);
+  const b = await dialog.boundingBox();
+  const cx = b.x + b.width / 2;
+  const cy = b.y + b.height / 2;
+  check(Math.abs(cx - viewport.width / 2) < 24 && Math.abs(cy - viewport.height / 2) < 24, `チャットが画面の中央に出る (中心 ${Math.round(cx)},${Math.round(cy)} / 画面 ${viewport.width / 2},${viewport.height / 2})`);
+  check(await page.evaluate(() => document.body.style.overflow === "hidden"), "モーダルのあいだは背面がスクロールしない");
   const box = page.getByLabel("質問").last();
   await box.fill("今年の売上合計はいくらですか？");
   await page.getByRole("button", { name: "送信" }).last().click();
+  // 待っているあいだ: 経過時間・段階・道具の進み
+  const progress = dialog.getByRole("status").filter({ hasText: "目安" });
+  check(await progress.waitFor({ timeout: 10_000 }).then(() => true).catch(() => false), "待っているあいだに進み具合 (経過時間・目安) を出す");
+  check(await dialog.getByText(/集計しています|質問を読み解いています|結果を読んで/).first().waitFor({ timeout: 10_000 }).then(() => true).catch(() => false), "いま何をしているかを出す (途中の知らせ)");
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/progress-${viewport.width}.png` });
   const answer = page.getByText(/売上合計は/).last();
   check(await answer.waitFor({ timeout: 90_000 }).then(() => true).catch(() => false), "質問すると回答が出る");
+  check(streamed.length >= 1, "途中の知らせつきの /api/assistant/ask で質問する");
+  check(await dialog.getByText(/\d+\.\d 秒/).last().isVisible().catch(() => false), "回答までの時間 (秒) を回答の下に出す");
   check(await page.getByText(/回答の根拠/).last().isVisible().catch(() => false), "回答の根拠を表示する");
   check(await page.locator("table").last().isVisible().catch(() => false), "集計の表を表示する");
   check(await noHScroll(page), "横にはみ出さない (チャットを開いた状態)");
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/chat-${viewport.width}.png` });
   await page.keyboard.press("Escape");
+  check(await dialog.waitFor({ state: "detached", timeout: 3000 }).then(() => true).catch(() => false), "Esc で閉じる");
+  await page.getByRole("button", { name: "チャットボットに質問する" }).click();
+  await dialog.waitFor();
+  await page.mouse.click(3, viewport.height / 2);
+  check(await dialog.waitFor({ state: "detached", timeout: 3000 }).then(() => true).catch(() => false), "背面を押すと閉じる");
   // AI アシスタントの画面・品質と費用 (管理者)
   for (const url of ["/ai", "/ai?tab=quality", "/ai?tab=history"]) {
     const r = await page.goto(`${BASE}${url}`, { waitUntil: "networkidle" });

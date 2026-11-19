@@ -6,31 +6,15 @@ import { addAudit, getDb, mutate, syncDb } from "@/lib/db/store";
 import { getSessionUser } from "@/lib/auth/session";
 import { canManageChatbot, canShareChatToKnowledge, canViewChatLog } from "@/lib/auth/permissions";
 import { askChatbot, type BotReply, type ChatTurn } from "@/lib/chatbot/answer";
+import { cleanTurns } from "@/lib/chatbot/ask-input";
 import { ensureChatbotData } from "@/lib/chatbot/build";
 import { startTraining, stopTraining } from "@/lib/chatbot/train";
 import { deleteQa, getChatLog, getQa, insertQa, markChatShared, rateChatLog, rateQa, updateQa } from "@/lib/chatbot/store";
-import type { AnalysisSpec } from "@/lib/assistant/analyze";
 import { newId, nowIso } from "@/lib/db/store";
 import { KNOWLEDGE_FAQ_CATEGORY } from "@/lib/knowledge";
 import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 const BACK = "/ai?tab=bot";
-
-/** 集計の条件 (画面から戻ってきたもの) を、知っている項目だけにして受け取る */
-function cleanSpecs(v: unknown): AnalysisSpec[] | undefined {
-  if (!Array.isArray(v)) return undefined;
-  const out: AnalysisSpec[] = [];
-  for (const x of v.slice(0, 4)) {
-    if (!x || typeof x !== "object") continue;
-    try {
-      const j = JSON.parse(JSON.stringify(x).slice(0, 3000)) as AnalysisSpec;
-      out.push(j);
-    } catch {
-      /* 壊れた条件は使わない */
-    }
-  }
-  return out.length ? out : undefined;
-}
 
 /** 画面左下のチャットボット (「質問する」) への質問 (ログイン前のトップページからも使える) */
 export async function askChatbotAction(history: ChatTurn[], question: string, convId?: string, opts?: { voice?: boolean }): Promise<BotReply> {
@@ -38,10 +22,7 @@ export async function askChatbotAction(history: ChatTurn[], question: string, co
   const db = user ? getDb() : await syncDb();
   const q = String(question ?? "").trim();
   if (!q) return { answer: "質問を入力してください。", links: [], source: "none", suggestions: [] };
-  const turns: ChatTurn[] = (Array.isArray(history) ? history : [])
-    .filter((h) => h && (h.role === "user" || h.role === "assistant") && typeof h.content === "string")
-    .slice(-8)
-    .map((h) => ({ role: h.role, content: h.content.slice(0, 3000), specs: user && h.role === "assistant" ? cleanSpecs(h.specs) : undefined }));
+  const turns: ChatTurn[] = cleanTurns(history, Boolean(user));
   try {
     return await askChatbot(db, user, turns, q, { convId: typeof convId === "string" ? convId.slice(0, 64) : undefined, voice: opts?.voice === true });
   } catch (err) {
