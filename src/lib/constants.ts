@@ -350,6 +350,7 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
   logout: "ログアウト",
   export: "書き出し",
   import: "取込",
+  view: "閲覧",
 };
 
 export const ENTITY_LABEL: Record<string, string> = {
@@ -381,6 +382,9 @@ export const ENTITY_LABEL: Record<string, string> = {
   attachment: "添付ファイル",
   store: "店舗",
   accounting: "会計データ",
+  map_location: "場所 (地図)",
+  map_document: "住宅地図 (PDF)",
+  map_batch: "地図の一括処理",
 };
 
 /** 勘定科目 (仕入) */

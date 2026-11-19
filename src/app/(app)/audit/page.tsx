@@ -9,7 +9,7 @@ import type { AuditAction } from "@/lib/db/types";
 import { Avatar, Badge, Button, Flash, Input, LinkButton, Note, PageHeader, Pager, Select, StoreTag, paginate } from "@/components/ui";
 
 const ACTION_TONE: Record<AuditAction, "neutral" | "info" | "good" | "warn" | "critical" | "accent"> = {
-  create: "info", update: "neutral", delete: "critical", approve: "good", reject: "critical", submit: "warn", send: "accent", status: "neutral", login: "neutral", logout: "neutral", export: "warn", import: "warn",
+  create: "info", update: "neutral", delete: "critical", approve: "good", reject: "critical", submit: "warn", send: "accent", status: "neutral", login: "neutral", logout: "neutral", export: "warn", import: "warn", view: "neutral",
 };
 
 const SCOPE_TEXT: Record<string, string> = {

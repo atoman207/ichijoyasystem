@@ -8,12 +8,13 @@ export const DATA_VERSION = 3;
  * 旧バージョンのデータを現在の形式にそろえる。読み込み時に 1 回だけ実行する。
  * v2 (全社カレンダー): 予定の時刻を HH:MM に統一、受注の施工予定と連動する予定に source="order"、案件 ID の補完
  * v3 (クライアント資料の取込): 休業日・アンケート・資料台帳・写真台帳のコレクション
- * (添付ファイル attachments・現金出納 cashEntries・送信履歴 deliveries・社内資料 knowledge・発注書 purchaseOrders・FAX faxMessages / faxNumbers は後から追加したコレクション。無ければ空で作る)
+ * (添付ファイル attachments・現金出納 cashEntries・送信履歴 deliveries・社内資料 knowledge・発注書 purchaseOrders・FAX faxMessages / faxNumbers・
+ *  地図 mapLocations / mapLocationRefs / mapDocuments / mapDocumentLinks は後から追加したコレクション。無ければ空で作る)
  */
 export function migrateDb(db: Database): Database {
   const version = db.meta?.version ?? 1;
   if (version < 2) migrateV2(db);
-  for (const key of ["holidays", "surveys", "qualityIssues", "reviews", "sourceFiles", "photoAlbums", "settings", "attachments", "cashEntries", "deliveries", "knowledge", "purchaseOrders", "faxMessages", "faxNumbers"] as const) {
+  for (const key of ["holidays", "surveys", "qualityIssues", "reviews", "sourceFiles", "photoAlbums", "settings", "attachments", "cashEntries", "deliveries", "knowledge", "purchaseOrders", "faxMessages", "faxNumbers", "mapLocations", "mapLocationRefs", "mapDocuments", "mapDocumentLinks"] as const) {
     if (!Array.isArray(db[key])) (db as unknown as Record<string, unknown[]>)[key] = [];
   }
   if (version < DATA_VERSION) db.meta = { ...db.meta, version: DATA_VERSION };

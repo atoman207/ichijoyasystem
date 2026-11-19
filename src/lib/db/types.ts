@@ -664,7 +664,9 @@ export type AuditAction =
   | "login"
   | "logout"
   | "export"
-  | "import";
+  | "import"
+  /** 閲覧 (住宅地図の PDF など、閲覧の記録が必要なもの) */
+  | "view";
 
 export interface AuditChange {
   field: string;
@@ -1317,6 +1319,127 @@ export interface FaxNumber {
   updatedAt: string;
 }
 
+/* ---------------- 地図・住宅地図 (顧客・案件・予定の場所と、許諾を確認した住宅地図の PDF) ---------------- */
+
+/**
+ * 場所 (地図上の 1 か所。複数の顧客・案件・予定が同じ場所を参照する)。
+ * 顧客・見積・受注・予定の住所の文字は書き換えず、照合用のキー (src/lib/maps/address.ts) で結び付ける。
+ * 番地のない住所の場所は自動では結び付けず、記録ごとの参照 (MapLocationRef) で結び付ける
+ */
+export interface MapLocation {
+  id: string;
+  /** 照合用のキー (都道府県 + 市区町村・町名 + 番地) */
+  addressKey: string;
+  /** 表示用の住所 (正規化した文字。元の住所は各記録に残る) */
+  address: string;
+  postalCode?: string;
+  /** house = 番地まで / area = 番地なし・地区まで (自動では結び付けない) / none = 住所なし */
+  precision: "house" | "area" | "none";
+  /** 緯度経度 (Google マップのリンクに使うのは確認済み (coordStatus = verified) のときだけ) */
+  lat?: number;
+  lng?: number;
+  /** Google の Place ID */
+  placeId?: string;
+  /** 位置の出どころ: manual = 人が地図で合わせた / geocode = 住所から自動で求めた / import = 取込 */
+  coordSource?: "manual" | "geocode" | "import";
+  /** unverified = 未確認 / needs_review = 要確認 (候補が複数・おおよその位置) / verified = 確認済み */
+  coordStatus?: "unverified" | "needs_review" | "verified";
+  coordVerifiedBy?: string;
+  coordVerifiedAt?: string;
+  /** 自動で位置を求めたときの結果の説明 (候補の数・精度) */
+  geocodeNote?: string;
+  /** 現地のメモ (例: 駐車場は裏・入口は北側) */
+  note?: string;
+  /** active / merged = 重複のため別の場所にまとめた (mergedInto へ参照を移した。行は残す) */
+  status: "active" | "merged";
+  mergedInto?: string;
+  /** 登録元: app = 画面 / batch = 一括の正規化・取込 */
+  source: "app" | "batch";
+  /** 閲覧範囲の目安の店舗 (最初に登録した記録の店舗。参照する記録が他店舗にあれば、その店舗のメンバーも見られる) */
+  storeId: StoreId;
+  createdBy: string;
+  createdAt: string;
+  updatedBy?: string;
+  updatedAt: string;
+}
+
+/** 場所の参照の対象 (顧客の住所・見積と受注の施工場所・予定の場所) */
+export type MapRefType = "customer" | "quote" | "order" | "event";
+
+/**
+ * 記録と場所の明示的な結び付け (1 記録 1 行。ID は mlr_<type>_<recordId>)
+ * - 顧客・見積・受注: mode = manual (番地のない住所を、人が選んだ場所に結び付けた)。住所の文字が変わったら外れる (addressSnapshot で判定)
+ * - 予定: mode = follow (案件・お客様の場所に合わせる) / custom (この予定だけ別の場所。お客様の住所を変えても上書きしない)
+ */
+export interface MapLocationRef {
+  id: string;
+  recordType: MapRefType;
+  recordId: string;
+  mode: "manual" | "follow" | "custom";
+  locationId?: string;
+  /** 結び付けたときの記録の住所の文字 (変わったら結び付けを使わない) */
+  addressSnapshot?: string;
+  linkedBy: string;
+  linkedAt: string;
+}
+
+/** 住宅地図などの地図の PDF (本体は VPS のディスク。ここには台帳とライセンスの情報だけ) */
+export interface MapDocument {
+  id: string;
+  /** residential = 住宅地図 / other = その他の地図・案内図 */
+  kind: "residential" | "other";
+  /** 地図の提供元: zenrin = ゼンリン / other */
+  provider: "zenrin" | "other";
+  /** 表示名 (例: ゼンリン住宅地図 合志市 2025 p.123) */
+  title: string;
+  fileName: string;
+  contentType: string;
+  size: number;
+  /** ファイルの SHA-256 (同じファイルの二重登録を防ぐ) */
+  sha256: string;
+  pageCount?: number;
+  /** 保存先のキー (src/lib/storage.ts)。取り消し (removed) で本体を消したときは空 */
+  storageKey?: string;
+  /** active = 使用中 / replaced = 差し替え済み (古い版。台帳と本体は残す) / removed = 取り消し (台帳は残し、本体は消す) */
+  status: "active" | "replaced" | "removed";
+  /** 差し替えの前後 */
+  replacesId?: string;
+  replacedById?: string;
+  /** upload = 画面から / bulk_import = 一括取込 / provider_api = 提供元の公式 API */
+  source: "upload" | "bulk_import" | "provider_api";
+  /** 取込元 (一括取込のフォルダー・ファイル名) */
+  sourceRef?: string;
+  /** 版・発行年 (例: 2025年版) */
+  edition?: string;
+  /** 著作権表示 (例: © ZENRIN CO., LTD.)。PDF の表示・ダウンロードでも消さない */
+  copyrightNotice: string;
+  /** 契約・許諾の番号やメモ */
+  licenseRef?: string;
+  licenseNote?: string;
+  /** 「契約で社内サーバーへの保存と社内の複数人での閲覧が認められている」ことを確認した人と日時 */
+  licenseConfirmedBy: string;
+  licenseConfirmedAt: string;
+  /** 複数の場所 (同じ地図の範囲の近所の場所) から参照してよい */
+  shareable?: boolean;
+  /** 閲覧範囲の目安の店舗 (登録した記録の店舗) */
+  storeId: StoreId;
+  uploadedBy: string;
+  uploadedAt: string;
+  updatedAt: string;
+  removedBy?: string;
+  removedAt?: string;
+  removeReason?: string;
+}
+
+/** 地図の PDF と場所の結び付け (1 つの PDF を複数の場所から参照できる。ID は mdl_<documentId>_<locationId>) */
+export interface MapDocumentLink {
+  id: string;
+  documentId: string;
+  locationId: string;
+  linkedBy: string;
+  linkedAt: string;
+}
+
 export interface Database {
   meta: { version: number; seededAt: string; source?: string; importedAt?: string; revision?: number };
   stores: Store[];
@@ -1352,6 +1475,10 @@ export interface Database {
   purchaseOrders: PurchaseOrder[];
   faxMessages: FaxMessage[];
   faxNumbers: FaxNumber[];
+  mapLocations: MapLocation[];
+  mapLocationRefs: MapLocationRef[];
+  mapDocuments: MapDocument[];
+  mapDocumentLinks: MapDocumentLink[];
 }
 
 export type CollectionName = Exclude<keyof Database, "meta">;

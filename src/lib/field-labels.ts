@@ -49,6 +49,8 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   fax: { triage: "仕分け", supplierId: "仕入先", customerId: "顧客", purchaseOrderId: "発注書", orderIds: "案件", assignedUserId: "担当者" },
   fax_number: { kind: "種類", label: "名前" },
   store: { phone: "電話", address: "住所", managerUserId: "責任者" },
+  map_location: { lat: "緯度", lng: "経度", placeId: "Google の場所 ID", coordStatus: "位置の確認", coordSource: "位置の出どころ", note: "現地のメモ", locationId: "場所", mergedInto: "まとめ先", document: "住宅地図", mode: "場所の指定" },
+  map_document: { title: "表示名", edition: "版・発行年", copyrightNotice: "著作権表示", licenseRef: "契約・許諾の番号", licenseNote: "許諾のメモ", shareable: "複数の場所で共用", status: "状態", location: "場所", file: "ファイル" },
 };
 
 export function fieldLabel(entity: string, field: string): string {

@@ -1,4 +1,4 @@
-import type { Approval, Attachment, AuditLog, CashEntry, Expense, FaxMessage, KnowledgeEntry, PurchaseInvoice, PurchaseOrder, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
+import type { Approval, Attachment, AuditLog, CashEntry, Expense, FaxMessage, KnowledgeEntry, MapDocument, PurchaseInvoice, PurchaseOrder, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
 
 /**
  * 権限ルール
@@ -20,6 +20,9 @@ import type { Approval, Attachment, AuditLog, CashEntry, Expense, FaxMessage, Kn
  * - FAX: 全店舗ロールは全件。店長・店舗スタッフは自店舗の FAX と、自分が送った・担当の FAX。
  *   受信 FAX の仕分け (要確認・不要の番号) は本部スタッフ・管理者。ひも付けの修正は本部スタッフ・管理者・自店舗の FAX の店長と、担当・登録した本人。
  *   不要に仕分けた FAX の完全な削除は管理者だけ (AI の判定だけでは削除しない)
+ * - 地図・住宅地図: 場所と住宅地図の PDF は、その場所を参照する記録 (顧客・案件・予定) を見られる人が見られる (src/lib/maps/access.ts)。
+ *   登録・差し替え・位置の修正は記録を扱える人、PDF の取り消しは登録した本人・その店舗の店長・管理者 (ほかの場所でも使っている PDF は取り消せない)。
+ *   一括の正規化・PDF の一括取込・重複した場所のまとめは本部スタッフ・管理者
  */
 
 export function canSeeAllStores(user: User): boolean {
@@ -285,7 +288,7 @@ export function canExportAccounting(user: User): boolean {
 }
 
 /** 店舗スタッフが自店舗の履歴を見られる対象 (案件・顧客・予定・請求など。経費・承認・設定などは見ない) */
-const STAFF_AUDIT_ENTITIES = new Set(["customer", "inquiry", "quote", "order", "invoice", "payment", "schedule", "document", "attachment", "survey", "quality", "review", "comm", "cash", "thread", "purchase_order", "fax"]);
+const STAFF_AUDIT_ENTITIES = new Set(["customer", "inquiry", "quote", "order", "invoice", "payment", "schedule", "document", "attachment", "survey", "quality", "review", "comm", "cash", "thread", "purchase_order", "fax", "map_location", "map_document"]);
 
 /**
  * 変更履歴 (監査ログ) の閲覧範囲
@@ -422,4 +425,22 @@ export function canRegisterFaxNumber(user: User): boolean {
 /** 不要に仕分けた FAX の完全な削除 (PDF を含む): 管理者 */
 export function canDeleteFax(user: User): boolean {
   return user.role === "admin";
+}
+
+/* ---------------- 地図・住宅地図 ---------------- */
+
+/**
+ * 地図の一括処理 (顧客の住所の正規化・住宅地図の PDF の一括取込・重複した場所のまとめ)、地図の管理画面: 本部スタッフ・管理者
+ * (全店舗の住所を扱うため、データの取込と同じ範囲)
+ */
+export function canManageMaps(user: User): boolean {
+  return canSeeAllStores(user);
+}
+
+/**
+ * 住宅地図の PDF の取り消し (台帳は残し、ファイルの本体を消す): 登録した本人・管理者・その店舗の店長。
+ * ほかの場所でも使っている PDF は取り消せない (先にこの場所から外す。src/lib/actions/maps.ts)
+ */
+export function canRemoveMapDocument(user: User, d: Pick<MapDocument, "uploadedBy" | "storeId">): boolean {
+  return d.uploadedBy === user.id || user.role === "admin" || (user.role === "store_manager" && user.storeId === d.storeId);
 }

@@ -158,6 +158,10 @@ export function createSeed(now = new Date()): Database {
     purchaseOrders: [],
     faxMessages: [],
     faxNumbers: [],
+    mapLocations: [],
+    mapLocationRefs: [],
+    mapDocuments: [],
+    mapDocumentLinks: [],
   };
   const ctx: Ctx = { now, today, rand, db, counters: {}, busy: new Map() };
 

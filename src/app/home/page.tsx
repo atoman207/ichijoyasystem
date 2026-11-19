@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { storePhone } from "@/lib/store-contact";
 import {
   ArrowRight,
   Bot,
@@ -181,31 +180,20 @@ export default async function HomePage() {
         description="問い合わせから入金まで、ひとつの画面で。4 店舗と本社の社員が、お客様・見積・工事の予定・請求を同じ最新の情報で扱います。"
       />
 
-      {/* 店舗 (公式サイトの写真) */}
+      {/* 店舗 (公式サイトの写真。店名のみ。住所・電話・アイコンは出さない) */}
       <Card id="stores" className="mt-6 scroll-mt-24">
-        <CardHeader icon={<Store />} title="熊本の 4 店舗と本社が、同じ情報でつながります" description="どの店舗で受けたお問い合わせも、ほかの店舗・本社からすぐに確認できます。予定表は全店舗で共有しています。" />
+        <CardHeader title="熊本の 4 店舗と本社が、同じ情報でつながります" description="どの店舗で受けたお問い合わせも、ほかの店舗・本社からすぐに確認できます。予定表は全店舗で共有しています。" />
         <ul className="grid grid-cols-1 gap-3 @3xl:grid-cols-2">
           {shops.map((s) => (
-            <li key={s.id} className="group overflow-hidden rounded-xl border border-line/70 bg-panel">
+            <li key={s.id} className="overflow-hidden rounded-xl border border-line/70 bg-panel">
               <div className="relative aspect-[2.4/1] overflow-hidden bg-subtle">
                 {STORE_PHOTO[s.id] && (
                   // eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル (最適化済みの WebP)
-                  <img src={STORE_PHOTO[s.id]} alt={`${s.name}の外観`} loading="lazy" className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
+                  <img src={STORE_PHOTO[s.id]} alt={`${s.name}の外観`} loading="lazy" className="h-full w-full object-cover" />
                 )}
-                <div className="absolute inset-0 bg-linear-to-t from-ink/45 via-transparent to-transparent" aria-hidden />
-                <span className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full bg-white/95 px-2.5 py-0.5 text-xs font-semibold text-ink shadow-xs">
-                  <span className="h-2 w-2 rounded-full" style={{ background: s.color }} aria-hidden />
+                <span className="absolute bottom-3 left-3 rounded-full border border-line/70 bg-panel/95 px-2.5 py-0.5 text-xs font-semibold text-ink">
                   {s.name}
                 </span>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-ink-2">
-                <span>〒{s.postalCode} {s.address}</span>
-                {/* 固定電話のない店舗 (中央店・西店・玉名店) は電話番号を出さない (src/lib/store-contact.ts) */}
-                {storePhone(s) && (
-                  <a href={`tel:${storePhone(s).replace(/[^0-9]/g, "")}`} className="inline-flex items-center gap-1 font-medium text-accent hover:underline">
-                    <Phone className="h-3.5 w-3.5" aria-hidden /> {storePhone(s)}
-                  </a>
-                )}
               </div>
             </li>
           ))}
@@ -215,6 +203,9 @@ export default async function HomePage() {
             <div className="relative aspect-[2.4/1] @3xl:aspect-auto">
               {/* eslint-disable-next-line @next/next/no-img-element -- public の静的ファイル */}
               <img src={STORE_PHOTO.hq} alt={`${hq.name}の外観`} loading="lazy" className="h-full w-full object-cover" />
+              <span className="absolute bottom-3 left-3 rounded-full border border-line/70 bg-panel/95 px-2.5 py-0.5 text-xs font-semibold text-ink">
+                {hq.name}
+              </span>
             </div>
             <div className="bg-subtle/60 p-5 sm:p-6">
               <Badge tone="accent" dot={false}>
@@ -223,9 +214,6 @@ export default async function HomePage() {
               <h3 className="mt-2 text-[15px] font-semibold tracking-tight text-ink">{hq.name}</h3>
               <p className="mt-1.5 text-sm leading-relaxed text-ink-2">
                 経理・承認・経営の数字を全店舗まとめて確認します。各店舗の見積・請求・入金も、本社からリアルタイムで見えます。
-              </p>
-              <p className="mt-3 text-xs text-ink-3">
-                〒{hq.postalCode} {hq.address}{storePhone(hq) && ` · TEL ${storePhone(hq)}`}
               </p>
             </div>
           </div>
