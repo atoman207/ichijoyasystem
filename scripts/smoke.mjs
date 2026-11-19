@@ -19,7 +19,7 @@ import path from "node:path";
 import { chromium } from "playwright";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:3100";
-const OUT = process.env.SHOT_DIR ?? path.join(process.cwd(), ".smoke-shots");
+const OUT = process.env.SHOT_DIR ?? path.join(process.cwd(), "other", ".smoke-shots");
 fs.mkdirSync(OUT, { recursive: true });
 const REVIEW_KEY = process.env.SMOKE_REVIEW_KEY?.trim();
 const DEMO_PASSWORD = process.env.SMOKE_PASSWORD ?? "demo1234";

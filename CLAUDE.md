@@ -5,7 +5,7 @@ AI コーディング支援 (Claude Code 等) がこのリポジトリで作業�
 ## まず読むもの
 - `README.md` — 起動方法・テストアカウント・画面一覧・ディレクトリ構成
 - `supabase/README.md` — テーブル作成とデータ登録 (`ichijoya.sql` を `scripts/import/setup-database.mjs` / psql で実行、または分割版を SQL Editor で実行)
-- (ローカルのみ・リポジトリ外) `docs/` の設計メモと `phase1/` の納品物 (要件定義書・設計書・画面一覧・権限設定一覧・次段階開発仕様書)
+- (ローカルのみ・リポジトリ外) `other/docs/` の設計メモと `other/phase1/` の納品物 (要件定義書・設計書・画面一覧・権限設定一覧・次段階開発仕様書)。実行に不要な資料は `other/` にまとめる
 
 ## 設計原則
 1. 情報は一つの基盤に集約する。問い合わせ → 見積 → 受注・施工 → 売上 → 請求 → 入金 を ID で連結し、どの画面からも前後へ辿れるようにする
@@ -31,7 +31,7 @@ AI コーディング支援 (Claude Code 等) がこのリポジトリで作業�
 - 本番データは Supabase。`.env.local` に `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SECRET_KEY` があれば Supabase、なければ (または `DATA_BACKEND=json`) `data/<DATA_FILE_NAME>` の JSON。テーブル定義の正本は `src/lib/db/schema.ts` (型 `types.ts` にフィールドを足したら schema.ts にも列を足し、`node scripts/import/generate-schema.mjs` で `supabase/migrations/20261112000000_initial_schema.sql` を、`node scripts/import/generate-data-sql.mjs` で `supabase/ichijoya.sql` (テーブル定義 + 全データの 1 ファイル。psql 用。コミットしない) を作り直す。SQL の組み立ては `scripts/import/schema-sql.mjs` に集約)。Supabase の SQL Editor は 1 回 0.98 MB まで (超えると "Query is too large to be run via the SQL Editor") なので、SQL Editor 用は `--split` の `supabase/data/*.sql` (各 900 KB 以下)
 - Supabase の負荷を減らす: データはメモリに持ち、他のインスタンスの書き込みは変更の記録 (`app_changes`。`record_changes` 関数がリビジョンの +1 と同時に書く) から変わった行だけを取り直す (`store.ts` の `catchUp`)。起動時は VPS の控え (`src/lib/db/snapshot.ts`、`/srv/ichijoya/data/cache`) から読み、そのあとの変更だけを取り直す。全件 (約 10 万行) を読むのは記録に抜けがあるとき (`bump_revision` を使うスクリプト・テーブル定義の反映のあと) だけ。Supabase に直接書くスクリプトは最後に `bump_revision()` を呼ぶ (= 全インスタンスが全件を読み直す)
 - 書き込みは必ず `await mutate(...)`。読み込みは `requireUser` / `requireActionUser` が `syncDb()` で最新化した後の `getDb()`。認証前に DB を読む画面 (ログイン・API) は `await syncDb()` を使う
-- リポジトリは公開。`client-materials/` (共有資料)・`data/` (移行データ・初期パスワード・サンプル)・`supabase/ichijoya.sql`・`supabase/data/` (データの SQL)・`phase1/`・`docs/`・`scripts/import/extract-client-data.mjs` (社員名を含む) はコミットしない (.gitignore)。社員の実名・ログイン ID をコードに書かない。手順は supabase/README.md
+- リポジトリは公開。`other/` (共有資料・設計メモ・納品物・参考 PDF など実行に不要なもの)・`data/` (移行データ・初期パスワード・サンプル)・`supabase/ichijoya.sql`・`supabase/data/` (データの SQL)・`scripts/import/extract-client-data.mjs` (社員名を含む) はコミットしない (.gitignore)。社員の実名・ログイン ID をコードに書かない。手順は supabase/README.md
 - schema.ts を変えたら `npm run db:migrate` で Supabase に反映する (`.env.local` の `SUPABASE_DB_PASSWORD` を使う)。反映前の本番ではそのテーブルがない。読み込みは空として続行し (`supabase.ts` の `missingTables`)、`/api/health` が `schema.missing` で知らせる。その機能の書き込み前に `recheckMissingTables()` で確かめ、ない間は分かる言葉で断る
 - 資料・写真は `src/lib/attachments.ts` (登録先・権限・保存)。閲覧・登録の権限は登録先の記録に従う。ファイルの本体は VPS のディスク (`src/lib/storage.ts`。`/srv/ichijoya/data/uploads`、3000 番と 3001 番で共有) にだけ置き、Supabase には台帳の文字とパス (`storage_key`・`avatar_key`) だけを持つ (Supabase Storage は使わない。以前のファイルは `scripts/ops/migrate-storage-to-vps.mjs` で移した)。ファイルの URL は `/api/attachments/<ID>` だけ (権限を確かめてからディスクのファイルを返す)。Vercel の送信上限 4.5 MB のため、写真は `src/components/attachments/image-prep.ts` で縮小してから送る
 - 権限の判定を変えたら `src/lib/auth/permission-table.ts` (設定画面の権限一覧) も直す

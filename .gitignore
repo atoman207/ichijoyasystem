@@ -49,11 +49,13 @@ next-env.d.ts
 # local data files (sample data / copies of the real data)
 /data/
 
-# smoke test screenshots
-.smoke-shots/
+# 実行に不要な資料・納品物・作業物 (client-materials / docs / phase1・2 / PDF・deb など)
+/other/*
+!/other/README.md
 
-# client materials downloaded from Google Drive (confidential, large)
-/client-materials/
+# smoke test screenshots (互換のため旧パスも残す)
+.smoke-shots/
+/other/.smoke-shots/
 
 # generated data SQL for the Supabase SQL Editor (customer personal data)
 /supabase/ichijoya.sql
@@ -63,18 +65,9 @@ next-env.d.ts
 # client-specific importer (contains employee names and spreadsheet layouts)
 /scripts/import/extract-client-data.mjs
 
-# Phase 1 deliverables (PDF / CSV / document sources) and their builders: delivered separately
-/phase1/
-/scripts/phase1/
-/phase2/
-/scripts/phase2/
-
 # design notes and reference images (not needed to run the app)
-/docs/
 /public/Screenshot*
 
-# クライアントの資料 (リポジトリのルートに置いた見積書などの PDF) はコミットしない
+# ルートに残った PDF・インストーラー (誤配置の保険)
 /*.pdf
-
-# ダウンロードしたインストーラーなど (アプリの一部ではない。GitHub は 100 MB を超えるファイルを受け付けない)
 *.deb
