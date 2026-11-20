@@ -25,8 +25,25 @@ import type { Approval, Attachment, AuditLog, CashEntry, Expense, FaxMessage, Kn
  *   一括の正規化・PDF の一括取込・重複した場所のまとめは本部スタッフ・管理者
  */
 
+/**
+ * AI アシスタントの読み取り (検索・集計・SQL) だけで全店舗を見られるようにした利用者の写し
+ * (設定 → AI アシスタント →「チャットボットの管理」の「AI アシスタントの閲覧範囲」= 全店舗のとき。src/lib/assistant/scope.ts)。
+ * 本物の利用者は変えないので、画面・登録・変更・承認・実行の権限はそのまま
+ */
+const ALL_STORES_READ = new WeakSet<User>();
+export function withAllStoresReadScope(user: User): User {
+  const copy = { ...user };
+  ALL_STORES_READ.add(copy);
+  return copy;
+}
+
 export function canSeeAllStores(user: User): boolean {
-  return user.role === "admin" || user.role === "hq_staff";
+  return user.role === "admin" || user.role === "hq_staff" || ALL_STORES_READ.has(user);
+}
+
+/** AI アシスタントの閲覧範囲 (権限どおり / 全店舗) を切り替える: 管理者 */
+export function canManageAssistantScope(user: User): boolean {
+  return user.role === "admin";
 }
 
 export function canAccessStore(user: User, storeId: StoreId): boolean {
@@ -288,7 +305,7 @@ export function canExportAccounting(user: User): boolean {
 }
 
 /** 店舗スタッフが自店舗の履歴を見られる対象 (案件・顧客・予定・請求など。経費・承認・設定などは見ない) */
-const STAFF_AUDIT_ENTITIES = new Set(["customer", "inquiry", "quote", "order", "invoice", "payment", "schedule", "document", "attachment", "survey", "quality", "review", "comm", "cash", "thread", "purchase_order", "fax", "map_location", "map_document"]);
+const STAFF_AUDIT_ENTITIES = new Set(["customer", "inquiry", "quote", "order", "invoice", "payment", "schedule", "document", "attachment", "survey", "quality", "review", "comm", "cash", "thread", "purchase_order", "fax", "map_location", "map_document", "work_report"]);
 
 /**
  * 変更履歴 (監査ログ) の閲覧範囲
@@ -470,4 +487,168 @@ export function canAckHold(user: User, h: { storeId: StoreId; assigneeIds: strin
 /** 提案の検証 (過去の予定との比較) の実行: 全店舗を見られるロール (管理者・本部)。重みの適用は管理者 */
 export function canRunScheduleBacktest(user: User): boolean {
   return canSeeAllStores(user);
+}
+
+/* ---------------- 事務 (事務改善シート・慶弔リスト。src/lib/office.ts・/office) ---------------- */
+
+/** 事務の権限の判定に使う情報: 事務担当の社員 (設定 → KPI・インセンティブ の事務担当。src/lib/office.ts の officeCtx で作る) */
+export interface OfficeCtx {
+  clerkUserIds: string[];
+}
+
+/** 事務の担当: 管理者・本部スタッフ・事務担当に選ばれた社員 (店舗ロールでも可。顧客の新規登録と同じ考え方) */
+function isOfficeStaff(user: User, ctx: OfficeCtx): boolean {
+  return user.active && (user.role === "admin" || user.role === "hq_staff" || ctx.clerkUserIds.includes(user.id));
+}
+
+/** 事務改善シートを見る・書き出す: 全員 (事務のミスと改善策を全社で共有するため) */
+export function canViewOfficeImprovements(user: User): boolean {
+  return user.active;
+}
+
+/** 事務改善シートの登録・修正・削除・取込: 事務担当・本部スタッフ・管理者 */
+export function canEditOfficeImprovements(user: User, ctx: OfficeCtx): boolean {
+  return isOfficeStaff(user, ctx);
+}
+
+/**
+ * 慶弔リストの閲覧・登録・修正・削除・取込・書き出し: 事務担当・本部スタッフ・管理者。
+ * 社員・取引先のご家族の情報 (喪主・関係・金額) を含むため、ほかの社員には画面のタブも出さない。
+ * AI の SQL (src/lib/datastore/model.ts の scopeStatements) では全店舗ロールだけが見られる
+ */
+export function canViewCondolences(user: User, ctx: OfficeCtx): boolean {
+  return isOfficeStaff(user, ctx);
+}
+
+export function canEditCondolences(user: User, ctx: OfficeCtx): boolean {
+  return isOfficeStaff(user, ctx);
+}
+
+/* ---------------- 縁在庫 (src/lib/heri-stock.ts・/heri) ---------------- */
+
+/**
+ * 縁在庫 (品番 × 場所の数量・規定量・登録の履歴) を見る: 全員。
+ * 原価・単価・金額はこの画面と書き出しに出さない (原価は管理会計 /management の権限 src/lib/mgmt/access.ts のまま)
+ */
+export function canViewHeriStock(user: User): boolean {
+  return user.active;
+}
+
+/** 縁の品番の登録・変更 (発注先・単位・規定量)・縁在庫表の取込: 事務担当・本部スタッフ・管理者 */
+export function canManageHeriStock(user: User, ctx: OfficeCtx): boolean {
+  return isOfficeStaff(user, ctx);
+}
+
+export type HeriOp = "receive" | "transfer" | "use" | "count";
+
+/**
+ * 縁の数量の登録 (場所は "store:<店舗 ID>"。共通在庫は store:hq)
+ * - 入庫 (仕入先 → 共通在庫など): 事務担当・本部スタッフ・管理者
+ * - 振り分け (場所 → 場所): 事務担当・本部スタッフ・管理者。店長は共通在庫と自店舗の間
+ * - 使用: 全員。店舗ロールは自店舗の在庫か共通在庫から
+ * - 棚卸 (数えた数量の登録): 事務担当・本部スタッフ・管理者。店長は自店舗
+ */
+export function canRecordHeriMove(user: User, op: HeriOp, loc: { from?: string; to?: string }, ctx: OfficeCtx): boolean {
+  if (!user.active) return false;
+  if (isOfficeStaff(user, ctx)) return true;
+  const own = `store:${user.storeId}`;
+  const common = "store:hq";
+  switch (op) {
+    case "receive":
+      return false;
+    case "transfer":
+      return user.role === "store_manager" && (loc.from === own || loc.to === own) && [loc.from, loc.to].every((l) => l === own || l === common);
+    case "use":
+      return loc.from === own || loc.from === common;
+    case "count":
+      return user.role === "store_manager" && loc.to === own;
+  }
+  return false;
+}
+
+/** 縁の登録の取消し (逆向きの行を追加。元の行は残す): 登録した本人・事務担当・本部スタッフ・管理者 */
+export function canReverseHeriMove(user: User, m: { createdBy: string }, ctx: OfficeCtx): boolean {
+  return user.active && (m.createdBy === user.id || isOfficeStaff(user, ctx));
+}
+
+/* ---------------- 作業日報・販促と媒体の分析 (src/lib/ops-reports・/work-reports・/promotions) ---------------- */
+
+/** 作業日報 (店舗・月ごとの引取・納品・施工・見積の件数・枚数・担当) の閲覧・印刷・CSV: その店舗のメンバー (全店舗ロールは全店舗) */
+export function canViewWorkReport(user: User, storeId: StoreId): boolean {
+  return user.active && canAccessStore(user, storeId);
+}
+
+/** 作業日報の手入力 (チラシの配布人・枚数・地域、来店数、メモ): その店舗のメンバー (事務担当を含む。全店舗ロールは全店舗) */
+export function canEditWorkReport(user: User, storeId: StoreId): boolean {
+  return user.active && canAccessStore(user, storeId);
+}
+
+/** 作業日報の係数 (障子・網戸の襖換算) と、媒体の対応表 (過去の値の読み替え) の変更: 本部スタッフ・管理者 */
+export function canManageOpsReportSettings(user: User): boolean {
+  return user.active && canSeeAllStores(user);
+}
+
+/** 販促と媒体の分析 (媒体別・町別・チラシの反応・年度の比較・CSV) と販促の記録の閲覧: 店長 (自店舗)・本部スタッフ・管理者 */
+export function canViewPromoAnalysis(user: User): boolean {
+  return user.active && canViewReports(user);
+}
+
+/** 販促の記録 (チラシ・イベント・点検の DM・テレアポ) の登録・変更・削除と、イベントの受付票の一括登録: 本部スタッフ・管理者 (全店舗)・店長 (自店舗) */
+export function canEditPromotion(user: User, storeId: StoreId): boolean {
+  return user.active && (canSeeAllStores(user) || (user.role === "store_manager" && user.storeId === storeId));
+}
+
+/* ---------------- 有給・休日出勤 (src/lib/hr/leave.ts・/leave) ---------------- */
+
+/** 休暇・有給の残日数・休日出勤を見る: 本人、店長は自店舗の社員、本部スタッフ (事務)・管理者は全員 */
+export function canViewLeaveOf(user: User, target: { id: string; storeId: StoreId }): boolean {
+  if (target.id === user.id || canSeeAllStores(user)) return true;
+  return user.role === "store_manager" && target.storeId === user.storeId;
+}
+
+/** 社員ごとの一覧・年度の取得状況・CSV を見る: 店長 (自店舗の社員)・本部スタッフ・管理者 */
+export function canViewLeaveReport(user: User): boolean {
+  return canSeeAllStores(user) || user.role === "store_manager";
+}
+
+/**
+ * 休暇 (有給・振休・特別休暇) を申請できる: 本人。店長は自店舗の社員の分、本部スタッフ (事務)・管理者は全員の分を代わりに申請できる
+ * (紙・LINE で受けた申請の登録。承認できる人が登録したときはそのまま承認済みになる)
+ */
+export function canRequestLeaveFor(user: User, target: { id: string; storeId: StoreId }): boolean {
+  return canViewLeaveOf(user, target);
+}
+
+/**
+ * 休暇の申請を承認・却下できる: 管理者は全件 (管理者自身の申請は承認を省略し、申請と同時に承認済み)、
+ * 店長は自店舗の社員の申請 (自分の申請は管理者が承認する)。本部スタッフは承認しない
+ */
+export function canApproveLeave(user: User, req: { userId: string; storeId: StoreId }): boolean {
+  if (user.role === "admin") return true;
+  return user.role === "store_manager" && req.storeId === user.storeId && req.userId !== user.id;
+}
+
+/**
+ * 休暇の取消し: 申請中は本人・申請した人・承認できる人。
+ * 承認済みは承認できる人 (店長・管理者) と、まだ始まっていない休暇の本人 (予定表の「休暇」も消える)
+ */
+export function canCancelLeave(user: User, req: { userId: string; storeId: StoreId; requestedBy: string; status: string; date: string }, today: string): boolean {
+  if (req.status === "pending") return req.userId === user.id || req.requestedBy === user.id || canApproveLeave(user, req);
+  if (req.status !== "approved") return false;
+  return canApproveLeave(user, req) || (req.userId === user.id && req.date > today);
+}
+
+/** 休日出勤の登録・削除と、振休の登録 (承認済みとして): 本部スタッフ (事務)・管理者は全員、店長は自店舗の社員 */
+export function canRegisterHolidayWork(user: User, target: { storeId: StoreId }): boolean {
+  return canSeeAllStores(user) || (user.role === "store_manager" && target.storeId === user.storeId);
+}
+
+/** 有給の付与の登録・修正・削除、切り替え時点の残日数の取込、社員の基準日・雇い入れ日の設定: 本部スタッフ (事務)・管理者 */
+export function canManageLeaveGrants(user: User): boolean {
+  return canSeeAllStores(user);
+}
+
+/** 有給・振休のルール (振休のため込みの上限・有給の消化の順番・年度・締め日・半日の時間帯) の変更: 管理者 */
+export function canManageLeaveSettings(user: User): boolean {
+  return user.role === "admin";
 }

@@ -181,6 +181,13 @@ export function createSeed(now = new Date()): Database {
     productionJobs: [],
     resourceBookings: [],
     scheduleHolds: [],
+    leaveRequests: [],
+    leaveGrants: [],
+    holidayWorks: [],
+    officeImprovements: [],
+    condolences: [],
+    workReportDays: [],
+    promotions: [],
   };
   const ctx: Ctx = { now, today, rand, db, counters: {}, busy: new Map() };
 

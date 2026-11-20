@@ -119,7 +119,9 @@ create table if not exists inquiries (
   area text,
   result text,
   source text,
-  source_ref text
+  source_ref text,
+  media text,
+  promotion_id text
 );
 comment on table inquiries is '問い合わせ';
 
@@ -964,6 +966,10 @@ create table if not exists materials (
   supplier_code text,
   active boolean not null default true,
   note text,
+  reorder_level numeric,
+  supplier_id text,
+  series text,
+  lineup boolean,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
@@ -1254,6 +1260,146 @@ create table if not exists schedule_holds (
 );
 comment on table schedule_holds is '予定の仮押さえ (候補日・担当者の確認・お客様への案内)';
 
+-- 休暇の申請 (有給・振休・特別休暇。承認すると予定表に「休暇」を登録)
+create table if not exists leave_requests (
+  id text primary key,
+  number text not null unique,
+  user_id text not null,
+  store_id text not null references stores(id),
+  leave_type text not null check (leave_type in ('paid','comp','special')),
+  date date not null,
+  end_date date,
+  slot text not null default 'day' check (slot in ('day','am','pm')),
+  dates text[] not null default '{}',
+  days numeric not null check (days > 0),
+  reason text,
+  holiday_work_id text,
+  status text not null check (status in ('pending','approved','rejected','cancelled')),
+  requested_by text not null,
+  requested_at timestamptz not null,
+  decided_by text,
+  decided_at timestamptz,
+  decision_comment text,
+  event_id text,
+  cancelled_by text,
+  cancelled_at timestamptz,
+  cancel_reason text,
+  updated_at timestamptz not null
+);
+comment on table leave_requests is '休暇の申請 (有給・振休・特別休暇。承認すると予定表に「休暇」を登録)';
+
+-- 有給休暇の付与 (付与日・日数・有効期限。切り替え時点の残日数を含む)
+create table if not exists leave_grants (
+  id text primary key,
+  user_id text not null,
+  kind text not null default 'grant' check (kind in ('grant','opening')),
+  grant_date date not null,
+  base_date date,
+  expires_on date not null,
+  days numeric not null check (days > 0),
+  note text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz
+);
+comment on table leave_grants is '有給休暇の付与 (付与日・日数・有効期限。切り替え時点の残日数を含む)';
+
+-- 休日出勤 (振休の発生。切り替え時点の振休の残を含む)
+create table if not exists holiday_works (
+  id text primary key,
+  user_id text not null,
+  store_id text not null references stores(id),
+  kind text not null default 'work' check (kind in ('work','opening')),
+  date date not null,
+  slot text not null default 'day' check (slot in ('day','am','pm')),
+  days numeric not null check (days > 0),
+  note text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz
+);
+comment on table holiday_works is '休日出勤 (振休の発生。切り替え時点の振休の残を含む)';
+
+-- 作業日報の手入力 (店舗 × 日。チラシの配布人・枚数・地域、来店数)
+create table if not exists work_report_days (
+  id text primary key,
+  store_id text not null references stores(id),
+  date date not null,
+  visitors integer check (visitors is null or visitors >= 0),
+  flyers jsonb not null default '[]',
+  note text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz not null
+);
+comment on table work_report_days is '作業日報の手入力 (店舗 × 日。チラシの配布人・枚数・地域、来店数)';
+
+-- 販促の記録 (チラシ・イベント・点検の DM・テレアポ。地域ごとの部数)
+create table if not exists promotions (
+  id text primary key,
+  number text not null unique,
+  kind text not null check (kind in ('flyer','event','dm','teleapo','other')),
+  title text not null,
+  store_id text not null references stores(id),
+  status text not null check (status in ('planned','done','cancelled')),
+  start_date date not null,
+  end_date date,
+  areas jsonb not null default '[]',
+  copies integer not null default 0 check (copies >= 0),
+  cost numeric,
+  media text not null,
+  vendor text,
+  note text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz not null
+);
+comment on table promotions is '販促の記録 (チラシ・イベント・点検の DM・テレアポ。地域ごとの部数)';
+
+-- 事務改善シート (事務のミス・気づき・原因・具体的改善策)
+create table if not exists office_improvements (
+  id text primary key,
+  year integer not null,
+  date date,
+  staff_name text not null default '',
+  staff_id text,
+  item text not null default '',
+  content text not null,
+  cause text,
+  measure text,
+  source text not null default 'manual' check (source in ('manual','import')),
+  source_ref text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz not null
+);
+comment on table office_improvements is '事務改善シート (事務のミス・気づき・原因・具体的改善策)';
+
+-- 慶弔リスト (通夜・葬儀・慶事への対応。ご家族の情報を含むため事務担当・本部・管理者だけが見る)
+create table if not exists condolences (
+  id text primary key,
+  date date not null,
+  category text not null check (category in ('condolence','celebration','other')),
+  kind text not null default '',
+  name text not null default '',
+  relation text,
+  amount numeric,
+  attendee text,
+  note text,
+  source text not null default 'manual' check (source in ('manual','import')),
+  source_ref text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz not null
+);
+comment on table condolences is '慶弔リスト (通夜・葬儀・慶事への対応。ご家族の情報を含むため事務担当・本部・管理者だけが見る)';
+
 -- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)
 -- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する
 alter table stores add column if not exists code text not null;
@@ -1329,6 +1475,8 @@ alter table inquiries add column if not exists area text;
 alter table inquiries add column if not exists result text;
 alter table inquiries add column if not exists source text;
 alter table inquiries add column if not exists source_ref text;
+alter table inquiries add column if not exists media text;
+alter table inquiries add column if not exists promotion_id text;
 alter table products add column if not exists category text not null;
 alter table products add column if not exists name text not null;
 alter table products add column if not exists grade text;
@@ -1939,6 +2087,10 @@ alter table materials add column if not exists item_category text not null;
 alter table materials add column if not exists supplier_code text;
 alter table materials add column if not exists active boolean not null default true;
 alter table materials add column if not exists note text;
+alter table materials add column if not exists reorder_level numeric;
+alter table materials add column if not exists supplier_id text;
+alter table materials add column if not exists series text;
+alter table materials add column if not exists lineup boolean;
 alter table materials add column if not exists created_at timestamptz not null;
 alter table materials add column if not exists updated_at timestamptz not null;
 alter table material_costs add column if not exists material_id text not null references materials(id);
@@ -2148,6 +2300,104 @@ alter table schedule_holds add column if not exists created_by text not null;
 alter table schedule_holds add column if not exists created_at timestamptz not null;
 alter table schedule_holds add column if not exists updated_by text;
 alter table schedule_holds add column if not exists updated_at timestamptz;
+alter table leave_requests add column if not exists number text not null unique;
+alter table leave_requests add column if not exists user_id text not null;
+alter table leave_requests add column if not exists store_id text not null references stores(id);
+alter table leave_requests add column if not exists leave_type text not null check (leave_type in ('paid','comp','special'));
+alter table leave_requests add column if not exists date date not null;
+alter table leave_requests add column if not exists end_date date;
+alter table leave_requests add column if not exists slot text not null default 'day' check (slot in ('day','am','pm'));
+alter table leave_requests add column if not exists dates text[] not null default '{}';
+alter table leave_requests add column if not exists days numeric not null check (days > 0);
+alter table leave_requests add column if not exists reason text;
+alter table leave_requests add column if not exists holiday_work_id text;
+alter table leave_requests add column if not exists status text not null check (status in ('pending','approved','rejected','cancelled'));
+alter table leave_requests add column if not exists requested_by text not null;
+alter table leave_requests add column if not exists requested_at timestamptz not null;
+alter table leave_requests add column if not exists decided_by text;
+alter table leave_requests add column if not exists decided_at timestamptz;
+alter table leave_requests add column if not exists decision_comment text;
+alter table leave_requests add column if not exists event_id text;
+alter table leave_requests add column if not exists cancelled_by text;
+alter table leave_requests add column if not exists cancelled_at timestamptz;
+alter table leave_requests add column if not exists cancel_reason text;
+alter table leave_requests add column if not exists updated_at timestamptz not null;
+alter table leave_grants add column if not exists user_id text not null;
+alter table leave_grants add column if not exists kind text not null default 'grant' check (kind in ('grant','opening'));
+alter table leave_grants add column if not exists grant_date date not null;
+alter table leave_grants add column if not exists base_date date;
+alter table leave_grants add column if not exists expires_on date not null;
+alter table leave_grants add column if not exists days numeric not null check (days > 0);
+alter table leave_grants add column if not exists note text;
+alter table leave_grants add column if not exists created_by text not null;
+alter table leave_grants add column if not exists created_at timestamptz not null;
+alter table leave_grants add column if not exists updated_by text;
+alter table leave_grants add column if not exists updated_at timestamptz;
+alter table holiday_works add column if not exists user_id text not null;
+alter table holiday_works add column if not exists store_id text not null references stores(id);
+alter table holiday_works add column if not exists kind text not null default 'work' check (kind in ('work','opening'));
+alter table holiday_works add column if not exists date date not null;
+alter table holiday_works add column if not exists slot text not null default 'day' check (slot in ('day','am','pm'));
+alter table holiday_works add column if not exists days numeric not null check (days > 0);
+alter table holiday_works add column if not exists note text;
+alter table holiday_works add column if not exists created_by text not null;
+alter table holiday_works add column if not exists created_at timestamptz not null;
+alter table holiday_works add column if not exists updated_by text;
+alter table holiday_works add column if not exists updated_at timestamptz;
+alter table work_report_days add column if not exists store_id text not null references stores(id);
+alter table work_report_days add column if not exists date date not null;
+alter table work_report_days add column if not exists visitors integer check (visitors is null or visitors >= 0);
+alter table work_report_days add column if not exists flyers jsonb not null default '[]';
+alter table work_report_days add column if not exists note text;
+alter table work_report_days add column if not exists created_by text not null;
+alter table work_report_days add column if not exists created_at timestamptz not null;
+alter table work_report_days add column if not exists updated_by text;
+alter table work_report_days add column if not exists updated_at timestamptz not null;
+alter table promotions add column if not exists number text not null unique;
+alter table promotions add column if not exists kind text not null check (kind in ('flyer','event','dm','teleapo','other'));
+alter table promotions add column if not exists title text not null;
+alter table promotions add column if not exists store_id text not null references stores(id);
+alter table promotions add column if not exists status text not null check (status in ('planned','done','cancelled'));
+alter table promotions add column if not exists start_date date not null;
+alter table promotions add column if not exists end_date date;
+alter table promotions add column if not exists areas jsonb not null default '[]';
+alter table promotions add column if not exists copies integer not null default 0 check (copies >= 0);
+alter table promotions add column if not exists cost numeric;
+alter table promotions add column if not exists media text not null;
+alter table promotions add column if not exists vendor text;
+alter table promotions add column if not exists note text;
+alter table promotions add column if not exists created_by text not null;
+alter table promotions add column if not exists created_at timestamptz not null;
+alter table promotions add column if not exists updated_by text;
+alter table promotions add column if not exists updated_at timestamptz not null;
+alter table office_improvements add column if not exists year integer not null;
+alter table office_improvements add column if not exists date date;
+alter table office_improvements add column if not exists staff_name text not null default '';
+alter table office_improvements add column if not exists staff_id text;
+alter table office_improvements add column if not exists item text not null default '';
+alter table office_improvements add column if not exists content text not null;
+alter table office_improvements add column if not exists cause text;
+alter table office_improvements add column if not exists measure text;
+alter table office_improvements add column if not exists source text not null default 'manual' check (source in ('manual','import'));
+alter table office_improvements add column if not exists source_ref text;
+alter table office_improvements add column if not exists created_by text not null;
+alter table office_improvements add column if not exists created_at timestamptz not null;
+alter table office_improvements add column if not exists updated_by text;
+alter table office_improvements add column if not exists updated_at timestamptz not null;
+alter table condolences add column if not exists date date not null;
+alter table condolences add column if not exists category text not null check (category in ('condolence','celebration','other'));
+alter table condolences add column if not exists kind text not null default '';
+alter table condolences add column if not exists name text not null default '';
+alter table condolences add column if not exists relation text;
+alter table condolences add column if not exists amount numeric;
+alter table condolences add column if not exists attendee text;
+alter table condolences add column if not exists note text;
+alter table condolences add column if not exists source text not null default 'manual' check (source in ('manual','import'));
+alter table condolences add column if not exists source_ref text;
+alter table condolences add column if not exists created_by text not null;
+alter table condolences add column if not exists created_at timestamptz not null;
+alter table condolences add column if not exists updated_by text;
+alter table condolences add column if not exists updated_at timestamptz not null;
 
 -- 索引 (検索・読み込みの並び順)
 create index if not exists stores_load_order_idx on stores (code, id);
@@ -2272,6 +2522,20 @@ create index if not exists resource_bookings_load_order_idx on resource_bookings
 create index if not exists schedule_holds_group_id_idx on schedule_holds (group_id);
 create index if not exists schedule_holds_status_date_idx on schedule_holds (status, date);
 create index if not exists schedule_holds_load_order_idx on schedule_holds (date, id);
+create index if not exists leave_requests_user_id_date_idx on leave_requests (user_id, date);
+create index if not exists leave_requests_status_idx on leave_requests (status);
+create index if not exists leave_requests_load_order_idx on leave_requests (date, requested_at, id);
+create index if not exists leave_grants_user_id_grant_date_idx on leave_grants (user_id, grant_date);
+create index if not exists leave_grants_load_order_idx on leave_grants (grant_date, id);
+create index if not exists holiday_works_user_id_date_idx on holiday_works (user_id, date);
+create index if not exists holiday_works_load_order_idx on holiday_works (date, created_at, id);
+create index if not exists work_report_days_store_id_date_idx on work_report_days (store_id, date);
+create index if not exists work_report_days_load_order_idx on work_report_days (date, id);
+create index if not exists promotions_store_id_start_date_idx on promotions (store_id, start_date);
+create index if not exists promotions_kind_idx on promotions (kind);
+create index if not exists promotions_load_order_idx on promotions (start_date, id);
+create index if not exists office_improvements_load_order_idx on office_improvements (year, date, created_at, id);
+create index if not exists condolences_load_order_idx on condolences (date, created_at, id);
 
 -- 後から not null を外した列 (データは変えない。外した後に実行しても変化なし)
 alter table comm_logs alter column customer_id drop not null;
@@ -2453,6 +2717,27 @@ grant select, insert, update, delete on table resource_bookings to service_role;
 alter table schedule_holds enable row level security;
 revoke all on table schedule_holds from anon, authenticated;
 grant select, insert, update, delete on table schedule_holds to service_role;
+alter table leave_requests enable row level security;
+revoke all on table leave_requests from anon, authenticated;
+grant select, insert, update, delete on table leave_requests to service_role;
+alter table leave_grants enable row level security;
+revoke all on table leave_grants from anon, authenticated;
+grant select, insert, update, delete on table leave_grants to service_role;
+alter table holiday_works enable row level security;
+revoke all on table holiday_works from anon, authenticated;
+grant select, insert, update, delete on table holiday_works to service_role;
+alter table work_report_days enable row level security;
+revoke all on table work_report_days from anon, authenticated;
+grant select, insert, update, delete on table work_report_days to service_role;
+alter table promotions enable row level security;
+revoke all on table promotions from anon, authenticated;
+grant select, insert, update, delete on table promotions to service_role;
+alter table office_improvements enable row level security;
+revoke all on table office_improvements from anon, authenticated;
+grant select, insert, update, delete on table office_improvements to service_role;
+alter table condolences enable row level security;
+revoke all on table condolences from anon, authenticated;
+grant select, insert, update, delete on table condolences to service_role;
 
 -- 書き込みのたびにリビジョンを +1 (他のサーバーインスタンスが変更を検知して読み直す)
 create or replace function public.bump_revision() returns bigint

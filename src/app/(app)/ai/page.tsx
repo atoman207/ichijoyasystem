@@ -15,6 +15,8 @@ import { ensureChatbotData } from "@/lib/chatbot/build";
 import { chatbotStats, listQa } from "@/lib/chatbot/store";
 import { pendingDocs, trainState } from "@/lib/chatbot/train";
 import { QualityPanel } from "@/components/chatbot/QualityPanel";
+import { AssistantScopeCard } from "@/components/chatbot/AssistantScopeCard";
+import { assistantAllStores } from "@/lib/assistant/scope";
 
 /** AI の応答待ち (最大 50 秒) のため、処理時間の上限を 60 秒にする */
 export const maxDuration = 60;
@@ -60,16 +62,17 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<R
                 <li>・<strong>集計のしかたの案内</strong>: 直接集計できないときは、経営ダッシュボード・CSV 出力での手順</li>
                 <li>・<strong>社内資料</strong> (業務ルール・議事録・マニュアル・価格・施工方法) にもとづく回答 (登録 {knowledgeCount} 件・<Link href="/knowledge" className="text-accent hover:underline">社内資料を見る</Link>)</li>
                 <li>・<strong>予定の候補日の提案</strong>: 店舗の受け入れ量・畳の製造・担当者の空き・現場の距離から</li>
+                <li>・<strong>頼んだ操作の実行</strong>: 予定の登録・変更・削除、問い合わせの登録・状態の変更、受注の進捗の記録、社内連絡・業務依頼、承認・差戻し・却下 (「来週火曜の 10 時に○○様の引取を入れて」など。確認のカードの「実行する」を押すと実行)</li>
                 <li>・<strong>相談の履歴</strong>: 過去の質問と回答を検索。よい回答は社内資料 (よくある質問) に登録して共有</li>
               </ul>
             </Card>
             <Card>
               <CardHeader title="安全性" />
               <ul className="space-y-1.5 text-xs text-ink-2">
-                <li>・回答はログインした人が閲覧できる範囲のデータだけを使います (店舗のロールは自店舗。社内資料は資料ごとの公開範囲)</li>
+                <li>・回答はログインした人が閲覧できる範囲のデータだけを使います (店舗のロールは自店舗。社内資料は資料ごとの公開範囲){assistantAllStores(db) ? "。いまは管理者の設定で、AI アシスタントは全員が全店舗のデータを調べられます" : ""}</li>
                 <li>・数字は AI が計算せず、システムの集計で出します。回答の下の「回答の根拠」で元の記録・資料・集計の条件を確認できます</li>
                 <li>・見つからないときは「記録がありません」と答え、推測で補いません</li>
-                <li>・AI は登録・変更・承認を直接行いません (操作は担当者が画面で行います)</li>
+                <li>・AI は自分では何も変えません。頼んだ操作は、内容を確認のカードで確かめて「実行する」を押したときだけ、画面のボタンと同じ処理 (権限・入力の確かめ・変更履歴・通知) で実行されます</li>
                 <li>・質問と回答は相談の履歴に残ります (本人のほか、管理者・本部は全員分、店長は自店舗の分を閲覧できます)</li>
                 <li>・AI テキスト相談・AI 音声相談・AI 電話受付・LINE・Web フォームからの受付も、同じデータに登録されます</li>
               </ul>
@@ -89,6 +92,7 @@ function BotTab({ sp, enabled, db }: { sp: Record<string, string | undefined>; e
   const { rows, total } = listQa({ q: sp.q, origin: sp.origin, flagged: sp.flagged === "1", limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
   return (
     <div className="space-y-4">
+      <AssistantScopeCard db={db} />
       <DataMirrorCard />
       <ChatbotAdmin stats={chatbotStats()} train={trainState()} pending={pendingDocs().length} aiEnabled={enabled} list={{ rows, total, page, size: PAGE_SIZE }} sp={sp} />
     </div>

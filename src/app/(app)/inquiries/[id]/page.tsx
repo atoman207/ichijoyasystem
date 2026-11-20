@@ -16,6 +16,9 @@ import { CasePlanCard } from "@/components/scheduling/CasePlanCard";
 import { caseEvents } from "@/lib/db/schedule";
 import { toDateKey } from "@/lib/format";
 import { AiSummary } from "@/components/features/AiSummary";
+import { MediaSelect, MediaTag, PromotionSelect, promotionOptions } from "@/components/ops-reports/MediaFields";
+import { inquiryMediaMap } from "@/lib/ops-reports/promo-analysis";
+import { MEDIA_SOURCE_LABEL, mediaLabel } from "@/lib/media";
 
 export default async function InquiryDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -45,6 +48,10 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   // 担当者への引き継ぎ (業務依頼)
   const handoffs = db.threads.filter((t) => t.kind === "request" && t.relatedType === "inquiry" && t.relatedId === inq.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const handoffUsers = db.users.filter((u) => u.active && (u.storeId === inq.storeId || u.role === "admin" || u.role === "hq_staff" || canSeeAllStores(user)));
+  // 媒体 (当社を知ったきっかけ): 入力がなければ過去の記録からの推定 (src/lib/media.ts)
+  const media = inquiryMediaMap(db, [inq]).get(inq.id)!;
+  const promotion = inq.promotionId ? (db.promotions ?? []).find((p) => p.id === inq.promotionId) : undefined;
+  const promotions = promotionOptions(db.promotions ?? [], (sid) => sid === "hq" || canAccessStore(user, sid), inq.promotionId);
 
   return (
     <div>
@@ -52,7 +59,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
       <PageHeader
         title={inq.summary}
         badge={<StatusBadge value={inq.status} map={INQUIRY_STATUS} />}
-        description={<span className="inline-flex flex-wrap items-center gap-2">{inq.number} · 受付 {fmtDateTime(inq.receivedAt)} · <ChannelTag channel={inq.channel} /> · {CATEGORY_LABEL[inq.category]} · <StoreTag store={store} /></span>}
+        description={<span className="inline-flex flex-wrap items-center gap-2">{inq.number} · 受付 {fmtDateTime(inq.receivedAt)} · <ChannelTag channel={inq.channel} /> · 媒体 <MediaTag {...media} /> · {CATEGORY_LABEL[inq.category]} · <StoreTag store={store} /></span>}
         back={{ href: "/inquiries", label: "問い合わせ一覧" }}
         actions={
           <>
@@ -72,7 +79,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             <CardHeader title="問い合わせ内容" />
             <p className="whitespace-pre-wrap text-sm text-ink">{inq.detail || "(詳細なし)"}</p>
             <div className="mt-4">
-              <Dl columns={3} items={[["お客様", inq.contactName], ["電話", inq.contactPhone ?? "-"], ["担当", userName(inq.assignedUserId)], ["登録者", userName(inq.createdBy)], ["次のアクション", inq.nextAction ?? "-"], ["期限", inq.nextActionDue ? fmtDate(inq.nextActionDue) : "-"]]} />
+              <Dl columns={3} items={[["お客様", inq.contactName], ["電話", inq.contactPhone ?? "-"], ["担当", userName(inq.assignedUserId)], ["登録者", userName(inq.createdBy)], ["次のアクション", inq.nextAction ?? "-"], ["期限", inq.nextActionDue ? fmtDate(inq.nextActionDue) : "-"], ["媒体 (きっかけ)", <MediaTag key="m" {...media} />], ["きっかけの販促", promotion ? `${promotion.title} (${promotion.number})` : "-"]]} />
             </div>
           </Card>
 
@@ -155,6 +162,12 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                 <Select name="category" defaultValue={inq.category}>
                   {(Object.keys(CATEGORY_LABEL) as (keyof typeof CATEGORY_LABEL)[]).map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
                 </Select>
+              </Field>
+              <Field label="媒体 (当社を知ったきっかけ)" required hint={inq.media ? undefined : media.media ? `未入力です。${MEDIA_SOURCE_LABEL[media.source]}: ${mediaLabel(media.media)}${media.raw ? ` (元の値: ${media.raw})` : ""}。確かめて選んでください` : "未入力です。お客様に確かめて選んでください (わからなければ「不明」)"}>
+                <MediaSelect name="media" defaultValue={inq.media ?? ""} required />
+              </Field>
+              <Field label="きっかけの販促 (チラシ・イベントなど)">
+                <PromotionSelect name="promotionId" options={promotions} defaultValue={inq.promotionId} />
               </Field>
               <div className="grid grid-cols-2 gap-2">
                 <Field label="次のアクション"><Input name="nextAction" defaultValue={inq.nextAction} /></Field>

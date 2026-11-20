@@ -7,6 +7,15 @@ export const MGMT_COLLECTIONS = ["mgmtRules", "itemCategories", "salesAreas", "o
 /** 予定の計画のコレクション (後から追加。無ければ空で作る) */
 export const PLAN_COLLECTIONS = ["jobSpecs", "productionJobs", "resourceBookings", "scheduleHolds"] as const;
 
+/** 有給・休日出勤のコレクション (後から追加。無ければ空で作る) */
+export const HR_COLLECTIONS = ["leaveRequests", "leaveGrants", "holidayWorks"] as const;
+
+/** 作業日報の手入力・販促の記録のコレクション (後から追加。無ければ空で作る) */
+export const OPS_COLLECTIONS = ["workReportDays", "promotions"] as const;
+
+/** 事務 (事務改善シート・慶弔リスト) のコレクション (後から追加。無ければ空で作る) */
+export const OFFICE_COLLECTIONS = ["officeImprovements", "condolences"] as const;
+
 /** 現在のデータ形式のバージョン (seed.ts の meta.version もこの値) */
 export const DATA_VERSION = 3;
 
@@ -20,7 +29,7 @@ export const DATA_VERSION = 3;
 export function migrateDb(db: Database): Database {
   const version = db.meta?.version ?? 1;
   if (version < 2) migrateV2(db);
-  for (const key of ["holidays", "surveys", "qualityIssues", "reviews", "sourceFiles", "photoAlbums", "settings", "attachments", "cashEntries", "deliveries", "knowledge", "purchaseOrders", "faxMessages", "faxNumbers", "mapLocations", "mapLocationRefs", "mapDocuments", "mapDocumentLinks", ...MGMT_COLLECTIONS, ...PLAN_COLLECTIONS] as const) {
+  for (const key of ["holidays", "surveys", "qualityIssues", "reviews", "sourceFiles", "photoAlbums", "settings", "attachments", "cashEntries", "deliveries", "knowledge", "purchaseOrders", "faxMessages", "faxNumbers", "mapLocations", "mapLocationRefs", "mapDocuments", "mapDocumentLinks", ...MGMT_COLLECTIONS, ...PLAN_COLLECTIONS, ...HR_COLLECTIONS, ...OPS_COLLECTIONS, ...OFFICE_COLLECTIONS] as const) {
     if (!Array.isArray(db[key])) (db as unknown as Record<string, unknown[]>)[key] = [];
   }
   if (version < DATA_VERSION) db.meta = { ...db.meta, version: DATA_VERSION };

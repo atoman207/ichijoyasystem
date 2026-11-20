@@ -3,7 +3,8 @@ import type { Database, StoreId, User } from "@/lib/db/types";
 import { canSeeAllStores, canViewExpense, canViewPurchase } from "@/lib/auth/permissions";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, QUOTE_STATUS, SCHEDULE_KIND } from "@/lib/constants";
 import { addDays, toDateKey } from "@/lib/format";
-import { AMOUNT_KEYS, AMOUNT_LABEL, salesFacts, type AmountKey, type OrderFact } from "./facts";
+import { AMOUNT_KEYS, AMOUNT_LABEL, salesFacts, type AmountKey, type ItemFact, type OrderFact } from "./facts";
+import { apportion } from "@/lib/mgmt/decimal";
 
 /**
  * 自由な条件の集計 (AI アシスタントの「分析」)
@@ -319,6 +320,7 @@ function salesAtoms(ctx: Ctx, spec: AnalysisSpec, from: string, to: string, need
   let withItems = 0;
   let tatamiOrders = 0;
   let tatamiCosted = 0;
+  let costUnallocated = 0;
   for (const f of facts) {
     if (!ctx.stores.has(f.storeId)) continue;
     if (spec.statuses?.length && !spec.statuses.includes(f.status)) continue;
@@ -353,10 +355,13 @@ function salesAtoms(ctx: Ctx, spec: AnalysisSpec, from: string, to: string, need
     if (needItems) {
       if (!f.items.length) continue;
       withItems++;
-      for (const it of f.items) {
+      const alloc = itemCosts(f);
+      if (alloc.unallocated) costUnallocated++;
+      for (const [idx, it] of f.items.entries()) {
         if (cats && !cats.has(it.cat)) continue;
         if (products.length && !matchAny(it.product, products)) continue;
-        out.push({ ...base, dims: { ...commonDims(), category: AMOUNT_LABEL[it.cat], product: it.product }, v: { sales: it.amount, qty: it.qty } });
+        const tCost = alloc.tatami[idx];
+        out.push({ ...base, dims: { ...commonDims(), category: AMOUNT_LABEL[it.cat], product: it.product }, v: { sales: it.amount, qty: it.qty, cost: tCost + alloc.purchase[idx], tSales: f.tatamiCost > 0 && it.cat === "tatami" ? it.amount : 0, tCost } });
       }
       continue;
     }
@@ -377,8 +382,36 @@ function salesAtoms(ctx: Ctx, spec: AnalysisSpec, from: string, to: string, need
     }
   }
   if (needItems) notes.add(`商品・数量の集計は明細のある受注 ${withItems.toLocaleString("ja-JP")} 件 (期間内の受注 ${inRange.toLocaleString("ja-JP")} 件のうち) から。明細の金額は税込に換算 (税抜の明細は当時の税率)`);
+  if (needItems) notes.add("商品 (明細) ごとの原価は記録がないため、案件の原価 (畳原価は畳の明細へ、案件にひも付いた仕入は案件の主な種別の明細へ) を明細の金額で按分した目安です。値引きの行には配りません");
+  if (needItems && costUnallocated) notes.add(`原価を配る明細がなかった受注 ${costUnallocated.toLocaleString("ja-JP")} 件の原価は、商品別の表に入っていません`);
   if (tatamiOrders) notes.add(`畳原価の記録: 期間内の畳の案件 ${tatamiOrders.toLocaleString("ja-JP")} 件のうち ${tatamiCosted.toLocaleString("ja-JP")} 件 (${Math.round((tatamiCosted / tatamiOrders) * 100)}%)`);
   return out;
+}
+
+/**
+ * 受注の原価を明細に配る (商品別の粗利の目安。合計は案件の原価と必ず一致する)
+ * - 畳原価 → 畳の明細へ、明細の金額の比で按分
+ * - 案件にひも付いた仕入 → 案件の主な種別 (種別ごとの集計と同じ) の明細へ、金額の比で按分。その種別の明細がなければ全明細へ
+ * - 値引き・金額 0 以下の行には配らない
+ */
+function itemCosts(f: OrderFact): { tatami: number[]; purchase: number[]; unallocated: boolean } {
+  const zeros = () => f.items.map(() => 0);
+  const tatami = zeros();
+  const purchase = zeros();
+  let unallocated = false;
+  const spread = (total: number, pick: (it: ItemFact) => boolean, into: number[]): boolean => {
+    const yen = Math.round(total);
+    if (!yen) return true;
+    const idx = f.items.map((it, i) => (it.cat !== "discount" && it.amount > 0 && pick(it) ? i : -1)).filter((i) => i >= 0);
+    if (!idx.length) return false;
+    const parts = apportion(yen, idx.map((i) => Math.max(1, Math.round(f.items[i].amount))));
+    idx.forEach((i, k) => (into[i] += parts[k]));
+    return true;
+  };
+  if (!spread(f.tatamiCost, (it) => it.cat === "tatami", tatami) && !spread(f.tatamiCost, () => true, tatami)) unallocated = true;
+  const main = AMOUNT_KEYS.filter((k) => k !== "discount").sort((a, b) => f.amounts[b] - f.amounts[a])[0];
+  if (!spread(f.purchaseCost, (it) => it.cat === main, purchase) && !spread(f.purchaseCost, () => true, purchase)) unallocated = true;
+  return { tatami, purchase, unallocated };
 }
 
 function otherAtoms(ctx: Ctx, subject: Subject, spec: AnalysisSpec, from: string, to: string): Atom[] {
@@ -515,7 +548,7 @@ export function runAnalysis(db: Database, user: User, raw: AnalysisSpec, now = n
     return {
       ok: false,
       error: `${SUBJECT_LABEL[subject]}の集計では ${[...unknownMetrics, ...unknownDims].join("・")} は使えません。使える指標: ${Object.keys(metricDefs).join(", ")} / 使える軸: ${DIMS[subject].join(", ")}`,
-      hint: subject === "sales" ? "商品ごとの原価・粗利は記録がないため集計できません。" : undefined,
+      hint: subject === "sales" ? "商品ごとの原価・粗利は cost・gross・gross_margin で出せます (案件の原価を明細の金額で按分した目安)。" : undefined,
     };
   }
   const notes = new Set<string>();
@@ -537,8 +570,8 @@ export function runAnalysis(db: Database, user: User, raw: AnalysisSpec, now = n
 
   const needItems = subject === "sales" && (dims.includes("product") || Boolean(raw.products?.length) || metrics.some((m) => m === "quantity" || m === "avg_unit_price"));
   const splitCategory = subject === "sales" && dims.includes("category");
-  if (needItems && metrics.some((m) => ["cost", "gross", "gross_margin", "tatami_gross", "tatami_margin", "simple_gross"].includes(m))) {
-    return { ok: false, error: "原価・粗利は商品 (明細) ごとには記録がないため、商品別・数量の集計と一緒には出せません。", hint: "粗利は店舗・期間・種別・顧客・担当者の軸で集計できます (原価は畳原価と案件にひも付いた仕入だけ)。" };
+  if (needItems && metrics.includes("simple_gross")) {
+    return { ok: false, error: "簡易粗利 (売上−仕入−経費) は商品 (明細) ごとには出せません。", hint: "商品別の粗利は gross (売上−案件の原価を明細の金額で按分した目安) を使ってください。" };
   }
   if (metrics.includes("simple_gross") && dims.some((d) => !(TIME_DIMS as readonly string[]).includes(d) && d !== "store")) {
     return { ok: false, error: "簡易粗利 (売上−仕入−経費) は期間と店舗の軸でだけ集計できます。", hint: "種別・顧客・担当者の軸では gross (売上−記録された原価) を使ってください。" };

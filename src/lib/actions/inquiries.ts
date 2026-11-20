@@ -13,6 +13,20 @@ import { createHandoffTask } from "@/lib/ai-intake";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
 import { assertStore, choice, fail, isKeyOf, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
+import { MEDIA_LABEL, isMediaKey, mapMediaText, readMediaRules } from "@/lib/media";
+import type { MediaKey } from "@/lib/db/types";
+
+/** 媒体 (当社を知ったきっかけ) は必須。選択肢に「不明」がある */
+const MEDIA_REQUIRED = "媒体 (当社を知ったきっかけ) を選んでください。お客様に聞けなかったときは「不明」を選びます。";
+
+/** 媒体の値 (分類のコード。AI アシスタントなどから「チラシ」「紹介」のような言葉で届いたときは対応表で読み替える)。なければ断る */
+function readMedia(formData: FormData, back: string): MediaKey {
+  const v = str(formData, "media");
+  if (isMediaKey(v)) return v;
+  const mapped = v ? mapMediaText(readMediaRules(getDb()).rules, v) : null;
+  if (!mapped) fail(back, MEDIA_REQUIRED);
+  return mapped;
+}
 
 export async function createInquiry(formData: FormData) {
   const user = await requireActionUser();
@@ -24,6 +38,8 @@ export async function createInquiry(formData: FormData) {
   const receivedAt = atRaw ? new Date(`${atRaw.length === 16 ? `${atRaw}:00` : atRaw}+09:00`) : new Date();
   if (Number.isNaN(receivedAt.getTime())) fail(back, "受付日時を正しく入力してください。");
   if (receivedAt.getTime() > Date.now() + 5 * 60 * 1000) fail(back, "受付日時に未来の日時は入力できません。");
+  const media = readMedia(formData, back);
+  const promotionId = str(formData, "promotionId") || undefined;
   const id = newId("inq");
   await mutate((db) => {
     const customer = db.customers.find((c) => c.id === str(formData, "customerId"));
@@ -52,9 +68,15 @@ export async function createInquiry(formData: FormData) {
       nextActionDue: str(formData, "nextActionDue") || undefined,
       createdBy: user.id,
       updatedAt: now,
+      media,
     };
+    if (promotionId) {
+      const promo = (db.promotions ?? []).find((p) => p.id === promotionId);
+      if (!promo || (promo.storeId !== "hq" && !canAccessStore(user, promo.storeId))) fail(back, "きっかけの販促が見つかりません。");
+      inq.promotionId = promo.id;
+    }
     db.inquiries.push(inq);
-    addAudit(db, { userId: user.id, action: "create", entity: "inquiry", entityId: id, entityLabel: inq.number, summary: `問い合わせを登録 (${contactName} / ${summary})`, storeId });
+    addAudit(db, { userId: user.id, action: "create", entity: "inquiry", entityId: id, entityLabel: inq.number, summary: `問い合わせを登録 (${contactName} / ${summary} / 媒体: ${MEDIA_LABEL[media]})`, storeId });
     if (customer) {
       db.commLogs.push({ id: newId("cl"), customerId: customer.id, channel: inq.channel, direction: "inbound", subject: summary, body: inq.detail || summary, at: inq.receivedAt, userId: user.id, relatedType: "inquiry", relatedId: id });
       customer.updatedAt = now;
@@ -81,6 +103,15 @@ export async function updateInquiry(id: string, formData: FormData) {
     inq.nextAction = str(formData, "nextAction") || undefined;
     inq.nextActionDue = str(formData, "nextActionDue") || undefined;
     if (formData.has("detail")) inq.detail = str(formData, "detail");
+    // 媒体は必須 (更新の画面に欄がある。わからなければ「不明」)
+    if (formData.has("media")) inq.media = readMedia(formData, back);
+    if (formData.has("promotionId")) {
+      const pid = str(formData, "promotionId");
+      const promo = pid ? (db.promotions ?? []).find((p) => p.id === pid) : undefined;
+      if (pid && (!promo || (promo.storeId !== "hq" && !canAccessStore(user, promo.storeId)))) fail(back, "きっかけの販促が見つかりません。");
+      if (promo) inq.promotionId = promo.id;
+      else delete inq.promotionId;
+    }
     // 担当店舗の変更 (本社・他店舗で受けた問い合わせを担当の店舗へ回す)
     const storeId = str(formData, "storeId");
     if (storeId && storeId !== inq.storeId) {
@@ -92,7 +123,7 @@ export async function updateInquiry(id: string, formData: FormData) {
       moved = !canAccessStore(user, inq.storeId);
     }
     inq.updatedAt = nowIso();
-    const changes = diffChanges(before, inq, ["status", "assignedUserId", "category", "nextAction", "nextActionDue", "detail", "storeId"]);
+    const changes = diffChanges(before, inq, ["status", "assignedUserId", "category", "nextAction", "nextActionDue", "detail", "storeId", "media", "promotionId"]);
     storeName = db.stores.find((s) => s.id === inq.storeId)?.name ?? "";
     const storeMoved = changes.some((c) => c.field === "storeId");
     addAudit(db, { userId: user.id, action: changes.some((c) => c.field === "status") ? "status" : "update", entity: "inquiry", entityId: id, entityLabel: inq.number, summary: storeMoved ? `問い合わせを${storeName}へ回しました` : `問い合わせを更新 (${changes.map((c) => c.field).join(", ") || "変更なし"})`, storeId: inq.storeId, changes });

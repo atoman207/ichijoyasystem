@@ -38,6 +38,7 @@ import {
   ListChecks,
   Bell,
   CalendarDays,
+  CalendarOff,
   CalendarPlus,
   CalendarX2,
   ChartColumn,
@@ -71,6 +72,10 @@ import {
   type LucideIcon,
   MapPinned,
   Scale,
+  NotebookPen,
+  Layers,
+  ClipboardPen,
+  Megaphone,
 } from "lucide-react";
 import { Avatar, Badge } from "@/components/ui";
 import { IchijoyaLogo } from "@/components/brand/Logo";
@@ -108,7 +113,12 @@ export type NavIcon =
   | "fax"
   | "maps"
   | "management"
-  | "help";
+  | "help"
+  | "leave"
+  | "office"
+  | "heri"
+  | "workReport"
+  | "promotions";
 
 const ICONS: Record<NavIcon, LucideIcon> = {
   dashboard: House,
@@ -142,6 +152,11 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   fax: Printer,
   help: CircleHelp,
   management: Scale,
+  leave: CalendarOff,
+  office: NotebookPen,
+  heri: Layers,
+  workReport: ClipboardPen,
+  promotions: Megaphone,
 };
 
 export interface NavItem {

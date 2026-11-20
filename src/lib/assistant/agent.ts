@@ -9,8 +9,11 @@ import { listChatLogs, searchDocs } from "@/lib/chatbot/store";
 import { analysisCatalog, analysisText, runAnalysis, type AnalysisResult, type AnalysisSpec } from "./analyze";
 import { getRecord, lastSearchSource, listSchedule, searchAll, storeScopeNote, RECORD_TYPE_LABEL } from "./search";
 import { scheduleSuggestTool, scheduleTools } from "./schedule-tool";
+import { ACTION_LABEL, proposalText, proposeAction, type ProposedAction } from "./actions";
+import { assistantReadUser } from "./scope";
 import { checkCalcInputs, evaluate, formatCalc } from "./calc";
 import { forecast, type ForecastSubject } from "./forecast";
+import { parseStoreSplitQuestion, simulateStoreSplit } from "./store-split";
 import { permissionHints } from "@/lib/chatbot/permission-hints";
 import { describeTables, runSql, sqlTable, tableList } from "@/lib/datastore/sql";
 import { METRICS, VIEWS } from "@/lib/datastore/model";
@@ -19,7 +22,7 @@ import { managementAccounting } from "./mgmt-tool";
 import { canViewMgmt } from "@/lib/mgmt/access";
 import { mirrorReady } from "@/lib/datastore/mirror";
 import { allDocs } from "@/lib/chatbot/store";
-import { applyFixes, buildEvidence, checkAnswer, isWriteRequest, retryInstruction, type AnswerChecks } from "./guard";
+import { ACTION_REFUSAL, applyFixes, buildEvidence, checkAnswer, isWriteRequest, retryInstruction, type AnswerChecks } from "./guard";
 
 /**
  * 社内 AI アシスタント (画面左下の「質問する」と AI アシスタントの画面)
@@ -53,7 +56,11 @@ export interface AgentSource {
 /** 回答を作っている途中の知らせ (画面の「考えています」の表示に使う。/api/assistant/ask が順に送る) */
 export type AgentProgress =
   | { type: "phase"; phase: "prepare" | "thinking" | "checking" | "done"; label: string }
-  | { type: "tool"; id: string; name: string; label: string; status: "start" | "done"; summary?: string };
+  | { type: "tool"; id: string; name: string; label: string; status: "start" | "done"; summary?: string }
+  /** 回答の文字 (書かれた順。画面にすぐ出す下書き。最後の回答は確かめのあとで送り直す) */
+  | { type: "text"; delta: string }
+  /** 書きかけの下書きを消す (道具を呼んだ・確かめ直す) */
+  | { type: "reset" };
 
 /** 道具の名前 → 画面に出す「いま何をしているか」 */
 export const TOOL_PROGRESS_LABEL: Record<string, string> = {
@@ -69,6 +76,8 @@ export const TOOL_PROGRESS_LABEL: Record<string, string> = {
   management_accounting: "管理会計を集計",
   calculate: "計算",
   forecast: "過去の実績から予測を計算",
+  store_split: "店舗ごとの売上の配分を計算",
+  propose_action: "実行の確認を用意",
 };
 
 export interface AgentReply {
@@ -87,6 +96,8 @@ export interface AgentReply {
   ms: number;
   /** 回答の確かめの結果 (guard.ts) */
   checks?: AnswerChecks;
+  /** 実行の確認のカード (押すと実行。actions.ts) */
+  actions?: ProposedAction[];
 }
 
 const str = (v: unknown, max = 200) => (typeof v === "string" ? v.slice(0, max) : undefined);
@@ -151,7 +162,7 @@ function tools(user: User): ToolDef[] {
     },
     {
       name: "analyze",
-      description: `売上・粗利・数量・単価・件数などを、期間・店舗・種別・商品・顧客・担当者・地区などを自由に組み合わせて集計する。数字は必ずこの道具で出す (自分で計算しない)。結果の表とグラフは画面に自動で表示される。\n指標と軸:\n${analysisCatalog()}\n- 比較: compare=previous_year (前年同期) / previous_period (直前の同じ長さ)。only=decreased/increased で減った・増えた行だけ。\n- 2 つの軸 (例: month と store) は表を縦横にする (pivot)。\n- 商品の絞り込み products は品名の一部 (例: "きずな", "18メッシュ")。表記ゆれがあるので、まず group_by=["product"] で品名の一覧を見てから絞るとよい。\n- 商品・数量・平均単価は明細のある受注だけ。原価・粗利は商品ごとには出せない。`,
+      description: `売上・粗利・数量・単価・件数などを、期間・店舗・種別・商品・顧客・担当者・地区などを自由に組み合わせて集計する。数字は必ずこの道具で出す (自分で計算しない)。結果の表とグラフは画面に自動で表示される。\n指標と軸:\n${analysisCatalog()}\n- 比較: compare=previous_year (前年同期) / previous_period (直前の同じ長さ)。only=decreased/increased で減った・増えた行だけ。\n- 2 つの軸 (例: month と store) は表を縦横にする (pivot)。\n- 商品の絞り込み products は品名の一部 (例: "きずな", "18メッシュ")。表記ゆれがあるので、まず group_by=["product"] で品名の一覧を見てから絞るとよい。\n- 商品・数量・平均単価は明細のある受注だけ。商品ごとの原価・粗利 (cost・gross・gross_margin) は、案件の原価を明細の金額で按分した目安 (回答ではそう断る)。`,
       parameters: {
         type: "object",
         properties: {
@@ -181,6 +192,22 @@ function tools(user: User): ToolDef[] {
     },
     ...(canViewMgmt(user)
       ? [
+          {
+            name: "store_split",
+            description:
+              "店舗間で仕事を依頼したとき (内部受注)、それぞれの店舗にいくらの売上が計上されるかを、管理会計と同じ設定 (配分率・税込/税抜の基準・端数) で計算する。仮の金額でよい。「合志店から中央店に 20 万円の通常工事を依頼したら、それぞれいくら？」「中央店が施工した合志店の仕事の売上の配分は？」はこれを使い、自分で計算しない。",
+            parameters: {
+              type: "object",
+              properties: {
+                from_store: { type: "string", description: "依頼した店舗 (受注店舗・営業エリアの店舗。名前か id)" },
+                to_store: { type: "string", description: "施工した店舗 (名前か id)" },
+                amount: { type: "number", description: "金額 (円)" },
+                work_kind: { type: "string", enum: ["normal", "reform"], description: "通常工事 (既定) / リフォーム工事" },
+                tax_included: { type: "boolean", description: "金額が税込か (省略 = 税込。「税抜」と言われたら false)" },
+              },
+              required: ["from_store", "to_store", "amount"],
+            },
+          } satisfies ToolDef,
           {
             name: "management_accounting",
             description:
@@ -256,6 +283,54 @@ function tools(user: User): ToolDef[] {
     },
   );
   for (const t of scheduleTools) list.push(t.def);
+  list.push({
+    name: "propose_action",
+    description: `データを変える依頼 (予定の登録・変更・削除、問い合わせの登録・状態の変更、受注の進捗の記録、社内連絡・業務依頼を送る、承認・差戻し・却下) のときに、実行の確認のカードを画面に出す。AI は実行しない: 利用者がカードの内容を確かめて「実行する」を押すと、画面のボタンと同じ処理 (権限・入力の確かめ・変更履歴・通知も同じ) で実行される。社員・お客様は名前、案件は番号 (受注・見積・問い合わせ)、予定は ID (list_schedule の結果) で指定してよい。分からない項目は聞き返すか、調べてから呼ぶ。できる操作: ${Object.entries(ACTION_LABEL).map(([k, v]) => `${k} (${v})`).join(", ")}`,
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: Object.keys(ACTION_LABEL), description: "操作の種類" },
+        event_id: { type: "string", description: "予定の変更・削除: 予定の ID" },
+        event_kind: { type: "string", description: "予定の登録: 種類 (survey 現地調査・pickup 引取・delivery 納品・install 施工・visit 訪問・meeting 打合せ・leave 休暇・other その他 など。日本語の名前でもよい)" },
+        title: { type: "string", description: "予定・社内連絡の件名 (予定は案件を指定すれば省略可)" },
+        date: { type: "string", description: "予定の日付 YYYY-MM-DD" },
+        end_date: { type: "string", description: "複数日の予定の終了日 YYYY-MM-DD" },
+        start_time: { type: "string", description: "開始時刻 HH:MM" },
+        end_time: { type: "string", description: "終了時刻 HH:MM" },
+        slot: { type: "string", enum: ["am", "pm"], description: "時刻を決めないときの午前・午後" },
+        all_day: { type: "boolean", description: "終日" },
+        assignees: { type: "array", items: { type: "string" }, description: "予定の担当者 (社員の名前)。省略すると頼んだ本人" },
+        store: { type: "string", description: "店舗 (省略すると案件・お客様・本人の店舗)" },
+        case: { type: "string", description: "予定に紐づける案件の番号 (受注・見積・問い合わせ)" },
+        customer: { type: "string", description: "お客様 (顧客コードか名前)" },
+        location: { type: "string", description: "予定の場所 (省略すると案件・お客様の住所)" },
+        memo: { type: "string", description: "予定のメモ" },
+        summary: { type: "string", description: "問い合わせの内容 (要約)" },
+        detail: { type: "string", description: "問い合わせの詳細" },
+        contact_name: { type: "string", description: "新しいお客様の名前 (問い合わせ)" },
+        contact_phone: { type: "string", description: "新しいお客様の電話 (問い合わせ)" },
+        channel: { type: "string", description: "問い合わせの受付経路 (電話・来店・Web・LINE など)" },
+        category: { type: "string", description: "問い合わせの種別 (畳・襖・障子・網戸・カーテン・クロス など)" },
+        media: { type: "string", description: "問い合わせの登録では必須: お客様が当社を知ったきっかけ (情報媒体。チラシ・紹介・リピート・ホームページ・看板・DM・イベント など。聞けなかったときは「不明」。分からなければ利用者に聞き返す)" },
+        assignee: { type: "string", description: "問い合わせの担当者 (社員の名前)" },
+        next_action: { type: "string", description: "問い合わせの次の対応" },
+        next_action_due: { type: "string", description: "次の対応の期限 YYYY-MM-DD" },
+        inquiry: { type: "string", description: "状態を変える問い合わせの番号" },
+        status: { type: "string", description: "問い合わせの新しい状態 (未対応・対応中・見積済・受注・失注 など)" },
+        order: { type: "string", description: "進捗を記録する受注の番号" },
+        progress_kind: { type: "string", description: "進捗の種類 (メモ・現場調査・製作・手配・施工・完了・変更)" },
+        body: { type: "string", description: "受注の進捗の内容 / 社内連絡の本文" },
+        message_kind: { type: "string", enum: ["notice", "request", "report", "question"], description: "社内連絡の種類 (notice 連絡・request 業務依頼・report 報告・question 確認・質問)" },
+        to: { type: "array", items: { type: "string" }, description: "社内連絡の宛先・業務依頼の依頼先 (社員の名前)" },
+        due_date: { type: "string", description: "業務依頼の期限 YYYY-MM-DD" },
+        related: { type: "string", description: "社内連絡に紐づける案件の番号" },
+        approval: { type: "string", description: "判断する承認の依頼 (ID か件名)" },
+        decision: { type: "string", enum: ["approved", "returned", "rejected"], description: "承認・差戻し・却下" },
+        comment: { type: "string", description: "承認の判断のコメント (差戻し・却下は必須)" },
+      },
+      required: ["action"],
+    },
+  });
   if (canUseSql(user)) {
     list.push(
       {
@@ -294,6 +369,8 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     `## 社員 (いま有効なアカウント)\n${staff.join("、")}\n(移行した過去の売上の担当者には、退職した社員の名前もあります)`,
     "",
     "## 答え方のルール",
+    "0. 最初の 1 文で、質問にそのまま答える (金額・件数・名前・日付・はい/いいえ・店舗ごとの金額)。そのあとの補足は短い箇条書きで 2〜4 行まで、全体で 6 行以内を目安にする (総合的な分析の質問だけは長くてよい)。画面の場所・操作の手順は、操作を聞かれたとき・データや計算で答えられないときだけ、最後に 1 行で書く。答えの代わりに画面を案内しない。",
+    "0b. 社員が読んですぐ分かる言葉で書く。道具・表・ビュー・列・コード・SQL の名前 (store_split・v_invoices・pending など) や、システムの内部の言い方は書かない。",
     "1. 数字・日付・名前・件数などの事実は、必ず道具で調べた結果だけを使う。推測で補わない。計算 (合計・比較・割合・平均) は analyze で行い、自分で計算しない。道具の結果の数字どうしの差・比・割合・増減率・平均は calculate で計算する (暗算しない)。",
     "1b. これからの見込み・予測 (来月の売上・今年の着地・来月の問い合わせの件数など) は forecast で計算する。予測は「予測 (中心)」と幅をそのまま書き、予測であること・計算の方法 (前年同月 × 伸び・直近の平均・今月のペース・受注残) と前提を一言添える。forecast で出せない予測は「システムの記録からは計算できません」と書き、数字を作らない。",
     "2. 調べても見つからないとき・データがないときは、そのことをはっきり書く (例:「システムには○○の記録がありません」)。判断できないときもそう書く。",
@@ -305,8 +382,8 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     "5c. 「お客様ごと・店舗ごと・担当者ごとで一番多い〜」は、まずその単位で合計 (group by) してから比べる。1 件の請求・受注の最大と取り違えない。前の質問の続き (「その中で〜」) でも同じ。",
     "5b. 「比較して」は、質問にある軸 (店舗・商品・担当者など) どうしの比較のこと。前年・前の期間との比較 (compare) は、質問に「前年」「昨年」「前期」「去年と」などの言葉があるときだけ使う。",
     "6. 直接集計できないとき (データがない・軸がない・権限がない) は、その理由を書き、search_guides で調べて、経営ダッシュボード・CSV 出力などの画面で目的の集計にたどり着く手順を案内する。",
-    "7. 操作方法の質問は、質問に付いた「参考資料」か search_guides の結果に書かれている画面・ボタン・手順だけで答える (一般的なシステムの知識で補わない)。「メニュー → 画面 → ボタン」の順に番号付きの手順で、画面・ボタンの名前は資料の表記のまま「」で書く。資料に書かれていない操作は「使い方の資料には見当たりません」と書き、店長・管理者への確認を勧める。権限がない操作は、誰に頼めばよいかを書く。",
-    "8. この AI は登録・変更・削除・承認・送信を行えない。依頼されたら、画面での操作手順を案内する。",
+    "7. 操作方法の質問は、質問に付いた「参考資料」か search_guides の結果に書かれている画面・ボタン・手順だけで答える (一般的なシステムの知識で補わない)。「メニュー → 画面 → ボタン」の順に番号付きの手順で、画面・ボタンの名前は資料の表記のまま「」で書く。最初に出てくる画面の名前には、資料にある画面のリンクを付ける (例: [見積](/quotes))。資料に書かれていない操作は「使い方の資料には見当たりません」と書き、店長・管理者への確認を勧める。権限がない操作は、誰に頼めばよいかを書く。",
+    `8. この AI は自分では何も変えない。データを変える依頼のうち、${Object.values(ACTION_LABEL).join("・")} は propose_action で実行の確認のカードを出す (利用者が「実行する」を押すと実行される。回答に「実行しました」「登録しました」と書かない)。それ以外の操作 (見積・請求・入金・経費・顧客の変更など) は行えないので、画面での操作手順を案内する。`,
     "9. 会話の続き (「店舗別にして」「前年と比べて」「その中で一番は？」) は、前の回答の [分析条件] を引き継いで analyze を呼び直す。[分析条件] は内部の情報なので、回答には書かない。",
     "10. 日本語のです・ます調で、簡潔に。見出しは使わず、必要なら短い箇条書き (・) と **太字** を使う。Markdown の表は書かない (表は画面に出る)。",
     "11. 過去に同じような相談がありそうなら search_history で確かめてもよい。ただし古い回答の数字はそのまま使わず、必要なら調べ直す。",
@@ -334,7 +411,7 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     "- 会議・決定事項・ルールは search_records (types: knowledge, schedule, thread) と search_guides の両方を見る。",
     "- 仕入先・発注履歴は search_records (types: supplier) → get_record (type: supplier)。",
     "- 売上の分析は analyze (subject: sales)。商品名は表記ゆれがあるので、まず品名の一覧を見てから絞る。",
-    scheduleSuggestTool ? "- 予定の候補日は suggest_schedule (候補ごとの「入力」のリンクをそのまま回答に入れる)。日程のない案件をまとめて配置・既存の予定の入れ替えは plan_schedule、1 日の回る順番は day_route、仮押さえの状況は schedule_holds、提案に足りない情報は schedule_setup。予定の登録・変更はせず、リンクの画面で利用者が行うと案内する。" : "",
+    scheduleSuggestTool ? "- 予定の候補日は suggest_schedule (候補ごとの「入力」のリンクをそのまま回答に入れる。利用者が候補を選んだ・「1 番で入れて」と頼まれたら、その候補の日時・担当者で propose_action (create_schedule_event) の登録のカードを出す)。日程のない案件をまとめて配置・既存の予定の入れ替えは plan_schedule、1 日の回る順番は day_route、仮押さえの状況は schedule_holds、提案に足りない情報は schedule_setup。予定の登録・変更はせず、リンクの画面で利用者が行うと案内する。" : "",
     canUseSql(user)
       ? [
           "",
@@ -367,7 +444,9 @@ function specSummary(s: AnalysisSpec): string {
 /** 質問に期間の言葉があるか (ない件数・一覧・順位は全期間で数える: 答え方のルール 5・5a) */
 const PERIOD_WORDS = /今日|本日|昨日|明日|今週|先週|来週|今月|先月|来月|今年|昨年|去年|来年|今期|前期|年度|上期|下期|直近|最近|過去|以降|以前|期間|\d+\s*(年|月|日)|\d{4}[-/]|年間|か月|ヶ月|カ月|週間|四半期/;
 
-function makeExecutor(db: Database, user: User, now: Date, out: { tables: AnalysisResult[]; sources: AgentSource[]; tools: AgentReply["tools"]; usedData: boolean; usedKnowledge: boolean; docKeys: string[] }, opts: { periodless?: boolean; evidence?: () => number[] } = {}) {
+function makeExecutor(db: Database, user: User, now: Date, out: { tables: AnalysisResult[]; sources: AgentSource[]; tools: AgentReply["tools"]; usedData: boolean; usedKnowledge: boolean; docKeys: string[]; actions?: ProposedAction[] }, opts: { periodless?: boolean; evidence?: () => number[]; actor?: User } = {}) {
+  // actor = ログインした本人 (実行の確認・相談の履歴は本人の権限。user は読み取りの範囲: scope.ts)
+  const actor = opts.actor ?? user;
   const addSource = (s: AgentSource) => {
     if (out.sources.some((x) => x.href === s.href && x.label === s.label)) return;
     if (out.sources.length < 20) out.sources.push(s);
@@ -465,15 +544,27 @@ function makeExecutor(db: Database, user: User, now: Date, out: { tables: Analys
       }
       case "search_history": {
         const q = str(a.query, 200) ?? "";
-        const scope = canSeeAllStores(user) ? "all" : user.role === "store_manager" ? "store" : "self";
-        const r = listChatLogs({ scope, userId: user.id, storeId: user.storeId, q, limit: 6 });
-        const rows = r.rows.filter((x) => canViewChatLog(user, x));
+        const scope = canSeeAllStores(actor) ? "all" : actor.role === "store_manager" ? "store" : "self";
+        const r = listChatLogs({ scope, userId: actor.id, storeId: actor.storeId, q, limit: 6 });
+        const rows = r.rows.filter((x) => canViewChatLog(actor, x));
         // 過去の相談は人ごとの情報なので、回答を蓄えない
         out.usedData = true;
         out.tools.push({ name: "過去の相談", summary: `${q} → ${rows.length} 件` });
         if (!rows.length) return "過去の相談に当てはまるものはありませんでした。";
         for (const x of rows.slice(0, 2)) addSource({ label: `過去の相談: ${x.question.slice(0, 30)}`, href: `/ai?tab=history&id=${x.id}`, kind: "過去の相談" });
         return rows.map((x) => `- ${x.at.slice(0, 10)} ${x.userName}: Q「${x.question}」\n  A: ${x.answer.replace(/\n/g, " ").slice(0, 400)} [履歴](/ai?tab=history&id=${x.id})`).join("\n");
+      }
+      case "store_split": {
+        const r = simulateStoreSplit(db, user, { fromStore: str(a.from_store, 40) ?? "", toStore: str(a.to_store, 40) ?? "", amount: typeof a.amount === "number" ? a.amount : Number(String(a.amount ?? "").replace(/[,円]/g, "")), workKind: str(a.work_kind) === "reform" ? "reform" : "normal", taxIncluded: typeof a.tax_included === "boolean" ? a.tax_included : undefined }, now);
+        if (!r.ok) {
+          out.tools.push({ name: "店舗間の売上の配分", summary: r.error.slice(0, 80) });
+          return `計算できません: ${r.error}`;
+        }
+        out.usedData = true;
+        if (out.tables.length < 4) out.tables.push(r.table);
+        out.tools.push({ name: "店舗間の売上の配分", summary: r.summary });
+        addSource({ label: "管理会計の設定 (内部受注の配分率・基準・端数)", href: "/management?tab=settings", kind: "集計" });
+        return r.text;
       }
       case "management_accounting": {
         out.usedData = true;
@@ -544,6 +635,18 @@ ${expr} = ${formatCalc(r.value)}
         return `${analysisText(t, 60)}`;
       }
     }
+    // 実行の確認のカード (actions.ts。AI は実行しない。利用者が画面で「実行する」を押す)
+    if (call.name === "propose_action") {
+      out.usedData = true;
+      const { action: kind, ...rest } = a as Record<string, unknown>;
+      const r = proposeAction(db, actor, typeof kind === "string" ? kind : "", rest, now);
+      if (r.ok) {
+        out.actions ??= [];
+        if (out.actions.length < 5) out.actions.push(r.action);
+      }
+      out.tools.push({ name: "実行の確認", summary: r.ok ? `${r.action.title} (確認のカード)` : `作れず: ${r.error.slice(0, 80)}` });
+      return proposalText(r);
+    }
     // 予定の計画の道具 (schedule-tool.ts: 候補日・まとめて配置・巡回順・仮押さえ・準備の状況)
     const st = scheduleTools.find((t) => t.def.name === call.name);
     if (st) {
@@ -611,12 +714,15 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   const deep = isAnalytical(question);
   const now = opts.now ?? new Date();
   const t0 = Date.now();
-  const out = { tables: [] as AnalysisResult[], sources: [] as AgentSource[], tools: [] as AgentReply["tools"], usedData: false, usedKnowledge: false, docKeys: [] as string[] };
+  const out = { tables: [] as AnalysisResult[], sources: [] as AgentSource[], tools: [] as AgentReply["tools"], usedData: false, usedKnowledge: false, docKeys: [] as string[], actions: [] as ProposedAction[] };
   // 道具の結果は回答の確かめ (guard.ts) の根拠にする
   const toolOutputs: string[] = [];
   const lastAsked = [...history].reverse().find((h) => h.role === "user")?.content ?? "";
   const historyText = history.map((h) => h.content).join("\n");
-  const executeTool = makeExecutor(db, user, now, out, {
+  // AI アシスタントの閲覧範囲 (設定で全店舗にしているときは、読み取りだけ全店舗。scope.ts)
+  const readUser = assistantReadUser(db, user, now);
+  const executeTool = makeExecutor(db, readUser, now, out, {
+    actor: user,
     periodless: !PERIOD_WORDS.test(question) && !PERIOD_WORDS.test(lastAsked),
     evidence: () => buildEvidence([...toolOutputs, question, historyText], out.tables).values,
   });
@@ -630,15 +736,17 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
     return r;
   };
   const messages = toMessages(history, question);
-  // 登録・変更・削除・承認・送信の依頼: この AI は実行できないので、手順の案内にする (実行したように書かせない)
+  // 登録・変更・削除・承認・送信の依頼: できる操作は確認のカード (propose_action) を出す。それ以外は手順の案内 (実行したように書かせない)
   const writeRequest = isWriteRequest(question);
   if (writeRequest) {
-    messages[messages.length - 1] = { role: "user", content: `${question}\n\n---\n(システムの注意: これはデータを変える依頼です。この AI は登録・変更・削除・承認・送信を実行できません。実行したように書かず、できないことを伝え、search_guides で調べた画面・ボタンの名前で手順を案内してください)` };
+    messages[messages.length - 1] = { role: "user", content: `${question}\n\n---\n(システムの注意: これはデータを変える依頼です。${Object.values(ACTION_LABEL).join("・")} なら、必要な記録 (予定の ID・案件の番号・社員の名前など) を調べてから propose_action で実行の確認のカードを出し、「内容を確かめて『実行する』を押してください」と伝えてください。AI は実行しないので「実行しました」とは書かない。足りない情報 (日付・担当者など) があれば聞き返す。それ以外の操作は実行できないことを伝え、search_guides で調べた画面・ボタンの名前で手順を案内してください)` };
   }
   // 操作の質問は、使い方の資料を先に探して質問に添える (AI が資料を見ずに一般的な手順を答えないように)
   let prefetched: AgentSource[] = [];
-  if (opts.prefetchGuides || deep || (canViewMgmt(user) && MGMT_QUESTION.test(question))) progress({ type: "phase", phase: "prepare", label: "関係する資料・データを用意しています" });
-  if (opts.prefetchGuides) {
+  // 「A 店から B 店に X 円の工事を依頼したら、それぞれいくら？」は、先に計算しておく (AI の往復を 1 回減らし、計算させない)
+  const split = parseStoreSplitQuestion(db, question);
+  if (split || opts.prefetchGuides || deep || (canViewMgmt(user) && MGMT_QUESTION.test(question))) progress({ type: "phase", phase: "prepare", label: "関係する資料・データを用意しています" });
+  if (opts.prefetchGuides && !split) {
     const before = out.sources.length;
     const guides = await execute({ id: "prefetch", name: "search_guides", args: { query: question } });
     prefetched = out.sources.slice(before);
@@ -648,7 +756,15 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   // 総合的な分析は、全体像を先に用意する (1 回分の往復を省き、必ず全体から考える)
   // 管理会計の質問 (店舗別の粗利益・損益・原価率・内部受注・案分): 管理会計の店舗別損益を先に渡す (経営ダッシュボードの簡易粗利と混ぜない)
   const mgmtQ = canViewMgmt(user) && MGMT_QUESTION.test(question);
-  if (mgmtQ) {
+  if (split) {
+    const r = await execute({ id: "split", name: "store_split", args: { from_store: split.fromStore, to_store: split.toStore, amount: split.amount, work_kind: split.workKind, tax_included: split.taxIncluded } });
+    const last = messages[messages.length - 1];
+    messages[messages.length - 1] = { role: "user", content: `${last.content}
+
+---
+店舗ごとの売上の配分の計算 (store_split の結果。管理会計と同じ設定で計算済み。この数字で、最初の 1 文で各店舗の金額を答える。質問の店舗・金額・税込/税抜・工事の種類と違うときだけ store_split を呼び直す。計算できないと書かれていたら、その理由をそのまま短く伝える)
+${r}` };
+  } else if (mgmtQ) {
     const pnl = await execute({ id: "mgmt", name: "management_accounting", args: { view: /品目|畳|襖|リフォーム|カーテン|自社商品|原価率/.test(question) ? "items" : "store_pnl" } });
     const last = messages[messages.length - 1];
     messages[messages.length - 1] = { role: "user", content: `${last.content}\n\n---\n管理会計の集計 (management_accounting の結果。今年の 1 月 1 日〜今日。期間・店舗・見方が違う質問なら management_accounting を呼び直す。粗利益・損益はこの数字を使い、business_overview の「簡易粗利」や売上を粗利益として書かない)\n${pnl}` };
@@ -659,14 +775,15 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   }
   const loop = (msgs: { role: "user" | "assistant"; content: string }[]) =>
     runToolLoop({
-      system: opts.voice ? `${systemPrompt(db, user, now)}\n\n${VOICE_NOTE}` : systemPrompt(db, user, now),
+      system: opts.voice ? `${systemPrompt(db, readUser, now)}\n\n${VOICE_NOTE}` : systemPrompt(db, readUser, now),
       messages: msgs,
-      tools: tools(user),
+      tools: tools(readUser),
       execute,
       maxRounds: deep ? 12 : 8,
       effort: deep ? "medium" : "low",
       maxTokens: 3000,
       deadlineMs: Number(process.env.ASSISTANT_DEADLINE_MS) || (deep ? 170_000 : 120_000),
+      onText: opts.onProgress ? (e) => progress(e.type === "delta" ? { type: "text", delta: e.text } : { type: "reset" }) : undefined,
     });
   progress({ type: "phase", phase: "thinking", label: "質問を読み解いています" });
   let res = await loop(messages);
@@ -674,6 +791,7 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   const drill = () => res.calls.filter((c) => ["analyze", "query_database", "get_record", "search_records", "list_schedule", "management_accounting", "forecast", "calculate"].includes(c.name)).length + (mgmtQ ? 2 : 0);
   if (deep && drill() < 2 && Date.now() - t0 < 60_000) {
     const first = res;
+    progress({ type: "reset" });
     res = await loop([
       ...messages,
       { role: "assistant", content: first.text },
@@ -695,6 +813,7 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   if (issues.some((i) => i.severity !== "low") && Date.now() - t0 < 100_000) {
     const first = res;
     checks.retried = true;
+    progress({ type: "reset" });
     progress({ type: "phase", phase: "checking", label: "数字と根拠を確かめ直しています" });
     try {
       const again = await loop([...messages, { role: "assistant", content: first.text }, { role: "user", content: retryInstruction(issues) }]);
@@ -713,6 +832,11 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   const fixedAnswer = applyFixes(res.text, issues);
   checks.fixed = fixedAnswer.fixed;
   res = { ...res, text: fixedAnswer.text };
+  // データを変える依頼には、最初の 1 文で「この AI ではできない」と答える (手順の案内だけで終わらせない)
+  if (writeRequest && !out.actions.length && res.text !== ACTION_REFUSAL && !/(でき|行え|おこなえ)(ません|ない)/.test(res.text.split(/\n|。/)[0] ?? "")) {
+    res = { ...res, text: `この依頼は AI アシスタントからは実行できません (AI アシスタントから実行できるのは ${Object.values(ACTION_LABEL).join("・")} で、確認のカードを押して実行します)。${/(でき|行え)(ません|ない)/.test(res.text) ? "" : "操作は担当の画面で行ってください。"}\n\n${res.text}` };
+    checks.fixed.push("データを変える依頼に、実行できないことを最初に書きました");
+  }
   // 先に探した使い方の資料は、データを調べて答えたときは根拠から外す (関係のない資料が並ばないように)
   if (out.usedData && prefetched.length) out.sources = out.sources.filter((x) => !prefetched.includes(x));
   let text = res.text

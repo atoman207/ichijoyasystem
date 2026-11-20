@@ -16,6 +16,7 @@ import { approvalSettings } from "@/lib/approval-rules";
 import { sendTestMessage, updateAiIntakeSettings, updateApprovalSettings, updateNotifySettings } from "@/lib/actions/settings-ops";
 import { HANDOFF_MODE_LABEL, aiIntakeSettings, type HandoffMode } from "@/lib/ai-intake";
 import { appBaseUrl, chatworkConfig, integrationStatuses } from "@/lib/notify/config";
+import { googleSheetsStatus } from "@/lib/google/sheets";
 import { NOTIFY_EVENT_LABEL, notifySettings, type NotifyEvent } from "@/lib/notify/events";
 import { canManageIntegrations } from "@/lib/auth/permissions";
 import type { ServiceCategory } from "@/lib/db/types";
@@ -332,7 +333,20 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           )}
           <LineGroupsCard db={db} admin={canManageIntegrations(user)} />
           {[
-            { name: "Google スプレッドシート", status: "取込・書き出しに対応", ok: true, desc: "リンクで共有したシートから顧客・問い合わせを取込 (データ入出力の画面)。書き出した CSV はシートでインポート。非公開シートの直接連携はサービスアカウントの準備後。" },
+            (() => {
+              // 非公開のシートの直接同期 (サービスアカウント。src/lib/google/sheets.ts)。鍵の中身は出さない
+              const gs = googleSheetsStatus();
+              return {
+                name: "Google スプレッドシート",
+                status: gs.configured ? "サービスアカウントで接続" : gs.error ? "鍵の設定に誤り" : "リンクの共有で取込",
+                ok: gs.configured || !gs.error,
+                desc: gs.configured
+                  ? `非公開のシートも、シートの「共有」でサービスアカウント ${gs.email} を「閲覧者」に追加すると、データ入出力の取込・社内資料の同期で直接読めます (${gs.source})。共有していないシートは、リンクの共有 (リンクを知っている全員) なら従来どおり読めます。`
+                  : gs.error
+                    ? `${gs.source} を読めません: ${gs.error} (リンクの共有のシートは読めます)`
+                    : "リンクで共有したシートから顧客・問い合わせを取込 (データ入出力の画面)・社内資料の同期。書き出した CSV はシートでインポート。非公開のシートを直接読むには、サービスアカウントの鍵を GOOGLE_SERVICE_ACCOUNT_JSON (または GOOGLE_SERVICE_ACCOUNT_FILE) に設定します。",
+              };
+            })(),
             { name: "会計ソフト (弥生・freee・マネーフォワードなど)", status: "CSV で出力", ok: true, desc: "売上・入金・経費・仕入・現金出納の仕訳と明細を、会計データの出力 (/accounting) から CSV で出力します (汎用・弥生会計のインポート形式)。" },
           ].map((i) => (
             <Card key={i.name}>

@@ -215,6 +215,11 @@ export interface ToolCall {
 }
 
 export interface ToolLoopRequest {
+  /**
+   * 回答の文字を書かれた順に受け取る (OpenAI のとき。画面に回答をすぐ出す)。その回で道具を呼んだら reset
+   * (道具の前の書きかけの文は回答ではないため)。Claude は今は順には受け取らず、最後にまとめて返す
+   */
+  onText?: (e: { type: "delta"; text: string } | { type: "reset" }) => void;
   system: string;
   messages: { role: "user" | "assistant"; content: string }[];
   tools: ToolDef[];
@@ -287,8 +292,24 @@ export async function runToolLoop(req: ToolLoopRequest): Promise<ToolLoopResult>
   for (let round = 1; ; round++) {
     const last = round >= maxRounds || left() < 25_000;
     if (last && round > 1) messages.push({ role: "user", content: FINAL.trim() });
-    const res = await openAiCall(c, { messages, maxTokens: req.maxTokens ?? 3000, effort, tools, noToolUse: last, deadlineMs: Math.max(8_000, left() - 2_000) });
+    let streamed = false;
+    const res = await openAiCall(c, {
+      messages,
+      maxTokens: req.maxTokens ?? 3000,
+      effort,
+      tools,
+      noToolUse: last,
+      deadlineMs: Math.max(8_000, left() - 2_000),
+      onDelta: req.onText
+        ? (text) => {
+            streamed = true;
+            req.onText?.({ type: "delta", text });
+          }
+        : undefined,
+    });
     if (!res.toolCalls?.length || last) return { text: res.text, provider: "openai", model: res.model, rounds: round, calls, ms: Date.now() - t0 };
+    // 道具を呼ぶ回の書きかけの文は回答ではないので、画面から消してもらう
+    if (streamed) req.onText?.({ type: "reset" });
     messages.push({ role: "assistant", content: res.text || null, tool_calls: res.toolCalls });
     // 同じ回の道具は並べて実行する (結果の順番は呼ばれた順のまま)
     const batch = res.toolCalls.map((tc) => ({ id: tc.id, name: tc.function.name, args: parseArgs(tc.function.arguments) }));
@@ -423,7 +444,17 @@ type OpenAiBody = { choices?: { message?: { content?: string | null; refusal?: s
 type OpenAiToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 type OpenAiMessage = { role: "system" | "user" | "assistant" | "tool"; content: OpenAiContent | null; tool_calls?: OpenAiToolCall[]; tool_call_id?: string };
 
-type OpenAiCallOpts = { messages: OpenAiMessage[]; maxTokens: number; effort: AiEffort; responseFormat?: Record<string, unknown>; tools?: Record<string, unknown>[]; noToolUse?: boolean; deadlineMs?: number };
+type OpenAiCallOpts = {
+  messages: OpenAiMessage[];
+  maxTokens: number;
+  effort: AiEffort;
+  responseFormat?: Record<string, unknown>;
+  tools?: Record<string, unknown>[];
+  noToolUse?: boolean;
+  deadlineMs?: number;
+  /** 回答の文字を書かれた順に受け取る (stream。画面に回答をすぐ出すため) */
+  onDelta?: (text: string) => void;
+};
 
 /** OpenAI の 1 回の呼び出し (使ったトークン数・時間・失敗を usage.ts に知らせる) */
 async function openAiCall(c: AiConfig, opts: OpenAiCallOpts): Promise<{ text: string; model: string; toolCalls?: OpenAiToolCall[] }> {
@@ -438,6 +469,62 @@ async function openAiCall(c: AiConfig, opts: OpenAiCallOpts): Promise<{ text: st
     reportAiCall({ provider: "openai", model, inputTokens: 0, outputTokens: 0, cachedTokens: 0, ms: Date.now() - t0, ok: false, error: err instanceof AiError ? err.code : "api" });
     throw err;
   }
+}
+
+/** OpenAI の stream (data: {...} の行) を読み、文字は onDelta に渡しながら、道具の呼び出し・使ったトークン数を組み立てる */
+async function readOpenAiStream(stream: ReadableStream<Uint8Array>, onDelta: (text: string) => void): Promise<{ text: string; model: string; toolCalls?: OpenAiToolCall[]; usage?: OpenAiUsage }> {
+  type Chunk = { model?: string; usage?: OpenAiUsage; choices?: { delta?: { content?: string | null; refusal?: string | null; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[] };
+  const reader = stream.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let text = "";
+  let model = "";
+  let finish = "";
+  let usage: OpenAiUsage | undefined;
+  const calls: OpenAiToolCall[] = [];
+  const handle = (line: string) => {
+    if (!line.startsWith("data:")) return;
+    const data = line.slice(5).trim();
+    if (!data || data === "[DONE]") return;
+    let j: Chunk;
+    try {
+      j = JSON.parse(data) as Chunk;
+    } catch {
+      return;
+    }
+    if (j.model) model = j.model;
+    if (j.usage) usage = j.usage;
+    const ch = j.choices?.[0];
+    if (!ch) return;
+    const d = ch.delta ?? {};
+    if (d.refusal) throw new AiError("refusal", MSG.refusal, d.refusal);
+    if (typeof d.content === "string" && d.content) {
+      text += d.content;
+      onDelta(d.content);
+    }
+    for (const tc of d.tool_calls ?? []) {
+      const k = tc.index ?? 0;
+      const cur = (calls[k] ??= { id: "", type: "function", function: { name: "", arguments: "" } });
+      if (tc.id) cur.id = tc.id;
+      if (tc.function?.name) cur.function.name += tc.function.name;
+      if (tc.function?.arguments) cur.function.arguments += tc.function.arguments;
+    }
+    if (ch.finish_reason) finish = ch.finish_reason;
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (value) buf += dec.decode(value, { stream: true });
+    for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
+      handle(buf.slice(0, i).trim());
+      buf = buf.slice(i + 1);
+    }
+    if (done) break;
+  }
+  if (buf.trim()) handle(buf.trim());
+  if (finish === "length") throw new AiError("truncated", MSG.truncated);
+  if (finish === "content_filter") throw new AiError("refusal", MSG.refusal, "content_filter");
+  const toolCalls = calls.filter((x) => x && x.function.name);
+  return { text, model, toolCalls: toolCalls.length ? toolCalls : undefined, usage };
 }
 
 async function openAiCallRaw(c: AiConfig, opts: OpenAiCallOpts): Promise<{ text: string; model: string; toolCalls?: OpenAiToolCall[]; usage?: OpenAiUsage }> {
@@ -468,6 +555,7 @@ async function openAiCallRaw(c: AiConfig, opts: OpenAiCallOpts): Promise<{ text:
           ...(opts.responseFormat ? { response_format: opts.responseFormat } : {}),
           ...(opts.tools?.length ? { tools: opts.tools, tool_choice: opts.noToolUse ? "none" : "auto", ...(opts.noToolUse ? {} : { parallel_tool_calls: true }) } : {}),
           ...(withEffort ? { reasoning_effort: opts.effort } : {}),
+          ...(opts.onDelta ? { stream: true, stream_options: { include_usage: true } } : {}),
         }),
         signal: AbortSignal.timeout(remaining),
       });
@@ -480,6 +568,18 @@ async function openAiCallRaw(c: AiConfig, opts: OpenAiCallOpts): Promise<{ text:
         continue;
       }
       throw new AiError("api", MSG.network, (err as Error).message);
+    }
+    // 文字を順に受け取る (stream)。誤りのときは下の JSON の処理 (モデルの切り替え・やり直し) に進む
+    if (res.ok && opts.onDelta && res.body) {
+      try {
+        const r = await readOpenAiStream(res.body, opts.onDelta);
+        workingOpenAiModel = model;
+        return { ...r, model: r.model || model };
+      } catch (err) {
+        if (err instanceof AiError) throw err;
+        if ((err as Error).name === "TimeoutError" || (err as Error).name === "AbortError") throw new AiError("timeout", MSG.timeout);
+        throw new AiError("api", MSG.network, (err as Error).message);
+      }
     }
     const body = (await res.json().catch(() => null)) as OpenAiBody;
     if (!res.ok) {

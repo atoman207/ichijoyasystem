@@ -56,6 +56,10 @@ for (const r of E.evalResults(runId)) {
   console.log(`     回答: ${r.answer.replace(/\s+/g, " ").slice(0, 220)}`);
   console.log(`     道具: ${r.tools.join(", ")}`);
 }
+{
+  const lens = E.evalResults(runId).map((r) => r.answer.length).sort((a, b) => a - b);
+  console.log(`\n回答の長さ (文字): 中央 ${lens[Math.floor(lens.length / 2)]}・90% ${lens[Math.floor(lens.length * 0.9)]}・最大 ${lens[lens.length - 1]}`);
+}
 console.log(`\n正答率 ${(m.accuracy * 100).toFixed(1)}% (${m.passed}/${m.total}) / 数字の一致 ${m.numericRate === null ? "-" : `${(m.numericRate * 100).toFixed(1)}%`} / 道具 ${m.toolRate === null ? "-" : `${(m.toolRate * 100).toFixed(0)}%`} / 根拠 ${m.evidenceRate === null ? "-" : `${(m.evidenceRate * 100).toFixed(0)}%`}`);
 console.log(`権限違反 ${m.violations} / 存在しない画面 ${m.badScreens} / 根拠のない数字 ${m.ungrounded} / 答えられない ${m.unknownRate ?? "-"} / 断る ${m.refuseRate ?? "-"}`);
 console.log(`回答時間 平均 ${(m.avgMs / 1000).toFixed(1)}s・p95 ${(m.p95Ms / 1000).toFixed(1)}s / トークン ${m.tokens.toLocaleString()} / 費用の見込み ${Math.round(m.costJpy)} 円 (単価が分かるモデルだけ) / 全体 ${((Date.now() - t0) / 1000).toFixed(0)}s`);

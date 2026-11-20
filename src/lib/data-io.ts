@@ -5,6 +5,7 @@ import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, ORDER_STATUS } from "@/l
 import { candidateLabel, findDuplicateCustomers, needsConfirmation, normName } from "@/lib/duplicates";
 import { IMPORT_MAX_ROWS, IMPORT_SPEC, mapHeaders, type ImportTarget } from "@/lib/data-io-spec";
 import { toDateKey } from "@/lib/format";
+import { SheetAccessError, readSheetCsv, serviceAccount } from "@/lib/google/sheets";
 
 /* ================================================================== */
 /* 書き出し (CSV の行)                                                    */
@@ -370,11 +371,8 @@ function importInquiries(db: Database, user: User, body: string[][], idx: Record
 /* Google スプレッドシート                                                */
 /* ================================================================== */
 
-/**
- * 共有リンク (https://docs.google.com/spreadsheets/d/<ID>/edit#gid=<シート>) から CSV の URL を作る。
- * Google のアドレス以外は受け付けない (サーバーから任意の URL へ接続させないため)
- */
-export function sheetCsvUrl(link: string): { url: string; label: string } | null {
+/** 共有リンク (https://docs.google.com/spreadsheets/d/<ID>/edit#gid=<シート>) からスプレッドシートの ID とシート (gid。指定がなければ空) */
+export function parseSheetLink(link: string): { id: string; gid?: string } | null {
   let u: URL;
   try {
     u = new URL(link.trim());
@@ -384,16 +382,25 @@ export function sheetCsvUrl(link: string): { url: string; label: string } | null
   if (u.protocol !== "https:" || u.hostname !== "docs.google.com") return null;
   const m = u.pathname.match(/^\/spreadsheets\/d\/([a-zA-Z0-9_-]{20,})/);
   if (!m) return null;
-  const gid = (u.hash.match(/gid=(\d+)/) ?? u.search.match(/gid=(\d+)/))?.[1] ?? "0";
-  // 取得先は Google 固定 (SHEETS_EXPORT_BASE は検証用の差し替え。通常は設定しない)
-  const base = (process.env.SHEETS_EXPORT_BASE?.trim() || "https://docs.google.com").replace(/\/+$/, "");
-  return { url: `${base}/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`, label: `Google スプレッドシート (${m[1].slice(0, 8)}… シート ${gid})` };
+  const gid = (u.hash.match(/gid=(\d+)/) ?? u.search.match(/gid=(\d+)/))?.[1];
+  return { id: m[1], gid };
 }
 
-/** スプレッドシートを CSV として取得する (リンクを知っている全員が閲覧できる共有設定が必要) */
-export async function fetchSheetCsv(link: string): Promise<{ text: string; label: string }> {
-  const target = sheetCsvUrl(link);
-  if (!target) throw new Error("Google スプレッドシートの URL ではありません (https://docs.google.com/spreadsheets/d/… の形式)。");
+/**
+ * 共有リンクから CSV の URL を作る。
+ * Google のアドレス以外は受け付けない (サーバーから任意の URL へ接続させないため)
+ */
+export function sheetCsvUrl(link: string): { url: string; label: string } | null {
+  const p = parseSheetLink(link);
+  if (!p) return null;
+  const gid = p.gid ?? "0";
+  // 取得先は Google 固定 (SHEETS_EXPORT_BASE は検証用の差し替え。通常は設定しない)
+  const base = (process.env.SHEETS_EXPORT_BASE?.trim() || "https://docs.google.com").replace(/\/+$/, "");
+  return { url: `${base}/spreadsheets/d/${p.id}/export?format=csv&gid=${gid}`, label: `Google スプレッドシート (${p.id.slice(0, 8)}… シート ${gid})` };
+}
+
+/** リンクを知っている全員が閲覧できるシートを、公開の書き出し (CSV) で読む */
+async function fetchPublicSheetCsv(target: { url: string; label: string }): Promise<{ text: string; label: string }> {
   const res = await fetch(target.url, { redirect: "follow", signal: AbortSignal.timeout(20000), headers: { Accept: "text/csv" } });
   const type = res.headers.get("content-type") ?? "";
   if (res.status === 404) throw new Error("スプレッドシートが見つかりません。URL を確認してください。");
@@ -403,4 +410,40 @@ export async function fetchSheetCsv(link: string): Promise<{ text: string; label
   const buf = new Uint8Array(await res.arrayBuffer());
   if (buf.length > 4 * 1024 * 1024) throw new Error("シートが大きすぎます (4 MB まで)。シートを分けるか、行を絞ってください。");
   return { text: new TextDecoder("utf-8").decode(buf), label: target.label };
+}
+
+/**
+ * スプレッドシートを CSV として取得する。
+ * - サービスアカウント (GOOGLE_SERVICE_ACCOUNT_JSON / _FILE。src/lib/google/sheets.ts) があれば、非公開のシートも
+ *   サービスアカウントに共有してあれば読める。共有されていない (403・404) ときは、リンクの共有のシートとして読み直し、
+ *   それも読めなければ「サービスアカウントに共有してください」と伝える
+ * - なければ、リンクを知っている全員が閲覧できる共有設定のシートだけ (公開の書き出し)
+ */
+export async function fetchSheetCsv(link: string): Promise<{ text: string; label: string }> {
+  const target = sheetCsvUrl(link);
+  const p = parseSheetLink(link);
+  if (!target || !p) throw new Error("Google スプレッドシートの URL ではありません (https://docs.google.com/spreadsheets/d/… の形式)。");
+  const sa = serviceAccount();
+  if (!sa.account && !sa.error) return fetchPublicSheetCsv(target);
+  if (!sa.account) {
+    // 鍵の設定の誤り: リンクの共有のシートは読めるようにしておき、読めなければ鍵の誤りも伝える
+    try {
+      return await fetchPublicSheetCsv(target);
+    } catch (e) {
+      throw new Error(`サービスアカウントの鍵を読めません (${sa.error})。${(e as Error).message}`);
+    }
+  }
+  try {
+    const r = await readSheetCsv(p.id, p.gid);
+    return { text: r.text, label: r.label };
+  } catch (err) {
+    if (!(err instanceof SheetAccessError)) throw err;
+    // サービスアカウントに共有されていない: リンクの共有のシートならそのまま読める
+    try {
+      const r = await fetchPublicSheetCsv(target);
+      return { text: r.text, label: `${r.label}・リンクの共有で読み取り` };
+    } catch {
+      throw err;
+    }
+  }
 }

@@ -27,6 +27,7 @@ import {
   THREAD_KIND_LABEL,
 } from "@/lib/constants";
 import { AMOUNT_KEYS, AMOUNT_LABEL } from "@/lib/assistant/facts";
+import { MEDIA_LABEL } from "@/lib/media";
 
 /**
  * システムの全データの「統合データモデル」(AI アシスタントが正確に答えるための意味の層)
@@ -93,6 +94,8 @@ export function labelRows(): [string, string, string][] {
       ["individual", "個人"],
       ["corporate", "法人"],
     ],
+    // 媒体 (お客様が当社を知ったきっかけ。全社共通の分類 src/lib/media.ts)
+    media: labelOf(MEDIA_LABEL),
   };
   return Object.entries(kinds).flatMap(([kind, rows]) => rows.map(([code, label]) => [kind, code, label] as [string, string, string]));
 }
@@ -103,7 +106,7 @@ export function labelRows(): [string, string, string][] {
 export const CODE_COLUMNS: Record<string, Record<string, string>> = {
   orders: { status: "order_status", category: "category" },
   quotes: { status: "quote_status", category: "category" },
-  inquiries: { status: "inquiry_status", channel: "channel", category: "category" },
+  inquiries: { status: "inquiry_status", channel: "channel", category: "category", media: "media" },
   invoices: { status: "invoice_status" },
   payments: { method: "payment_method" },
   expenses: { status: "expense_status", payment_method: "expense_method" },
@@ -557,6 +560,9 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
     ...["customers", "inquiries", "quotes", "orders", "invoices", "cash_entries", "quality_issues", "survey_responses", "google_reviews", "attachments", "approvals", "documents", "purchase_orders", "photo_albums", "sales_orders", "sales_items"].map(byStore),
     // 予定の計画 (作業の内容・製造の予定・車両の予約・仮押さえ。src/lib/scheduling/access.ts と同じ: 自店舗)
     ...["job_specs", "production_jobs", "resource_bookings", "schedule_holds"].map(byStore),
+    // 作業日報の手入力 (permissions.ts の canViewWorkReport: 自店舗)・販促の記録 (canViewPromoAnalysis: 店長は自店舗、店舗スタッフは見ない)
+    byStore("work_report_days"),
+    manager ? byStore("promotions") : none("promotions"),
     v("payments", "select * from main.payments where invoice_id in (select id from main.invoices where store_id = " + store + ")"),
     v("order_staff", `select * from main.order_staff where order_id in (select order_id from main.sales_orders where store_id = ${store})`),
     // 経費: 店長は自店舗、店舗スタッフは自分の申請 / 仕入: 店長は自店舗 / 仕入先: 店長のみ
@@ -576,6 +582,8 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
     v("fax_messages", `select * from main.fax_messages where user_id = ${me} or assigned_user_id = ${me} or (store_id = ${store} and (direction = 'outbound' or triage in ('auto', 'accepted')))`),
     // 見せない表 (変更履歴・送信履歴・設定・資料台帳・FAX 番号・地図・検索の索引)
     ...["audit_logs", "deliveries", "settings", "source_files", "fax_numbers", "map_locations", "map_location_refs", "map_documents", "map_document_links", "search_docs", "_rowhash"].map(none),
+    // 慶弔リスト (ご家族の情報。permissions.ts の canViewCondolences。事務担当の店舗ロールも SQL では見せない)
+    none("condolences"),
     // 管理会計 (src/lib/mgmt/access.ts と同じ範囲): 店長は自店舗の行と設定・マスタ、店舗スタッフは品目・営業エリアだけ
     ...(manager
       ? [
@@ -588,6 +596,8 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
           ...["allocation_runs", "period_closes", "purchase_line_allocs"].map(none),
         ]
       : ["sales_adjustments", "material_usages", "mgmt_entries", "stock_moves", "order_attributions", "expense_classes", "allocation_runs", "period_closes", "purchase_line_allocs", "mgmt_rules", "materials", "material_costs", "boms"].map(none)),
+    // 有給・休日出勤 (permissions.ts の canViewLeaveOf と同じ): 店長は自店舗の社員、店舗スタッフは本人
+    ...["leave_requests", "leave_grants", "holiday_works"].map((t) => v(t, `select * from main.${t} where ${manager ? `user_id in (select id from main.users where store_id = ${store})` : `user_id = ${me}`}`)),
   ];
 }
 

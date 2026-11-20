@@ -17,6 +17,9 @@ import { NotifyPrefsForm } from "@/components/settings/NotifyPrefsForm";
 import { analyzeConflicts, compareEvents, overlapsRange, timeLabel } from "@/lib/calendar";
 import { ConflictBadge, KindBadge } from "@/components/schedule/parts";
 
+import { CalendarOff } from "lucide-react";
+import { compBalance, fmtDays, paidBalance } from "@/lib/hr/leave";
+
 export const metadata: Metadata = { title: "プロフィール" };
 
 export default async function ProfilePage({ searchParams }: { searchParams: Promise<{ msg?: string; err?: string }> }) {
@@ -226,6 +229,22 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
           </ul>
         </Card>
       </div>
+
+      {(() => {
+        const paid = paidBalance(db, user.id, today);
+        const comp = compBalance(db, user.id);
+        const pending = db.leaveRequests.filter((r) => r.userId === user.id && r.status === "pending").length;
+        return (
+          <Card className="mb-6">
+            <CardHeader title="有給・振休" description="残日数の確認と休暇の申請 (終日・午前・午後)。承認されると予定表に「休暇」として載ります" icon={<CalendarOff />} action={<Link href="/leave" className="text-xs font-medium text-accent hover:underline">休暇を申請する →</Link>} />
+            <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+              <span>有給の残 <span className="text-base font-semibold tnum">{fmtDays(paid.remaining)}</span>{paid.expiring.length > 0 && <span className="ml-1 text-xs text-warn-ink">({fmtDate(paid.expiring[0].expiresOn)} に {fmtDays(paid.expiring[0].days)} が期限)</span>}</span>
+              <span>振休の残り <span className={`text-base font-semibold tnum ${comp.overLimit ? "text-critical-ink" : ""}`}>{fmtDays(comp.remaining)}</span>{comp.overLimit && <span className="ml-1 text-xs text-critical-ink">(上限 {fmtDays(comp.limit)} を超えています)</span>}</span>
+              {pending > 0 && <span className="text-warn-ink">申請中 {pending} 件</span>}
+            </div>
+          </Card>
+        );
+      })()}
 
       <Card className="mb-6">
         <CardHeader title="最近のあなたの操作" description="登録・変更・承認はすべて変更履歴に記録されます" icon={<Users />} action={<Link href="/audit" className="text-xs font-medium text-accent hover:underline">変更履歴 →</Link>} />

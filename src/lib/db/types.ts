@@ -10,6 +10,12 @@ import type { AllocationRun, Bom, ExpenseClass, ItemCategory, Material, Material
 export type * from "./types-mgmt";
 import type { JobSpec, ProductionJob, ResourceBooking, ScheduleHold } from "./types-plan";
 export type * from "./types-plan";
+import type { HolidayWork, LeaveGrant, LeaveRequest } from "./types-hr";
+export type * from "./types-hr";
+import type { Condolence, OfficeImprovement } from "./types-office";
+export type * from "./types-office";
+import type { MediaKey, Promotion, WorkReportDay } from "./types-ops";
+export type * from "./types-ops";
 
 export type Role = "admin" | "store_manager" | "store_staff" | "hq_staff";
 
@@ -174,6 +180,13 @@ export interface Inquiry {
   source?: RecordSource;
   /** 取込元 (ファイル#シート!行) */
   sourceRef?: string;
+  /**
+   * 媒体 (お客様が当社を知ったきっかけ。全社共通の分類 src/lib/media.ts)。画面の登録・更新では必須 (わからなければ「不明」)。
+   * 移行・自動受付の問い合わせは空 (分析では見積・受注の媒体欄・顧客の媒体から対応表で読み替え、なければ「未分類」)
+   */
+  media?: MediaKey;
+  /** この問い合わせのきっかけになった販促 (チラシ・イベントなど。promotions) */
+  promotionId?: string;
 }
 
 export interface Product {
@@ -1509,6 +1522,16 @@ export interface Database {
   productionJobs: ProductionJob[];
   resourceBookings: ResourceBooking[];
   scheduleHolds: ScheduleHold[];
+  /* 有給・休日出勤 (types-hr.ts) */
+  leaveRequests: LeaveRequest[];
+  leaveGrants: LeaveGrant[];
+  holidayWorks: HolidayWork[];
+  /* 作業日報・販促の記録 (types-ops.ts) */
+  workReportDays: WorkReportDay[];
+  promotions: Promotion[];
+  /* 事務 (types-office.ts。事務改善シート・慶弔リスト) */
+  officeImprovements: OfficeImprovement[];
+  condolences: Condolence[];
 }
 
 export type CollectionName = Exclude<keyof Database, "meta">;

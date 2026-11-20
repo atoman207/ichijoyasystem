@@ -6,6 +6,7 @@ import { fmtDateTime, toDateKey } from "@/lib/format";
 import { KNOWLEDGE_CATEGORY_HINTS, KNOWLEDGE_VISIBILITY_LABEL, MINUTES_TEMPLATE, knowledgeSources, searchKnowledge } from "@/lib/knowledge";
 import { addKnowledgeSource, createKnowledge, importKnowledgeFile, removeKnowledgeSource, syncKnowledgeSource } from "@/lib/actions/knowledge";
 import { aiEnabled } from "@/lib/ai/provider";
+import { googleSheetsStatus } from "@/lib/google/sheets";
 import Link from "@/components/ui/Link";
 import { Badge, Button, Card, CardHeader, Field, Flash, Input, Note, PageHeader, Pager, Select, Textarea, paginate } from "@/components/ui";
 
@@ -108,7 +109,7 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Pr
             </Card>
           )}
           <Card>
-            <CardHeader title="Google スプレッドシートとの連携" description="指定したシートの内容を社内資料として取り込み、同期のたびにシートの内容に合わせます (追加・更新・削除)。シートは「リンクを知っている全員が閲覧できる」共有にしてください" />
+            <CardHeader title="Google スプレッドシートとの連携" description={`指定したシートの内容を社内資料として取り込み、同期のたびにシートの内容に合わせます (追加・更新・削除)。${googleSheetsStatus().email ? `シートは「共有」でサービスアカウント ${googleSheetsStatus().email} を閲覧者に追加する (非公開のまま) か、` : "シートは"}「リンクを知っている全員が閲覧できる」共有にしてください`} />
             {sources.length === 0 && <p className="text-xs text-ink-3">登録されたシートはありません。</p>}
             <ul className="space-y-2">
               {sources.map((s) => (

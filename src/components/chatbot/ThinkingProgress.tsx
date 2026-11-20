@@ -34,6 +34,7 @@ export const newProgress = (): ProgressState => ({ startedAt: Date.now(), phase:
 /** 途中の知らせを表示の状態に重ねる */
 export function applyProgress(s: ProgressState, e: AgentProgress): ProgressState {
   if (e.type === "phase") return { ...s, live: true, phase: e.phase, phaseLabel: e.label };
+  if (e.type !== "tool") return s;
   const i = s.steps.findIndex((x) => x.id === e.id);
   const step: ProgressStep = { id: e.id, name: e.name, label: e.label, status: e.status === "done" ? "done" : "running", summary: e.summary };
   const steps = i >= 0 ? s.steps.map((x, k) => (k === i ? { ...x, ...step } : x)) : [...s.steps, step];
@@ -99,7 +100,8 @@ export const fmtSeconds = (ms: number) => `${(ms / 1000).toFixed(1)} 秒`;
 
 /* ---------------- 表示 ---------------- */
 
-export function ThinkingProgress({ state, guest = false, className }: { state: ProgressState; guest?: boolean; className?: string }) {
+/** compact: 回答の文字が届きはじめたあとの 1 行の表示 (経過時間だけ) */
+export function ThinkingProgress({ state, guest = false, className, compact = false }: { state: ProgressState; guest?: boolean; className?: string; compact?: boolean }) {
   const [now, setNow] = useState(() => Date.now());
   const [expected] = useState(expectedAnswerMs);
   useEffect(() => {
@@ -110,6 +112,15 @@ export function ThinkingProgress({ state, guest = false, className }: { state: P
   const ratio = Math.min(0.94, 1 - Math.exp(-ms / Math.max(1500, expected * 0.9)));
   const stage = stageOf(state);
   const running = state.steps.filter((x) => x.status === "running");
+  if (compact) {
+    return (
+      <p className={clsx("flex items-center gap-1.5 px-1 text-[11px] text-ink-3", className)} role="status" aria-live="polite">
+        <Loader2 className="h-3 w-3 animate-spin text-accent motion-reduce:animate-none" aria-hidden />
+        {state.phase === "checking" ? "数字と根拠を確かめています" : "回答を書いています"}
+        <span className="font-mono tabular-nums text-accent-ink">{fmtSeconds(ms)}</span>
+      </p>
+    );
+  }
   const headline = running.length ? `${running.map((x) => x.label).join("・")}しています` : state.steps.length && state.phase !== "checking" ? "結果を読んで回答をまとめています" : guest ? "回答を考えています" : state.phaseLabel;
 
   return (

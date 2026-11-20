@@ -8,7 +8,12 @@ import { ROLE_LABEL, APPROVAL_TYPE_LABEL } from "@/lib/constants";
 import { AppShell, type NavItem, type NotificationItem } from "@/components/layout/AppShell";
 import { logout } from "@/lib/actions/auth";
 import { canViewMgmt } from "@/lib/mgmt/access";
+import { canViewPromoAnalysis } from "@/lib/auth/permissions";
 import { yen } from "@/lib/format";
+import { canApproveLeave } from "@/lib/auth/permissions";
+import { canManageHeriStock } from "@/lib/auth/permissions";
+import { officeCtx } from "@/lib/office";
+import { heriBelow } from "@/lib/heri-stock";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +28,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const faxReview = canTriageFax(user) ? faxes.filter((f) => f.direction === "inbound" && f.triage === "review").length : 0;
   const faxReplies = faxes.filter((f) => f.direction === "inbound" && f.assignedUserId === user.id && f.purchaseOrderId && !f.checkedAt && (f.triage === "auto" || f.triage === "accepted") && canViewFax(user, f)).length;
   const faxFailed = faxes.filter((f) => f.direction === "outbound" && f.userId === user.id && (f.status === "failed" || f.status === "unknown") && !f.nextRetryAt).length;
+  // 休暇の申請 (承認できる人: 店長は自店舗の社員、管理者は全員。src/lib/hr)
+  const leavePending = (getDb().leaveRequests ?? []).filter((r) => r.status === "pending" && canApproveLeave(user, r));
 
   // short: ヘッダーのタブに表示する短い名前 (正式名はツールチップに表示)
   const nav: NavItem[] = [
@@ -33,6 +40,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     { href: "/orders", label: "受注・施工", icon: "orders", group: "営業・施工" },
     { href: "/cases", label: "案件の進捗 (問い合わせ〜入金・全処理完了)", short: "案件進捗", icon: "cases", group: "営業・施工" },
     { href: "/schedule", label: "予定表", icon: "schedule", group: "営業・施工", badge: n.myConflicts || undefined, pinned: true },
+    { href: "/work-reports", label: "作業日報 (引取・納品の件数・枚数の月次集計)", short: "作業日報", icon: "workReport", group: "営業・施工" },
     { href: "/invoices", label: "請求・入金", icon: "invoices", group: "経理", badge: n.overdueInvoices || undefined },
     { href: "/finance", label: "入出金の予定 (未入金・支払待ち)", short: "入出金予定", icon: "finance", group: "経理" },
     { href: "/expenses", label: "経費精算", icon: "expenses", group: "経理" },
@@ -58,9 +66,17 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     { href: "/knowledge", label: "社内資料 (ナレッジ・AI の回答の根拠)", short: "社内資料", icon: "knowledge", group: "業務支援" },
     { href: "/materials", label: "資料・写真", icon: "materials", group: "業務支援" },
   );
+  nav.push({ href: "/leave", label: "有給・休日出勤 (休暇の申請・承認・振休・年度の取得状況)", short: "有給・休暇", icon: "leave", group: "業務支援", badge: leavePending.length || undefined });
+  // 事務 (事務改善シート・慶弔リスト) と縁在庫。縁在庫のバッジ = 共通在庫が規定量を下回った品番の数 (事務担当・本部・管理者・店長)
+  const heriBadge = canManageHeriStock(user, officeCtx(getDb())) || user.role === "store_manager" ? heriBelow(getDb()).length : 0;
+  nav.push({ href: "/office", label: "事務 (事務改善シート・慶弔リスト)", short: "事務", icon: "office", group: "業務支援" });
+  nav.push({ href: "/heri", label: "縁在庫 (品番 × 場所の数量・入庫・振り分け・使用・棚卸)", short: "縁在庫", icon: "heri", group: "業務支援", badge: heriBadge || undefined });
   nav.push({ href: "/kpi", label: "KPI (アンケート・クレーム・口コミ・インセンティブ)", short: "KPI", icon: "kpi", group: "管理" });
   if (canViewReports(user)) {
     nav.push({ href: "/reports", label: "経営ダッシュボード (売上・受注・施工・請求・経費)", short: "経営", icon: "reports", group: "管理" });
+  }
+  if (canViewPromoAnalysis(user)) {
+    nav.push({ href: "/promotions", label: "販促と媒体の分析 (チラシ・イベント・DM の反応)", short: "販促分析", icon: "promotions", group: "管理" });
   }
   if (canViewMgmt(user)) {
     nav.push({ href: "/management", label: "管理会計 (店舗別損益・内部受注・材料原価・在庫・共通経費の案分)", short: "管理会計", icon: "management", group: "管理" });
@@ -117,6 +133,10 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   }
   if (faxFailed > 0) {
     notifications.push({ kind: "fax", title: `FAX の送信に失敗 ${faxFailed} 件`, detail: "理由を確認して再送してください", href: "/fax?tab=outbox" });
+  }
+  if (leavePending.length > 0) {
+    const nameOf = (id: string) => getDb().users.find((u) => u.id === id)?.name ?? "";
+    notifications.push({ kind: "approval", title: `休暇の申請 ${leavePending.length} 件`, detail: `${leavePending.slice(0, 3).map((r) => `${nameOf(r.userId)} ${r.date.slice(5).replace("-", "/")}`).join("・")}${leavePending.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/leave?tab=approve" });
   }
   if (signups.length > 0) {
     notifications.push({ kind: "signup", title: `新規登録の申請 ${signups.length} 件`, detail: `${signups.slice(0, 3).map((u) => `${u.name} (${ROLE_LABEL[u.role]})`).join("・")}${signups.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/staff#signups" });

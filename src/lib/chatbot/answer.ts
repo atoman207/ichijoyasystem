@@ -6,6 +6,8 @@ import { extractTerms, searchRecords } from "@/lib/ai/search";
 import { ensureChatbotData } from "./build";
 import { countHit, findSimilarQa, insertChatLog, insertQa, logAsk, recentAiAsks, normalizeQuestion, searchDocs, type AskSource, type ChatLogPayload, type DocRow, type QaLink, type QaMatch } from "./store";
 import { runAgent, type AgentProgress, type AgentSource } from "@/lib/assistant/agent";
+import type { ProposedAction } from "@/lib/assistant/actions";
+import { assistantReadUser } from "@/lib/assistant/scope";
 import { runAnalysis, type AnalysisResult, type AnalysisSpec } from "@/lib/assistant/analyze";
 import { ANALYSIS_WORDS, heuristicSpec, refineSpec } from "@/lib/assistant/intent";
 import { yen } from "@/lib/format";
@@ -55,6 +57,8 @@ export interface BotReply {
   logId?: number;
   /** 回答の確かめの結果 (guard.ts。画面には出さず、履歴と精度の評価に使う) */
   checks?: AnswerChecks;
+  /** 実行の確認のカード (押すと /api/assistant/action で実行。src/lib/assistant/actions.ts) */
+  actions?: ProposedAction[];
   /** AI の接続先とモデル */
   provider?: string;
   /** AI を使わなかった理由 (予算の上限・障害) */
@@ -89,9 +93,10 @@ function dataReply(db: Database, user: User, q: string): string | undefined {
   // 顧客・案件の検索は、敬称つきの名前・番号・電話番号・「」の言葉があるときだけ (画面の名前が顧客名の一部に当たらないように)
   const t = extractTerms(q);
   if (t.names.length || t.numbers.length || t.phones.length || (t.words.length && !howTo)) {
-    if (searchRecords(db, user, q).context) return rulesAnswer(db, user, q);
+    const reader = assistantReadUser(db, user);
+    if (searchRecords(db, reader, q).context) return rulesAnswer(db, reader, q);
   }
-  if (DATA.test(q) && !howTo) return rulesAnswer(db, user, q);
+  if (DATA.test(q) && !howTo) return rulesAnswer(db, assistantReadUser(db, user), q);
   return undefined;
 }
 
@@ -243,7 +248,7 @@ async function answerQuestion(db: Database, user: User | null, history: ChatTurn
       if (!r.usedData && !r.usedKnowledge && !r.unknown && !followUp && r.docKeys.length && norm.length >= 3 && !opts.evaluation && !r.checks?.issues.some((i) => i.severity !== "low")) {
         qaId = insertQa({ question: q, answer: r.answer, links, origin: "ai", role, sourceKeys: [...new Set(r.docKeys)].slice(0, 3) });
       }
-      return done({ answer: r.answer, links: r.tables.length || r.usedData ? [] : links, source: r.usedData ? "agent" : r.unknown ? "none" : "ai", qaId, suggestions: [], tables: r.tables, sources: r.sources, tools: r.tools, checks: r.checks, provider: r.provider });
+      return done({ answer: r.answer, links: r.tables.length || r.usedData ? [] : links, source: r.usedData ? "agent" : r.unknown ? "none" : "ai", qaId, suggestions: [], tables: r.tables, sources: r.sources, tools: r.tools, checks: r.checks, provider: r.provider, actions: r.actions?.length ? r.actions : undefined });
     } catch (err) {
       console.warn("[chatbot] agent failed:", err instanceof AiError ? `${err.code} ${err.detail ?? ""}` : (err as Error).message);
       degraded = "error";
@@ -256,7 +261,7 @@ async function answerQuestion(db: Database, user: User | null, history: ChatTurn
     const prevSpec = history.at(-1)?.role === "assistant" ? history.at(-1)?.specs?.[0] : undefined;
     const spec = heuristicSpec(db, q) ?? (prevSpec && !howTo ? refineSpec(db, prevSpec, q) : null);
     if (spec) {
-      const r = runAnalysis(db, user, spec);
+      const r = runAnalysis(db, assistantReadUser(db, user), spec);
       if (r.ok) return done({ answer: `${degradedNote()}${analysisReply(r)}`, links: [{ label: "経営ダッシュボード", href: "/reports" }], source: "analysis", suggestions: [], tables: [r], sources: [{ label: r.title, kind: "集計" }], degraded });
     }
     const data = dataReply(db, user, q);

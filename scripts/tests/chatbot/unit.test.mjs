@@ -434,6 +434,40 @@ section("予測の道具 (forecast): 過去の実績から決まった方法で�
   ok(st.ok && stAll.ok && stAll.rows.length <= 1, "店舗スタッフの予測は自店舗の実績だけで計算する (analyze と同じ閲覧範囲)");
 }
 
+section("店舗間の仕事の依頼 (内部受注) の売上の配分");
+{
+  const SP = await imp("lib/assistant/store-split.ts");
+  const p = (q) => SP.parseStoreSplitQuestion(db, q);
+  eq(p("合志店から中央店に20万円の通常工事を依頼した場合、それぞれの店舗にいくらの売上が計上されますか？"), { fromStore: "koshi", toStore: "chuo", amount: 200000, workKind: "normal" }, "「A から B に依頼」を読む");
+  eq(p("中央店が施工した合志店の仕事 30万円 の売上配分は？")?.fromStore, "koshi", "「B が施工した A の仕事」は A が依頼した店舗");
+  eq(p("西店に玉名店から税抜10万円のリフォームを頼んだら売上はいくら？"), { fromStore: "tamana", toStore: "nishi", amount: 100000, workKind: "reform", taxIncluded: false }, "「B に A から」・税抜・リフォームを読む");
+  eq(p("合志店の今年の売上はいくら？"), undefined, "店舗が 1 つだけの質問は対象外");
+  eq(p("合志店と中央店の売上を比べて"), undefined, "依頼・施工の言葉がない比較の質問は対象外");
+  const r = SP.simulateStoreSplit(db, admin, { fromStore: "合志", toStore: "中央店", amount: 200000 });
+  ok(r.ok, "計算できる");
+  eq(r.table.rows.map((x) => [x.ext, x.adj, x.mgmt]), [[0, 40000, 40000], [200000, -40000, 160000]], "合志店 (依頼) 40,000 円・中央店 (施工) 160,000 円 (税込 200,000 × 20% 切り捨て)");
+  eq([r.table.total.ext, r.table.total.adj, r.table.total.mgmt], [200000, 0, 200000], "合計は 200,000 円のまま (二重に数えない)");
+  const odd = SP.simulateStoreSplit(db, admin, { fromStore: "koshi", toStore: "chuo", amount: 199999 });
+  eq(odd.table.rows[0].mgmt, 39999, "配分額の端数は切り捨て (199,999 × 20% = 39,999.8 → 39,999)");
+  const ex = SP.simulateStoreSplit(db, admin, { fromStore: "tamana", toStore: "nishi", amount: 100000, workKind: "reform", taxIncluded: false });
+  eq(ex.table.rows.map((x) => x.mgmt), [5500, 104500], "税抜 100,000 → 税込 110,000 × 5% (リフォーム) = 5,500 円");
+  ok(ex.table.notes.some((n) => n.includes("暫定")), "リフォームの配分率は暫定の設定であることを書く");
+  const same = SP.simulateStoreSplit(db, admin, { fromStore: "koshi", toStore: "koshi", amount: 50000 });
+  eq(same.table.rows.map((x) => x.mgmt), [50000], "同じ店舗なら配分なし");
+  const st = SP.simulateStoreSplit(db, staff, { fromStore: "koshi", toStore: "chuo", amount: 200000 });
+  ok(!st.ok && st.error.includes("店長"), "店舗スタッフは見られない (管理会計と同じ権限)");
+  const mgr = SP.simulateStoreSplit(db, db.users.find((u) => u.role === "store_manager" && u.active), { fromStore: "koshi", toStore: "chuo", amount: 200000 });
+  ok(mgr.ok, "店長は計算できる");
+}
+
+section("回答の確かめ: 質問に書かれた数字で計算した回答は「データを調べていない」としない");
+{
+  const ctx = { question: "合志店から中央店に20万円の工事を依頼したら？", usedData: false, dataQuestion: true, writeRequest: false };
+  eq(G.checkAnswer("依頼の金額は 200,000円 です。", G.buildEvidence([ctx.question]), ctx).filter((i) => i.kind === "no_evidence"), [], "質問の数字 (20 万円) をそのまま使うのは問題なし");
+  ok(G.checkAnswer("中央店の今年の売上は 3,000,000円 です。", G.buildEvidence([ctx.question]), ctx).some((i) => i.kind === "no_evidence"), "質問にない数字を調べずに書いたら no_evidence");
+  ok(G.applyFixes("x", [{ kind: "no_evidence", detail: "", severity: "high" }]).text.includes("システムの記録を調べて出したものではありません"), "注記は社員に分かる言葉");
+}
+
 section("データの品質");
 {
   const checks = DQ.dataQualityChecks(db);

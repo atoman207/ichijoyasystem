@@ -9,6 +9,7 @@ import { userName } from "@/lib/db/queries";
 import { AUDIT_ACTION_LABEL } from "@/lib/constants";
 import { Badge, Card, CardHeader, Note, PageHeader, Select } from "@/components/ui";
 import { ImportWizard } from "@/components/features/ImportWizard";
+import { googleSheetsStatus } from "@/lib/google/sheets";
 import { SalesLedgerImport } from "@/components/features/SalesLedgerImport";
 
 export const metadata: Metadata = { title: "データ入出力" };
@@ -48,7 +49,7 @@ export default async function DataIoPage({ searchParams }: { searchParams: Promi
         <div className="space-y-4 @4xl:col-span-2">
           <Card>
             <CardHeader title="取り込む (CSV・Google スプレッドシート)" icon={<FileSpreadsheet />} description="内容を確認してから取り込みます。確認の段階ではデータは変わりません" />
-            {canImportData(user) ? <ImportWizard /> : <Note>取込は管理者・本部スタッフが行います。</Note>}
+            {canImportData(user) ? <ImportWizard serviceAccountEmail={googleSheetsStatus().email} /> : <Note>取込は管理者・本部スタッフが行います。</Note>}
           </Card>
 
           <Card>
@@ -120,9 +121,9 @@ export default async function DataIoPage({ searchParams }: { searchParams: Promi
           <Card>
             <CardHeader title="Google スプレッドシートとの連携" />
             <ul className="list-disc space-y-2 pl-4 text-xs leading-relaxed text-ink-2">
-              <li><span className="font-medium text-ink">シート → システム:</span> 左の「取り込む」で Google スプレッドシートを選び、シートの URL を貼り付けます。共有設定は「リンクを知っている全員 (閲覧者)」が必要です。</li>
+              <li><span className="font-medium text-ink">シート → システム:</span> 左の「取り込む」で Google スプレッドシートを選び、シートの URL を貼り付けます。共有設定は「リンクを知っている全員 (閲覧者)」か、サービスアカウントへの共有 (設定されているとき) が必要です。</li>
               <li><span className="font-medium text-ink">システム → シート:</span> CSV を書き出し、Google スプレッドシートの「ファイル → インポート → アップロード」で読み込みます。</li>
-              <li>非公開のシートを直接読み書きする連携 (Google のサービスアカウント) は、アカウントの準備後に設定します。</li>
+              <li>{googleSheetsStatus().email ? <>非公開のシートは、シートの「共有」でサービスアカウント <span className="font-mono">{googleSheetsStatus().email}</span> を「閲覧者」に追加すると直接読めます (読み取りのみ)。</> : "非公開のシートを直接読む連携 (Google のサービスアカウント) は、鍵を GOOGLE_SERVICE_ACCOUNT_JSON に設定すると使えます (設定 → 外部連携・AI)。"}</li>
             </ul>
           </Card>
 

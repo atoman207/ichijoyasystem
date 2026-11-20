@@ -16,7 +16,7 @@ import type { Outgoing } from "./send";
  * 画面のヘッダーの通知 (お知らせ) は従来どおり常に表示する
  */
 
-export type NotifyEvent = "approval_request" | "approval_result" | "mention" | "task" | "schedule_hold";
+export type NotifyEvent = "approval_request" | "approval_result" | "mention" | "task" | "schedule_hold" | "leave";
 
 export const NOTIFY_EVENT_LABEL: Record<NotifyEvent, string> = {
   approval_request: "承認の依頼 (承認者へ)",
@@ -24,6 +24,7 @@ export const NOTIFY_EVENT_LABEL: Record<NotifyEvent, string> = {
   mention: "社内連絡のメンション",
   task: "業務依頼 (依頼・確認・報告・完了)",
   schedule_hold: "予定の仮押さえ (担当者へ確認の依頼・お客様が選んだ候補)",
+  leave: "休暇の申請 (承認者へ) と承認・却下の結果 (本人へ)",
 };
 
 export interface NotifySettings {
@@ -158,4 +159,32 @@ export function scheduleHoldNotices(db: Database, holds: { id: string; title: st
       ? `${nameOf(db, actorId)} さんが予定を仮押さえしました。行けるかどうかを画面で返事してください。\n${holds.map(when).join("\n")}`
       : `お客様が日程の候補から選びました。内容を確かめて予定を確定してください。\n${holds.map(when).join("\n")}${note ? `\nお客様のメモ: ${note.slice(0, 500)}` : ""}`;
   return build(db, "schedule_hold", to, subject, body, `/schedule/planning?tab=holds`, {});
+}
+
+/* ---------------- 有給・休日出勤 (src/lib/hr) ---------------- */
+
+type LeaveNotice = { id: string; number: string; userId: string; storeId: string; requestedBy: string; status: string; date: string; endDate?: string; slot: string; days: number; reason?: string; decidedBy?: string; decisionComment?: string; leaveType: string };
+const LEAVE_KIND: Record<string, string> = { paid: "有給休暇", comp: "振休", special: "特別休暇" };
+const leaveWhen = (r: LeaveNotice) => `${r.date}${r.endDate && r.endDate > r.date ? `〜${r.endDate}` : ""}${r.slot === "am" ? " 午前" : r.slot === "pm" ? " 午後" : ""} (${r.days} 日)`;
+
+/** 休暇の申請を承認できる人: その店舗の店長 (本人を除く)。いなければ管理者 */
+function leaveApprovers(db: Database, r: LeaveNotice): User[] {
+  const requester = db.users.find((u) => u.id === r.userId);
+  const demo = requester ? isDemoAccount(requester) : false;
+  const ok = (u: User) => u.active && u.id !== r.userId && !isReviewAccount(u) && isDemoAccount(u) === demo;
+  const managers = db.users.filter((u) => ok(u) && u.role === "store_manager" && u.storeId === r.storeId);
+  return managers.length ? managers : db.users.filter((u) => ok(u) && u.role === "admin");
+}
+
+/** 休暇の申請 (承認者へ) */
+export function leaveRequestNotices(db: Database, r: LeaveNotice): Outgoing[] {
+  const by = r.requestedBy !== r.userId ? ` (${nameOf(db, r.requestedBy)} さんが代理で登録)` : "";
+  return build(db, "leave", leaveApprovers(db, r), `休暇の申請: ${nameOf(db, r.userId)} ${LEAVE_KIND[r.leaveType] ?? ""}`, `${nameOf(db, r.userId)} さんから休暇の申請があります${by}。\n種類: ${LEAVE_KIND[r.leaveType] ?? r.leaveType}\n日付: ${leaveWhen(r)}${r.reason ? `\n理由: ${r.reason}` : ""}\n承認すると予定表に「休暇」として登録されます。`, "/leave?tab=approve", {});
+}
+
+/** 承認・却下の結果 (本人と、代理で登録した人へ) */
+export function leaveResultNotices(db: Database, r: LeaveNotice): Outgoing[] {
+  const to = db.users.filter((u) => (u.id === r.userId || u.id === r.requestedBy) && u.id !== r.decidedBy);
+  const label = r.status === "approved" ? "承認" : r.status === "rejected" ? "却下" : r.status;
+  return build(db, "leave", to, `休暇の${label}: ${LEAVE_KIND[r.leaveType] ?? ""} ${r.date}`, `休暇の申請が「${label}」になりました (${nameOf(db, r.decidedBy)} さん)。\n種類: ${LEAVE_KIND[r.leaveType] ?? r.leaveType}\n日付: ${leaveWhen(r)}${r.decisionComment ? `\nコメント: ${r.decisionComment}` : ""}`, "/leave", {});
 }

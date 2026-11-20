@@ -16,6 +16,8 @@ import { findDuplicateCustomers } from "@/lib/duplicates";
 import { AiSummary } from "@/components/features/AiSummary";
 import { contactLabel, phoneDigits } from "@/lib/customer-contacts";
 import { MapInfoCard } from "@/components/maps/MapInfoCard";
+import { customerMedia, mediaIndex } from "@/lib/media";
+import { MediaTag } from "@/components/ops-reports/MediaFields";
 
 export default async function CustomerDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -36,6 +38,8 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
   const pendingChange = changeApprovals.find((a) => a.status === "pending");
   const returnTo = `/customers/${c.id}`;
   const billed = t.invoices.filter((i) => i.status !== "void");
+  // 媒体 (当社を知ったきっかけ。全社共通の分類): 最初の問い合わせ > 顧客の媒体 (販売管理ソフト) > 初回接点 (src/lib/media.ts)
+  const media = customerMedia(mediaIndex(db), c, db.inquiries.filter((i) => i.customerId === c.id));
 
   return (
     <div>
@@ -100,6 +104,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
                 ["LINE", c.lineId ?? "未登録"],
                 ["希望する連絡手段", CHANNEL_LABEL[c.preferredChannel]],
                 ["初回接点", CHANNEL_LABEL[c.firstContactChannel]],
+                ["媒体 (当社を知ったきっかけ)", <MediaTag key="m" {...media} />],
                 ["住所", `〒${c.postalCode} ${c.address}`],
                 ["担当店舗", <StoreTag key="s" store={store} />],
                 ["備考", c.notes || "-"],

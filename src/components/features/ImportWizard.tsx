@@ -18,7 +18,8 @@ const STATUS: Record<RowStatus, { label: string; cls: string }> = {
 const SHOW = 300;
 
 /** CSV ファイル・Google スプレッドシートからの取込 (確認 → 実行) */
-export function ImportWizard() {
+/** serviceAccountEmail: Google のサービスアカウント (設定されていれば、そのアドレスに共有した非公開のシートも読める) */
+export function ImportWizard({ serviceAccountEmail }: { serviceAccountEmail?: string } = {}) {
   const [target, setTarget] = useState<ImportTarget>("customers");
   const [source, setSource] = useState<"file" | "sheet">("file");
   const [sheetUrl, setSheetUrl] = useState("");
@@ -127,7 +128,7 @@ export function ImportWizard() {
             <div className="mt-2 flex flex-wrap gap-2">
               <input value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=0" className="field min-w-0 flex-1 basis-64" aria-label="スプレッドシートの URL" />
               <button type="button" onClick={onSheet} disabled={pending || !sheetUrl.trim()} className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-line bg-panel px-4 text-sm font-medium hover:bg-subtle disabled:opacity-50"><Link2 className="h-4 w-4" aria-hidden />読み込む</button>
-              <p className="w-full text-[11px] text-ink-3">シートの共有設定を「リンクを知っている全員 (閲覧者)」にして、ブラウザのアドレス欄の URL を貼り付けます。開いているシート (gid) を読み込みます。</p>
+              <p className="w-full text-[11px] text-ink-3">{serviceAccountEmail ? <>シートの「共有」で {serviceAccountEmail} を「閲覧者」に追加する (非公開のまま) か、共有設定を「リンクを知っている全員 (閲覧者)」にして、</> : "シートの共有設定を「リンクを知っている全員 (閲覧者)」にして、"}ブラウザのアドレス欄の URL を貼り付けます。開いているシート (gid) を読み込みます。</p>
             </div>
           )}
         </fieldset>

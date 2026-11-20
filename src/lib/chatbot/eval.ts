@@ -490,6 +490,9 @@ const TOOL_NAMES: [RegExp, string][] = [
   [/^仮押さえ/, "schedule_holds"],
   [/^提案の準備の状況/, "schedule_setup"],
   [/^管理会計/, "management_accounting"],
+  [/^計算/, "calculate"],
+  [/^予測/, "forecast"],
+  [/^店舗間の売上の配分/, "store_split"],
 ];
 export const toolNameOf = (label: string) => TOOL_NAMES.find(([re]) => re.test(label))?.[1] ?? label;
 

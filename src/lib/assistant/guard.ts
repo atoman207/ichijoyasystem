@@ -167,6 +167,8 @@ function claimsAction(answer: string): boolean {
   // 記録の説明 (「○○さんが 4 月 3 日に承認しました」) と区別するため、人の名前・日付が主語のものは除く
   for (const line of answer.split(/\n|。/)) {
     if (!ACTION_DONE.test(line)) continue;
+    // 実行の確認のカードの説明 (「確認のカードを作成しました」「『実行する』を押すと登録されます」) は実行の主張ではない
+    if (/カード|を押して|を押すと|押してください/.test(line)) continue;
     if (/(さん|様|氏|店長|社長|担当者|担当|お客様)(が|は)|\d+月\d+日|\d{4}-\d{2}-\d{2}|記録|履歴|によると|されています|されました/.test(line)) continue;
     return true;
   }
@@ -174,7 +176,7 @@ function claimsAction(answer: string): boolean {
 }
 
 export const ACTION_REFUSAL =
-  "この AI アシスタントは、登録・変更・削除・承認・送信を行うことはできません (データを変えずに調べて答えるだけです)。お手数ですが、該当する画面で操作してください。手順が分からないときは「○○の登録の仕方は？」のように聞いていただければ、画面とボタンの順にご案内します。";
+  "この AI アシスタントは、自分ではデータを変えません。予定の登録・変更・削除、問い合わせの登録・状態の変更、受注の進捗の記録、社内連絡・業務依頼、承認・差戻し・却下は、内容を確認のカードで確かめて「実行する」を押すと実行できます (例: 「来週火曜の 10 時に○○様の引取を入れて」)。それ以外の操作は該当する画面で行ってください。手順が分からないときは「○○の登録の仕方は？」のように聞いていただければ、画面とボタンの順にご案内します。";
 
 /* ================================================================== */
 /* リンク・画面の名前                                                       */
@@ -218,6 +220,11 @@ export const NAV_ITEMS: { href: string; label: string; short?: string }[] = [
   { href: "/audit", label: "変更履歴" },
   { href: "/settings", label: "設定", short: "設定" },
   { href: "/help", label: "使い方 (操作説明)", short: "使い方" },
+  { href: "/leave", label: "有給・休日出勤 (休暇の申請・承認・振休・年度の取得状況)", short: "有給・休暇" },
+  { href: "/office", label: "事務 (事務改善シート・慶弔リスト)", short: "事務" },
+  { href: "/heri", label: "縁在庫 (品番 × 場所の数量・入庫・振り分け・使用・棚卸)", short: "縁在庫" },
+  { href: "/work-reports", label: "作業日報 (引取・納品の件数・枚数の月次集計)", short: "作業日報" },
+  { href: "/promotions", label: "販促と媒体の分析 (チラシ・イベント・DM の反応)", short: "販促分析" },
 ];
 
 /** (app) の外の画面・メニューの画面 (画面の一覧に入らないもの) */
@@ -297,8 +304,9 @@ export function checkAnswer(answer: string, ev: Evidence, ctx: CheckContext): An
   const nums = extractNumbers(answer);
   const facts = nums.filter((n) => n.unit !== "plain" || n.value >= 1000);
 
-  // データの質問なのに、データを調べずに数字で答えた
-  if (ctx.dataQuestion && !ctx.usedData && facts.some((n) => n.unit === "yen" || n.unit === "count")) {
+  // データの質問なのに、データを調べずに数字で答えた (質問に書かれた数字 (「20 万円の工事なら」) をそのまま使うのは除く)
+  const asked = extractNumbers(ctx.question).map((n) => n.value);
+  if (ctx.dataQuestion && !ctx.usedData && facts.some((n) => (n.unit === "yen" || n.unit === "count") && !numberGrounded(n, asked))) {
     issues.push({ kind: "no_evidence", detail: "データの道具を使わずに数字を答えています", severity: "high" });
   }
   // 数字の根拠
@@ -380,7 +388,7 @@ export function applyFixes(answer: string, issues: AnswerIssue[]): { text: strin
   const nums = issues.filter((i) => i.kind === "number" && i.severity === "high").map((i) => i.detail);
   const noEv = issues.some((i) => i.kind === "no_evidence");
   if (noEv || nums.length) {
-    text = `${text}\n\n※ ${noEv ? "この回答はシステムのデータで確かめられていません" : `${nums.slice(0, 3).join("・")} はシステムの集計で確かめられませんでした`}。元の画面 (経営ダッシュボード・各一覧) でご確認ください。`;
+    text = `${text}\n\n※ ${noEv ? "この回答の金額・件数は、システムの記録を調べて出したものではありません" : `${nums.slice(0, 3).join("・")} は、システムの記録で確かめられなかった数字です`}。正確な数字は元の画面で確かめてください。`;
     fixed.push(noEv ? "データで確かめられていない回答に注記を付けました" : `確かめられない数字 (${nums.join("・")}) に注記を付けました`);
   }
   return { text, fixed };

@@ -41,17 +41,37 @@ export async function POST(req: Request) {
         }
       };
       const t0 = Date.now();
+      // 回答の文字は 40ms ごとにまとめて送る (1 文字ずつの行を減らす)。ほかの知らせの前には必ず送り切る (順番を保つ)
+      let pendingText = "";
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const flushText = () => {
+        if (timer) clearTimeout(timer);
+        timer = undefined;
+        if (!pendingText) return;
+        send({ type: "progress", event: { type: "text", delta: pendingText }, ms: Date.now() - t0 });
+        pendingText = "";
+      };
+      const onProgress = (event: AgentProgress) => {
+        if (event.type === "text") {
+          pendingText += event.delta;
+          timer ??= setTimeout(flushText, 40);
+          return;
+        }
+        flushText();
+        send({ type: "progress", event, ms: Date.now() - t0 });
+      };
       send({ type: "progress", event: { type: "phase", phase: "thinking", label: "質問を受け付けました" }, ms: 0 });
       let reply: BotReply;
       if (!q) reply = { answer: "質問を入力してください。", links: [], source: "none", suggestions: [] };
       else {
         try {
-          reply = await askChatbot(db, user, turns, q, { convId, voice: body.voice === true, onProgress: (event: AgentProgress) => send({ type: "progress", event, ms: Date.now() - t0 }) });
+          reply = await askChatbot(db, user, turns, q, { convId, voice: body.voice === true, onProgress });
         } catch (err) {
           console.error("[chatbot] failed:", err);
           reply = { answer: "ごめんなさい、いま回答を用意できませんでした。少し時間をおいてもう一度お試しください。", links: [], source: "none", suggestions: [] };
         }
       }
+      flushText();
       send({ type: "done", reply, ms: Date.now() - t0 });
       closed = true;
       controller.close();

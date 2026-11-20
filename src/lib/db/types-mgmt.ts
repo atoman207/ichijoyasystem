@@ -140,6 +140,14 @@ export interface Material {
   supplierCode?: string;
   active: boolean;
   note?: string;
+  /** 規定量 (共通在庫がこの数量を下回ったら発注する。縁在庫の画面 /heri で設定。空 = 設定なし) */
+  reorderLevel?: number;
+  /** 発注先 (仕入先の ID) */
+  supplierId?: string;
+  /** シリーズ (縁の柄の系統: アラベスク・浮・織部 など。一覧のまとまり) */
+  series?: string;
+  /** 通常ヘリのラインナップ (見本帳の定番) */
+  lineup?: boolean;
   createdAt: string;
   updatedAt: string;
 }

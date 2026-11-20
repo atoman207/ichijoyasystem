@@ -1,12 +1,13 @@
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
+import { canAccessStore, canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
 import { customerOptions } from "@/lib/db/queries";
 import { createInquiry } from "@/lib/actions/inquiries";
 import { CustomerSearch } from "@/components/features/CustomerSearch";
 import { DuplicateWatcher } from "@/components/features/DuplicateWatcher";
 import { checkCustomerDuplicates } from "@/lib/actions/customers";
 import { CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
+import { MediaSelect, PromotionSelect, promotionOptions } from "@/components/ops-reports/MediaFields";
 import { Button, Card, Field, Flash, FormActions, Input, LinkButton, Note, PageHeader, Select, Textarea } from "@/components/ui";
 
 export default async function NewInquiryPage({ searchParams }: { searchParams: Promise<{ err?: string; customerId?: string; cq?: string }> }) {
@@ -17,6 +18,7 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
   const choices = customerOptions(scopeByStore(user, db.customers), cq, customerId);
   const customers = choices.options;
   const users = db.users.filter((u) => u.active && (allStores || u.storeId === user.storeId));
+  const promotions = promotionOptions(db.promotions ?? [], (sid) => sid === "hq" || canAccessStore(user, sid));
   return (
     <div className="max-w-3xl">
       <Flash err={err} />
@@ -49,6 +51,12 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
                   <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>
                 ))}
               </Select>
+            </Field>
+            <Field label="媒体 (当社を知ったきっかけ)" required hint="お客様に「何を見てご連絡いただきましたか」と聞いて選びます。聞けなかったときは「不明」">
+              <MediaSelect name="media" required />
+            </Field>
+            <Field label="きっかけの販促 (チラシ・イベントなど)" hint="販促の記録にあるチラシ・イベント・DM から来た問い合わせなら選びます (任意)">
+              <PromotionSelect name="promotionId" options={promotions} />
             </Field>
             <Field label="種別">
               <Select name="category" defaultValue="tatami">

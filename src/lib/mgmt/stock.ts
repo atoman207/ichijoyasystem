@@ -31,6 +31,8 @@ export function locLabel(db: Pick<Database, "stores" | "orders">, loc: string | 
   if (loc === "supplier") return "仕入先";
   if (loc === "disposal") return "廃棄";
   if (loc === "adjust") return "棚卸の調整";
+  // 縁在庫の画面 (src/lib/heri-stock.ts) で案件を指定せずに登録した使用
+  if (loc === "used") return "使用 (案件の指定なし)";
   if (loc.startsWith("store:")) return db.stores.find((s) => s.id === loc.slice(6))?.name ?? loc.slice(6);
   if (loc.startsWith("order:")) return `案件 ${db.orders.find((o) => o.id === loc.slice(6))?.number ?? loc.slice(6)}`;
   return loc;

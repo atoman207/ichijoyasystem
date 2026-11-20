@@ -7,6 +7,10 @@ import { fmtDate, fmtDateTime, toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS } from "@/lib/constants";
 import type { InquiryStatus } from "@/lib/db/types";
 import { Button, ChannelTag, EmptyRow, Flash, Input, LinkButton, LinkTabs, PageHeader, Select, StatusBadge, StoreTag, Table, Td, Th, Tr, Pager, paginate } from "@/components/ui";
+import { isDateKey } from "@/lib/calendar";
+import { MEDIA_KEYS, MEDIA_LABEL, MEDIA_NONE, UNCLASSIFIED, isMediaKey } from "@/lib/media";
+import { filterInquiries, inquiryMediaMap } from "@/lib/ops-reports/promo-analysis";
+import { MediaTag } from "@/components/ops-reports/MediaFields";
 
 export default async function InquiriesPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -23,8 +27,14 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
   if (allStores && sp.store) rows = rows.filter((i) => i.storeId === sp.store);
   const q = (sp.q ?? "").trim().toLowerCase();
   if (q) rows = rows.filter((i) => [i.number, i.contactName, i.summary, i.detail].join(" ").toLowerCase().includes(q));
+  // 媒体 (入力 + 過去の記録からの推定)・受付日の絞り込み (販促と媒体の分析と同じ判定。件数が一致する)
+  const mediaParam = sp.media === MEDIA_NONE || isMediaKey(sp.media) ? sp.media : "";
+  const fromParam = isDateKey(sp.from) ? sp.from : "";
+  const toParam = isDateKey(sp.to) ? sp.to : "";
+  if (mediaParam || fromParam || toParam) rows = filterInquiries(db, rows, { media: mediaParam, from: fromParam, to: toParam });
   rows = [...rows].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
   const paged = paginate(rows, sp.page);
+  const mediaOf = inquiryMediaMap(db, paged.items);
   const storeMap = new Map(db.stores.map((s) => [s.id, s]));
   const count = (f: (s: InquiryStatus) => boolean) => scoped.filter((i) => f(i.status)).length;
   const base = "/inquiries";
@@ -54,6 +64,12 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
             <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>
           ))}
         </Select>
+        <Select name="media" defaultValue={mediaParam} className="w-auto" aria-label="媒体">
+          <option value="">すべての媒体</option>
+          {MEDIA_KEYS.map((k) => <option key={k} value={k}>{MEDIA_LABEL[k]}</option>)}
+          <option value={MEDIA_NONE}>{UNCLASSIFIED}</option>
+        </Select>
+        <label className="flex items-center gap-1 text-xs text-ink-3">受付日<Input type="date" name="from" defaultValue={fromParam} className="w-auto" aria-label="受付日 (から)" />〜<Input type="date" name="to" defaultValue={toParam} className="w-auto" aria-label="受付日 (まで)" /></label>
         {allStores && (
           <Select name="store" defaultValue={sp.store ?? ""} className="w-auto">
             <option value="">全店舗</option>
@@ -67,6 +83,7 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
           <tr>
             <Th>受付日時</Th>
             <Th>入口</Th>
+            <Th>媒体</Th>
             <Th>お客様</Th>
             <Th>内容</Th>
             <Th>種別</Th>
@@ -77,13 +94,14 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={9} />}
+          {rows.length === 0 && <EmptyRow colSpan={10} />}
           {paged.items.map((i) => {
             const overdue = i.nextActionDue && i.nextActionDue < today && ["new", "in_progress"].includes(i.status);
             return (
               <Tr key={i.id}>
                 <Td className="text-xs text-ink-2 tnum">{fmtDateTime(i.receivedAt)}<div className="font-mono text-[10px] text-ink-3">{i.number}</div></Td>
                 <Td><ChannelTag channel={i.channel} /></Td>
+                <Td>{mediaOf.get(i.id) && <MediaTag {...mediaOf.get(i.id)!} />}</Td>
                 <Td>
                   {i.customerId ? <Link href={`/customers/${i.customerId}`} className="hover:text-accent">{i.contactName}</Link> : <span>{i.contactName} <span className="text-[10px] text-ink-3">(未登録)</span></span>}
                 </Td>

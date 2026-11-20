@@ -385,6 +385,15 @@ export const ENTITY_LABEL: Record<string, string> = {
   map_location: "場所 (地図)",
   map_document: "住宅地図 (PDF)",
   map_batch: "地図の一括処理",
+  leave: "休暇 (有給・振休)",
+  holiday_work: "休日出勤",
+  leave_grant: "有給の付与",
+  work_report: "作業日報",
+  promotion: "販促の記録",
+  office_improvement: "事務改善シート",
+  condolence: "慶弔リスト",
+  material: "材料マスタ (縁の品番など)",
+  stock_move: "在庫の移動 (縁在庫・材料)",
 };
 
 /** 勘定科目 (仕入) */

@@ -21,6 +21,22 @@ const server = http.createServer((req, res) => {
     const entry = { path: req.url, body, raw };
     requests.push(entry);
     const r = await handler(entry);
+    // 文字を順に受け取る依頼 (stream: true) には、同じ返事を OpenAI の stream の形 (data: … の行) にして返す
+    const choice = r.body?.choices?.[0];
+    if (body.stream && (r.status ?? 200) === 200 && choice) {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const chunk = (delta, finish = null) => res.write(`data: ${JSON.stringify({ id: "c", model: r.body.model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
+      const m = choice.message ?? {};
+      if (m.content) for (const piece of m.content.match(/[\s\S]{1,6}/g)) chunk({ content: piece });
+      (m.tool_calls ?? []).forEach((tc, i) => {
+        chunk({ tool_calls: [{ index: i, id: tc.id, type: "function", function: { name: tc.function.name, arguments: "" } }] });
+        chunk({ tool_calls: [{ index: i, function: { arguments: tc.function.arguments } }] });
+      });
+      chunk({}, choice.finish_reason);
+      res.write(`data: ${JSON.stringify({ id: "c", model: r.body.model, choices: [], usage: r.body.usage })}\n\n`);
+      res.end("data: [DONE]\n\n");
+      return;
+    }
     res.writeHead(r.status ?? 200, { "content-type": "application/json", ...(r.headers ?? {}) });
     res.end(JSON.stringify(r.body));
   });
@@ -81,7 +97,9 @@ section("道具の呼び出し (OpenAI): 集計してから答える");
   ok(r.tables?.length === 1 && r.sources?.length >= 1, "表と根拠を画面に出す");
   eq(r.checks?.issues ?? [], [], "確かめで問題なし");
   const tools = requests[0].body.tools.map((t) => t.function.name);
-  const READ_ONLY = ["search_records", "get_record", "list_schedule", "analyze", "management_accounting", "business_overview", "search_guides", "search_history", "suggest_schedule", "plan_schedule", "day_route", "schedule_holds", "schedule_setup", "describe_database", "query_database", "calculate", "forecast"];
+  const READ_ONLY = ["search_records", "get_record", "list_schedule", "analyze", "management_accounting", "business_overview", "search_guides", "search_history", "suggest_schedule", "plan_schedule", "day_route", "schedule_holds", "schedule_setup", "describe_database", "query_database", "calculate", "forecast", "store_split",
+    // propose_action は確認のカードを作るだけ (何も変えない。実行は利用者が「実行する」を押したとき: src/lib/assistant/actions.ts)
+    "propose_action"];
   ok(tools.every((t) => READ_ONLY.includes(t)) && !tools.some((t) => /create|update|delete|approve|send|write|insert|register|pay/i.test(t)), `AI に渡す道具は読み取りだけ (${tools.length} 個)`);
   const calls = aiCallsSince(c0);
   ok(calls.length === 2 && calls.every((c) => c.kind === "assistant" && c.ok === 1 && c.input_tokens === 1200 && c.cached_tokens === 200), "AI の呼び出しをトークン数つきで記録 (目的 = AI アシスタント)");
@@ -106,7 +124,7 @@ section("回答の確かめ: 直らない数字には注記を付ける");
 {
   handler = (e) => (lastRole(e) === "tool" || allText(e).includes("回答の下書き") ? oaText("売上合計は 99,999,999円 です。") : oaTools([{ name: "analyze", args: analyzeArgs }]));
   const r = await askChatbot(db, admin, [], "今年の売上合計はいくらですか？");
-  ok(r.answer.includes("確かめられませんでした"), "確かめられない数字に注記");
+  ok(r.answer.includes("確かめられなかった数字"), "確かめられない数字に注記");
   ok(r.checks?.issues.some((i) => i.kind === "number") && r.checks?.fixed.length >= 1, "問題と直したことを残す (履歴・品質の画面)");
 }
 
@@ -118,6 +136,23 @@ section("実行の依頼: 実行したように答えさせない");
   ok(requests[0] && allText(requests[0]).includes("これはデータを変える依頼です"), "AI に実行できないことを先に伝える");
   eq(r.answer, G.ACTION_REFUSAL, "それでも実行したように答えたら、実行できないことの案内に置き換える");
   ok(!r.answer.includes("更新しました"), "「更新しました」を出さない");
+}
+
+section("実行の依頼: 確認のカードを出す (AI は実行しない。押すと画面と同じ処理で実行)");
+{
+  requests.length = 0;
+  const staffUser = db.users.find((u) => u.active && u.role === "store_staff" && u.storeId === "koshi");
+  const before = db.schedule.length;
+  handler = (e) =>
+    lastRole(e) === "tool"
+      ? oaText("次の内容で予定を登録できます。よければ「登録する」を押してください。")
+      : oaTools([{ name: "propose_action", args: { action: "create_schedule_event", event_kind: "pickup", title: "テスト 引取", date: "2031-05-12", start_time: "10:00", end_time: "11:00", assignees: [staffUser.name] } }]);
+  const r = await askChatbot(db, staffUser, [], "5月12日の10時から引取の予定を入れておいて");
+  ok(requests[0] && allText(requests[0]).includes("propose_action"), "データを変える依頼では propose_action を使うよう AI に伝える");
+  ok(r.actions?.length === 1 && r.actions[0].kind === "create_schedule_event" && typeof r.actions[0].token === "string", "回答に確認のカードを付ける");
+  ok(r.actions?.[0]?.fields.some((f) => f.label === "担当" && f.value.includes(staffUser.name)), "カードに担当者を表示する");
+  ok(db.schedule.length === before, "AI の回答の時点では何も変えない");
+  ok(!r.answer.startsWith("この依頼は AI アシスタントからは実行できません"), "カードを出したときは「実行できない」と書かない");
 }
 
 section("回答の確かめ: 存在しない画面・道具の結果にない記録へのリンクを外す");
@@ -220,6 +255,55 @@ section("計算と予測の道具: 道具の結果の数字で計算する・推
   const fr = f.tables.find((t) => t.title.includes("予測"));
   ok(String(fr.rows[0].k0).includes("(今月)") && String(fr.rows[1].k0).includes("(来月)"), "予測の表の行に (今月)・(来月) を書く (AI が月を取り違えないように)");
   ok(/予測 \(中心\) は [\d,]+円/.test(f.answer) && !(f.checks?.issues ?? []).some((i) => i.kind === "number"), "予測の数字も根拠のある数字として扱う");
+}
+
+section("回答を書かれた順に送る (stream): 画面にすぐ出す");
+{
+  resetBreaker();
+  requests.length = 0;
+  const c0 = lastCallId();
+  const events = [];
+  handler = (e) => (lastRole(e) === "tool" ? oaText(`今年の売上合計は **${ytdText}** です。`) : oaTools([{ name: "analyze", args: analyzeArgs }]));
+  const r = await askChatbot(db, admin, [], "今年の売上合計はいくらですか？", { onProgress: (ev) => events.push(ev) });
+  ok(requests.length >= 2 && requests.every((x) => x.body.stream === true), "途中の知らせを受け取るときは、AI に stream で頼む");
+  const text = events.filter((x) => x.type === "text").map((x) => x.delta).join("");
+  eq(text, r.answer, "書かれた順に届いた文字をつなぐと、最後の回答と同じ");
+  ok(events.filter((x) => x.type === "text").length >= 3, "回答は何回かに分けて届く (すぐに出しはじめられる)");
+  ok(r.tables?.length === 1 && r.source === "agent", "stream でも道具の呼び出し (集計) は同じように動く");
+  const calls = aiCallsSince(c0);
+  ok(calls.length === 2 && calls.every((c) => c.input_tokens === 1200 && c.output_tokens === 150), "stream でも使ったトークン数を記録する");
+  // 確かめ直しになったら、書きかけを消してから書き直す
+  events.length = 0;
+  handler = (e) => (allText(e).includes("回答の下書きを確かめたところ") ? oaText(`売上合計は ${ytdText} です。`) : lastRole(e) === "tool" ? oaText("売上合計は 99,999,999円 です。") : oaTools([{ name: "analyze", args: analyzeArgs }]));
+  const r2 = await askChatbot(db, admin, [], "今年の売上合計はいくらですか？", { onProgress: (ev) => events.push(ev) });
+  const iReset = events.findIndex((x) => x.type === "reset");
+  ok(iReset > 0 && events.slice(0, iReset).some((x) => x.type === "text") && events.some((x) => x.type === "phase" && x.phase === "checking"), "確かめ直すときは、書きかけを消してから書き直す");
+  ok(r2.answer.includes(ytdText), "最後の回答は確かめた数字");
+}
+
+section("店舗間の仕事の依頼の売上の配分: 先に計算して、AI の往復を 1 回にする");
+{
+  resetBreaker();
+  requests.length = 0;
+  handler = (e) => {
+    const t = allText(e);
+    const ok1 = t.includes("40,000") && t.includes("160,000");
+    return oaText(ok1 ? "合志店に 40,000円、中央店に 160,000円 の売上が計上されます (合計 200,000円)。" : "分かりません");
+  };
+  const t0 = Date.now();
+  const r = await askChatbot(db, admin, [], "合志店から中央店に20万円の通常工事を依頼した場合、それぞれの店舗にいくらの売上が計上されますか？");
+  eq(requests.length, 1, "AI とのやりとりは 1 回 (計算は先に済ませて渡す)");
+  ok(allText(requests[0]).includes("店舗ごとの売上の配分の計算") && !allText(requests[0]).includes("参考資料 (システムが自動で探した使い方"), "計算の結果を質問に添える (使い方の資料は添えない)");
+  ok(r.answer.startsWith("合志店に 40,000円、中央店に 160,000円"), "最初の 1 文で各店舗の金額を答える");
+  ok(r.tables?.some((x) => x.title.includes("売上の配分")), "配分の表を出す");
+  eq(r.checks?.issues ?? [], [], "確かめで問題なし (注記を付けない)");
+  ok(!r.answer.includes("※"), "分かりにくい注記を付けない");
+  console.log(`    (${Date.now() - t0}ms)`);
+  // 店舗スタッフ: 管理会計は見られないので、分かる言葉で断る (計算した金額は渡さない)
+  requests.length = 0;
+  handler = (e) => oaText(allText(e).includes("店長に確認してください") ? "店舗間の売上の配分は、店長・本部・管理者が確認できます。店長に確認してください。" : "40,000円です");
+  const s = await askChatbot(db, staff, [], "合志店から中央店に20万円の通常工事を依頼した場合、それぞれの店舗にいくらの売上が計上されますか？");
+  ok(!allText(requests[0]).includes("160,000") && s.answer.includes("店長に確認"), "店舗スタッフには配分の金額を渡さず、確認先を伝える");
 }
 
 section("会話の続き: 前の集計の条件を AI に渡す");
