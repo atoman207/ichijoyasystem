@@ -26,7 +26,15 @@ import { loadEnv } from "../import/env.mjs";
 
 const args = process.argv.slice(2);
 const APPLY = args.includes("--apply");
-const plans = args.flatMap((a, i) => (a === "--plan" ? [args[i + 1]] : []));
+const HISTORY = args.includes("--history");
+const planDir = args.includes("--plan-dir") ? args[args.indexOf("--plan-dir") + 1] : undefined;
+const monthOf = (file) => {
+  const b = path.basename(file).normalize("NFKC");
+  const m = b.match(/(20\d\d)\.(\d{1,2})/) ?? b.match(/(20\d\d)年(\d{1,2})月/);
+  return m ? { y: m[1], m: String(Number(m[2])).padStart(2, "0") } : null;
+};
+const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : /\.xlsx$/i.test(e.name) ? [path.join(d, e.name)] : []));
+const plans = [...args.flatMap((a, i) => (a === "--plan" ? [args[i + 1]] : [])), ...(planDir ? walk(planDir).filter((f) => monthOf(f) && !/原紙/.test(f)) : [])];
 const vehiclesFile = args[args.indexOf("--vehicles") + 1];
 if (!plans.length || !vehiclesFile) {
   console.error("使い方: --plan <予定表.xlsx> [--plan …] --vehicles <車両点検表.xlsx> [--apply]");
@@ -59,7 +67,8 @@ console.log(`[plan] 読み込み: 予定 ${db.schedule.length} 件・受注 ${db
 const settingsOut = [];
 const setValue = (id, value) => settingsOut.push({ id, value });
 // 1 日の上限 (店舗人数 × 11) と始業・終業
-const capBook = XLSX.readFile(plans[plans.length - 1], { sheets: ["係数・電話当番"] });
+const newest = [...plans].sort((a, b) => `${monthOf(a).y}${monthOf(a).m}`.localeCompare(`${monthOf(b).y}${monthOf(b).m}`)).at(-1);
+const capBook = XLSX.readFile(newest, { sheets: ["係数・電話当番"] });
 const capRows = XLSX.utils.sheet_to_json(capBook.Sheets["係数・電話当番"], { header: 1, defval: "" });
 const people = {};
 capRows[0].forEach((h, i) => {
@@ -153,14 +162,17 @@ console.log(`[plan] 作業の内容: ${specs.length} 件 (今日以降の引き�
 const byTitle = db.schedule.filter((e) => e.kind === "pickup" || e.kind === "delivery");
 const jobs = [];
 const unmatched = [];
+const seenJobs = new Set();
+const skippedLarge = [];
 for (const file of plans) {
-  const ym = path.basename(file).match(/(\d{4})\.(\d{1,2})/);
-  if (!ym) continue;
+  const mo = monthOf(file);
+  if (!mo) continue;
   const book = XLSX.readFile(file);
   for (const sn of book.SheetNames) {
     if (!/^\d{1,2}$/.test(sn.trim())) continue;
-    const date = `${ym[1]}-${String(ym[2]).padStart(2, "0")}-${String(sn.trim()).padStart(2, "0")}`;
-    if (date < today) continue;
+    const date = `${mo.y}-${mo.m}-${String(sn.trim()).padStart(2, "0")}`;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number(sn) > 31) continue;
+    if (date < today && !HISTORY) continue;
     const rows = XLSX.utils.sheet_to_json(book.Sheets[sn], { header: 1, defval: "" });
     let shop;
     let col = null;
@@ -186,13 +198,22 @@ for (const file of plans) {
       const size = cells[col + 5];
       const toko = cells[col + 6];
       const borderless = /無し|なし/.test(heri) || /古都/.test(`${omote}${heri}`);
-      const workTypeId = /新/.test(kindText) ? "tatami_new" : /裏/.test(kindText) ? "tatami_ura" : "tatami_omote";
+      const workTypeId = /新/.test(kindText) ? "tatami_new" : /裏|うら/.test(kindText) ? "tatami_ura" : "tatami_omote";
+      // 1 件で 150 枚を超えるのは読み違い (合計の行など) として登録しない
+      if (qty > 150) {
+        skippedLarge.push(`${date} ${name} ${qty}枚`);
+        return;
+      }
       const key = nk(name).replace(/[（(]/g, "(").replace(/[）)]/g, ")");
       const sameName = (e) => nk(e.title).replace(/[（(]/g, "(").replace(/[）)]/g, ")").startsWith(key);
       const pickup = byTitle.filter((e) => e.kind === "pickup" && e.storeId === shop && e.date <= date && e.date >= addDays(date, -45) && sameName(e)).sort((a, b) => b.date.localeCompare(a.date))[0];
       const delivery = byTitle.filter((e) => e.kind === "delivery" && e.storeId === shop && e.date >= date && e.date <= addDays(date, 30) && sameName(e)).sort((a, b) => a.date.localeCompare(b.date))[0];
       if (!pickup) unmatched.push(`${date} ${name}`);
-      const id = `pj_${hash(`${path.basename(file)}#${sn}#${i}`)}`;
+      // 同じ月のシートが 2 つのフォルダにあっても 1 件にする (日付・店舗・現場名・種類・枚数・表・ヘリ)
+      const id = `pj_${hash([date, shop, key, kindText, qty, omote, heri].join("|"))}`;
+      if (seenJobs.has(id)) return;
+      seenJobs.add(id);
+      const done = date < today;
       const ev = pickup ?? delivery;
       jobs.push({
         id,
@@ -204,11 +225,11 @@ for (const file of plans) {
         items: [{ workTypeId, qty, note: [omote && `表 ${omote}`, heri && `ヘリ ${heri}`, size && `サイズ ${size}`, toko && `床 ${toko}`].filter(Boolean).join(" / ") || undefined }],
         pickupEventId: pickup?.id,
         deliveryEventId: delivery?.id,
-        steps: [{ processId: "proc_koshi_tatami", date, minutes: qty * (borderless ? 20 : 15), qty, status: "planned" }],
+        steps: [{ processId: "proc_koshi_tatami", date, minutes: qty * (borderless ? 20 : 15), qty, status: done ? "done" : "planned" }],
         startDate: date,
         endDate: date,
         dueDate: delivery?.date,
-        status: "planned",
+        status: done ? "done" : "planned",
         note: `予定表 (${path.basename(file)} の「${sn}」) の製造の欄から登録 (${Object.keys(STORE).find((k) => STORE[k] === shop)}の分)`,
         createdBy: SYSTEM,
         createdAt: new Date().toISOString(),
@@ -222,7 +243,77 @@ function addDays(d, n) {
   return t.toISOString().slice(0, 10);
 }
 console.log(`[plan] 製造の予定: ${jobs.length} 件 (引き取りの予定にひも付いた ${jobs.length - unmatched.length} 件)・日別: ${[...new Set(jobs.map((j) => j.startDate))].sort().map((d) => `${d.slice(5)}:${jobs.filter((j) => j.startDate === d).reduce((a, j) => a + j.steps[0].qty, 0)}枚`).join(" ")}`);
+{
+  const byYear = {};
+  for (const j of jobs) {
+    const y = j.startDate.slice(0, 4);
+    const o = (byYear[y] ??= { n: 0, qty: 0, kinds: {}, max: 0 });
+    o.n++;
+    o.qty += j.steps[0].qty;
+    o.max = Math.max(o.max, j.steps[0].qty);
+    const k = j.title.replace(/^.*\s(\S+)\s[\d.]+枚.*$/, "$1");
+    o.kinds[k] = (o.kinds[k] ?? 0) + 1;
+  }
+  for (const [y, o] of Object.entries(byYear).sort()) console.log(`[plan]   ${y}: ${o.n} 件・${o.qty} 枚 (最大 ${o.max} 枚/件)・種類 ${Object.entries(o.kinds).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => `${k}:${n}`).join(" ")}`);
+}
+if (skippedLarge.length) console.log(`[plan] 枚数が多すぎて登録しない行: ${skippedLarge.join("、")}`);
 if (unmatched.length) console.log(`[plan] 引き取りの予定が見つからない製造: ${unmatched.slice(0, 12).join("、")}${unmatched.length > 12 ? ` ほか ${unmatched.length - 12} 件` : ""}`);
+
+/* ---------------- 4. 仮押さえ (予定表で「仮」と書かれた今日以降の予定) ---------------- */
+// 件名・メモに単独の「仮」がある予定 (例: 「(石貫) 平 仮 納品」「障子 張替4 / 仮」)。「納品11/25仮」のように別の予定の日付についた「仮」は除く
+const TENTATIVE = /(^|[\s/])仮($|[\s/])/;
+const tentative = db.schedule.filter((e) => e.source === "import" && e.date >= today && (TENTATIVE.test(e.title) || TENTATIVE.test(String(e.memo ?? "").split("\n").join(" / "))));
+const holds = tentative.map((e) => ({
+  id: `hold_${hash(e.id)}`,
+  groupId: `hg_${hash(e.id)}`,
+  rank: 1,
+  storeId: e.storeId,
+  kind: e.kind,
+  title: e.title.replace(/\s*仮(?=\s|$)/, "").replace(/\s{2,}/g, " ").trim(),
+  date: e.date,
+  endDate: e.endDate,
+  startTime: e.startTime,
+  endTime: e.endTime,
+  slot: e.slot,
+  assigneeIds: e.assigneeIds ?? [],
+  resourceIds: [],
+  customerId: e.customerId,
+  inquiryId: e.inquiryId,
+  quoteId: e.quoteId,
+  orderId: e.orderId,
+  location: e.location,
+  memo: [e.memo, "予定表 (スプレッド) で「仮」の予定。確定したら「予定の計画 → 仮押さえ」で確定してください"].filter(Boolean).join("\n"),
+  reasons: ["予定表 (スプレッド) で「仮」と書かれた予定"],
+  warnings: [],
+  status: "held",
+  expiresAt: new Date(`${e.endDate ?? e.date}T23:59:59+09:00`).toISOString(),
+  acks: [],
+  createdBy: SYSTEM,
+  createdAt: new Date().toISOString(),
+  _eventId: e.id,
+}));
+console.log(`[plan] 仮押さえ: ${holds.length} 件 (${holds.map((h) => `${h.date.slice(5)} ${h.title}`).join("、")})。元の予定は仮押さえに移す (二重に数えないため)`);
+
+/* ---------------- 5. 車両の予約 (担当者が使用者の車両) ---------------- */
+const userOfVehicle = new Map();
+for (const v of vehicles) {
+  const who = (v.note.match(/使用者 (.+)$/) ?? [])[1];
+  if (!who) continue;
+  const u = db.users.filter((x) => x.active && (nk(x.name).includes(nk(who)) || nk(x.name).split(/[・]/).some((part) => part === nk(who))));
+  if (u.length === 1) userOfVehicle.set(u[0].id, v);
+}
+const movedEventIds = new Set(holds.map((h) => h._eventId));
+const bookings = [];
+const addBooking = (src, key) => {
+  for (const uid of src.assigneeIds ?? []) {
+    const v = userOfVehicle.get(uid);
+    if (!v) continue;
+    bookings.push({ id: `rb_${hash(`${key}|${v.id}`)}`, resourceId: v.id, storeId: v.storeId, date: src.date, endDate: src.endDate, startTime: src.startTime, endTime: src.endTime, slot: src.startTime ? undefined : src.slot, ...(key.startsWith("hold:") ? { holdId: src.id } : { eventId: src.id }), note: `車両点検表の使用者 (${db.users.find((x) => x.id === uid)?.name ?? uid}) の車両`, createdBy: SYSTEM, createdAt: new Date().toISOString() });
+  }
+};
+for (const e of db.schedule) if (e.date >= today && !movedEventIds.has(e.id) && ["pickup", "delivery", "install", "survey", "measure", "visit"].includes(e.kind)) addBooking(e, `event:${e.id}`);
+for (const h of holds) addBooking(h, `hold:${h.id}`);
+console.log(`[plan] 車両の予約: ${bookings.length} 件 (使用者がわかる車両 ${userOfVehicle.size} 台。担当者が決まっている今日以降の予定から)`);
 
 if (!APPLY) {
   console.log("[plan] 試しのため書き込みません。--apply で登録します。");
@@ -244,9 +335,25 @@ await store.mutate((d) => {
   }
   const specIds = new Set(specs.map((s) => s.id));
   d.jobSpecs = [...(d.jobSpecs ?? []).filter((s) => !specIds.has(s.id)), ...specs];
-  const jobIds = new Set(jobs.map((j) => j.id));
-  d.productionJobs = [...(d.productionJobs ?? []).filter((j) => !jobIds.has(j.id)), ...jobs];
-  store.addAudit(d, { userId: SYSTEM, action: "import", entity: "schedule", entityId: "plan-import", entityLabel: "予定表の製造の欄・枚数", summary: `予定表 (スプレッド) から作業の内容 ${specs.length} 件・製造の予定 ${jobs.length} 件を登録 (${today} 以降)`, storeId: "hq" });
+  // このスクリプトで前に登録した製造の予定は置き換える (ID の付け方を変えても二重にならない)
+  d.productionJobs = [...(d.productionJobs ?? []).filter((j) => !(j.createdBy === SYSTEM && /^予定表 \(/.test(j.note ?? ""))), ...jobs];
+  // 「仮」の予定 → 仮押さえ (元の予定は消す。削除の記録は残さず「移した」と残す: 空いた枠の前倒しの提案に出さないため)
+  for (const h of holds) {
+    const ev = d.schedule.find((x) => x.id === h._eventId);
+    if (!ev) continue;
+    d.schedule = d.schedule.filter((x) => x.id !== ev.id);
+    d.jobSpecs = d.jobSpecs.filter((x) => !(x.recordType === "event" && x.recordId === ev.id));
+    for (const j of d.productionJobs) {
+      if (j.pickupEventId === ev.id) j.pickupEventId = undefined;
+      if (j.deliveryEventId === ev.id) j.deliveryEventId = undefined;
+    }
+    const { _eventId, ...hold } = h;
+    d.scheduleHolds = [...(d.scheduleHolds ?? []).filter((x) => x.id !== hold.id), hold];
+    store.addAudit(d, { userId: SYSTEM, action: "update", entity: "schedule", entityId: ev.id, entityLabel: ev.title, summary: `予定表で「仮」の予定を仮押さえに移しました (${ev.date} ${ev.title})`, storeId: ev.storeId, changes: [{ field: "status", before: "予定", after: "仮押さえ" }] });
+  }
+  const bookingIds = new Set(bookings.map((b) => b.id));
+  d.resourceBookings = [...(d.resourceBookings ?? []).filter((b) => !bookingIds.has(b.id)), ...bookings];
+  store.addAudit(d, { userId: SYSTEM, action: "import", entity: "schedule", entityId: "plan-import", entityLabel: "予定表の製造の欄・枚数", summary: `予定表 (スプレッド) から作業の内容 ${specs.length} 件・製造の予定 ${jobs.length} 件 (${HISTORY ? "過去の分を含む" : `${today} 以降`})・仮押さえ ${holds.length} 件・車両の予約 ${bookings.length} 件を登録`, storeId: "hq" });
 });
-console.log(`[plan] 登録しました: 設定 ${settingsOut.length} 件・作業の内容 ${specs.length} 件・製造の予定 ${jobs.length} 件`);
+console.log(`[plan] 登録しました: 設定 ${settingsOut.length} 件・作業の内容 ${specs.length} 件・製造の予定 ${jobs.length} 件・仮押さえ ${holds.length} 件・車両の予約 ${bookings.length} 件`);
 process.exit(0);
