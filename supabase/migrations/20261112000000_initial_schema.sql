@@ -1142,6 +1142,118 @@ create table if not exists period_closes (
 );
 comment on table period_closes is '月次確定 (確定時の店舗別損益の写しと、確定・解除の履歴)';
 
+-- 作業の内容 (作業種別と数量・標準時間・人数・技能・車両・製造日数・期限・お客様の希望・優先度)
+create table if not exists job_specs (
+  id text primary key,
+  record_type text not null check (record_type in ('order','quote','inquiry','event')),
+  record_id text not null,
+  store_id text not null references stores(id),
+  items jsonb not null default '[]',
+  minutes integer,
+  staff_count integer,
+  skills text[] not null default '{}',
+  resource_kinds text[] not null default '{}',
+  production_days integer,
+  pickup_from date,
+  deadline date,
+  preferred_dates text[] not null default '{}',
+  preferred_weekdays jsonb not null default '[]',
+  preferred_slot text,
+  preferred_time text,
+  avoid_dates text[] not null default '{}',
+  preference_strength text not null default 'none' check (preference_strength in ('none','soft','hard')),
+  priority text not null default 'normal' check (priority in ('urgent','high','normal','low')),
+  note text,
+  updated_by text not null,
+  updated_at timestamptz not null
+);
+comment on table job_specs is '作業の内容 (作業種別と数量・標準時間・人数・技能・車両・製造日数・期限・お客様の希望・優先度)';
+
+-- 製造の予定 (引き取り → 工程ごとの製造 → 納品)
+create table if not exists production_jobs (
+  id text primary key,
+  store_id text not null references stores(id),
+  order_id text,
+  quote_id text,
+  customer_id text,
+  title text not null,
+  items jsonb not null default '[]',
+  pickup_event_id text,
+  delivery_event_id text,
+  hold_id text,
+  steps jsonb not null default '[]',
+  start_date date not null,
+  end_date date not null,
+  due_date date,
+  status text not null check (status in ('planned','in_progress','done','cancelled')),
+  material_check jsonb,
+  note text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz
+);
+comment on table production_jobs is '製造の予定 (引き取り → 工程ごとの製造 → 納品)';
+
+-- 車両・設備・工具の予約
+create table if not exists resource_bookings (
+  id text primary key,
+  resource_id text not null,
+  store_id text not null references stores(id),
+  date date not null,
+  end_date date,
+  start_time text,
+  end_time text,
+  slot text,
+  event_id text,
+  hold_id text,
+  production_job_id text,
+  note text,
+  created_by text not null,
+  created_at timestamptz not null
+);
+comment on table resource_bookings is '車両・設備・工具の予約';
+
+-- 予定の仮押さえ (候補日・担当者の確認・お客様への案内)
+create table if not exists schedule_holds (
+  id text primary key,
+  group_id text not null,
+  rank integer not null default 1,
+  store_id text not null references stores(id),
+  kind text not null,
+  title text not null,
+  date date not null,
+  end_date date,
+  start_time text,
+  end_time text,
+  slot text,
+  assignee_ids text[] not null default '{}',
+  resource_ids text[] not null default '{}',
+  customer_id text,
+  inquiry_id text,
+  quote_id text,
+  order_id text,
+  location text,
+  memo text,
+  chain_id text,
+  score integer,
+  reasons jsonb not null default '[]',
+  warnings jsonb not null default '[]',
+  status text not null check (status in ('held','confirmed','released','expired')),
+  expires_at timestamptz not null,
+  acks jsonb not null default '[]',
+  offered_at timestamptz,
+  offered_via text,
+  customer_choice_at timestamptz,
+  customer_choice_note text,
+  event_id text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz
+);
+comment on table schedule_holds is '予定の仮押さえ (候補日・担当者の確認・お客様への案内)';
+
 -- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)
 -- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する
 alter table stores add column if not exists code text not null;
@@ -1948,6 +2060,94 @@ alter table period_closes add column if not exists status text not null check (s
 alter table period_closes add column if not exists snapshot jsonb;
 alter table period_closes add column if not exists history jsonb not null default '[]';
 alter table period_closes add column if not exists updated_at timestamptz not null;
+alter table job_specs add column if not exists record_type text not null check (record_type in ('order','quote','inquiry','event'));
+alter table job_specs add column if not exists record_id text not null;
+alter table job_specs add column if not exists store_id text not null references stores(id);
+alter table job_specs add column if not exists items jsonb not null default '[]';
+alter table job_specs add column if not exists minutes integer;
+alter table job_specs add column if not exists staff_count integer;
+alter table job_specs add column if not exists skills text[] not null default '{}';
+alter table job_specs add column if not exists resource_kinds text[] not null default '{}';
+alter table job_specs add column if not exists production_days integer;
+alter table job_specs add column if not exists pickup_from date;
+alter table job_specs add column if not exists deadline date;
+alter table job_specs add column if not exists preferred_dates text[] not null default '{}';
+alter table job_specs add column if not exists preferred_weekdays jsonb not null default '[]';
+alter table job_specs add column if not exists preferred_slot text;
+alter table job_specs add column if not exists preferred_time text;
+alter table job_specs add column if not exists avoid_dates text[] not null default '{}';
+alter table job_specs add column if not exists preference_strength text not null default 'none' check (preference_strength in ('none','soft','hard'));
+alter table job_specs add column if not exists priority text not null default 'normal' check (priority in ('urgent','high','normal','low'));
+alter table job_specs add column if not exists note text;
+alter table job_specs add column if not exists updated_by text not null;
+alter table job_specs add column if not exists updated_at timestamptz not null;
+alter table production_jobs add column if not exists store_id text not null references stores(id);
+alter table production_jobs add column if not exists order_id text;
+alter table production_jobs add column if not exists quote_id text;
+alter table production_jobs add column if not exists customer_id text;
+alter table production_jobs add column if not exists title text not null;
+alter table production_jobs add column if not exists items jsonb not null default '[]';
+alter table production_jobs add column if not exists pickup_event_id text;
+alter table production_jobs add column if not exists delivery_event_id text;
+alter table production_jobs add column if not exists hold_id text;
+alter table production_jobs add column if not exists steps jsonb not null default '[]';
+alter table production_jobs add column if not exists start_date date not null;
+alter table production_jobs add column if not exists end_date date not null;
+alter table production_jobs add column if not exists due_date date;
+alter table production_jobs add column if not exists status text not null check (status in ('planned','in_progress','done','cancelled'));
+alter table production_jobs add column if not exists material_check jsonb;
+alter table production_jobs add column if not exists note text;
+alter table production_jobs add column if not exists created_by text not null;
+alter table production_jobs add column if not exists created_at timestamptz not null;
+alter table production_jobs add column if not exists updated_by text;
+alter table production_jobs add column if not exists updated_at timestamptz;
+alter table resource_bookings add column if not exists resource_id text not null;
+alter table resource_bookings add column if not exists store_id text not null references stores(id);
+alter table resource_bookings add column if not exists date date not null;
+alter table resource_bookings add column if not exists end_date date;
+alter table resource_bookings add column if not exists start_time text;
+alter table resource_bookings add column if not exists end_time text;
+alter table resource_bookings add column if not exists slot text;
+alter table resource_bookings add column if not exists event_id text;
+alter table resource_bookings add column if not exists hold_id text;
+alter table resource_bookings add column if not exists production_job_id text;
+alter table resource_bookings add column if not exists note text;
+alter table resource_bookings add column if not exists created_by text not null;
+alter table resource_bookings add column if not exists created_at timestamptz not null;
+alter table schedule_holds add column if not exists group_id text not null;
+alter table schedule_holds add column if not exists rank integer not null default 1;
+alter table schedule_holds add column if not exists store_id text not null references stores(id);
+alter table schedule_holds add column if not exists kind text not null;
+alter table schedule_holds add column if not exists title text not null;
+alter table schedule_holds add column if not exists date date not null;
+alter table schedule_holds add column if not exists end_date date;
+alter table schedule_holds add column if not exists start_time text;
+alter table schedule_holds add column if not exists end_time text;
+alter table schedule_holds add column if not exists slot text;
+alter table schedule_holds add column if not exists assignee_ids text[] not null default '{}';
+alter table schedule_holds add column if not exists resource_ids text[] not null default '{}';
+alter table schedule_holds add column if not exists customer_id text;
+alter table schedule_holds add column if not exists inquiry_id text;
+alter table schedule_holds add column if not exists quote_id text;
+alter table schedule_holds add column if not exists order_id text;
+alter table schedule_holds add column if not exists location text;
+alter table schedule_holds add column if not exists memo text;
+alter table schedule_holds add column if not exists chain_id text;
+alter table schedule_holds add column if not exists score integer;
+alter table schedule_holds add column if not exists reasons jsonb not null default '[]';
+alter table schedule_holds add column if not exists warnings jsonb not null default '[]';
+alter table schedule_holds add column if not exists status text not null check (status in ('held','confirmed','released','expired'));
+alter table schedule_holds add column if not exists expires_at timestamptz not null;
+alter table schedule_holds add column if not exists acks jsonb not null default '[]';
+alter table schedule_holds add column if not exists offered_at timestamptz;
+alter table schedule_holds add column if not exists offered_via text;
+alter table schedule_holds add column if not exists customer_choice_at timestamptz;
+alter table schedule_holds add column if not exists customer_choice_note text;
+alter table schedule_holds add column if not exists event_id text;
+alter table schedule_holds add column if not exists created_by text not null;
+alter table schedule_holds add column if not exists created_at timestamptz not null;
+alter table schedule_holds add column if not exists updated_by text;
+alter table schedule_holds add column if not exists updated_at timestamptz;
 
 -- 索引 (検索・読み込みの並び順)
 create index if not exists stores_load_order_idx on stores (code, id);
@@ -2061,6 +2261,17 @@ create index if not exists mgmt_entries_month_idx on mgmt_entries (month);
 create index if not exists mgmt_entries_load_order_idx on mgmt_entries (month, created_at, id);
 create index if not exists allocation_runs_load_order_idx on allocation_runs (month, created_at, id);
 create index if not exists period_closes_load_order_idx on period_closes (month, id);
+create index if not exists job_specs_record_type_record_id_idx on job_specs (record_type, record_id);
+create index if not exists job_specs_load_order_idx on job_specs (updated_at, id);
+create index if not exists production_jobs_order_id_idx on production_jobs (order_id);
+create index if not exists production_jobs_store_id_start_date_idx on production_jobs (store_id, start_date);
+create index if not exists production_jobs_load_order_idx on production_jobs (start_date, id);
+create index if not exists resource_bookings_resource_id_date_idx on resource_bookings (resource_id, date);
+create index if not exists resource_bookings_event_id_idx on resource_bookings (event_id);
+create index if not exists resource_bookings_load_order_idx on resource_bookings (date, id);
+create index if not exists schedule_holds_group_id_idx on schedule_holds (group_id);
+create index if not exists schedule_holds_status_date_idx on schedule_holds (status, date);
+create index if not exists schedule_holds_load_order_idx on schedule_holds (date, id);
 
 -- 後から not null を外した列 (データは変えない。外した後に実行しても変化なし)
 alter table comm_logs alter column customer_id drop not null;
@@ -2230,6 +2441,18 @@ grant select, insert, update, delete on table allocation_runs to service_role;
 alter table period_closes enable row level security;
 revoke all on table period_closes from anon, authenticated;
 grant select, insert, update, delete on table period_closes to service_role;
+alter table job_specs enable row level security;
+revoke all on table job_specs from anon, authenticated;
+grant select, insert, update, delete on table job_specs to service_role;
+alter table production_jobs enable row level security;
+revoke all on table production_jobs from anon, authenticated;
+grant select, insert, update, delete on table production_jobs to service_role;
+alter table resource_bookings enable row level security;
+revoke all on table resource_bookings from anon, authenticated;
+grant select, insert, update, delete on table resource_bookings to service_role;
+alter table schedule_holds enable row level security;
+revoke all on table schedule_holds from anon, authenticated;
+grant select, insert, update, delete on table schedule_holds to service_role;
 
 -- 書き込みのたびにリビジョンを +1 (他のサーバーインスタンスが変更を検知して読み直す)
 create or replace function public.bump_revision() returns bigint
