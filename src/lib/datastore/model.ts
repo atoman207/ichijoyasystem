@@ -1,6 +1,6 @@
 import "server-only";
 import type { Role, StoreId, User } from "@/lib/db/types";
-import { canSeeAllStores } from "@/lib/auth/permissions";
+import { STAFF_AUDIT_ENTITIES, canSeeAllStores } from "@/lib/auth/permissions";
 import {
   APPROVAL_STATUS,
   APPROVAL_TYPE_LABEL,
@@ -25,6 +25,8 @@ import {
   FAX_TRIAGE,
   TASK_STATUS,
   THREAD_KIND_LABEL,
+  AUDIT_ACTION_LABEL,
+  ENTITY_LABEL,
 } from "@/lib/constants";
 import { AMOUNT_KEYS, AMOUNT_LABEL } from "@/lib/assistant/facts";
 import { MEDIA_LABEL } from "@/lib/media";
@@ -96,6 +98,9 @@ export function labelRows(): [string, string, string][] {
     ],
     // 媒体 (お客様が当社を知ったきっかけ。全社共通の分類 src/lib/media.ts)
     media: labelOf(MEDIA_LABEL),
+    // 変更履歴 (社内の活動) の操作と対象
+    audit_action: labelOf(AUDIT_ACTION_LABEL),
+    audit_entity: labelOf(ENTITY_LABEL),
   };
   return Object.entries(kinds).flatMap(([kind, rows]) => rows.map(([code, label]) => [kind, code, label] as [string, string, string]));
 }
@@ -143,6 +148,8 @@ export const CODE_COLUMNS: Record<string, Record<string, string>> = {
   v_products: { category: "category" },
   v_staff: { role: "role" },
   v_fax: { status: "fax_status", triage: "fax_triage" },
+  audit_logs: { action: "audit_action" },
+  v_activity: { action: "audit_action" },
 };
 
 export const LABELS_SQL = "create table if not exists _labels (kind text not null, code text not null, label text not null, primary key (kind, code));";
@@ -430,6 +437,21 @@ export const VIEWS: ViewDef[] = [
       left join users u on u.id = x.recorded_by`,
   },
   {
+    name: "v_activity",
+    label: "社内の活動 (変更履歴: 誰が・いつ・何を登録・変更・削除・承認・取込したか。見られる範囲だけ)",
+    description:
+      "操作 1 件 = 1 行。at (UTC)・date / hour (日本時間の日付・時)・user_id・user_name・action (create・update・delete・approve・reject・submit・send・status・login・export・import)・action_label・entity (customer・order・schedule・approval・knowledge・user・settings など)・entity_label・entity_id・target (対象の名前)・summary (内容)・store_id・store_name。人ごと・日ごとの件数は count(*) group by",
+    sql: `
+      select a.id, a.at, date(a.at, '+9 hours') date, cast(strftime('%H', a.at, '+9 hours') as integer) hour,
+             a.user_id, coalesce(u.name, case when a.user_id = 'system' then 'システム' end) user_name,
+             a.action, ${L("audit_action", "a", "action")} action_label,
+             a.entity, coalesce(${L("audit_entity", "a", "entity")}, a.entity) entity_label, a.entity_id,
+             a.entity_label target, a.summary, a.store_id, s.name store_name
+      from audit_logs a
+      left join users u on u.id = a.user_id
+      left join stores s on s.id = a.store_id`,
+  },
+  {
     name: "v_approvals",
     label: "承認 (申請・承認者・状態)",
     description: "承認 1 件 = 1 行。type と type_label (見積・契約・経費・支払など)・title・amount・store_id・store_name・requested_by (申請者)・required_role と _label (店長/管理者)・status と status_label (承認待ち/承認/差戻し/却下)・request_comment・created_at・decided_by・decided_at・decision_comment",
@@ -580,8 +602,13 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
     v("users", "select id, name, kana, role, store_id, title, active from main.users"),
     // FAX: 自店舗の送信・仕分け済みの受信、担当・登録したもの
     v("fax_messages", `select * from main.fax_messages where user_id = ${me} or assigned_user_id = ${me} or (store_id = ${store} and (direction = 'outbound' or triage in ('auto', 'accepted')))`),
-    // 見せない表 (変更履歴・送信履歴・設定・資料台帳・FAX 番号・地図・検索の索引)
-    ...["audit_logs", "deliveries", "settings", "source_files", "fax_numbers", "map_locations", "map_location_refs", "map_documents", "map_document_links", "search_docs", "_rowhash"].map(none),
+    // 変更履歴 (社内の活動): permissions.ts の canViewAuditEntry と同じ (本人の操作 + 所属店舗の操作。ほかの人のログインは除く。店舗スタッフは案件・顧客・予定などの対象だけ)
+    v(
+      "audit_logs",
+      `select * from main.audit_logs where user_id = ${me} or (entity != 'session' and store_id = ${store}${manager ? "" : ` and entity in (${[...STAFF_AUDIT_ENTITIES].map(sq).join(", ")})`})`,
+    ),
+    // 見せない表 (送信履歴・設定・資料台帳・FAX 番号・地図・検索の索引)
+    ...["deliveries", "settings", "source_files", "fax_numbers", "map_locations", "map_location_refs", "map_documents", "map_document_links", "search_docs", "_rowhash"].map(none),
     // 慶弔リスト (ご家族の情報。permissions.ts の canViewCondolences。事務担当の店舗ロールも SQL では見せない)
     none("condolences"),
     // 管理会計 (src/lib/mgmt/access.ts と同じ範囲): 店長は自店舗の行と設定・マスタ、店舗スタッフは品目・営業エリアだけ
@@ -640,7 +667,8 @@ export const GLOSSARY: [string, string][] = [
   ["発注・発注書・注文 (仕入先へ)", "purchase_orders / v_purchase_orders"],
   ["仕入先・協力業者・業者・取引先", "suppliers"],
   ["連絡・やりとり・電話の記録・着信", "comm_logs / v_comm_logs"],
-  ["議事録・会議・決定事項・ルール・マニュアル", "knowledge (category・record_date)"],
+  ["議事録・会議・決定事項・ルール・マニュアル", "knowledge (category・record_date)。クライアントから受け取った資料の中身 (表計算・Word・PDF) は SQL には入っていない: 道具 search_materials"],
+  ["活動・操作・誰が何をした・最近の変更・削除された記録・ログイン", "audit_logs / v_activity (日本時間の date・hour。集計は道具 data_registry の activity でもよい)"],
   ["クレーム・手直し", "quality_issues"],
   ["アンケート・お客様の声", "survey_responses"],
   ["口コミ・レビュー", "google_reviews"],
@@ -688,6 +716,7 @@ const CODE_KINDS: [string, string][] = [
   ["task_status", "業務依頼の状態"],
   ["fax_status", "FAX の状態"],
   ["fax_triage", "受信 FAX の仕分け"],
+  ["audit_action", "変更履歴の操作 (action)"],
 ];
 
 function codeLines(): string[] {

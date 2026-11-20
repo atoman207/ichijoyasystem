@@ -23,7 +23,10 @@
     "test:chatbot": "node scripts/tests/chatbot/unit.test.mjs && node scripts/tests/chatbot/mock-ai.test.mjs",
     "chatbot:catalog": "node scripts/chatbot/extract-ui.mjs",
     "test:hr": "node scripts/tests/hr/leave.test.mjs",
-    "test:office": "node scripts/tests/office/office.test.mjs"
+    "test:office": "node scripts/tests/office/office.test.mjs",
+    "test:registry": "node scripts/tests/registry/registry.test.mjs",
+    "registry:scan": "node scripts/registry/scan-materials.mjs",
+    "registry:promote": "node scripts/registry/promote-knowledge.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.7.0",

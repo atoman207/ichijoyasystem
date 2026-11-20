@@ -131,6 +131,13 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
 
       {tab === "files" && (
         <>
+          <p className="mb-3 text-xs text-ink-3">
+            資料の中身 (表計算・Word・PDF の文字) と、AI アシスタントでの使い方・見られる人は{" "}
+            <Link href="/registry?tab=materials" className="font-medium text-accent hover:underline">
+              データ台帳
+            </Link>{" "}
+            で管理しています。
+          </p>
           <form method="get" className="mb-3 flex flex-wrap items-end gap-2">
             <input type="hidden" name="tab" value="files" />
             <Select name="folder" defaultValue={sp.folder ?? ""} aria-label="フォルダ" className="w-auto">

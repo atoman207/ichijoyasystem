@@ -76,6 +76,7 @@ import {
   Layers,
   ClipboardPen,
   Megaphone,
+  Database,
 } from "lucide-react";
 import { Avatar, Badge } from "@/components/ui";
 import { IchijoyaLogo } from "@/components/brand/Logo";
@@ -118,7 +119,8 @@ export type NavIcon =
   | "office"
   | "heri"
   | "workReport"
-  | "promotions";
+  | "promotions"
+  | "registry";
 
 const ICONS: Record<NavIcon, LucideIcon> = {
   dashboard: House,
@@ -157,6 +159,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   heri: Layers,
   workReport: ClipboardPen,
   promotions: Megaphone,
+  registry: Database,
 };
 
 export interface NavItem {

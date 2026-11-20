@@ -40,6 +40,7 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   purchase: { supplierId: "仕入先", invoiceDate: "請求日", dueDate: "支払期限", scheduledPayDate: "支払予定日", amount: "金額 (税込)", taxAmount: "うち消費税", account: "勘定科目", items: "仕入内容", orderId: "案件", supplierInvoiceNo: "請求書番号", payMethod: "支払方法", payReference: "支払の記録" },
   ai: { question: "質問", answer: "回答", disabled: "無効" },
   knowledge: { body: "内容", category: "分類", tags: "タグ", active: "AI に使う", visibility: "見られる人", recordDate: "日付" },
+  registry: { action: "扱い", visibility: "見られる人", category: "分類", note: "メモ" },
   settings: { lineGroup: "LINE グループのひも付け (受注 / 協力業者 / 呼び名)", mode: "AI アシスタントの閲覧範囲 (permission = 権限どおり / all_stores = 全店舗)", until: "全店舗にする最終日", hiredOn: "雇い入れ日", baseDate: "有給の基準日", weeklyDays: "週の所定労働日数", compLimit: "振休のため込みの上限", consumeOrder: "有給の消化の順番", fiscalStartMonth: "年度の始まりの月", closingDay: "勤怠の締め日", amStart: "午前休の開始", amEnd: "午前休の終了", pmStart: "午後休の開始", pmEnd: "午後休の終了", condolenceViewers: "慶弔リストを見られる人 (all = 全社員 / office = 事務担当・本部・管理者)" },
   supplier: { kind: "区分", category: "取扱品目", contactName: "担当者", fax: "FAX", paymentTerms: "支払条件 (文章)", closingDay: "締め日", payMonthOffset: "支払月", payDay: "支払日", bankInfo: "振込先", registrationNumber: "登録番号", lineId: "LINE ユーザー ID", chatworkRoomId: "Chatwork ルーム ID", active: "取引中" },
   cash: { direction: "入出金", account: "科目", counterparty: "相手", description: "摘要" },

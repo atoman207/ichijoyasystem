@@ -1,4 +1,4 @@
-import type { Approval, Attachment, AuditLog, CashEntry, Expense, FaxMessage, KnowledgeEntry, MapDocument, PurchaseInvoice, PurchaseOrder, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
+import type { Approval, Attachment, AuditLog, CashEntry, Expense, FaxMessage, KnowledgeEntry, KnowledgeVisibility, MapDocument, PurchaseInvoice, PurchaseOrder, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
 
 /**
  * 権限ルール
@@ -305,7 +305,8 @@ export function canExportAccounting(user: User): boolean {
 }
 
 /** 店舗スタッフが自店舗の履歴を見られる対象 (案件・顧客・予定・請求など。経費・承認・設定などは見ない) */
-const STAFF_AUDIT_ENTITIES = new Set(["customer", "inquiry", "quote", "order", "invoice", "payment", "schedule", "document", "attachment", "survey", "quality", "review", "comm", "cash", "thread", "purchase_order", "fax", "map_location", "map_document", "work_report"]);
+/** 店舗スタッフが見られる変更履歴の対象 (所属店舗のもの)。AI の SQL の範囲 (model.ts の scopeStatements) も同じものを使う */
+export const STAFF_AUDIT_ENTITIES = new Set(["customer", "inquiry", "quote", "order", "invoice", "payment", "schedule", "document", "attachment", "survey", "quality", "review", "comm", "cash", "thread", "purchase_order", "fax", "map_location", "map_document", "work_report"]);
 
 /**
  * 変更履歴 (監査ログ) の閲覧範囲
@@ -366,6 +367,28 @@ export function canViewKnowledge(user: User, k: Pick<KnowledgeEntry, "visibility
       return user.role === "admin";
   }
   return false;
+}
+
+/** 社内資料の「見られる人」のうち、この人が見られるもの (資料庫の検索の範囲にも使う) */
+export function knowledgeVisibilities(user: User): KnowledgeVisibility[] {
+  return (["all", "manager", "hq", "admin"] as const).filter((v) => canViewKnowledge(user, { visibility: v }));
+}
+
+/** データ台帳 (/registry: 全データの一覧・データフォルダー・クライアント資料の資料庫・全社の活動): 管理者・本部スタッフ */
+export function canViewRegistry(user: User): boolean {
+  return canSeeAllStores(user);
+}
+
+/** データ台帳の資料の扱いの変更 (見られる人・分類・社内資料への登録・取り込まない)・資料の追加: 管理者・本部スタッフ */
+export function canManageRegistry(user: User): boolean {
+  return user.role === "admin" || user.role === "hq_staff";
+}
+
+/** 資料庫の資料を見られるか (見られる人 + 店舗の資料は所属店舗だけ。店舗のロールにほかの店舗の数字を見せない) */
+export function canViewMaterial(user: User, m: { visibility: KnowledgeVisibility; storeId?: StoreId }): boolean {
+  if (!canViewKnowledge(user, { visibility: m.visibility })) return false;
+  if (canSeeAllStores(user)) return true;
+  return !m.storeId || m.storeId === user.storeId;
 }
 
 /** AI アシスタントの相談履歴: 自分の履歴は全員。全員の履歴の閲覧・検索は管理者・本部スタッフ (店長は自店舗の社員の分) */

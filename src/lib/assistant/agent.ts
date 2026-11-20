@@ -4,11 +4,12 @@ import { ROLE_LABEL } from "@/lib/constants";
 import { toDateKey } from "@/lib/format";
 import { canSeeAllStores, canViewChatLog, canViewKnowledge } from "@/lib/auth/permissions";
 import { runToolLoop, type ToolCall, type ToolDef } from "@/lib/ai/provider";
-import { searchKnowledge } from "@/lib/knowledge";
+import { knowledgeExcerpt, searchKnowledge } from "@/lib/knowledge";
 import { listChatLogs, searchDocs } from "@/lib/chatbot/store";
 import { analysisCatalog, analysisText, runAnalysis, type AnalysisResult, type AnalysisSpec } from "./analyze";
 import { getRecord, lastSearchSource, listSchedule, searchAll, storeScopeNote, RECORD_TYPE_LABEL } from "./search";
 import { scheduleSuggestTool, scheduleTools } from "./schedule-tool";
+import { materialsForGuides, registryTools } from "./registry-tool";
 import { ACTION_LABEL, proposalText, proposeAction, type ProposedAction } from "./actions";
 import { assistantReadUser, outOfScopeRefusal } from "./scope";
 import { checkCalcInputs, evaluate, formatCalc } from "./calc";
@@ -78,6 +79,9 @@ export const TOOL_PROGRESS_LABEL: Record<string, string> = {
   forecast: "過去の実績から予測を計算",
   store_split: "店舗ごとの売上の配分を計算",
   propose_action: "実行の確認を用意",
+  search_materials: "クライアント資料を検索",
+  read_material: "資料を読む",
+  data_registry: "データ台帳を確認",
 };
 
 export interface AgentReply {
@@ -283,6 +287,8 @@ function tools(user: User): ToolDef[] {
     },
   );
   for (const t of scheduleTools) list.push(t.def);
+  // データ台帳 (クライアント資料の資料庫・全データの一覧・社内の活動): registry-tool.ts
+  for (const t of registryTools) list.push(t.def);
   list.push({
     name: "propose_action",
     description: `データを変える依頼 (予定の登録・変更・削除、問い合わせの登録・状態の変更、受注の進捗の記録、社内連絡・業務依頼を送る、承認・差戻し・却下) のときに、実行の確認のカードを画面に出す。AI は実行しない: 利用者がカードの内容を確かめて「実行する」を押すと、画面のボタンと同じ処理 (権限・入力の確かめ・変更履歴・通知も同じ) で実行される。社員・お客様は名前、案件は番号 (受注・見積・問い合わせ)、予定は ID (list_schedule の結果) で指定してよい。分からない項目は聞き返すか、調べてから呼ぶ。できる操作: ${Object.entries(ACTION_LABEL).map(([k, v]) => `${k} (${v})`).join(", ")}`,
@@ -410,6 +416,8 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     "- 顧客の質問 (「○○様の施工履歴」「前回の担当者」) は search_records (types: customer) → get_record (type: customer)。",
     "- 「似たような工事」は search_records で工事内容・品名の言葉を探す (types: order, quote)。",
     "- 会議・決定事項・ルールは search_records (types: knowledge, schedule, thread) と search_guides の両方を見る。",
+    "- クライアントの資料 (社内総合マニュアル・顧客対応マニュアル・議事録・研修・作業手順・点検とテレアポ・イベント・チラシの計画と配布・SNS・情報媒体・事務の手続き・書類の保管期限・車両・縁・補助金・取引先の請求書と契約・行政の様式) は search_materials で探し、必要なら read_material で全文を読む。社内資料 (search_guides) に無いときも資料庫を探す。答えには資料名とリンクを添える。",
+    "- 社内の活動 (誰が・いつ・何を登録・変更・削除・承認・取込したか、最近の変更、操作の多い人・日) は data_registry (view: activity)。どんなデータがあるか・いつからのデータか・データの置き場所は data_registry (view: catalog)、クライアント資料の内訳は data_registry (view: materials)。",
     "- 仕入先・発注履歴は search_records (types: supplier) → get_record (type: supplier)。",
     "- 売上の分析は analyze (subject: sales)。商品名は表記ゆれがあるので、まず品名の一覧を見てから絞る。",
     scheduleSuggestTool ? "- 予定の候補日は suggest_schedule (候補ごとの「入力」のリンクをそのまま回答に入れる。利用者が候補を選んだ・「1 番で入れて」と頼まれたら、その候補の日時・担当者で propose_action (create_schedule_event) の登録のカードを出す)。日程のない案件をまとめて配置・既存の予定の入れ替えは plan_schedule、1 日の回る順番は day_route、仮押さえの状況は schedule_holds、提案に足りない情報は schedule_setup。予定の登録・変更はせず、リンクの画面で利用者が行うと案内する。" : "",
@@ -535,12 +543,19 @@ function makeExecutor(db: Database, user: User, now: Date, out: { tables: Analys
         }
         for (const h of know.slice(0, 3)) addSource({ label: h.entry.title, href: `/knowledge/${h.entry.id}`, kind: "社内資料" });
         if (know.length) out.usedKnowledge = true;
+        // クライアント資料 (資料庫) の候補も添える
+        const mats = materialsForGuides(user, q);
+        if (mats) {
+          out.usedKnowledge = true;
+          for (const src of mats.sources.slice(0, 2)) addSource(src);
+        }
         const perms = permissionHints(q, user.role);
-        if (!docs.length && !know.length) return `使い方の資料・社内資料に当てはまるものはありませんでした。${perms.length ? `\n## このロール (${ROLE_LABEL[user.role]}) の権限 (関係しそうなもの)\n${perms.join("\n")}` : ""}`;
+        if (!docs.length && !know.length && !mats) return `使い方の資料・社内資料・クライアント資料に当てはまるものはありませんでした。言葉を変えて search_materials でも探してください。資料に書かれていないことを一般的な知識で補って答えない。${perms.length ? `\n## このロール (${ROLE_LABEL[user.role]}) の権限 (関係しそうなもの)\n${perms.join("\n")}` : ""}`;
         return [
           ...(perms.length ? [`## このロール (${ROLE_LABEL[user.role]}) の権限 (関係しそうなもの。操作を案内する前に確かめる)\n${perms.join("\n")}`] : []),
           ...docs.map((d) => `### ${d.title}${d.href ? ` (画面: ${d.href})` : ""}\n${d.body.slice(0, 1500)}`),
-          ...know.map((h) => `### 社内資料: ${h.entry.title} (分類 ${h.entry.category || "その他"}${h.entry.recordDate ? ` / 日付 ${h.entry.recordDate}` : ""}) [開く](/knowledge/${h.entry.id})\n${h.entry.body.slice(0, 2000)}`),
+          ...know.map((h) => `### 社内資料: ${h.entry.title} (分類 ${h.entry.category || "その他"}${h.entry.recordDate ? ` / 日付 ${h.entry.recordDate}` : ""}) [開く](/knowledge/${h.entry.id})\n${knowledgeExcerpt(h.entry.body, q, 2500)}`),
+          ...(mats ? [mats.text] : []),
         ].join("\n\n");
       }
       case "search_history": {
@@ -647,6 +662,16 @@ ${expr} = ${formatCalc(r.value)}
       }
       out.tools.push({ name: "実行の確認", summary: r.ok ? `${r.action.title} (確認のカード)` : `作れず: ${r.error.slice(0, 80)}` });
       return proposalText(r);
+    }
+    // データ台帳の道具 (registry-tool.ts: 資料庫の検索・資料を読む・全データの一覧・社内の活動)。人ごとの閲覧範囲で変わるので回答を蓄えない
+    const rt = registryTools.find((t) => t.def.name === call.name);
+    if (rt) {
+      out.usedData = true;
+      if (call.name !== "data_registry") out.usedKnowledge = true;
+      const r = await rt.run(db, user, a, now);
+      out.tools.push({ name: rt.label, summary: r.summary });
+      for (const src of r.sources) addSource(src);
+      return r.text;
     }
     // 予定の計画の道具 (schedule-tool.ts: 候補日・まとめて配置・巡回順・仮押さえ・準備の状況)
     const st = scheduleTools.find((t) => t.def.name === call.name);

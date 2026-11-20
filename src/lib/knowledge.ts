@@ -112,6 +112,35 @@ function snippetOf(body: string, q: Set<string>, size = 160): string {
   return `${start > 0 ? "…" : ""}${flat.slice(start, start + size)}${start + size < flat.length ? "…" : ""}`;
 }
 
+/**
+ * AI に渡す本文: 短ければ全文、長ければ冒頭 (出典・見出し) と、質問の言葉が多く含まれるあたり。
+ * 長い資料 (マニュアルのシート・議事録) の後ろの方に答えがあるときに、先頭だけを渡して見落とさないように
+ */
+export function knowledgeExcerpt(body: string, query: string, size = 2500): string {
+  if (body.length <= size) return body;
+  const head = body.slice(0, Math.min(300, Math.floor(size / 6)));
+  const q = new Set(tokens(query));
+  if (!q.size) return `${body.slice(0, size)}…`;
+  const norm = body.normalize("NFKC").toLowerCase();
+  const win = size - head.length - 10;
+  let best = 0;
+  let bestAt = head.length;
+  for (let i = head.length; i < norm.length; i += 100) {
+    const part = norm.slice(i, i + win);
+    let n = 0;
+    for (const t of q) if (part.includes(t)) n++;
+    if (n > best) {
+      best = n;
+      bestAt = i;
+    }
+  }
+  // 行の頭にそろえる
+  const lineStart = body.lastIndexOf("\n", bestAt);
+  const start = lineStart > head.length && bestAt - lineStart < 200 ? lineStart + 1 : bestAt;
+  if (start <= head.length) return `${body.slice(0, size)}…`;
+  return `${head}\n…\n${body.slice(start, start + win)}${start + win < body.length ? "…" : ""}`;
+}
+
 export function searchKnowledge(entries: KnowledgeEntry[], query: string, opts: { limit?: number; minCoverage?: number } = {}): KnowledgeHit[] {
   const active = entries.filter((e) => e.active);
   if (!active.length || !query.trim()) return [];

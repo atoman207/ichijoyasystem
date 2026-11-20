@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { requireUser } from "@/lib/auth/session";
 import { notificationsFor, storeById, storeName } from "@/lib/db/queries";
-import { canApproveSignup, canExportAccounting, canExportData, canManageMaps, canManageSettings, canManageUsers, canRegisterPurchase, canSeeAllStores, canTriageFax, canViewFax, canViewReports, canViewSuppliers } from "@/lib/auth/permissions";
+import { canApproveSignup, canExportAccounting, canExportData, canManageMaps, canManageSettings, canManageUsers, canRegisterPurchase, canSeeAllStores, canTriageFax, canViewFax, canViewRegistry, canViewReports, canViewSuppliers } from "@/lib/auth/permissions";
 import { getDb } from "@/lib/db/store";
 import { avatarUrl } from "@/lib/account-rules";
 import { ROLE_LABEL, APPROVAL_TYPE_LABEL } from "@/lib/constants";
@@ -83,6 +83,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   }
   if (canExportData(user)) {
     nav.push({ href: "/data", label: "データ入出力 (CSV・スプレッドシート)", short: "入出力", icon: "dataio", group: "管理" });
+  }
+  if (canViewRegistry(user)) {
+    nav.push({ href: "/registry", label: "データ台帳 (全データ・クライアント資料・社内の活動の一覧)", short: "データ台帳", icon: "registry", group: "管理" });
   }
   if (canManageMaps(user)) {
     nav.push({ href: "/maps", label: "地図・住宅地図 (場所・住宅地図の PDF・一括処理)", short: "地図", icon: "maps", group: "管理" });

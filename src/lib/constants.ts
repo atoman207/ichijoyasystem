@@ -356,6 +356,7 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
 export const ENTITY_LABEL: Record<string, string> = {
   customer: "顧客",
   knowledge: "社内資料 (ナレッジ)",
+  registry: "データ台帳 (資料庫)",
   inquiry: "問い合わせ",
   quote: "見積",
   order: "受注・施工",

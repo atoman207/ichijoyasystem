@@ -46,6 +46,9 @@ function entries(buf: Buffer): Map<string, Buffer> {
   return out;
 }
 
+/** zip の中のファイル (名前 → 中身)。.docx・.pptx の読み取り (src/lib/registry/extract.ts) にも使う */
+export const zipEntries = entries;
+
 const decode = (s: string) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d))).replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&amp;/g, "&");
 
 /** <t> の文字をつなげる (ふりがな <rPh> は除く) */

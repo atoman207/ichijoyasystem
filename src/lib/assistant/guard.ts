@@ -216,6 +216,7 @@ export const NAV_ITEMS: { href: string; label: string; short?: string }[] = [
   { href: "/reports", label: "経営ダッシュボード (売上・受注・施工・請求・経費)", short: "経営" },
   { href: "/management", label: "管理会計 (店舗別損益・内部受注・材料原価・在庫・共通経費の案分)", short: "管理会計" },
   { href: "/data", label: "データ入出力 (CSV・スプレッドシート)", short: "入出力" },
+  { href: "/registry", label: "データ台帳 (全データ・クライアント資料・社内の活動の一覧)", short: "データ台帳" },
   { href: "/maps", label: "地図・住宅地図 (場所・住宅地図の PDF・一括処理)", short: "地図" },
   { href: "/audit", label: "変更履歴" },
   { href: "/settings", label: "設定", short: "設定" },

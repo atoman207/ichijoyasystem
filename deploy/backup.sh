@@ -9,6 +9,7 @@
 #   2. 添付ファイル・写真 (VPS の /srv/ichijoya/data/uploads): 新しいファイルを storage/ に追加でコピー
 #      (rsync。ファイルの中身は変わらないため増えた分だけ。アプリで削除したファイルもバックアップには残す)
 #   3. チャットボットのデータベース (SQLite): VACUUM INTO → chatbot/chatbot-<日時>.sqlite
+#      データ台帳の資料庫 (SQLite。人が変えた資料の扱い・画面から追加した資料の中身): VACUUM INTO → chatbot/materials-<日時>.sqlite
 #   4. 古いバックアップを削除 (自動: BACKUP_KEEP_DAYS 日・既定 14 日 / 手動: BACKUP_KEEP_MANUAL_DAYS 日・既定 30 日)
 #   5. 結果を BACKUP_STATUS_FILE に書き、履歴 (backup-history.jsonl) に 1 行足す (設定 → データ管理・本番運用の準備 に表示)
 #   同時には 1 つだけ実行する (2 つ目は「実行中」で終わる)。復元の手順は deploy/README.md の「バックアップと復元」
@@ -107,11 +108,24 @@ if [[ -f "$CHATBOT_DB" ]]; then
   fi
 fi
 
+# 3b. データ台帳の資料庫 (クライアント資料の中身はファイルから作り直せるが、人が変えた扱いと追加した資料を残す)
+MATERIALS_DB="${ICHIJOYA_MATERIALS_DB_PATH:-/srv/ichijoya/data/database/ichijoya-materials.sqlite}"
+if [[ -f "$MATERIALS_DB" ]]; then
+  mat_file="$DEST/chatbot/materials-$STAMP.sqlite"
+  if node -e 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(process.argv[1]); db.exec("pragma busy_timeout = 10000"); db.prepare("vacuum into ?").run(process.argv[2]); db.close();' "$MATERIALS_DB" "$mat_file" 2>/dev/null; then
+    messages+=("資料庫: $(( $(stat -c %s "$mat_file") / 1024 / 1024 )) MB")
+  else
+    messages+=("データ台帳の資料庫のバックアップに失敗しました")
+    rm -f "$mat_file"
+  fi
+fi
+
 # 4. 古いバックアップを削除 (手動で取ったものは長めに残す)
 find "$DEST/db" -name 'ichijoya-*.dump' ! -name '*-manual.dump' -mtime +"$KEEP" -delete
 find "$DEST/db" -name 'ichijoya-*-manual.dump' -mtime +"$KEEP_MANUAL" -delete
 find "$DEST/db" -name '*.part' -mmin +120 -delete
 find "$DEST/chatbot" -name 'chatbot-*.sqlite' -mtime +"$KEEP" -delete
+find "$DEST/chatbot" -name 'materials-*.sqlite' -mtime +"$KEEP" -delete
 
 # 5. 結果
 kept=$(find "$DEST/db" -name 'ichijoya-*.dump' | wc -l)
