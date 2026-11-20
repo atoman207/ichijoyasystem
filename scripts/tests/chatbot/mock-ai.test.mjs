@@ -100,6 +100,8 @@ section("道具の呼び出し (OpenAI): 集計してから答える");
   const READ_ONLY = ["search_records", "get_record", "list_schedule", "analyze", "management_accounting", "business_overview", "search_guides", "search_history", "suggest_schedule", "plan_schedule", "day_route", "schedule_holds", "schedule_setup", "describe_database", "query_database", "calculate", "forecast", "store_split",
     // propose_action は確認のカードを作るだけ (何も変えない。実行は利用者が「実行する」を押したとき: src/lib/assistant/actions.ts)
     "propose_action",
+    // production_plan は製造の予定を読むだけ (schedule-tool.ts)
+    "production_plan",
     // データ台帳 (src/lib/assistant/registry-tool.ts): 資料庫の検索・資料を読む・全データの一覧と社内の活動 (読み取りだけ)
     "search_materials", "read_material", "data_registry"];
   ok(tools.every((t) => READ_ONLY.includes(t)) && !tools.some((t) => /create|update|delete|approve|send|write|insert|register|pay/i.test(t)), `AI に渡す道具は読み取りだけ (${tools.length} 個)`);

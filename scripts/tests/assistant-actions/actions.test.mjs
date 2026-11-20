@@ -205,6 +205,16 @@ section("権限の範囲外の質問 (店舗のロールは自店舗の数字だ
   ok(/権限の範囲外/.test(R0(manager, "中央店の受注件数は？") ?? ""), "店長も自店舗の外は断る");
   ok(R0(chuo, `${own}の今月の売上は？`) === null && R0(chuo, "今月の売上は？") === null, "自店舗の数字は断らない");
   ok(R0(chuo, "合志店の来週の予定は？") === null, "予定表 (全社共有) は断らない");
+  for (const q of ["西店っていくら稼いだ？", "合志店の今月の数字を教えて", "会社全体でどれくらい売れてる？", "うちの店と合志店、どっちが売れてる？", "一番売れている店舗はどこ？", "合志店の月商は？"]) ok(/権限の範囲外/.test(R0(chuo, q) ?? ""), `言い方を変えても断る: ${q}`);
+  ok(R0(chuo, "合志店の明日の予定の件数は？") === null && R0(chuo, "玉名店の休みの人数") === null, "予定・休み (全社共有) は数字の言葉があっても断らない");
+  const ST = await imp("lib/assistant/schedule-tool.ts");
+  const pt = ST.scheduleTools.find((t) => t.def.name === "production_plan");
+  db.productionJobs = [{ id: "pj_t", storeId: "koshi", title: "(御代志)山田 表 12枚", items: [], steps: [{ processId: "p", date: "2031-04-08", minutes: 180, qty: 12, status: "planned" }], startDate: "2031-04-08", endDate: "2031-04-08", status: "planned", createdBy: "system", createdAt: nowIso }];
+  const pr = pt.run(db, chuo, { from: "2031-04-07", to: "2031-04-13" }, now);
+  ok(/合計 12 枚/.test(pr.text) && /御代志/.test(pr.text), "製造の予定の道具: 日別の枚数と現場を返す");
+  const FC = await imp("lib/assistant/forecast.ts");
+  const fc = FC.forecast(db, admin, { subject: "sales", months: 1 }, new Date());
+  ok(fc.ok && JSON.stringify(fc.rows).includes("(来月)"), `予測は months=1 でも来月の行を出す${fc.ok ? "" : ` (${fc.error})`}`);
   ok(R0(chuo, "全社の売上の出し方は？") === null, "使い方の質問は断らない");
   ok(R0(admin, "合志店の今月の売上は？") === null, "管理者は全店舗を答える");
   ok((R0(chuo, "合志店の売上は？") ?? "").includes(own), "断りの文に、見られる範囲 (自店舗) を書く");

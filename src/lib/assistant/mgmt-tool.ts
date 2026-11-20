@@ -29,6 +29,12 @@ function pnlLine(p: StorePnl): string {
 const shiftYear = (d: string, n: number) => `${Number(d.slice(0, 4)) + n}${d.slice(4)}`;
 
 export function managementAccounting(db: Database, user: User, args: { view?: string; from?: string; to?: string; store?: string; month?: string }, today: string): string {
+  const text = managementAccountingText(db, user, args, today);
+  const noCosts = !(db.materialUsages ?? []).length && !(db.materialCosts ?? []).length && !(db.mgmtEntries ?? []).length;
+  return noCosts && canViewMgmt(user) ? `${text}\n\n注意 (必ず守る): 管理会計の原価 (材料の使用・原価単価・仕訳) がまだ 1 件も登録されていないため、この表の材料費は 0 で、粗利益 = 管理売上 になっています。粗利・粗利率を聞かれたら、この表の粗利益は使わず、analyze の gross (売上 − 記録された原価 = 畳原価と案件にひも付いた仕入) で集計して答え、「管理会計の原価はまだ登録されていない」と一言添える。` : text;
+}
+
+function managementAccountingText(db: Database, user: User, args: { view?: string; from?: string; to?: string; store?: string; month?: string }, today: string): string {
   if (!canViewMgmt(user)) return "管理会計 (店舗別損益・原価) は 店長・本部スタッフ・管理者 が見られます。この質問には答えられません。";
   const visible = mgmtStores(user);
   const isDate = (v?: string) => /^\d{4}-\d{2}-\d{2}$/.test(v ?? "");

@@ -222,5 +222,46 @@ const setupTool: ScheduleSuggestTool = {
   },
 };
 
+
+/** 製造の予定 (工場・作業場の日別の枚数と現場。予定表の製造の欄から登録したものを含む。予定表と同じく全社共有) */
+const productionTool: ScheduleSuggestTool = {
+  def: {
+    name: "production_plan",
+    description: "畳の製造の予定と実績 (合志工場など作業場ごとの、日別の製造枚数と現場・新/表・枚数)。「今週の製造の予定」「工場で○日に何枚作る？」「先月の製造枚数」に使う。今日より前は完了 (実績)。予定表の予定 (list_schedule) には製造は入っていない",
+    parameters: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "YYYY-MM-DD (省略 = 今日)" },
+        to: { type: "string", description: "YYYY-MM-DD (省略 = from の 6 日後。最大 62 日)" },
+      },
+      required: [],
+    },
+  },
+  run(db, _user, a, now) {
+    const from = isDateKey(a.from) ? (a.from as string) : toDateKey(now);
+    let to = isDateKey(a.to) && (a.to as string) >= from ? (a.to as string) : addDays(from, 6);
+    if (to > addDays(from, 62)) to = addDays(from, 62);
+    const days = new Map<string, { qty: number; lines: string[] }>();
+    for (const j of db.productionJobs ?? []) {
+      if (j.status === "cancelled") continue;
+      for (const st of j.steps) {
+        if (st.date < from || st.date > to) continue;
+        const d = days.get(st.date) ?? { qty: 0, lines: [] };
+        d.qty += st.qty;
+        if (d.lines.length < 12) d.lines.push(`${j.title}${st.status === "done" ? " (完了)" : ""}`);
+        days.set(st.date, d);
+      }
+    }
+    const list = [...days.entries()].sort(([x], [y]) => x.localeCompare(y));
+    const total = list.reduce((s, [, d]) => s + d.qty, 0);
+    if (!list.length) return { text: `${shortDate(from)}〜${shortDate(to)} の製造の予定・実績は登録されていません。`, summary: "製造の予定 0 件", href: "/schedule/planning" };
+    return {
+      text: [`${shortDate(from)}〜${shortDate(to)} の製造: 合計 ${total} 枚 (${list.length} 日)。工場の 1 日の上限は 予定の計画の設定 (製造の工程) を参照`, ...list.map(([d, x]) => `- ${shortDate(d)}: ${x.qty} 枚 — ${x.lines.join("、")}`), "詳しくは [予定の計画 → 製造](/schedule/planning)"].join("\n"),
+      summary: `製造 ${total} 枚 / ${list.length} 日`,
+      href: "/schedule/planning",
+    };
+  },
+};
+
 /** AI アシスタントに渡す予定の計画の道具 (agent.ts が def を渡し、名前で呼ぶ) */
-export const scheduleTools: ScheduleSuggestTool[] = [scheduleSuggestTool!, planTool, routeTool, holdsTool, setupTool];
+export const scheduleTools: ScheduleSuggestTool[] = [scheduleSuggestTool!, planTool, routeTool, holdsTool, setupTool, productionTool];

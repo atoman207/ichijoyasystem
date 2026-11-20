@@ -52,7 +52,8 @@ const lastDay = (ym: string) => `${ym}-${String(daysIn(ym)).padStart(2, "0")}`;
 
 export function forecast(db: Database, user: User, opts: ForecastOpts, now = new Date()): AnalysisResult | AnalysisError {
   const subject: ForecastSubject = opts.subject && opts.subject in SUBJECT_LABEL ? opts.subject : "sales";
-  const months = Math.min(12, Math.max(1, Math.round(opts.months ?? 3)));
+  // 今月だけの予測を「来月」と取り違えないよう、少なくとも今月と来月を出す (表の行に「(今月)」「(来月)」と書く)
+  const months = Math.min(12, Math.max(2, Math.round(opts.months ?? 3)));
   const today = toDateKey(now);
   const cur = today.slice(0, 7);
   const lastDone = addMonths(cur, -1);

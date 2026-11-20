@@ -863,7 +863,7 @@ ${r}` };
   res = { ...res, text: fixedAnswer.text };
   // データを変える依頼には、最初の 1 文で「この AI ではできない」と答える (手順の案内だけで終わらせない)
   if (writeRequest && !out.actions.length && res.text !== ACTION_REFUSAL && !/(でき|行え|おこなえ)(ません|ない)/.test(res.text.split(/\n|。/)[0] ?? "")) {
-    res = { ...res, text: `この依頼は AI アシスタントからは実行できません (AI アシスタントから実行できるのは ${Object.values(ACTION_LABEL).join("・")} で、確認のカードを押して実行します)。${/(でき|行え)(ません|ない)/.test(res.text) ? "" : "操作は担当の画面で行ってください。"}\n\n${res.text}` };
+    res = { ...res, text: `この依頼は、AI アシスタントからは実行できません。${/(でき|行え)(ません|ない)/.test(res.text) ? "" : "操作は担当の画面で行ってください。"}\n\n${res.text}` };
     checks.fixed.push("データを変える依頼に、実行できないことを最初に書きました");
   }
   // 先に探した使い方の資料は、データを調べて答えたときは根拠から外す (関係のない資料が並ばないように)
