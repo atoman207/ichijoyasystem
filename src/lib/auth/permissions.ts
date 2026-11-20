@@ -494,6 +494,8 @@ export function canRunScheduleBacktest(user: User): boolean {
 /** 事務の権限の判定に使う情報: 事務担当の社員 (設定 → KPI・インセンティブ の事務担当。src/lib/office.ts の officeCtx で作る) */
 export interface OfficeCtx {
   clerkUserIds: string[];
+  /** 慶弔リストを見られる人: all = 有効な社員全員 (既定。お客様の決定 2026-11-20) / office = 事務担当・本部スタッフ・管理者だけ (設定の id = office_access) */
+  condolenceViewers: "all" | "office";
 }
 
 /** 事務の担当: 管理者・本部スタッフ・事務担当に選ばれた社員 (店舗ロールでも可。顧客の新規登録と同じ考え方) */
@@ -517,7 +519,12 @@ export function canEditOfficeImprovements(user: User, ctx: OfficeCtx): boolean {
  * AI の SQL (src/lib/datastore/model.ts の scopeStatements) では全店舗ロールだけが見られる
  */
 export function canViewCondolences(user: User, ctx: OfficeCtx): boolean {
-  return isOfficeStaff(user, ctx);
+  return isOfficeStaff(user, ctx) || (user.active && ctx.condolenceViewers === "all");
+}
+
+/** 慶弔リストを見られる人の切り替え (全社員 / 事務担当・本部・管理者): 管理者 */
+export function canManageOfficeAccess(user: User): boolean {
+  return user.role === "admin";
 }
 
 export function canEditCondolences(user: User, ctx: OfficeCtx): boolean {

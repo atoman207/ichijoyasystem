@@ -155,6 +155,18 @@ section("実行の依頼: 確認のカードを出す (AI は実行しない。�
   ok(!r.answer.startsWith("この依頼は AI アシスタントからは実行できません"), "カードを出したときは「実行できない」と書かない");
 }
 
+section("閲覧の権限: 店舗のロールがほかの店舗・全社の売上を聞いたら、AI を呼ばずに断る");
+{
+  requests.length = 0;
+  handler = () => oaText("合志店の今月の売上は 1,234,567円 です。");
+  const chuoStaff = db.users.find((u) => u.active && u.role === "store_staff" && u.storeId === "chuo");
+  const r1 = await askChatbot(db, chuoStaff, [], "合志店の今月の売上は？");
+  ok(/権限の範囲外/.test(r1.answer) && !/1,234,567/.test(r1.answer), "ほかの店舗の売上は「権限の範囲外」と答える");
+  const r2 = await askChatbot(db, chuoStaff, [], "全社の今年の粗利は？");
+  ok(/権限の範囲外/.test(r2.answer), "全社の数字も断る");
+  ok(requests.length === 0, "断るときは AI を呼ばない (数字を AI に渡さない)");
+}
+
 section("回答の確かめ: 存在しない画面・道具の結果にない記録へのリンクを外す");
 {
   handler = () => oaText("[受注](/orders/o_fake_999) か [管理の画面](/secret-admin-page) を開いてください。");

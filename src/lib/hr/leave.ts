@@ -80,7 +80,8 @@ export interface HrSettings {
 
 export const HR_DEFAULTS: HrSettings = {
   compLimit: 3,
-  consumeOrder: "oldest",
+  // お客様の決定 (2026-11-20): 有給は今年度分 (新しい付与) から使う
+  consumeOrder: "newest",
   fiscalStartMonth: 7,
   closingDay: 20,
   amStart: "08:00",
@@ -108,7 +109,7 @@ export function hrSettings(db: Pick<Database, "settings">): HrSettings {
   }
   return {
     compLimit: n(v.compLimit, 0, 60, HR_DEFAULTS.compLimit),
-    consumeOrder: v.consumeOrder === "newest" ? "newest" : "oldest",
+    consumeOrder: v.consumeOrder === "oldest" ? "oldest" : v.consumeOrder === "newest" ? "newest" : HR_DEFAULTS.consumeOrder,
     fiscalStartMonth: Math.round(n(v.fiscalStartMonth, 1, 12, HR_DEFAULTS.fiscalStartMonth)),
     closingDay: Math.round(n(v.closingDay, 1, 31, HR_DEFAULTS.closingDay)),
     amStart: isTime(v.amStart) ? v.amStart : HR_DEFAULTS.amStart,

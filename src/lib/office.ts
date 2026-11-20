@@ -17,8 +17,12 @@ import { decodeCsv, parseCsv } from "@/lib/csv";
  */
 
 /** 事務の権限の判定に使う情報 (事務担当 = 設定 → KPI・インセンティブ の事務担当) */
+/** 慶弔リストを見られる人の設定 (value.condolenceViewers = "all" | "office") */
+export const OFFICE_ACCESS_ID = "office_access";
+
 export function officeCtx(db: Pick<Database, "settings" | "users">): OfficeCtx {
-  return { clerkUserIds: kpiSettings(db).clerkUserIds };
+  const v = (db.settings ?? []).find((x) => x.id === OFFICE_ACCESS_ID)?.value as { condolenceViewers?: unknown } | undefined;
+  return { clerkUserIds: kpiSettings(db).clerkUserIds, condolenceViewers: v?.condolenceViewers === "office" ? "office" : "all" };
 }
 
 export const CONDOLENCE_CATEGORY_LABEL: Record<CondolenceCategory, string> = { condolence: "弔事", celebration: "慶事", other: "その他" };

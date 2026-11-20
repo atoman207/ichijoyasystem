@@ -268,15 +268,15 @@ function matchAny(value: string | undefined, keywords: string[]): boolean {
   return keywords.some((k) => v.includes(norm(k)));
 }
 
-function resolveStores(db: Database, user: User, wanted: string[] | undefined): { ids: Set<StoreId>; scoped: boolean } {
+function resolveStores(db: Database, user: User, wanted: string[] | undefined): { ids: Set<StoreId>; scoped: boolean; denied: StoreId[] } {
   const visible = canSeeAllStores(user) ? db.stores.map((s) => s.id) : [user.storeId];
-  if (!wanted?.length) return { ids: new Set(visible), scoped: !canSeeAllStores(user) };
+  if (!wanted?.length) return { ids: new Set(visible), scoped: !canSeeAllStores(user), denied: [] };
   const ids = new Set<StoreId>();
   for (const w of wanted) {
     const n = norm(w);
     for (const s of db.stores) if (s.id === w || norm(s.name).includes(n) || norm(s.shortName) === n || n.includes(norm(s.shortName))) ids.add(s.id);
   }
-  return { ids: new Set([...ids].filter((id) => visible.includes(id))), scoped: !canSeeAllStores(user) };
+  return { ids: new Set([...ids].filter((id) => visible.includes(id))), scoped: !canSeeAllStores(user), denied: [...ids].filter((id) => !visible.includes(id)) };
 }
 
 function categoryKeys(wanted: string[] | undefined): Set<AmountKey> | null {
@@ -552,7 +552,9 @@ export function runAnalysis(db: Database, user: User, raw: AnalysisSpec, now = n
     };
   }
   const notes = new Set<string>();
-  const { ids: stores, scoped } = resolveStores(db, user, raw.stores);
+  const { ids: stores, scoped, denied } = resolveStores(db, user, raw.stores);
+  // 閲覧できない店舗を指定した: 自店舗だけに黙って絞らず、権限の範囲外と返す (お客様の決定 2026-11-20)
+  if (denied.length) return { ok: false, error: `${denied.map((id) => db.stores.find((s) => s.id === id)?.name ?? id).join("・")}のデータは、この人の閲覧の権限の範囲外です (見られるのは ${db.stores.find((s) => s.id === user.storeId)?.name ?? "自店舗"} だけ)。`, hint: "回答では「その情報は閲覧の権限の範囲外のため、お答えできません」と伝える。自店舗の数字をほかの店舗・全社の数字として書かない。" };
   if (!stores.size) return { ok: false, error: "指定の店舗が見つからないか、閲覧できない店舗です。", hint: canSeeAllStores(user) ? undefined : "店舗のロールは自店舗のデータだけを集計できます。" };
   if (scoped) notes.add(`閲覧範囲: ${db.stores.find((s) => s.id === user.storeId)?.name ?? "自店舗"} のデータだけを集計しています`);
 

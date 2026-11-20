@@ -10,7 +10,7 @@ import { analysisCatalog, analysisText, runAnalysis, type AnalysisResult, type A
 import { getRecord, lastSearchSource, listSchedule, searchAll, storeScopeNote, RECORD_TYPE_LABEL } from "./search";
 import { scheduleSuggestTool, scheduleTools } from "./schedule-tool";
 import { ACTION_LABEL, proposalText, proposeAction, type ProposedAction } from "./actions";
-import { assistantReadUser } from "./scope";
+import { assistantReadUser, outOfScopeRefusal } from "./scope";
 import { checkCalcInputs, evaluate, formatCalc } from "./calc";
 import { forecast, type ForecastSubject } from "./forecast";
 import { parseStoreSplitQuestion, simulateStoreSplit } from "./store-split";
@@ -365,6 +365,7 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     "",
     `## 今日\n${today} (${wd})`,
     `## 質問している人\n${user.name} (${ROLE_LABEL[user.role]}・${db.stores.find((s) => s.id === user.storeId)?.name ?? user.storeId})。閲覧範囲: ${storeScopeNote(db, user)}`,
+    ...(canSeeAllStores(user) ? [] : [`## 閲覧の権限 (必ず守る)\nこの人が見られる売上・粗利・入金・経費・仕入・受注などの数字は ${db.stores.find((s) => s.id === user.storeId)?.name ?? "自店舗"} の分だけ。ほかの店舗・本部・全社の数字を聞かれたら、調べずに「その情報は閲覧の権限の範囲外のため、お答えできません」と答える。道具の結果は自店舗の分だけなので、それを全社・ほかの店舗の数字として書かない (予定表は全社共有なので答えてよい)。`]),
     `## 店舗\n${db.stores.map((s) => `${s.id}=${s.name}`).join(" / ")}`,
     `## 社員 (いま有効なアカウント)\n${staff.join("、")}\n(移行した過去の売上の担当者には、退職した社員の名前もあります)`,
     "",
@@ -711,8 +712,11 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
       /* 画面への知らせの失敗で回答を止めない */
     }
   };
-  const deep = isAnalytical(question);
   const now = opts.now ?? new Date();
+  // 店舗のロールが、ほかの店舗・本部・全社の数字を聞いた: AI を呼ばずに断る (scope.ts)
+  const refusal = outOfScopeRefusal(db, user, question, now);
+  if (refusal) return { answer: refusal, tables: [], sources: [], tools: [], usedData: true, usedKnowledge: false, docKeys: [], unknown: false, provider: "rule:scope", ms: 0, actions: [] };
+  const deep = isAnalytical(question);
   const t0 = Date.now();
   const out = { tables: [] as AnalysisResult[], sources: [] as AgentSource[], tools: [] as AgentReply["tools"], usedData: false, usedKnowledge: false, docKeys: [] as string[], actions: [] as ProposedAction[] };
   // 道具の結果は回答の確かめ (guard.ts) の根拠にする

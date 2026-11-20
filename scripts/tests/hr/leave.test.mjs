@@ -21,6 +21,10 @@ db.leaveGrants = [];
 db.holidayWorks = [];
 db.schedule = db.schedule.filter((e) => e.date < "2031-01-01");
 db.settings = db.settings.filter((s) => s.id !== L.HR_SETTINGS_ID);
+// 既定はお客様の決定で「当年度分 (新しい付与) から」(2026-11-20)。消化の順番を確かめるテストは「古い付与から」の設定で行い、既定は別に確かめる
+const OLDEST = () => { db.settings = db.settings.filter((s) => s.id !== L.HR_SETTINGS_ID); db.settings.push({ id: L.HR_SETTINGS_ID, value: { consumeOrder: "oldest" }, updatedAt: new Date().toISOString() }); };
+if (L.hrSettings(db).consumeOrder !== "newest") throw new Error("既定の消化の順番が「当年度分から」ではありません");
+OLDEST();
 db.holidays = [];
 
 const pick = (f, msg) => {
@@ -189,10 +193,11 @@ section("有給の前取りはできない・有効期限 (2 年)・古い付与
   leave(managerK, { userId: u.id, date: "2032-05-10" });
   eq(L.paidLedger(db, u.id, "2032-05-10").grants.find((g) => g.grant.grantDate === "2031-04-01").usedHalves, 2, "期限切れの付与は使わず、新しい付与から消化");
   // 設定で「当年度分 (新しい付与) から」
+  db.settings = db.settings.filter((s) => s.id !== L.HR_SETTINGS_ID);
   db.settings.push({ id: L.HR_SETTINGS_ID, value: { consumeOrder: "newest" }, updatedAt: new Date().toISOString() });
   const l2 = L.paidLedger(db, u.id, "2031-05-12");
   ok(l2.grants.find((g) => g.grant.grantDate === "2031-04-01").usedHalves === 4 && l2.grants.find((g) => g.grant.grantDate === "2030-04-01").usedHalves === 0, "設定が「当年度分から」なら新しい付与から消化");
-  db.settings = db.settings.filter((s) => s.id !== L.HR_SETTINGS_ID);
+  OLDEST();
   // 付与を消すと承認済みの休暇が足りなくなる → 断る
   const g = db.leaveGrants.find((x) => x.userId === u.id && x.grantDate === "2030-04-01");
   A.removeGrant(db, hq, g.id, "2031-06-01");
@@ -252,6 +257,7 @@ section("振休のため込みの上限 (社内規定: 3 日まで) の警告");
   ok(db.auditLogs.some((l) => l.entity === "settings" && l.changes?.some((c) => c.field === "compLimit" && c.before === 3 && c.after === 5)), "ルールの変更は変更履歴に changes つきで残る");
   A.saveRules(db, admin, { ...rules });
   ok(profiles && L.hrSettings(db).compLimit === 3, "初期値 3 日に戻す");
+  OLDEST(); // 既定 (当年度分から) に戻ったので、以降の消化の順番のテストは「古い付与から」に戻す
 }
 
 section("年度 (7 月〜翌 6 月) の取得状況");

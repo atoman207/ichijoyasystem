@@ -26,8 +26,8 @@ const hq = db.users.find((u) => u.active && u.role === "hq_staff");
 const koshiMgr = db.users.find((u) => u.active && u.role === "store_manager" && u.storeId === "koshi");
 const chuoMgr = db.users.find((u) => u.active && u.role === "store_manager" && u.storeId === "chuo");
 const koshiStaff = db.users.find((u) => u.active && u.role === "store_staff" && u.storeId === "koshi");
-const none = { clerkUserIds: [] };
-const clerk = { clerkUserIds: [koshiStaff.id] };
+const none = { clerkUserIds: [], condolenceViewers: "office" };
+const clerk = { clerkUserIds: [koshiStaff.id], condolenceViewers: "office" };
 
 function xlsxBuffer(sheets) {
   const wb = XLSX.utils.book_new();
@@ -45,6 +45,10 @@ section("権限: 事務改善は全員が見る・事務担当/本部/管理者�
   ok(!P.canViewCondolences(koshiStaff, none) && !P.canViewCondolences(koshiMgr, none), "事務担当でない店舗ロールは慶弔リストを見られない (店長も)");
   ok(P.canViewCondolences(koshiStaff, clerk) && P.canViewCondolences(hq, none) && P.canViewCondolences(admin, none), "事務担当・本部・管理者は慶弔リストを見られる");
   ok(!P.canViewCondolences({ ...hq, active: false }, none), "無効の社員は見られない");
+  const everyone = { clerkUserIds: [], condolenceViewers: "all" };
+  ok(P.canViewCondolences(koshiStaff, everyone) && P.canViewCondolences(koshiMgr, everyone), "「全社員」の設定 (既定) では店舗ロールも慶弔リストを見られる");
+  ok(!P.canEditCondolences(koshiStaff, everyone), "「全社員」でも登録・修正は事務担当・本部・管理者だけ");
+  ok(!P.canViewCondolences({ ...koshiStaff, active: false }, everyone), "「全社員」でも無効の社員は見られない");
   const scope = MODEL.scopeStatements(koshiMgr).join("\n");
   ok(/create temp view condolences as select \* from main\.condolences where 0/.test(scope), "AI の SQL でも店舗ロールには慶弔リストを見せない");
   eq(MODEL.scopeStatements(hq), [], "全店舗ロールは SQL の範囲の制限なし (慶弔も見られる)");

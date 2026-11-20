@@ -7,7 +7,7 @@ import { ensureChatbotData } from "./build";
 import { countHit, findSimilarQa, insertChatLog, insertQa, logAsk, recentAiAsks, normalizeQuestion, searchDocs, type AskSource, type ChatLogPayload, type DocRow, type QaLink, type QaMatch } from "./store";
 import { runAgent, type AgentProgress, type AgentSource } from "@/lib/assistant/agent";
 import type { ProposedAction } from "@/lib/assistant/actions";
-import { assistantReadUser } from "@/lib/assistant/scope";
+import { assistantReadUser, outOfScopeRefusal } from "@/lib/assistant/scope";
 import { runAnalysis, type AnalysisResult, type AnalysisSpec } from "@/lib/assistant/analyze";
 import { ANALYSIS_WORDS, heuristicSpec, refineSpec } from "@/lib/assistant/intent";
 import { yen } from "@/lib/format";
@@ -206,6 +206,12 @@ async function answerQuestion(db: Database, user: User | null, history: ChatTurn
   };
 
   for (const s of SMALLTALK) if (s.test.test(q.replace(/[\s!！。、?？~〜]+$/g, ""))) return done({ answer: s.reply, links: [], source: "smalltalk", suggestions: [] });
+
+  // 店舗のロールが、ほかの店舗・本部・全社の売上などを聞いた: 調べずに「権限の範囲外」と答える (お客様の決定 2026-11-20。scope.ts)
+  if (user) {
+    const refusal = outOfScopeRefusal(db, user, q);
+    if (refusal) return done({ answer: refusal, links: [], source: "none", suggestions: [] });
+  }
 
   if (!user && DATA.test(q) && !HOW_TO.test(q)) {
     return done({

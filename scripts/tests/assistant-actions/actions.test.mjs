@@ -195,6 +195,23 @@ ok(!SC.assistantAllStores(db, now) && SC.assistantReadUser(db, chuo, now) === ch
 db.settings = db.settings.filter((x) => x.id !== SC.ASSISTANT_SCOPE_ID);
 
 /* ------------------------------------------------------------------ */
+section("権限の範囲外の質問 (店舗のロールは自店舗の数字だけ。ほかの店舗・本部・全社は断る)");
+{
+  const R0 = (u, q) => SC.outOfScopeRefusal(db, u, q, now);
+  const own = db.stores.find((x) => x.id === chuo.storeId).name;
+  ok(/権限の範囲外/.test(R0(chuo, "合志店の今月の売上は？") ?? ""), "店舗スタッフがほかの店舗の売上を聞いたら断る");
+  ok(/権限の範囲外/.test(R0(chuo, "全社の売上はいくら？") ?? "") && /権限の範囲外/.test(R0(chuo, "店舗別の粗利を比べて") ?? ""), "全社・店舗別の数字も断る");
+  ok(/権限の範囲外/.test(R0(chuo, "本部の経費は？") ?? ""), "本部の数字も断る");
+  ok(/権限の範囲外/.test(R0(manager, "中央店の受注件数は？") ?? ""), "店長も自店舗の外は断る");
+  ok(R0(chuo, `${own}の今月の売上は？`) === null && R0(chuo, "今月の売上は？") === null, "自店舗の数字は断らない");
+  ok(R0(chuo, "合志店の来週の予定は？") === null, "予定表 (全社共有) は断らない");
+  ok(R0(chuo, "全社の売上の出し方は？") === null, "使い方の質問は断らない");
+  ok(R0(admin, "合志店の今月の売上は？") === null, "管理者は全店舗を答える");
+  ok((R0(chuo, "合志店の売上は？") ?? "").includes(own), "断りの文に、見られる範囲 (自店舗) を書く");
+  const an = AN.runAnalysis(db, chuo, { subject: "sales", metrics: ["sales"], stores: ["合志店"], from: "2020-01-01", to: "2031-12-31" });
+  ok(!an.ok && /権限の範囲外/.test(an.error), "集計の道具も、閲覧できない店舗の指定は権限の範囲外と返す (黙って自店舗に絞らない)");
+}
+
 section("商品別の原価・粗利 (案件の原価を明細の金額で按分)");
 const cust2 = { ...cust, id: "cust_a2", code: "C-A2", name: "按分 次郎" };
 db.customers.push(cust2);

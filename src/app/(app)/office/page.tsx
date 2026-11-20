@@ -1,10 +1,10 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canEditCondolences, canEditOfficeImprovements, canViewCondolences } from "@/lib/auth/permissions";
+import { canEditCondolences, canEditOfficeImprovements, canManageOfficeAccess, canViewCondolences } from "@/lib/auth/permissions";
 import { CONDOLENCE_CATEGORY_LABEL, filterCondolences, filterImprovements, officeCtx, yearsOf } from "@/lib/office";
 import { officeTablesReady } from "@/lib/office-tables";
-import { deleteCondolence, deleteImprovement, importCondolences, importImprovements, saveCondolence, saveImprovement } from "@/lib/actions/office";
+import { deleteCondolence, deleteImprovement, importCondolences, importImprovements, saveCondolence, saveImprovement, setCondolenceViewers } from "@/lib/actions/office";
 import { fmtDate, toDateKey, yen } from "@/lib/format";
 import type { CondolenceCategory } from "@/lib/db/types";
 import { Badge, Button, Card, CardHeader, EmptyRow, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Pager, Select, Table, Td, Textarea, Th, Tr, paginate } from "@/components/ui";
@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 /**
  * 事務 (事務改善シート・慶弔リスト)。クライアントのスプレッドシート 2 つを画面で扱う (src/lib/office.ts)
  * - 事務改善シート: 全員が見る (年・担当・項目・検索で絞り込み)。登録・修正・削除・取込は事務担当・本部・管理者
- * - 慶弔リスト: ご家族の情報を含むため、事務担当・本部・管理者だけ (タブも出さない)
+ * - 慶弔リスト: 見るのは全社員 (既定。お客様の決定。管理者がこの画面で「事務担当・本部・管理者だけ」に戻せる)。登録・修正・取込は事務担当・本部・管理者
  */
 export default async function OfficePage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -27,7 +27,7 @@ export default async function OfficePage({ searchParams }: { searchParams: Promi
 
   return (
     <div>
-      <Flash msg={sp.msg} err={sp.err ?? (sp.tab === "keicho" && !canKeicho ? "慶弔リストは事務担当・本部スタッフ・管理者だけが見られます。" : undefined)} />
+      <Flash msg={sp.msg} err={sp.err ?? (sp.tab === "keicho" && !canKeicho ? "慶弔リストを見る権限がありません (管理者の設定で、事務担当・本部スタッフ・管理者だけにしています)。" : undefined)} />
       <PageHeader
         title="事務"
         description="事務改善シート (事務のミス・気づき → 原因 → 具体的改善策) と慶弔リストを、スプレッドシートと同じ項目で記録します。シートの .xlsx・CSV から取り込めます"
@@ -37,6 +37,16 @@ export default async function OfficePage({ searchParams }: { searchParams: Promi
         items={[{ href: "/office?tab=kaizen", label: "事務改善シート", count: db.officeImprovements.length }, ...(canKeicho ? [{ href: "/office?tab=keicho", label: "慶弔リスト", count: db.condolences.length }] : [])]}
       />
       {!ready && <Note tone="warn">事務のテーブルがまだデータベースにありません (デプロイ後に作られます)。それまでは登録・取込はできません。</Note>}
+      {tab === "keicho" && canManageOfficeAccess(user) && (
+        <form action={setCondolenceViewers} className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-xs">
+          <span className="font-medium text-ink">慶弔リストを見られる人</span>
+          <Select name="condolenceViewers" defaultValue={ctx.condolenceViewers} className="max-w-64">
+            <option value="all">全社員 (登録・修正は事務担当・本部・管理者)</option>
+            <option value="office">事務担当・本部・管理者だけ</option>
+          </Select>
+          <Button type="submit" size="sm" variant="secondary">変更</Button>
+        </form>
+      )}
       {tab === "kaizen" ? <KaizenTab sp={sp} canEdit={canEditOfficeImprovements(user, ctx)} me={user.name} /> : <KeichoTab sp={sp} canEdit={canEditCondolences(user, ctx)} />}
     </div>
   );

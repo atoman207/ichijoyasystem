@@ -4,13 +4,14 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { CondolenceCategory, OfficeImprovement, Condolence, User } from "@/lib/db/types";
 import { addAudit, diffChanges, getDb, mutate, newId, nowIso } from "@/lib/db/store";
-import { canEditCondolences, canEditOfficeImprovements } from "@/lib/auth/permissions";
+import { canEditCondolences, canEditOfficeImprovements, canManageOfficeAccess } from "@/lib/auth/permissions";
 import {
   CONDOLENCE_CATEGORY_LABEL,
   applyCondolenceImport,
   applyImprovementImport,
   matchStaff,
   officeCtx,
+  OFFICE_ACCESS_ID,
   parseDay,
   parseYen,
   planCondolenceImport,
@@ -230,4 +231,25 @@ export async function importCondolences(fd: FormData) {
     n = applyCondolenceImport(db, user, plan, label);
   });
   done(back, summary(plan, n));
+}
+
+/** 慶弔リストを見られる人 (全社員 / 事務担当・本部・管理者だけ) の切り替え: 管理者 (設定の id = office_access) */
+export async function setCondolenceViewers(formData: FormData) {
+  const user = await requireActionUser();
+  const back = `${BASE}?tab=keicho`;
+  if (!canManageOfficeAccess(user)) fail(back, "慶弔リストを見られる人は管理者が変更できます。");
+  const next = String(formData.get("condolenceViewers") ?? "") === "office" ? "office" : "all";
+  await mutate((db) => {
+    const before = officeCtx(db).condolenceViewers;
+    const row = db.settings.find((s) => s.id === OFFICE_ACCESS_ID);
+    const now = nowIso();
+    if (row) {
+      row.value = { ...row.value, condolenceViewers: next };
+      row.updatedBy = user.id;
+      row.updatedAt = now;
+    } else db.settings.push({ id: OFFICE_ACCESS_ID, value: { condolenceViewers: next }, updatedBy: user.id, updatedAt: now });
+    addAudit(db, { userId: user.id, action: "update", entity: "settings", entityId: OFFICE_ACCESS_ID, entityLabel: "慶弔リストを見られる人", summary: `慶弔リストを見られる人を「${next === "all" ? "全社員" : "事務担当・本部・管理者"}」に変更`, storeId: "hq", changes: [{ field: "condolenceViewers", before, after: next }] });
+  });
+  revalidatePath(BASE);
+  redirect(withMsg(back, next === "all" ? "慶弔リストを全社員が見られるようにしました (登録・修正は事務担当・本部・管理者)。" : "慶弔リストを事務担当・本部・管理者だけが見られるようにしました。"));
 }
