@@ -6,8 +6,60 @@
  * - 列の削除・型の変更は自動では行わない (手動で移行 SQL を書く)
  * - すべてのテーブルで RLS を有効にし、ポリシーは作らない (= publishable キーからは読めない)。
  *   アプリはサーバー側で secret キーを使って読み書きする
+ * - SUPABASE_ONLY_TABLES (アプリがメモリに読み込まない表) も同じ書き方で作る。buildTablesSql はその表だけの SQL (同期のスクリプトが使う)
  */
-import { CHANGES_TABLE, META_TABLE, RELAXED_NOT_NULL, TABLES, loadOrder, snake } from "../../src/lib/db/schema.ts";
+import { CHANGES_TABLE, META_TABLE, RELAXED_NOT_NULL, SUPABASE_ONLY_TABLES, TABLES, loadOrder, snake } from "../../src/lib/db/schema.ts";
+
+/** 作る表 (アプリが読み込む表 → Supabase にだけ置く表。参照される側が先) */
+const ALL_TABLES = [...TABLES, ...SUPABASE_ONLY_TABLES];
+
+/** 表の作成・列の追加・索引 (何度実行しても同じ) */
+function tableLines(defs, lines) {
+  for (const t of defs) {
+    lines.push(`-- ${t.label}`);
+    lines.push(`create table if not exists ${t.table} (`);
+    lines.push(t.columns.map(([name, spec]) => `  ${snake(name)} ${spec}`).join(",\n"));
+    lines.push(");");
+    lines.push(`comment on table ${t.table} is '${q(t.label)}';`);
+    lines.push("");
+  }
+  lines.push("-- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)");
+  lines.push("-- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する");
+  for (const t of defs) {
+    for (const [name, spec] of t.columns) {
+      if (/primary key/.test(spec)) continue;
+      lines.push(`alter table ${t.table} add column if not exists ${snake(name)} ${spec};`);
+    }
+  }
+  lines.push("");
+  // 索引は列の追加の後に作る (後から追加した列の索引が、列より先に作られて失敗しないように)
+  lines.push("-- 索引 (検索・読み込みの並び順)");
+  for (const t of defs) {
+    for (const cols of t.indexes ?? []) lines.push(`create index if not exists ${t.table}_${cols.join("_")}_idx on ${t.table} (${cols.join(", ")});`);
+    const order = loadOrder(t);
+    if (order.length > 1 || order[0] !== "id") lines.push(`create index if not exists ${t.table}_load_order_idx on ${t.table} (${order.join(", ")});`);
+  }
+  lines.push("");
+}
+
+/** 行レベルセキュリティ (有効化のみ・ポリシーなし) と secret キー (service_role) の権限 */
+function securityLines(tables, lines) {
+  for (const t of tables) {
+    lines.push(`alter table ${t.table} enable row level security;`);
+    lines.push(`revoke all on table ${t.table} from anon, authenticated;`);
+    lines.push(`grant select, insert, update, delete on table ${t.table} to service_role;`);
+  }
+}
+
+/** 指定した表だけの SQL (作成・列・索引・RLS・権限)。同期のスクリプトが自分の表を作るときに使う (ほかの表には触れない) */
+export function buildTablesSql(defs) {
+  const lines = ["begin;", ""];
+  tableLines(defs, lines);
+  lines.push("grant usage on schema public to service_role;");
+  securityLines(defs, lines);
+  lines.push("", "commit;", "", "notify pgrst, 'reload schema';", "");
+  return lines.join("\n");
+}
 
 const q = (s) => s.replace(/'/g, "''");
 
@@ -45,43 +97,14 @@ export function buildSchemaSql({ header = true } = {}) {
   lines.push(`comment on table ${CHANGES_TABLE} is '変更の記録 (リビジョンごとの表と行の ID。中身は持たない。新しい 5,000 件を残す)';`);
   lines.push("");
 
-  for (const t of TABLES) {
-    lines.push(`-- ${t.label}`);
-    lines.push(`create table if not exists ${t.table} (`);
-    lines.push(t.columns.map(([name, spec]) => `  ${snake(name)} ${spec}`).join(",\n"));
-    lines.push(");");
-    lines.push(`comment on table ${t.table} is '${q(t.label)}';`);
-    lines.push("");
-  }
-
-  lines.push("-- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)");
-  lines.push("-- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する");
-  for (const t of TABLES) {
-    for (const [name, spec] of t.columns) {
-      if (/primary key/.test(spec)) continue;
-      lines.push(`alter table ${t.table} add column if not exists ${snake(name)} ${spec};`);
-    }
-  }
-  lines.push("");
-  // 索引は列の追加の後に作る (後から追加した列の索引が、列より先に作られて失敗しないように)
-  lines.push("-- 索引 (検索・読み込みの並び順)");
-  for (const t of TABLES) {
-    for (const cols of t.indexes ?? []) lines.push(`create index if not exists ${t.table}_${cols.join("_")}_idx on ${t.table} (${cols.join(", ")});`);
-    const order = loadOrder(t);
-    if (order.length > 1 || order[0] !== "id") lines.push(`create index if not exists ${t.table}_load_order_idx on ${t.table} (${order.join(", ")});`);
-  }
-  lines.push("");
+  tableLines(ALL_TABLES, lines);
   lines.push("-- 後から not null を外した列 (データは変えない。外した後に実行しても変化なし)");
   for (const [table, column] of RELAXED_NOT_NULL) lines.push(`alter table ${table} alter column ${column} drop not null;`);
   lines.push("");
   lines.push("-- 行レベルセキュリティ: 有効化のみ (ポリシーなし)。publishable / anon キーからはアクセスできない");
   lines.push("-- アプリが使う secret キー (service_role) には読み書きの権限を明示的に付ける (プロジェクトの既定の権限に頼らない)");
   lines.push("grant usage on schema public to service_role;");
-  for (const t of [{ table: META_TABLE }, { table: CHANGES_TABLE }, ...TABLES]) {
-    lines.push(`alter table ${t.table} enable row level security;`);
-    lines.push(`revoke all on table ${t.table} from anon, authenticated;`);
-    lines.push(`grant select, insert, update, delete on table ${t.table} to service_role;`);
-  }
+  securityLines([{ table: META_TABLE }, { table: CHANGES_TABLE }, ...ALL_TABLES], lines);
   lines.push("");
   lines.push("-- 書き込みのたびにリビジョンを +1 (他のサーバーインスタンスが変更を検知して読み直す)");
   lines.push("create or replace function public.bump_revision() returns bigint");
@@ -112,4 +135,4 @@ export function buildSchemaSql({ header = true } = {}) {
   return lines.join("\n");
 }
 
-export const TABLE_COUNT = TABLES.length + 2;
+export const TABLE_COUNT = ALL_TABLES.length + 2;

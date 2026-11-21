@@ -1,7 +1,7 @@
 # source — クライアントから受け取った資料 (分野ごとに整理)
 
 一畳屋様から受け取った資料 (Google ドライブの共有フォルダー・参考の PDF) を、**業務の分野ごと**にまとめたフォルダーです。
-データ台帳 (`/registry`) と AI アシスタントの資料庫は、ここを読んで作ります。
+データ台帳 (`/registry`) と AI アシスタントの資料庫は、ここを読んで作ります。Supabase の `source_items` (全ファイル・全フォルダー。画像・動画・フォルダーは場所だけ) と `source_texts` (文書の中身) にも登録します (ファイルの本体は Supabase に入れず、このフォルダーにだけ置く)。
 
 - **コミットしない** (個人情報・社外秘を含む。`.gitignore` で除外し、この README だけをコミット)。本番の VPS のこのフォルダーが正本です
 - 2026-11-21 に `other/client-materials` (Google ドライブの 9 フォルダ) と `other/` 直下の PDF から移しました。どのファイルがどこへ移ったかは `_index/manifest.csv` (表計算で開ける) にあります
@@ -39,8 +39,10 @@
 ## 新しい資料を置くとき
 
 1. 合う分野のフォルダーに置く (中に「年度」「店舗」などのフォルダーを作ってよい)。合うものがなければ `99_その他/`
-2. サーバーで読み取る: `npm run registry:scan` (変わったファイルだけ読む)。社内資料に登録する資料があれば続けて `npm run registry:promote -- --apply`
-3. 読み取りの報告は `data/registry/scan-report.md`
+2. サーバーで読み取る: `npm run registry:scan` (変わったファイルだけ読む)
+3. Supabase に登録する: `npm run registry:supabase -- --apply` (表 `source_items` = 全ファイル・全フォルダー、`source_texts` = 文書の中身。画像・動画・フォルダーは場所だけ。変わった行だけ書く)
+4. 社内資料 (AI が最優先で使う資料) に登録する資料があれば `npm run registry:promote -- --apply`
+読み取りの報告は `data/registry/scan-report.md`
 
 ファイルを別のフォルダーへ動かしても、中身が同じなら資料庫の ID・人が変えた扱い・社内資料はそのまま引き継ぎます (次の読み取りで索引も新しくなります)。
 

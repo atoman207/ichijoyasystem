@@ -32,7 +32,8 @@
     "test:intake": "node scripts/tests/ai-intake/intake.test.mjs",
     "test:assistant": "npm run test:chatbot && npm run test:acceptance && npm run test:knowledge && npm run test:drafts && npm run test:assistant-actions && npm run test:registry",
     "registry:scan": "node scripts/registry/scan-materials.mjs",
-    "registry:promote": "node scripts/registry/promote-knowledge.mjs"
+    "registry:promote": "node scripts/registry/promote-knowledge.mjs",
+    "registry:supabase": "node scripts/registry/sync-supabase.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.7.0",

@@ -1443,6 +1443,63 @@ create table if not exists doc_drafts (
 );
 comment on table doc_drafts is '文書の下書き (AI アシスタントで作った文面の保存・版の履歴・確認・承認・送信)';
 
+-- クライアント資料のファイルとフォルダー (source/。画像・動画・フォルダーは場所だけ)
+create table if not exists source_items (
+  id text primary key,
+  entry text not null check (entry in ('file','folder','system')),
+  path text not null unique deferrable initially deferred,
+  parent_path text not null default '',
+  name text not null,
+  folder text not null default '',
+  folder_label text not null default '',
+  ext text not null default '',
+  kind text not null,
+  content text not null check (content in ('text','summary','path_only','excluded')),
+  bytes bigint,
+  sha1 text,
+  modified_on date,
+  original_path text,
+  source_file_id text,
+  drive_url text,
+  action text,
+  category text,
+  visibility text not null check (visibility in ('all','manager','hq','admin')),
+  store_id text,
+  record_date date,
+  status text not null,
+  note text,
+  imported_to text,
+  duplicate_of text,
+  chars integer not null default 0,
+  sections integer not null default 0,
+  sheet_names jsonb,
+  pii jsonb,
+  summary text,
+  content_hash text,
+  row_hash text not null,
+  registered_at timestamptz not null,
+  updated_at timestamptz not null
+);
+comment on table source_items is 'クライアント資料のファイルとフォルダー (source/。画像・動画・フォルダーは場所だけ)';
+
+-- クライアント資料の中身 (文書の節。ID・パスワードは伏せ字・見られる人つき)
+create table if not exists source_texts (
+  id text primary key,
+  item_id text not null references source_items(id) on delete cascade,
+  seq integer not null,
+  section text not null default '',
+  part integer not null default 1,
+  parts integer not null default 1,
+  visibility text not null check (visibility in ('all','manager','hq','admin')),
+  category text,
+  knowledge boolean not null default false,
+  record_date date,
+  head text not null,
+  body text not null,
+  chars integer not null default 0
+);
+comment on table source_texts is 'クライアント資料の中身 (文書の節。ID・パスワードは伏せ字・見られる人つき)';
+
 -- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)
 -- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する
 alter table stores add column if not exists code text not null;
@@ -2478,6 +2535,51 @@ alter table doc_drafts add column if not exists recipient_label text;
 alter table doc_drafts add column if not exists delivery_ids jsonb not null default '[]';
 alter table doc_drafts add column if not exists comm_log_id text;
 alter table doc_drafts add column if not exists copied_from text;
+alter table source_items add column if not exists entry text not null check (entry in ('file','folder','system'));
+alter table source_items add column if not exists path text not null unique deferrable initially deferred;
+alter table source_items add column if not exists parent_path text not null default '';
+alter table source_items add column if not exists name text not null;
+alter table source_items add column if not exists folder text not null default '';
+alter table source_items add column if not exists folder_label text not null default '';
+alter table source_items add column if not exists ext text not null default '';
+alter table source_items add column if not exists kind text not null;
+alter table source_items add column if not exists content text not null check (content in ('text','summary','path_only','excluded'));
+alter table source_items add column if not exists bytes bigint;
+alter table source_items add column if not exists sha1 text;
+alter table source_items add column if not exists modified_on date;
+alter table source_items add column if not exists original_path text;
+alter table source_items add column if not exists source_file_id text;
+alter table source_items add column if not exists drive_url text;
+alter table source_items add column if not exists action text;
+alter table source_items add column if not exists category text;
+alter table source_items add column if not exists visibility text not null check (visibility in ('all','manager','hq','admin'));
+alter table source_items add column if not exists store_id text;
+alter table source_items add column if not exists record_date date;
+alter table source_items add column if not exists status text not null;
+alter table source_items add column if not exists note text;
+alter table source_items add column if not exists imported_to text;
+alter table source_items add column if not exists duplicate_of text;
+alter table source_items add column if not exists chars integer not null default 0;
+alter table source_items add column if not exists sections integer not null default 0;
+alter table source_items add column if not exists sheet_names jsonb;
+alter table source_items add column if not exists pii jsonb;
+alter table source_items add column if not exists summary text;
+alter table source_items add column if not exists content_hash text;
+alter table source_items add column if not exists row_hash text not null;
+alter table source_items add column if not exists registered_at timestamptz not null;
+alter table source_items add column if not exists updated_at timestamptz not null;
+alter table source_texts add column if not exists item_id text not null references source_items(id) on delete cascade;
+alter table source_texts add column if not exists seq integer not null;
+alter table source_texts add column if not exists section text not null default '';
+alter table source_texts add column if not exists part integer not null default 1;
+alter table source_texts add column if not exists parts integer not null default 1;
+alter table source_texts add column if not exists visibility text not null check (visibility in ('all','manager','hq','admin'));
+alter table source_texts add column if not exists category text;
+alter table source_texts add column if not exists knowledge boolean not null default false;
+alter table source_texts add column if not exists record_date date;
+alter table source_texts add column if not exists head text not null;
+alter table source_texts add column if not exists body text not null;
+alter table source_texts add column if not exists chars integer not null default 0;
 
 -- 索引 (検索・読み込みの並び順)
 create index if not exists stores_load_order_idx on stores (code, id);
@@ -2619,6 +2721,13 @@ create index if not exists condolences_load_order_idx on condolences (date, crea
 create index if not exists doc_drafts_store_id_idx on doc_drafts (store_id);
 create index if not exists doc_drafts_status_idx on doc_drafts (status);
 create index if not exists doc_drafts_load_order_idx on doc_drafts (created_at, id);
+create index if not exists source_items_folder_idx on source_items (folder);
+create index if not exists source_items_parent_path_idx on source_items (parent_path);
+create index if not exists source_items_entry_idx on source_items (entry);
+create index if not exists source_items_content_idx on source_items (content);
+create index if not exists source_items_load_order_idx on source_items (path, id);
+create index if not exists source_texts_visibility_idx on source_texts (visibility);
+create index if not exists source_texts_load_order_idx on source_texts (item_id, seq, id);
 
 -- 後から not null を外した列 (データは変えない。外した後に実行しても変化なし)
 alter table comm_logs alter column customer_id drop not null;
@@ -2824,6 +2933,12 @@ grant select, insert, update, delete on table condolences to service_role;
 alter table doc_drafts enable row level security;
 revoke all on table doc_drafts from anon, authenticated;
 grant select, insert, update, delete on table doc_drafts to service_role;
+alter table source_items enable row level security;
+revoke all on table source_items from anon, authenticated;
+grant select, insert, update, delete on table source_items to service_role;
+alter table source_texts enable row level security;
+revoke all on table source_texts from anon, authenticated;
+grant select, insert, update, delete on table source_texts to service_role;
 
 -- 書き込みのたびにリビジョンを +1 (他のサーバーインスタンスが変更を検知して読み直す)
 create or replace function public.bump_revision() returns bigint

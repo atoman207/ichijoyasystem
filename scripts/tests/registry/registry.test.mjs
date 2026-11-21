@@ -397,6 +397,58 @@ section("スクリプト: クライアント資料のフォルダー (source/) �
   sdb.close();
   ok(/追加 0・更新 2・削除 0/.test(promote()), "動かしても同じ社内資料を更新する (出典の場所だけ。追加・削除にならない)");
 
+  // Supabase に登録する行 (source_items・source_texts。画像・フォルダーは場所だけ)
+  const SS = await imp("lib/registry/supabase-sync.ts");
+  const SCHEMA = await imp("lib/db/schema.ts");
+  const { buildTablesSql, buildSchemaSql } = await import(path.join(root, "scripts/import/schema-sql.mjs"));
+  fs.mkdirSync(path.join(dir, "20_写真", "その他"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "20_写真", "その他", "a.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]));
+  const mdb2 = M.openMaterials(mfile);
+  ok(SS.buildSourceRows(mdb2, dir).problems.some((x) => x.includes("まだ読み取っていない: 20_写真/その他/a.jpg")), "読み取っていないファイルがあれば書かない (先に読み取り)");
+  M.closeMaterials();
+  scan();
+  const mdb3 = M.openMaterials(mfile);
+  const rows = SS.buildSourceRows(mdb3, dir, { sourceFileIds: new Set([legacy("07_販促/議事録.xlsx")]) });
+  eq(rows.problems, [], "読み取りが新しければ問題なし");
+  const item = (p) => rows.items.find((i) => i.path === p);
+  const img = item("20_写真/その他/a.jpg");
+  eq([img?.entry, img?.content, img?.kind, rows.texts.some((t) => t.itemId === img?.id)], ["file", "path_only", "image", false], "画像は場所だけ (中身の行なし)");
+  const fol = item("20_写真/その他");
+  eq([fol?.entry, fol?.content, fol?.kind, fol?.parentPath, fol?.visibility], ["folder", "path_only", "folder", "20_写真", "manager"], "フォルダーも場所だけ (見られる人は分野のフォルダー)");
+  eq(item("15_人事・労務/個人の情報（取り込まない）")?.visibility, "admin", "個人の情報のフォルダーは管理者のみ");
+  const kei = item(`${P15}/慶弔リスト.xlsx`);
+  eq([kei?.content, kei?.sheetNames, kei?.summary, rows.texts.some((t) => t.itemId === kei?.id)], ["excluded", null, null, false], "個人の情報は中身もシート名も持たない");
+  const manualItem = item("01_社内ルール・マニュアル/マニュアル/社内総合マニュアル.xlsx");
+  const manualTexts = rows.texts.filter((t) => t.itemId === manualItem?.id);
+  eq([manualItem?.content, manualItem?.originalPath, manualTexts.length, manualTexts.map((t) => t.visibility).sort()], ["text", "08_事務/社内総合マニュアル.xlsx", M.getChunks(mdb3, manualItem.id).length, ["all", "hq"]], "文書は中身の節 (節ごとの見られる人)・整理する前の場所");
+  eq(item("07_議事録・会議/議事録.xlsx")?.sourceFileId, legacy("07_販促/議事録.xlsx"), "資料台帳 (source_files) にある資料は同じ ID でつなぐ");
+  eq([item("README.md")?.entry, item("README.md")?.visibility, item("_index/manifest.json")?.visibility, item("07_議事録・会議/Thumbs.db")?.entry], ["system", "all", "admin", "system"], "システムのファイル (README・索引・OS の管理ファイル) も場所だけ");
+  eq(new Set(rows.items.map((i) => i.id)).size, rows.items.length, "行の ID は重ならない");
+  eq(new Set(rows.items.map((i) => i.path)).size, rows.items.length, "場所は重ならない");
+  const snk = SS.snakeRow(manualItem, { registeredAt: "x" });
+  ok("original_path" in snk && "row_hash" in snk && snk.registered_at === "x" && !("originalPath" in snk), "Supabase の列名 (snake_case)");
+  const cols = new Set(SCHEMA.SUPABASE_ONLY_TABLES[0].columns.map(([f]) => f));
+  ok(Object.keys(manualItem).every((k) => cols.has(k)) && ["registeredAt", "updatedAt"].every((k) => cols.has(k)), "行の項目は source_items の列と合う");
+  const tcols = new Set(SCHEMA.SUPABASE_ONLY_TABLES[1].columns.map(([f]) => f));
+  ok(Object.keys(manualTexts[0]).every((k) => tcols.has(k)) && tcols.size === Object.keys(manualTexts[0]).length, "中身の行は source_texts の列と合う");
+  // 比べる: 同じなら書かない・変わった行だけ・中身の指紋が変わった資料だけ書き直す・なくなった行は消す
+  const cur = rows.items.map((i) => ({ id: i.id, rowHash: i.rowHash, contentHash: i.contentHash }));
+  const same = SS.diffSourceRows(cur, rows.items);
+  eq([same.insert.length, same.update.length, same.remove.length, same.textsFor.length], [0, 0, 0, 0], "同じなら何も書かない");
+  const changed = SS.diffSourceRows([...cur.map((c) => (c.id === manualItem.id ? { ...c, rowHash: "old", contentHash: "old" } : c)), { id: "gone", rowHash: "x", contentHash: "y" }], rows.items);
+  eq([changed.update.map((i) => i.id), changed.textsFor, changed.remove], [[manualItem.id], [manualItem.id], ["gone"]], "変わった行・中身・なくなった行だけ");
+  eq(SS.diffSourceRows([], rows.items).insert.length, rows.items.length, "初めては全部追加");
+  M.closeMaterials();
+  const off = execFileSync("node", [path.join(root, "scripts/registry/sync-supabase.mjs"), "--offline", "--dir", dir, "--db", mfile], { cwd: work, env, encoding: "utf8" });
+  ok(/登録する行: \d+ \(ファイル 6・フォルダー \d+・システムのファイル \d+\)/.test(off) && /取り込まない 1/.test(off), "スクリプト (接続なしの確認): ファイル・フォルダー・システムのファイルの件数");
+  // 表の定義: Supabase にだけ置く表 (アプリはメモリに読み込まない)
+  ok(SCHEMA.SUPABASE_ONLY_TABLES.every((t) => !SCHEMA.TABLES.some((x) => x.table === t.table || x.collection === t.collection)), "source_items・source_texts はアプリの表 (メモリに読み込む表) に入れない");
+  ok(!("sourceItems" in store.getDb()) && !("sourceTexts" in store.getDb()), "アプリのデータ (メモリ) に入らない");
+  const ddl = buildTablesSql(SCHEMA.SUPABASE_ONLY_TABLES);
+  ok(/create table if not exists source_items/.test(ddl) && /create table if not exists source_texts/.test(ddl) && /alter table source_texts enable row level security/.test(ddl) && !/create table if not exists orders/.test(ddl), "同期のスクリプトが作るのはこの 2 つの表だけ (RLS 有効)");
+  const full = buildSchemaSql();
+  ok(full.indexOf("create table if not exists source_items") > full.indexOf("create table if not exists source_files") && /revoke all on table source_texts from anon, authenticated/.test(full), "db:migrate の定義にも入る (RLS・権限)");
+
   // 整理する前の並びを前提にした取込のための再現
   const view = SRC.legacyView(dir);
   ok(fs.realpathSync(path.join(view, "08_事務/社内総合マニュアル.xlsx")) === fs.realpathSync(path.join(dir, "01_社内ルール・マニュアル/マニュアル/社内総合マニュアル.xlsx")) && fs.existsSync(path.join(view, "08_事務/_download-log.md")), "整理する前の並びを一時フォルダーに再現できる (取得の記録も)");

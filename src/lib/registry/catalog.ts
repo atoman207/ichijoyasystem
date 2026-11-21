@@ -70,7 +70,7 @@ export function dataCatalog(db: Database): { tables: CatalogTable[]; totalRows: 
 }
 
 export interface DataStore {
-  key: "supabase" | "mirror" | "materials" | "source" | "chatbot" | "uploads" | "backups";
+  key: "supabase" | "mirror" | "materials" | "source" | "sourceDb" | "chatbot" | "uploads" | "backups";
   name: string;
   role: string;
   location: string;
@@ -158,6 +158,19 @@ export async function dataStores(db: Database, backend: string): Promise<{ store
       location: srcDir ?? "source/ (リポジトリ直下)",
       status: exists ? "ok" : "warn",
       detail: exists ? `${files.toLocaleString()} ファイル (最後の読み取り)。決まりは source/README.md` : "最後の読み取りの場所が見つかりません (scripts/registry/scan-materials.mjs を実行してください)",
+    });
+  }
+  // Supabase にだけ置く表 (source_items・source_texts。アプリは読み込まないので、最後に登録したときの件数)
+  const lastSync = mdb ? recentRuns(mdb, 50).find((r) => r.kind === "supabase") : undefined;
+  if (lastSync) {
+    const n = (k: string) => Number(lastSync.summary[k] ?? 0).toLocaleString();
+    out.push({
+      key: "sourceDb",
+      name: "Supabase: クライアント資料 (source_items・source_texts)",
+      role: "source/ の全ファイル・全フォルダー (画像・動画・フォルダーは場所だけ) と文書の中身の正本。アプリはメモリに読み込まない",
+      location: "Supabase (source_items・source_texts)",
+      status: "ok",
+      detail: `${n("items")} 行 (ファイル ${n("files")}・フォルダー ${n("folders")})・節 ${n("texts")}・${n("chars")} 文字 (${lastSync.at.slice(0, 16).replace("T", " ")} UTC に登録。scripts/registry/sync-supabase.mjs)`,
     });
   }
   try {

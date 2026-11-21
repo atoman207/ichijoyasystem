@@ -13,7 +13,8 @@ import type { RegistryAction } from "./classify";
  *   3000 番と 3001 番で同じファイルを使う
  * - 元のファイルから作り直せる (scripts/registry/scan-materials.mjs)。人が画面で変えた扱い (o_* の列) と社内資料への登録 (knowledge_ids) は、
  *   読み直しても残す
- * - Supabase には入れない (文字が大きく、アプリはデータをメモリに持つため)。社内資料に登録した節だけが Supabase の knowledge に入る
+ * - アプリの Supabase の表 (メモリに読み込む表) には入れない (文字が大きいため)。社内資料に登録した節だけが knowledge に入る。
+ *   正本の写しは Supabase にだけ置く表 source_items・source_texts (アプリは読み込まない。scripts/registry/sync-supabase.mjs が書く)
  * - クライアント資料は source/ (分野ごとのフォルダー。source.ts)。folder = source/ の先頭の階層・path = その中の場所・orig_path = 整理する前の場所
  */
 
@@ -371,6 +372,12 @@ export function getDoc(db: MaterialsSqlite, id: string): MaterialDoc | undefined
 export function docBySha1(db: MaterialsSqlite, sha1: string, exceptId?: string): MaterialDoc | undefined {
   const r = db.prepare("select * from docs where sha1 = ? and id != ? and duplicate_of is null order by id limit 1").get(sha1, exceptId ?? "");
   return r ? rowToDoc(r) : undefined;
+}
+
+/** すべての資料 (場所の順)。origin を指定するとその元の資料だけ */
+export function allDocs(db: MaterialsSqlite, origin?: MaterialDoc["origin"]): MaterialDoc[] {
+  const rows = origin ? db.prepare("select * from docs where origin = ? order by folder, path").all(origin) : db.prepare("select * from docs order by folder, path").all();
+  return rows.map(rowToDoc);
 }
 
 export function getChunks(db: MaterialsSqlite, docId: string): MaterialChunk[] {

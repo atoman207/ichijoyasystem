@@ -769,7 +769,8 @@ export default async function RegistryPage({ searchParams }: { searchParams: Pro
           <Note>
             クライアント資料は、サーバーのフォルダー source/ に分野ごと (01_社内ルール・マニュアル 〜 99_その他。決まりは source/README.md) に置いています。新しい資料は合う分野のフォルダーに置き、まとめて読むときはサーバーで次の順に実行します。
             <br />1. node scripts/registry/scan-materials.mjs (読み取り・分類。変わったファイルだけ)
-            <br />2. node scripts/registry/promote-knowledge.mjs --apply (社内資料に登録)
+            <br />2. node scripts/registry/sync-supabase.mjs --apply (Supabase に登録: source/ の全ファイル・全フォルダーと文書の中身。画像・動画・フォルダーは場所だけ)
+            <br />3. node scripts/registry/promote-knowledge.mjs --apply (社内資料に登録)
             <br />
             個人の情報 (健康・ご家族・給与・就労証明など) のファイルは内容を取り込みません (15_人事・労務 の「個人の情報（取り込まない）」に置きます)。
           </Note>

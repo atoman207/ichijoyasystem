@@ -1720,6 +1720,85 @@ export const TABLES: TableDef[] = [
   },
 ];
 
+const VISIBILITY_CHECK = "check (visibility in ('all','manager','hq','admin'))";
+
+/**
+ * Supabase にだけ置く表 (アプリはメモリに読み込まない: store.ts・控え・VPS の写し・AI の SQL の対象外)。
+ * クライアント資料のフォルダー source/ の正本: 全ファイル・全フォルダーの台帳 (画像・動画・フォルダーは場所だけ) と、文書の中身 (資料庫の節)。
+ * 行は src/lib/registry/supabase-sync.ts が資料庫 (VPS の SQLite) と source/ から作り、scripts/registry/sync-supabase.mjs だけが書く。
+ * テーブルは npm run db:migrate と同期のスクリプト (この表だけ) が作る。TABLES と同じ書き方 (列名は snake_case にする)
+ */
+export const SUPABASE_ONLY_TABLES: TableDef[] = [
+  {
+    collection: "sourceItems",
+    table: "source_items",
+    label: "クライアント資料のファイルとフォルダー (source/。画像・動画・フォルダーは場所だけ)",
+    columns: [
+      // ファイルは資料庫の ID (整理する前と同じ。資料台帳 source_files の ID と同じものは source_file_id にも)・フォルダーは sd_・システムのファイルは sx_
+      ["id", "text primary key"],
+      ["entry", "text not null check (entry in ('file','folder','system'))"],
+      // source/ からの場所 (区切りは /)
+      ["path", "text not null unique deferrable initially deferred"],
+      ["parentPath", "text not null default ''"],
+      ["name", "text not null"],
+      ["folder", "text not null default ''"],
+      ["folderLabel", "text not null default ''"],
+      ["ext", "text not null default ''"],
+      ["kind", "text not null"],
+      // text = 中身の文字を source_texts に持つ / summary = 取込済みのデータの要約だけ / path_only = 場所だけ (画像・動画・フォルダー・文字のないファイル) / excluded = 個人の情報 (中身を読まない)
+      ["content", "text not null check (content in ('text','summary','path_only','excluded'))"],
+      ["bytes", "bigint"],
+      ["sha1", "text"],
+      ["modifiedOn", "date"],
+      ["originalPath", "text"],
+      ["sourceFileId", "text"],
+      ["driveUrl", "text"],
+      ["action", "text"],
+      ["category", "text"],
+      ["visibility", `text not null ${VISIBILITY_CHECK}`],
+      ["storeId", "text"],
+      ["recordDate", "date"],
+      ["status", "text not null"],
+      ["note", "text"],
+      ["importedTo", "text"],
+      ["duplicateOf", "text"],
+      ["chars", "integer not null default 0"],
+      ["sections", "integer not null default 0"],
+      ["sheetNames", "jsonb"],
+      ["pii", "jsonb"],
+      ["summary", "text"],
+      ["contentHash", "text"],
+      ["rowHash", "text not null"],
+      ["registeredAt", `${ts} not null`],
+      ["updatedAt", `${ts} not null`],
+    ],
+    orderBy: ["path"],
+    indexes: [["folder"], ["parent_path"], ["entry"], ["content"]],
+  },
+  {
+    collection: "sourceTexts",
+    table: "source_texts",
+    label: "クライアント資料の中身 (文書の節。ID・パスワードは伏せ字・見られる人つき)",
+    columns: [
+      ["id", "text primary key"],
+      ["itemId", "text not null references source_items(id) on delete cascade"],
+      ["seq", "integer not null"],
+      ["section", "text not null default ''"],
+      ["part", "integer not null default 1"],
+      ["parts", "integer not null default 1"],
+      ["visibility", `text not null ${VISIBILITY_CHECK}`],
+      ["category", "text"],
+      ["knowledge", "boolean not null default false"],
+      ["recordDate", "date"],
+      ["head", "text not null"],
+      ["body", "text not null"],
+      ["chars", "integer not null default 0"],
+    ],
+    orderBy: ["item_id", "seq"],
+    indexes: [["visibility"]],
+  },
+];
+
 /**
  * 後から not null を外した列 (テーブル・列の追加と同じく、何度実行しても安全)。
  * comm_logs.customer_id: 協力業者・仕入先とのやりとりはお客様を持たないため (Phase 4)
