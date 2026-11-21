@@ -6,6 +6,9 @@
  *   node scripts/registry/promote-knowledge.mjs --apply               → Supabase に書く (1 つのトランザクション・変更履歴・リビジョン +1)
  *   node scripts/registry/promote-knowledge.mjs --json [--apply]      → サンプルデータ (DATA_BACKEND=json の data/<DATA_FILE_NAME>) に書く (アプリと同じ mutate)
  *   --db <file>  資料庫の場所 (既定は materialsPath)
+ *   --owner <社員の ID かログイン ID>  新しく登録する資料の担当者 (既定は 社内資料 →「確認のルール」の既定の担当者。どちらもなければ担当者なし = 画面の「担当者なし」で割り当てる)
+ *
+ * 新しく登録する資料には 次に確かめる日 (今日 + 分類ごとの間隔) を付ける。登録済みの資料の 担当者・確かめた記録・AI に使う は変えない
  *
  * 取込元は sourceRef = material:<資料の ID>#<節>。この印のない社内資料 (画面で登録したもの・スプレッドシートの同期) には触らない。
  * 戻すとき: 画面のデータ台帳で資料の扱いを変えるか、SQL で delete from knowledge where source_ref like 'material:%' (+ select bump_revision())
@@ -34,6 +37,24 @@ const jiti = createJiti(import.meta.url, { alias: { "@": path.join(root, "src"),
 const imp = (p) => jiti.import(path.join(root, "src", p));
 const M = await imp("lib/registry/materials-db.ts");
 const P = await imp("lib/registry/promote.ts");
+const R = await imp("lib/knowledge-review.ts");
+const OWNER = opt("--owner");
+
+/** 新しく登録する資料の担当者・次に確かめる日 (settings と社員の一覧から) */
+function reviewFor(settingsRows, users) {
+  const rs = R.reviewSettings({ settings: settingsRows });
+  let ownerId = rs.defaultOwnerId;
+  if (OWNER) {
+    const u = users.find((x) => x.id === OWNER || x.email?.toLowerCase() === OWNER.toLowerCase());
+    if (!u || !u.active) {
+      console.error(`担当者「${OWNER}」が有効な社員に見つかりません。`);
+      process.exit(1);
+    }
+    ownerId = u.id;
+  }
+  console.log(`新しく登録する資料の担当者: ${ownerId ? users.find((u) => u.id === ownerId)?.name ?? ownerId : "なし (画面の「担当者なし」で割り当てる)"}`);
+  return (d) => R.initialReview(rs, d.category, { ownerId });
+}
 
 const dbFile = opt("--db") ? path.resolve(root, opt("--db")) : M.materialsPath();
 const mdb = M.openMaterials(dbFile);
@@ -69,15 +90,16 @@ if (JSON_MODE) {
   const store = await imp("lib/db/store.ts");
   const db = store.getDb();
   const before = db.knowledge.filter((k) => k.sourceRef?.startsWith(P.MATERIAL_REF_PREFIX)).map((k) => ({ ...k }));
+  const review = reviewFor(db.settings, db.users);
   const copy = { knowledge: db.knowledge.map((k) => ({ ...k })) };
-  const r = P.promoteFromMaterials(copy, mdb, { userId: "system", now, newId });
+  const r = P.promoteFromMaterials(copy, mdb, { userId: "system", now, newId, review });
   describe(before, copy.knowledge.filter((k) => k.sourceRef?.startsWith(P.MATERIAL_REF_PREFIX)), r);
   if (!APPLY) {
     console.log("\n--apply を付けると書き込みます。");
     process.exit(0);
   }
   const res = await store.mutate((d) => {
-    const x = P.promoteFromMaterials(d, mdb, { userId: "system", now, newId });
+    const x = P.promoteFromMaterials(d, mdb, { userId: "system", now, newId, review });
     store.addAudit(d, { userId: "system", action: "import", entity: "knowledge", entityId: "registry", entityLabel: "データ台帳", summary: `クライアント資料から社内資料を登録 (追加 ${x.added}・更新 ${x.updated}・削除 ${x.removed})` });
     return x;
   });
@@ -91,6 +113,7 @@ if (JSON_MODE) {
 const { connectDatabase } = await import("../import/db-connect.mjs");
 const { client } = await connectDatabase();
 const q = (sql, params) => client.query(sql, params);
+const dateKey = (v) => (v ? (v instanceof Date ? `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}-${String(v.getDate()).padStart(2, "0")}` : String(v).slice(0, 10)) : undefined);
 const toEntry = (r) => ({
   id: r.id,
   title: r.title,
@@ -105,19 +128,27 @@ const toEntry = (r) => ({
   updatedBy: r.updated_by ?? undefined,
   updatedAt: new Date(r.updated_at).toISOString(),
   visibility: r.visibility ?? undefined,
-  recordDate: r.record_date ? (r.record_date instanceof Date ? `${r.record_date.getFullYear()}-${String(r.record_date.getMonth() + 1).padStart(2, "0")}-${String(r.record_date.getDate()).padStart(2, "0")}` : String(r.record_date).slice(0, 10)) : undefined,
+  recordDate: dateKey(r.record_date),
+  ownerId: r.owner_id ?? undefined,
+  reviewDue: dateKey(r.review_due),
+  reviewIntervalDays: r.review_interval_days ?? undefined,
+  reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : undefined,
+  reviewedBy: r.reviewed_by ?? undefined,
 });
 const before = (await q("select * from knowledge where source_ref like 'material:%'")).rows.map(toEntry);
+const settingsRows = (await q("select id, value from settings where id = 'knowledge_review'")).rows.map((x) => ({ id: x.id, value: x.value }));
+const users = (await q("select id, name, email, role, store_id, active from users")).rows.map((x) => ({ id: x.id, name: x.name, email: x.email, role: x.role, storeId: x.store_id, active: x.active }));
+const review = reviewFor(settingsRows, users);
 const work = { knowledge: before.map((k) => ({ ...k, tags: [...k.tags] })) };
-const r = P.promoteFromMaterials(work, mdb, { userId: "system", now, newId });
+const r = P.promoteFromMaterials(work, mdb, { userId: "system", now, newId, review });
 const diff = describe(before, work.knowledge, r);
 if (!APPLY) {
   console.log("\n確認だけです。--apply を付けると Supabase に書き込みます。");
   await client.end();
   process.exit(0);
 }
-const cols = ["id", "title", "body", "category", "tags", "source", "source_ref", "active", "created_by", "created_at", "updated_by", "updated_at", "visibility", "record_date"];
-const vals = (k) => [k.id, k.title, k.body, k.category, k.tags, k.source, k.sourceRef ?? null, k.active, k.createdBy, k.createdAt, k.updatedBy ?? null, k.updatedAt, k.visibility ?? null, k.recordDate ?? null];
+const cols = ["id", "title", "body", "category", "tags", "source", "source_ref", "active", "created_by", "created_at", "updated_by", "updated_at", "visibility", "record_date", "owner_id", "review_due", "review_interval_days", "reviewed_at", "reviewed_by"];
+const vals = (k) => [k.id, k.title, k.body, k.category, k.tags, k.source, k.sourceRef ?? null, k.active, k.createdBy, k.createdAt, k.updatedBy ?? null, k.updatedAt, k.visibility ?? null, k.recordDate ?? null, k.ownerId ?? null, k.reviewDue ?? null, k.reviewIntervalDays ?? null, k.reviewedAt ?? null, k.reviewedBy ?? null];
 try {
   await q("begin");
   for (const k of diff.removed) await q("delete from knowledge where id = $1", [k.id]);

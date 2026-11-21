@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, getDb, mutate, syncDb } from "@/lib/db/store";
 import { getSessionUser } from "@/lib/auth/session";
-import { canManageChatbot, canShareChatToKnowledge, canViewChatLog } from "@/lib/auth/permissions";
+import { canManageChatbot, canShareChatToKnowledge, canViewChatLog, canViewKnowledge } from "@/lib/auth/permissions";
 import { askChatbot, type BotReply, type ChatTurn } from "@/lib/chatbot/answer";
 import { cleanTurns } from "@/lib/chatbot/ask-input";
 import { ensureChatbotData } from "@/lib/chatbot/build";
@@ -12,6 +12,7 @@ import { startTraining, stopTraining } from "@/lib/chatbot/train";
 import { deleteQa, getChatLog, getQa, insertQa, markChatShared, rateChatLog, rateQa, updateQa } from "@/lib/chatbot/store";
 import { newId, nowIso } from "@/lib/db/store";
 import { KNOWLEDGE_FAQ_CATEGORY } from "@/lib/knowledge";
+import { initialReview, reviewSettings } from "@/lib/knowledge-review";
 import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 const BACK = "/ai?tab=bot";
@@ -63,11 +64,13 @@ export async function shareChatToKnowledge(logId: number, formData: FormData) {
   const body = str(formData, "body").slice(0, 20000);
   if (!title || !body) fail(back, "タイトルと本文を入力してください。");
   const visibility = (["all", "manager", "hq", "admin"] as const).find((v) => v === str(formData, "visibility")) ?? "all";
+  if (!canViewKnowledge(user, { visibility })) fail(back, "自分が見られない範囲は選べません。");
   const category = str(formData, "category").slice(0, 40) || KNOWLEDGE_FAQ_CATEGORY;
   const id = newId("kn");
   await mutate((db) => {
     const now = nowIso();
-    db.knowledge.push({ id, title, body, category, tags: ["相談から登録"], source: "manual", sourceRef: `chat:${logId}`, active: true, createdBy: user.id, createdAt: now, updatedBy: user.id, updatedAt: now, visibility: visibility === "all" ? undefined : visibility });
+    // 担当者は登録した人 (内容に責任を持ち、定期的に確かめる。src/lib/knowledge-review.ts)
+    db.knowledge.push({ id, title, body, category, tags: ["相談から登録"], source: "manual", sourceRef: `chat:${logId}`, active: true, createdBy: user.id, createdAt: now, updatedBy: user.id, updatedAt: now, visibility, ...initialReview(reviewSettings(db), category, { ownerId: user.id }), reviewedAt: now, reviewedBy: user.id });
     addAudit(db, { userId: user.id, action: "create", entity: "knowledge", entityId: id, entityLabel: title.slice(0, 60), summary: `相談の回答を社内資料に登録 (${title.slice(0, 40)})`, storeId: user.storeId });
   });
   markChatShared(logId, id);

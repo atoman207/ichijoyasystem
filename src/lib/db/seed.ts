@@ -188,6 +188,7 @@ export function createSeed(now = new Date()): Database {
     condolences: [],
     workReportDays: [],
     promotions: [],
+    docDrafts: [],
   };
   const ctx: Ctx = { now, today, rand, db, counters: {}, busy: new Map() };
 
@@ -324,7 +325,7 @@ function findSlot(ctx: Ctx, userIds: string[], date: string, minutes: number, ho
   for (let shift = 0; shift < 90; shift++) {
     const d = addDays(date, shift);
     const span = dateRange(d, addDays(d, len - 1));
-    if (span.some(isOffDay)) continue;
+    if (span.some((d) => isOffDay(d))) continue;
     for (const h of hours) {
       const s = Math.round(h * 60);
       if (isFree(ctx, userIds, span, s, s + minutes, opts.link)) return { date: d, start: fromMinutes(s), end: fromMinutes(s + minutes) };

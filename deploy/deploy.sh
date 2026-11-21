@@ -6,8 +6,9 @@
 #   版を指定して公開:       sudo -u ichijoya bash /srv/ichijoya/repo/deploy/deploy.sh <コミット・タグ・ブランチ>
 #   1 つ前の版に戻す:       sudo -u ichijoya bash /srv/ichijoya/repo/deploy/deploy.sh --rollback
 #
-#   流れ: 取得 → releases/<日時> に展開 → npm ci → npm run build (データベースの表の追加を含む) →
-#         current を切り替え → 再起動 → /api/health を確認 (失敗したら前の版に戻す) → 古い版を削除 (5 つ残す)
+#   流れ: 取得 → releases/<日時> に展開 → npm ci → (AI アシスタントが変わったら npm run test:assistant) →
+#         npm run build (データベースの表の追加を含む) → current を切り替え → 再起動 → /api/health を確認 (失敗したら前の版に戻す) →
+#         古い版を削除 (5 つ残す) → (AI アシスタントが変わったら精度の評価を始める)
 #   データベースの更新は「表・列の追加」だけ (データの削除・型の変更はしない)
 # ============================================================
 set -euo pipefail
@@ -86,6 +87,19 @@ log "依存パッケージ (npm ci)"
 cd "$REL"
 npm ci --no-audit --no-fund --loglevel=error
 
+# AI アシスタント (質問する・要約・文書の作成・社内資料・権限) に関わるファイルが変わったら、
+# テスト (AI を呼ばない。一時フォルダーのサンプルデータ) を通ってからビルドする。通らなければ公開しない
+ASSISTANT_PATHS=(src/lib/assistant src/lib/chatbot src/lib/ai src/lib/knowledge.ts src/lib/knowledge-review.ts src/lib/knowledge-sheet.ts src/lib/knowledge-sync.ts src/lib/datastore src/lib/doc-drafts.ts src/lib/registry src/lib/auth/permissions.ts src/components/chatbot src/app/api/assistant)
+PREV_REV=$(cat "$APP_DIR/current/REVISION" 2>/dev/null || true)
+ASSISTANT_CHANGED=1
+if [[ -n "$PREV_REV" ]] && git -C "$REPO" cat-file -e "$PREV_REV^{commit}" 2>/dev/null; then
+  if git -C "$REPO" diff --quiet "$PREV_REV" "$COMMIT" -- "${ASSISTANT_PATHS[@]}"; then ASSISTANT_CHANGED=0; fi
+fi
+if [[ "$ASSISTANT_CHANGED" == 1 && "${SKIP_ASSISTANT_TESTS:-}" != "1" ]]; then
+  log "AI アシスタントのテスト (npm run test:assistant。AI は呼ばない)"
+  npm run test:assistant || die "AI アシスタントのテストが通らないため公開しません (版 $STAMP は残してあります。急ぐときだけ SKIP_ASSISTANT_TESTS=1 で飛ばせます)"
+fi
+
 log "ビルド (npm run build: データベースの表の追加 → next build)"
 # shellcheck source=deploy/lib.sh
 . "$(dirname "$(readlink -f "$0")")/lib.sh"
@@ -111,4 +125,11 @@ log "古い版を削除します (新しい $KEEP 版を残す)"
 ls -1d "$APP_DIR"/releases/*/ | sed 's#/$##' | sort | head -n -"$KEEP" | while read -r old; do
   [[ "$old" == "$(readlink -f "$APP_DIR/current")" ]] || rm -rf "$old"
 done
+# AI アシスタントが変わったら、本番の AI で精度の評価を始める (裏で実行。結果と代表シナリオの承認は AI アシスタント →「品質・費用」)
+# AI の費用がかかる (1 回 100 円前後)。止めるときは EVAL_AFTER_DEPLOY=off
+if [[ "$ASSISTANT_CHANGED" == 1 && "${EVAL_AFTER_DEPLOY:-on}" != "off" && -n "${CRON_SECRET:-}" ]]; then
+  log "AI アシスタントの精度の評価を始めます (結果は AI アシスタント →「品質・費用」)"
+  curl -sS -m 30 -X POST -H "Authorization: Bearer $CRON_SECRET" "http://127.0.0.1:3000/api/cron/chatbot-eval?trigger=deploy&rev=$COMMIT" || echo "  評価を始められませんでした (画面の「評価を実行」から実行してください)"
+  echo
+fi
 log "完了: $COMMIT"

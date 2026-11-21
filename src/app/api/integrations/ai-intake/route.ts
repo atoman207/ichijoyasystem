@@ -16,7 +16,8 @@ export const maxDuration = 60;
  * POST /api/integrations/ai-intake?source=chat|voice|phone
  *   認証: ヘッダー Authorization: Bearer <AI_INTAKE_SECRET> (ヘッダーを設定できないシステムは ?token=<AI_INTAKE_SECRET>)
  *   本文: JSON (またはフォーム形式)。項目名は src/lib/ai-intake.ts の normalizeIntake を参照 (name / phone / summary / transcript など)
- *   応答: { ok: true, number, inquiryId, customerMatched, handoff: { assignee } | null, duplicate? }
+ *   応答: { ok: true, number, inquiryId, customerMatched, customerCandidates? (一致したお客様が 2 件以上), handoff: { assignee, taskId } | null, duplicate? (再送。最初の受付を返す) }
+ *   同じ受付 ID (id / callId / sessionId など) は 1 件だけ登録する。受付 ID のないシステムは、同じ内容の再送を 6 時間は同じ受付とみなす
  */
 export async function POST(req: Request) {
   const secret = aiIntakeSecret();
@@ -43,15 +44,20 @@ export async function POST(req: Request) {
   if (r.created && r.thread) {
     const db = getDb();
     const t = db.threads.find((x) => x.id === r.thread!.id);
-    if (t) await sendAndRecord(taskNotices(db, t, t.createdBy === SYSTEM_USER ? SYSTEM_USER : t.createdBy, "request", r.inquiry.summary), SYSTEM_USER).catch((err) => console.warn("[ai-intake] notify failed:", (err as Error).message));
+    // 依頼の文はシステムが書いたもの (依頼者が店長でも、店長の名前で知らせない)
+    if (t) await sendAndRecord(taskNotices(db, t, SYSTEM_USER, "request", r.inquiry.summary), SYSTEM_USER).catch((err) => console.warn("[ai-intake] notify failed:", (err as Error).message));
   }
-  const assignee = r.thread ? getDb().users.find((u) => u.id === r.thread!.assigneeIds?.[0]) : undefined;
+  // 再送 (同じ受付) のときは、最初の受付で作った引き継ぎを返す
+  const db = getDb();
+  const thread = r.thread ?? (r.duplicate ? db.threads.find((t) => t.kind === "request" && t.relatedType === "inquiry" && t.relatedId === r.inquiry.id) : undefined);
+  const assignee = thread ? db.users.find((u) => u.id === thread.assigneeIds?.[0]) : undefined;
   return NextResponse.json({
     ok: true,
     number: r.inquiry.number,
     inquiryId: r.inquiry.id,
     customerMatched: r.customerMatched,
-    handoff: assignee ? { assignee: assignee.name, taskId: r.thread!.id } : null,
+    ...(r.candidates > 1 ? { customerCandidates: r.candidates } : {}),
+    handoff: assignee && thread ? { assignee: assignee.name, taskId: thread.id } : null,
     ...(r.duplicate ? { duplicate: true } : {}),
   });
 }

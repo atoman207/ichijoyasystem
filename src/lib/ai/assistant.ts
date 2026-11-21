@@ -8,6 +8,7 @@ import { analyzeConflicts, compareEvents, occursOn, overlapsRange, periodLabel, 
 import { aiEnabled } from "./provider";
 import { searchRecords } from "./search";
 import { isStrongHit, searchKnowledge, type KnowledgeHit } from "@/lib/knowledge";
+import { isStale, todayKey } from "@/lib/knowledge-review";
 
 /**
  * AI アシスタント
@@ -149,5 +150,6 @@ export function rulesAnswer(db: Database, user: User, q: string, now = new Date(
 /* ------------------------------------------------------------------ */
 
 function knowledgeAnswer(hits: KnowledgeHit[]): string {
-  return `社内資料から関係しそうな内容です。\n\n${hits.map((h) => `**${h.entry.title}** (${h.entry.category})\n${h.snippet}`).join("\n\n")}\n\n詳しくは「社内資料 (ナレッジ)」の画面で確認してください。`;
+  const today = todayKey();
+  return `社内資料から関係しそうな内容です。\n\n${hits.map((h) => `**${h.entry.title}** (${h.entry.category})${isStale(h.entry, today) ? ` ※ 確認期限 (${h.entry.reviewDue}) を過ぎた資料です。内容が古い可能性があります` : ""}\n${h.snippet}`).join("\n\n")}\n\n詳しくは「社内資料 (ナレッジ)」の画面で確認してください。`;
 }

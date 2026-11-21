@@ -1,5 +1,5 @@
 import "server-only";
-import type { Approval, Database, Message, Thread, User } from "@/lib/db/types";
+import type { Approval, Database, DocDraft, Message, Thread, User } from "@/lib/db/types";
 import { APPROVAL_STATUS, APPROVAL_TYPE_LABEL, TASK_STATUS } from "@/lib/constants";
 import { isDemoAccount, isReviewAccount } from "@/lib/auth/permissions";
 import { fieldLabel, fieldValue } from "@/lib/field-labels";
@@ -16,7 +16,7 @@ import type { Outgoing } from "./send";
  * 画面のヘッダーの通知 (お知らせ) は従来どおり常に表示する
  */
 
-export type NotifyEvent = "approval_request" | "approval_result" | "mention" | "task" | "schedule_hold" | "leave";
+export type NotifyEvent = "approval_request" | "approval_result" | "mention" | "task" | "schedule_hold" | "leave" | "doc_draft" | "knowledge";
 
 export const NOTIFY_EVENT_LABEL: Record<NotifyEvent, string> = {
   approval_request: "承認の依頼 (承認者へ)",
@@ -25,6 +25,8 @@ export const NOTIFY_EVENT_LABEL: Record<NotifyEvent, string> = {
   task: "業務依頼 (依頼・確認・報告・完了)",
   schedule_hold: "予定の仮押さえ (担当者へ確認の依頼・お客様が選んだ候補)",
   leave: "休暇の申請 (承認者へ) と承認・却下の結果 (本人へ)",
+  doc_draft: "文書の下書きの承認の依頼 (承認者へ) と承認・差し戻しの結果 (作成者へ)",
+  knowledge: "社内資料の確認期限切れ (担当者へ) とスプレッドシートの同期の失敗・復旧 (担当者・本部・管理者へ)",
 };
 
 export interface NotifySettings {
@@ -138,7 +140,7 @@ export function taskNotices(db: Database, t: Thread, actorId: string, what: "req
     "task",
     to,
     `業務依頼: ${t.title}`,
-    `${nameOf(db, actorId)} さん: ${head[what]}${t.dueDate ? `\n期限: ${t.dueDate}` : ""}${status ? `\n状態: ${status}` : ""}${note ? `\n\n${note.slice(0, 1000)}` : ""}`,
+    `${actorId === "system" ? "システム (外部連携の自動の依頼)" : `${nameOf(db, actorId)} さん`}: ${head[what]}${t.dueDate ? `\n期限: ${t.dueDate}` : ""}${status ? `\n状態: ${status}` : ""}${note ? `\n\n${note.slice(0, 1000)}` : ""}`,
     `/messages/${t.id}`,
     { relatedType: "thread", relatedId: t.id },
   );
@@ -187,4 +189,52 @@ export function leaveResultNotices(db: Database, r: LeaveNotice): Outgoing[] {
   const to = db.users.filter((u) => (u.id === r.userId || u.id === r.requestedBy) && u.id !== r.decidedBy);
   const label = r.status === "approved" ? "承認" : r.status === "rejected" ? "却下" : r.status;
   return build(db, "leave", to, `休暇の${label}: ${LEAVE_KIND[r.leaveType] ?? ""} ${r.date}`, `休暇の申請が「${label}」になりました (${nameOf(db, r.decidedBy)} さん)。\n種類: ${LEAVE_KIND[r.leaveType] ?? r.leaveType}\n日付: ${leaveWhen(r)}${r.decisionComment ? `\nコメント: ${r.decisionComment}` : ""}`, "/leave", {});
+}
+
+/* ---------------- 文書の下書き (src/lib/doc-drafts.ts) ---------------- */
+
+/** 文書が「確認済み」になった: 承認する人へ (承認できる人は docDraftApprovers で決める) */
+export function docDraftReviewNotices(db: Database, d: Pick<DocDraft, "id" | "number" | "title" | "createdBy" | "reviewedBy">, approvers: User[]): Outgoing[] {
+  return build(
+    db,
+    "doc_draft",
+    approvers,
+    `文書の承認依頼: ${d.number} ${d.title}`,
+    `${nameOf(db, d.createdBy)} さんの文書が確認済みになりました (確認 ${nameOf(db, d.reviewedBy)} さん)。内容を読んで承認するか、差し戻してください。\n文書: ${d.number} ${d.title}`,
+    `/ai/drafts/${d.id}`,
+    {},
+  );
+}
+
+/** 承認・差し戻しの結果: 作成者へ (自分で操作したときは送らない) */
+export function docDraftResultNotices(db: Database, d: Pick<DocDraft, "id" | "number" | "title" | "createdBy">, actorId: string, what: "approved" | "returned", comment?: string): Outgoing[] {
+  if (d.createdBy === actorId) return [];
+  const creator = db.users.filter((u) => u.id === d.createdBy);
+  const label = what === "approved" ? "承認されました" : "差し戻されました";
+  const next = what === "approved" ? "\n文書の画面から送信してください (郵送・手渡しのときは記録だけ残せます)。" : "\n文面を直して、もう一度「内容を確認した」を押してください。";
+  return build(db, "doc_draft", creator, `文書が${label}: ${d.number} ${d.title}`, `文書が${label} (${nameOf(db, actorId)} さん)。\n文書: ${d.number} ${d.title}${comment ? `\nコメント: ${comment}` : ""}${next}`, `/ai/drafts/${d.id}`, {});
+}
+
+/* ---------------- 社内資料 (src/lib/knowledge-sync.ts) ---------------- */
+
+/** スプレッドシートの同期の失敗・復旧 (取込元の担当者・本部・管理者へ) */
+export function knowledgeSyncNotices(db: Database, users: User[], src: { id: string; label: string; lastError?: string; failCount?: number; lastSuccessAt?: string }, what: "failed" | "recovered"): Outgoing[] {
+  const last = src.lastSuccessAt ? new Date(src.lastSuccessAt).toLocaleString("ja-JP") : "なし";
+  return what === "failed"
+    ? build(db, "knowledge", users, `社内資料の同期に失敗: ${src.label}`, `Google スプレッドシート「${src.label}」から社内資料を同期できませんでした (${src.failCount ?? 1} 回続けて)。\n理由: ${src.lastError ?? "原因不明"}\n最後に成功した日時: ${last}\n社内資料はシートの前の内容のまま使われています。取込元の画面でシートの共有・見出しを確かめ、「確認する」から同期してください。`, `/knowledge/sources/${src.id}`, {})
+    : build(db, "knowledge", users, `社内資料の同期が復旧: ${src.label}`, `Google スプレッドシート「${src.label}」の同期が成功しました (復旧しました)。`, `/knowledge/sources/${src.id}`, {});
+}
+
+/** 確認期限を過ぎた社内資料 (担当者へ) */
+export function knowledgeReviewNotices(db: Database, owner: User, overdue: { title: string; reviewDue?: string }[], soon: { title: string; reviewDue?: string }[]): Outgoing[] {
+  const line = (k: { title: string; reviewDue?: string }) => `・${k.title} (期限 ${k.reviewDue ?? "-"})`;
+  return build(
+    db,
+    "knowledge",
+    [owner],
+    `社内資料の確認のお願い (${overdue.length} 件が期限切れ)`,
+    `担当している社内資料のうち、確認期限を過ぎたものが ${overdue.length} 件あります。内容が今も正しいかを確かめ、資料の画面で「確認した」を押してください (直すところがあれば修正してから)。AI アシスタントは、期限切れの資料を使うとき古い可能性があると添えています。\n${overdue.slice(0, 15).map(line).join("\n")}${overdue.length > 15 ? `\n… ほか ${overdue.length - 15} 件` : ""}${soon.length ? `\n\nもうすぐ期限 (${soon.length} 件):\n${soon.slice(0, 5).map(line).join("\n")}` : ""}`,
+    "/knowledge?health=mine",
+    {},
+  );
 }

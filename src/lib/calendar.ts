@@ -308,44 +308,65 @@ function nthMonday(y: number, m: number, n: number): string {
   return ymd(y, m, day);
 }
 
+/**
+ * 特例法で日付が変わった年 (東京オリンピック・パラリンピック: 2020・2021 年) と、天皇の即位の年 (2019 年)。
+ * [規則どおりなら入る日 (外す), 特例の日と名前]
+ */
+const SPECIAL_HOLIDAYS: Record<number, { drop: string[]; add: [string, string][] }> = {
+  2019: { drop: [], add: [["2019-05-01", "天皇の即位の日"], ["2019-10-22", "即位礼正殿の儀の行われる日"]] },
+  2020: { drop: ["2020-07-20", "2020-08-11", "2020-10-12"], add: [["2020-07-23", "海の日"], ["2020-07-24", "スポーツの日"], ["2020-08-10", "山の日"]] },
+  2021: { drop: ["2021-07-19", "2021-08-11", "2021-10-11"], add: [["2021-07-22", "海の日"], ["2021-07-23", "スポーツの日"], ["2021-08-08", "山の日"]] },
+};
+
 function buildHolidays(y: number): Map<string, string> {
   const h = new Map<string, string>();
+  // 春分・秋分の日は国立天文台の暦象年表から前年 2 月に官報で決まる。ここは 1980〜2099 年に使われる近似式 (予測値)
   const leap = Math.floor((y - 1980) / 4);
   const vernal = Math.floor(20.8431 + 0.242194 * (y - 1980) - leap);
   const autumnal = Math.floor(23.2488 + 0.242194 * (y - 1980) - leap);
   h.set(ymd(y, 1, 1), "元日");
   h.set(nthMonday(y, 1, 2), "成人の日");
   h.set(ymd(y, 2, 11), "建国記念の日");
-  h.set(ymd(y, 2, 23), "天皇誕生日");
+  // 天皇誕生日: 2018 年までは 12/23、2019 年はなし、2020 年から 2/23
+  if (y >= 2020) h.set(ymd(y, 2, 23), "天皇誕生日");
   h.set(ymd(y, 3, vernal), "春分の日");
-  h.set(ymd(y, 4, 29), "昭和の日");
+  h.set(ymd(y, 4, 29), y >= 2007 ? "昭和の日" : "みどりの日");
   h.set(ymd(y, 5, 3), "憲法記念日");
-  h.set(ymd(y, 5, 4), "みどりの日");
+  if (y >= 2007) h.set(ymd(y, 5, 4), "みどりの日");
   h.set(ymd(y, 5, 5), "こどもの日");
-  h.set(nthMonday(y, 7, 3), "海の日");
-  h.set(ymd(y, 8, 11), "山の日");
-  h.set(nthMonday(y, 9, 3), "敬老の日");
+  h.set(y >= 2003 ? nthMonday(y, 7, 3) : ymd(y, 7, 20), "海の日");
+  if (y >= 2016) h.set(ymd(y, 8, 11), "山の日");
+  h.set(y >= 2003 ? nthMonday(y, 9, 3) : ymd(y, 9, 15), "敬老の日");
   h.set(ymd(y, 9, autumnal), "秋分の日");
-  h.set(nthMonday(y, 10, 2), "スポーツの日");
+  h.set(nthMonday(y, 10, 2), y >= 2020 ? "スポーツの日" : "体育の日");
   h.set(ymd(y, 11, 3), "文化の日");
   h.set(ymd(y, 11, 23), "勤労感謝の日");
-  // 国民の休日: 祝日に挟まれた平日
+  if (y <= 2018) h.set(ymd(y, 12, 23), "天皇誕生日");
+  const special = SPECIAL_HOLIDAYS[y];
+  if (special) {
+    for (const d of special.drop) h.delete(d);
+    for (const [d, name] of special.add) h.set(d, name);
+  }
+  // 国民の休日: 前日と翌日が祝日の日 (祝日・日曜でない日)
   for (const d of [...h.keys()].sort()) {
     const mid = addDays(d, 1);
     if (!h.has(mid) && h.has(addDays(d, 2)) && dayOfWeek(mid) !== 0) h.set(mid, "国民の休日");
   }
-  // 振替休日: 日曜の祝日の後の最初の平日
+  // 振替休日: 日曜の祝日のあとの、祝日でない最初の日 (2007 年から。それまでは翌月曜だけ)
   for (const d of [...h.keys()].sort()) {
     if (dayOfWeek(d) !== 0) continue;
     let next = addDays(d, 1);
-    while (h.has(next)) next = addDays(next, 1);
-    h.set(next, "振替休日");
+    if (y >= 2007) while (h.has(next)) next = addDays(next, 1);
+    if (!h.has(next)) h.set(next, "振替休日");
   }
   return h;
 }
 
-/** 祝日名 (祝日でなければ undefined) */
-export function holidayName(d: string): string | undefined {
+/** 祝日の変更 (日付 → 祝日名。null = 規則では祝日だが祝日から外す)。管理者が休日カレンダーの画面で登録する (src/lib/holiday-calendar.ts) */
+export type HolidayOverrides = Readonly<Record<string, string | null>>;
+
+/** 規則 (「国民の祝日に関する法律」) で計算した祝日名。変更を考えない */
+export function lawHolidayName(d: string): string | undefined {
   const y = Number(d.slice(0, 4));
   if (!Number.isFinite(y) || y < 2000 || y > 2099) return undefined;
   let map = holidayCache.get(y);
@@ -356,9 +377,22 @@ export function holidayName(d: string): string | undefined {
   return map.get(d);
 }
 
+/** 1 年の祝日 (規則で計算した分。日付の順) */
+export function lawHolidays(year: number): [string, string][] {
+  if (!Number.isInteger(year) || year < 2000 || year > 2099) return [];
+  lawHolidayName(`${year}-01-01`);
+  return [...holidayCache.get(year)!].sort(([a], [b]) => (a < b ? -1 : 1));
+}
+
+/** 祝日名 (祝日でなければ undefined)。overrides があれば管理者の変更を優先する */
+export function holidayName(d: string, overrides?: HolidayOverrides): string | undefined {
+  if (overrides && Object.prototype.hasOwnProperty.call(overrides, d)) return overrides[d] ?? undefined;
+  return lawHolidayName(d);
+}
+
 /** 日曜・祝日 */
-export function isOffDay(d: string): boolean {
-  return dayOfWeek(d) === 0 || holidayName(d) !== undefined;
+export function isOffDay(d: string, overrides?: HolidayOverrides): boolean {
+  return dayOfWeek(d) === 0 || holidayName(d, overrides) !== undefined;
 }
 
 /* ---------------- 重複チェック (入力フォーム ⇄ サーバー) の受け渡し ---------------- */

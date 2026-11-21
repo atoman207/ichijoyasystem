@@ -110,6 +110,9 @@ export function ContactLogForm({
 }
 
 /** やりとりの一覧 (新しい順) */
+/** これより長い本文は折りたたむ */
+const LONG_BODY = 600;
+
 export function ContactList({ db, logs, showParty = true, returnTo, linkable = false, empty = "やりとりの記録はありません" }: { db: Database; logs: CommLog[]; showParty?: boolean; returnTo: string; linkable?: boolean; empty?: string }) {
   const rows = [...logs].sort((a, b) => b.at.localeCompare(a.at));
   if (!rows.length) return <p className="text-sm text-ink-3">{empty}</p>;
@@ -134,7 +137,16 @@ export function ContactList({ db, logs, showParty = true, returnTo, linkable = f
               <span>· {userName(c.userId)}</span>
             </div>
             <div className="font-medium text-ink">{c.subject}</div>
-            {c.body !== c.subject && <p className="whitespace-pre-wrap text-xs text-ink-2">{c.body}</p>}
+            {c.body !== c.subject &&
+              (c.body.length > LONG_BODY ? (
+                // AI 受付の会話の記録など長い本文は、はじめの部分だけ出して全文は開いて読む
+                <details className="text-xs text-ink-2">
+                  <summary className="cursor-pointer whitespace-pre-wrap">{c.body.slice(0, 240)}… <span className="text-accent">全文 ({c.body.length.toLocaleString("ja-JP")} 文字)</span></summary>
+                  <p className="mt-1 max-h-96 overflow-y-auto whitespace-pre-wrap rounded bg-subtle p-2">{c.body}</p>
+                </details>
+              ) : (
+                <p className="whitespace-pre-wrap text-xs text-ink-2">{c.body}</p>
+              ))}
             {linkable && (
               <form action={linkContactLog.bind(null, c.id)} className="mt-1 flex flex-wrap items-center gap-1">
                 <input type="hidden" name="returnTo" value={returnTo} />

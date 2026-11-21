@@ -14,6 +14,7 @@ import type { RegistryAction } from "./classify";
  * - 元のファイルから作り直せる (scripts/registry/scan-materials.mjs)。人が画面で変えた扱い (o_* の列) と社内資料への登録 (knowledge_ids) は、
  *   読み直しても残す
  * - Supabase には入れない (文字が大きく、アプリはデータをメモリに持つため)。社内資料に登録した節だけが Supabase の knowledge に入る
+ * - クライアント資料は source/ (分野ごとのフォルダー。source.ts)。folder = source/ の先頭の階層・path = その中の場所・orig_path = 整理する前の場所
  */
 
 const VERSION = "1";
@@ -54,7 +55,7 @@ create table if not exists docs (
   chars integer not null default 0, sections integer not null default 0,
   sheet_names text, pii text, summary text,
   o_action text, o_visibility text, o_category text, o_note text, o_by text, o_at text,
-  knowledge_ids text, storage_key text, drive_url text,
+  knowledge_ids text, storage_key text, drive_url text, orig_path text,
   scanned_at text, updated_at text
 );
 create index if not exists docs_folder on docs (folder);
@@ -95,6 +96,7 @@ export function openMaterials(file = materialsPath()): MaterialsSqlite | null {
     // 列を足したとき (古いファイル) の追加
     const cols = new Set(db.prepare("pragma table_info(docs)").all().map((r) => String(r.name)));
     if (!cols.has("rule_key")) db.exec("alter table docs add column rule_key text");
+    if (!cols.has("orig_path")) db.exec("alter table docs add column orig_path text");
     db.prepare("insert into _meta (key, value) values ('version', ?) on conflict (key) do update set value = excluded.value").run(VERSION);
     g.__ichijoyaMaterials?.db.close();
     g.__ichijoyaMaterials = { file, db };
@@ -117,7 +119,7 @@ export function closeMaterials(): void {
 
 export interface MaterialDoc {
   id: string;
-  /** client = クライアント資料 (other/client-materials) / upload = 画面から追加 */
+  /** client = クライアント資料 (source/) / upload = 画面から追加 */
   origin: "client" | "upload";
   folder: string;
   folderLabel: string;
@@ -153,6 +155,8 @@ export interface MaterialDoc {
   knowledgeIds: string[];
   storageKey?: string;
   driveUrl?: string;
+  /** 整理する前の場所 (other/client-materials からの相対。../ は other 直下)。あとから追加した資料・画面から追加した資料はなし */
+  originalPath?: string;
   scannedAt?: string;
   updatedAt?: string;
 }
@@ -225,6 +229,7 @@ function rowToDoc(r: Record<string, unknown>): MaterialDoc {
     knowledgeIds: pj(r.knowledge_ids, []),
     storageKey: s(r.storage_key),
     driveUrl: s(r.drive_url),
+    originalPath: s(r.orig_path),
     scannedAt: s(r.scanned_at),
     updatedAt: s(r.updated_at),
   };
@@ -262,14 +267,14 @@ export function upsertDoc(db: MaterialsSqlite, doc: Omit<MaterialDoc, "override"
   try {
     db.prepare(
       `insert into docs (id, origin, folder, folder_label, path, name, ext, kind, bytes, mtime, sha1, duplicate_of, rule_id, rule_key, action, category, visibility, note, imported_to,
-        store_id, record_date, status, error, chars, sections, sheet_names, pii, summary, knowledge_ids, storage_key, drive_url, scanned_at, updated_at)
-       values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        store_id, record_date, status, error, chars, sections, sheet_names, pii, summary, knowledge_ids, storage_key, drive_url, orig_path, scanned_at, updated_at)
+       values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
        on conflict (id) do update set origin = excluded.origin, folder = excluded.folder, folder_label = excluded.folder_label, path = excluded.path, name = excluded.name,
         ext = excluded.ext, kind = excluded.kind, bytes = excluded.bytes, mtime = excluded.mtime, sha1 = excluded.sha1, duplicate_of = excluded.duplicate_of,
         rule_id = excluded.rule_id, rule_key = excluded.rule_key, action = excluded.action, category = excluded.category, visibility = excluded.visibility, note = excluded.note, imported_to = excluded.imported_to,
         store_id = excluded.store_id, record_date = excluded.record_date, status = excluded.status, error = excluded.error, chars = excluded.chars, sections = excluded.sections,
         sheet_names = excluded.sheet_names, pii = excluded.pii, summary = excluded.summary, drive_url = coalesce(excluded.drive_url, docs.drive_url),
-        storage_key = coalesce(excluded.storage_key, docs.storage_key), scanned_at = excluded.scanned_at, updated_at = excluded.updated_at`,
+        storage_key = coalesce(excluded.storage_key, docs.storage_key), orig_path = excluded.orig_path, scanned_at = excluded.scanned_at, updated_at = excluded.updated_at`,
     ).run(
       doc.id,
       doc.origin,
@@ -302,6 +307,7 @@ export function upsertDoc(db: MaterialsSqlite, doc: Omit<MaterialDoc, "override"
       prev ? (prev.knowledge_ids as string | null) : j(doc.knowledgeIds ?? []),
       doc.storageKey ?? (prev?.storage_key as string | null) ?? null,
       doc.driveUrl ?? null,
+      doc.originalPath ?? null,
       doc.scannedAt ?? now,
       now,
     );
@@ -422,9 +428,10 @@ export function listDocs(db: MaterialsSqlite, f: DocFilter = {}): { rows: Materi
     args.push(...f.visibilities);
   }
   if (f.q?.trim()) {
-    where.push("(path like ? escape '\\' or summary like ? escape '\\' or note like ? escape '\\' or category like ? escape '\\')");
+    // 場所は source/ の先頭の階層 + その中の場所と、整理する前の場所 (古い場所の名前でも探せる)
+    where.push("((folder || '/' || path) like ? escape '\\' or orig_path like ? escape '\\' or summary like ? escape '\\' or note like ? escape '\\' or category like ? escape '\\')");
     const like = `%${escapeLike(f.q.trim())}%`;
-    args.push(like, like, like, like);
+    args.push(like, like, like, like, like);
   }
   const w = where.length ? `where ${where.join(" and ")}` : "";
   const total = Number(db.prepare(`select count(*) n from docs ${w}`).get(...args)?.n ?? 0);

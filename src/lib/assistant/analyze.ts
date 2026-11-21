@@ -139,7 +139,7 @@ const SALES_METRICS: Record<string, MetricDef> = {
   tatami_gross: { label: "畳の粗利 (原価の記録がある案件)", kind: "yen", calc: (a) => sum(a, "tSales") - sum(a, "tCost") },
   tatami_margin: { label: "畳の粗利率", kind: "percent", calc: (a) => ratio(sum(a, "tSales") - sum(a, "tCost"), sum(a, "tSales")) },
   customer_count: { label: "顧客数", kind: "count", calc: (a) => a.customers.size },
-  simple_gross: { label: "簡易粗利 (売上−仕入−経費)", kind: "yen", calc: (a) => sum(a, "sales") - sum(a, "purchases") - sum(a, "expenses") },
+  simple_gross: { label: "簡易粗利 (売上−畳原価−仕入−経費)", kind: "yen", calc: (a) => sum(a, "sales") - sum(a, "tCost") - sum(a, "purchases") - sum(a, "expenses") },
 };
 
 const COUNT_AMOUNT: Record<string, MetricDef> = {
@@ -330,7 +330,7 @@ function salesAtoms(ctx: Ctx, spec: AnalysisSpec, from: string, to: string, need
       const c = customerById.get(f.customerId);
       if (!c || !customers.some((k) => matchAny(`${c.name} ${c.kana} ${c.code}`, [k]))) continue;
     }
-    if (staffKw.length && !f.staff.some((s) => matchAny(s, staffKw)) && !f.workerIds.some((w) => matchAny(ctx.userName(w), staffKw))) continue;
+    if (staffKw.length && !f.staff.some((s) => matchAny(s, staffKw)) && !f.workerNames.some((w) => matchAny(w, staffKw))) continue;
     if (areas.length && !matchAny(f.area, areas) && !matchAny(orderById.get(f.id)?.siteAddress, areas)) continue;
     inRange++;
     if (f.amounts.tatami > 0) {
@@ -348,7 +348,7 @@ function salesAtoms(ctx: Ctx, spec: AnalysisSpec, from: string, to: string, need
       customer: ctx.customerLabel(f.customerId),
       customer_type: c?.type === "corporate" ? "法人" : "個人",
       staff: f.staff,
-      worker: f.workerIds.length ? f.workerIds.map((w) => ctx.userName(w)) : ["(未設定)"],
+      worker: f.workerNames.length ? f.workerNames : ["(未設定)"],
       area: f.area || "(不明)",
       channel: channelOf(f),
     });
@@ -573,10 +573,10 @@ export function runAnalysis(db: Database, user: User, raw: AnalysisSpec, now = n
   const needItems = subject === "sales" && (dims.includes("product") || Boolean(raw.products?.length) || metrics.some((m) => m === "quantity" || m === "avg_unit_price"));
   const splitCategory = subject === "sales" && dims.includes("category");
   if (needItems && metrics.includes("simple_gross")) {
-    return { ok: false, error: "簡易粗利 (売上−仕入−経費) は商品 (明細) ごとには出せません。", hint: "商品別の粗利は gross (売上−案件の原価を明細の金額で按分した目安) を使ってください。" };
+    return { ok: false, error: "簡易粗利 (売上−畳原価−仕入−経費) は商品 (明細) ごとには出せません。", hint: "商品別の粗利は gross (売上−案件の原価を明細の金額で按分した目安) を使ってください。" };
   }
   if (metrics.includes("simple_gross") && dims.some((d) => !(TIME_DIMS as readonly string[]).includes(d) && d !== "store")) {
-    return { ok: false, error: "簡易粗利 (売上−仕入−経費) は期間と店舗の軸でだけ集計できます。", hint: "種別・顧客・担当者の軸では gross (売上−記録された原価) を使ってください。" };
+    return { ok: false, error: "簡易粗利 (売上−畳原価−仕入−経費) は期間と店舗の軸でだけ集計できます。", hint: "種別・顧客・担当者の軸では gross (売上−記録された原価) を使ってください。" };
   }
 
   const build = (f: string, t: string, noteSet: Set<string>): Atom[] => {
@@ -739,8 +739,8 @@ export function runAnalysis(db: Database, user: User, raw: AnalysisSpec, now = n
   if (subject === "sales") {
     notes.add(raw.date_basis === "contract" ? "受注金額 = 契約日が期間内の受注 (税込・キャンセルを除く)" : "売上 = 売上計上日 (施工完了日) が期間内の受注 (税込・キャンセルを除く)。経営ダッシュボードと同じ基準");
     if (metrics.some((m) => ["cost", "gross", "gross_margin"].includes(m))) notes.add("原価は「畳原価 (売上台帳の記録)」と「案件にひも付いた仕入」だけです。襖・障子・網戸などの材料原価は記録がないため、粗利は実際より大きく出ます");
-    if (dims.includes("staff") || raw.staff?.length) notes.add("担当者: 移行した受注は販売管理ソフトの「担当者欄」(1 件に複数名のときはそれぞれに全額を計上)、システムで登録した受注は登録した社員");
-    if (dims.includes("worker")) notes.add("施工担当: 受注に登録された施工担当 (複数名のときはそれぞれに全額を計上)");
+    if (dims.includes("staff") || raw.staff?.length) notes.add("担当者: 移行した受注は販売管理ソフトの「担当者欄」の 1 番目 (担当。3 番目の伝票の入力者は数えない)、システムで登録した受注は見積の担当者 (見積がなければ受注を登録した社員)。経営ダッシュボードの担当者別と同じ");
+    if (dims.includes("worker")) notes.add("施工担当: 受注に登録された施工担当と、移行した受注の「担当者欄」の 2 番目 (複数名のときはそれぞれに全額を計上)");
     if (dims.includes("category") && !needItems) notes.add("種別ごとの金額は受注の種別別の内訳 (売上台帳の畳・襖・障子…の欄)。件数はその種別を含む受注の数");
     if (dims.includes("channel")) notes.add("受付経路: 見積の媒体 → 問い合わせの入口 → 顧客の初回接点 の順に使っています (移行データの多くは未登録)");
   }

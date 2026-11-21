@@ -39,7 +39,7 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   expense: { vendor: "支払先", date: "日付", amount: "金額 (税込)", taxAmount: "うち消費税", account: "勘定科目", paymentMethod: "支払方法", description: "内容・用途" },
   purchase: { supplierId: "仕入先", invoiceDate: "請求日", dueDate: "支払期限", scheduledPayDate: "支払予定日", amount: "金額 (税込)", taxAmount: "うち消費税", account: "勘定科目", items: "仕入内容", orderId: "案件", supplierInvoiceNo: "請求書番号", payMethod: "支払方法", payReference: "支払の記録" },
   ai: { question: "質問", answer: "回答", disabled: "無効" },
-  knowledge: { body: "内容", category: "分類", tags: "タグ", active: "AI に使う", visibility: "見られる人", recordDate: "日付" },
+  knowledge: { body: "内容", category: "分類", tags: "タグ", active: "AI に使う", visibility: "見られる人", recordDate: "日付", ownerId: "担当者", reviewDue: "次に確かめる日", reviewIntervalDays: "確かめる間隔 (日)", reviewedAt: "最後に確かめた日時", reviewedBy: "最後に確かめた人", url: "シートの URL", label: "名前", reviewIntervals: "分類ごとの確かめる間隔", defaultOwnerId: "既定の担当者", soonDays: "期限が近いとみなす日数", defaultDays: "既定の間隔 (日)" },
   registry: { action: "扱い", visibility: "見られる人", category: "分類", note: "メモ" },
   settings: { lineGroup: "LINE グループのひも付け (受注 / 協力業者 / 呼び名)", mode: "AI アシスタントの閲覧範囲 (permission = 権限どおり / all_stores = 全店舗)", until: "全店舗にする最終日", hiredOn: "雇い入れ日", baseDate: "有給の基準日", weeklyDays: "週の所定労働日数", compLimit: "振休のため込みの上限", consumeOrder: "有給の消化の順番", fiscalStartMonth: "年度の始まりの月", closingDay: "勤怠の締め日", amStart: "午前休の開始", amEnd: "午前休の終了", pmStart: "午後休の開始", pmEnd: "午後休の終了", condolenceViewers: "慶弔リストを見られる人 (all = 全社員 / office = 事務担当・本部・管理者)" },
   supplier: { kind: "区分", category: "取扱品目", contactName: "担当者", fax: "FAX", paymentTerms: "支払条件 (文章)", closingDay: "締め日", payMonthOffset: "支払月", payDay: "支払日", bankInfo: "振込先", registrationNumber: "登録番号", lineId: "LINE ユーザー ID", chatworkRoomId: "Chatwork ルーム ID", active: "取引中" },
@@ -57,11 +57,13 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   holiday_work: { slot: "区分", days: "日数", kind: "種類" },
   leave_grant: { grantDate: "付与日", baseDate: "もとの付与日", expiresOn: "有効期限", days: "日数" },
   work_report: { visitors: "来店数", flyers: "チラシの配布 (配布人・枚数・地域)", note: "メモ" },
+  holiday: { label: "休業日の名前", closed: "休業日", holiday: "祝日", dates: "日付" },
   promotion: { kind: "販促の種類", title: "名前", startDate: "配布日・開始日", endDate: "終了日", areas: "地域と部数", copies: "部数・件数", cost: "費用", media: "媒体", vendor: "配布業者・依頼先", note: "メモ", status: "状態" },
   office_improvement: { year: "年", date: "日付", staffName: "担当", staffId: "担当 (社員)", item: "項目", content: "内容", cause: "原因", measure: "具体的改善策" },
   condolence: { date: "年月日", category: "区分", kind: "内容", name: "名前", relation: "関係", amount: "金額", attendee: "担当 (参列者)", note: "備考" },
   material: { code: "コード", name: "名前", series: "シリーズ", supplierCode: "品番", unit: "単位", supplierId: "発注先", reorderLevel: "規定量", lineup: "通常ヘリ (ラインナップ)", active: "使う", note: "メモ" },
   stock_move: { status: "状態" },
+  doc_draft: { title: "名前", subject: "件名", body: "本文", status: "状態", version: "版", refs: "関係する記録", channel: "送信方法", recipient: "宛先", recipientLabel: "宛先の名前" },
 };
 
 export function fieldLabel(entity: string, field: string): string {

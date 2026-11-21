@@ -49,9 +49,13 @@ next-env.d.ts
 # local data files (sample data / copies of the real data)
 /data/
 
-# 実行に不要な資料・納品物・作業物 (client-materials / docs / phase1・2 / PDF・deb など)
+# 実行に不要な資料・納品物・作業物 (docs / phase1・2 / deb など)
 /other/*
 !/other/README.md
+
+# クライアントから受け取った資料 (分野ごとに整理したもの。個人情報・社外秘を含む。説明の README だけコミットする)
+/source/*
+!/source/README.md
 
 # smoke test screenshots (互換のため旧パスも残す)
 .smoke-shots/

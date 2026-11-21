@@ -21,6 +21,7 @@ import { CasePlanCard } from "@/components/scheduling/CasePlanCard";
 import { caseEvents } from "@/lib/db/schedule";
 import { toDateKey } from "@/lib/format";
 import { AiSummary } from "@/components/features/AiSummary";
+import { RecordDocDrafts } from "@/components/features/DocDrafts";
 
 /** 見積書の PDF を作ってメールで送る (送信の応答を待つ) ため */
 export const maxDuration = 60;
@@ -277,6 +278,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
             </ul>
           </Card>
           <AiSummary kind="quote" id={q.id} />
+          <RecordDocDrafts db={db} user={user} type="quote" id={q.id} number={q.number} />
           <RecordStamp db={db} targets={[{ entity: "quote", id: q.id }]} created={{ by: q.createdBy, at: q.createdAt }} approved={q.approvedBy ? [{ by: q.approvedBy, at: q.approvedAt }] : []} />
           <ApprovalHistoryCard approvals={chain.approvals.filter((a) => a.targetId === q.id)} />
           <HistoryCard db={db} user={user} targets={[{ entity: "quote", id: q.id }]} />

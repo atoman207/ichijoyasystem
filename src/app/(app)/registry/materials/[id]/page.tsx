@@ -94,6 +94,8 @@ export default async function MaterialPage({ params, searchParams }: { params: P
                 ["読み取り", doc.scannedAt ? fmtDateTime(doc.scannedAt) : "-"],
                 ["取り込み先 (システムのデータ)", doc.importedTo ?? "-"],
                 ["元", doc.origin === "upload" ? "画面から追加した資料" : "クライアント資料"],
+                ...(doc.origin === "client" ? ([["サーバーの場所", `source/${doc.folder ? `${doc.folder}/` : ""}${doc.path}`]] as [string, string][]) : []),
+                ...(doc.originalPath ? ([["整理する前の場所", doc.originalPath.startsWith("../") ? `other/${doc.originalPath.slice(3)}` : `other/client-materials/${doc.originalPath}`]] as [string, string][]) : []),
                 [
                   "元のファイル",
                   doc.driveUrl ? (

@@ -17,6 +17,8 @@ import { sendTestMessage, updateAiIntakeSettings, updateApprovalSettings, update
 import { HANDOFF_MODE_LABEL, aiIntakeSettings, type HandoffMode } from "@/lib/ai-intake";
 import { appBaseUrl, chatworkConfig, integrationStatuses } from "@/lib/notify/config";
 import { googleSheetsStatus } from "@/lib/google/sheets";
+import { knowledgeSources } from "@/lib/knowledge";
+import { cronHealth } from "@/lib/knowledge-sync";
 import { NOTIFY_EVENT_LABEL, notifySettings, type NotifyEvent } from "@/lib/notify/events";
 import { canManageIntegrations } from "@/lib/auth/permissions";
 import type { ServiceCategory } from "@/lib/db/types";
@@ -336,7 +338,10 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             (() => {
               // 非公開のシートの直接同期 (サービスアカウント。src/lib/google/sheets.ts)。鍵の中身は出さない
               const gs = googleSheetsStatus();
-              return {
+              // 社内資料の同期 (一方向: シート → システム) の最後の成功・失敗 (src/lib/knowledge-sync.ts)
+              const ks = knowledgeSources(db);
+              const sync = ks.length ? ` 社内資料の同期: ${ks.map((s) => `${s.label} ${s.failCount ? `失敗 ${s.failCount} 回 (${(s.lastError ?? "").slice(0, 40)})` : `最終成功 ${s.lastSuccessAt ? new Date(s.lastSuccessAt).toLocaleString("ja-JP") : "なし"}`}`).join(" / ")} · ${cronHealth(db).detail}` : "";
+              const base = {
                 name: "Google スプレッドシート",
                 status: gs.configured ? "サービスアカウントで接続" : gs.error ? "鍵の設定に誤り" : "リンクの共有で取込",
                 ok: gs.configured || !gs.error,
@@ -346,6 +351,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                     ? `${gs.source} を読めません: ${gs.error} (リンクの共有のシートは読めます)`
                     : "リンクで共有したシートから顧客・問い合わせを取込 (データ入出力の画面)・社内資料の同期。書き出した CSV はシートでインポート。非公開のシートを直接読むには、サービスアカウントの鍵を GOOGLE_SERVICE_ACCOUNT_JSON (または GOOGLE_SERVICE_ACCOUNT_FILE) に設定します。",
               };
+              return { ...base, desc: `${base.desc}${sync}`, ok: base.ok && !ks.some((s) => s.failCount) };
             })(),
             { name: "会計ソフト (弥生・freee・マネーフォワードなど)", status: "CSV で出力", ok: true, desc: "売上・入金・経費・仕入・現金出納の仕訳と明細を、会計データの出力 (/accounting) から CSV で出力します (汎用・弥生会計のインポート形式)。" },
           ].map((i) => (
@@ -359,6 +365,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           {(() => {
             const intake = aiIntakeSettings(db);
             const base = appBaseUrl();
+            // 最近の受付 (接続できているかの確認)
+            const recentIntakes = db.inquiries.filter((i) => i.sourceRef?.startsWith("ai:")).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt)).slice(0, 5);
             return (
               <Card className="@2xl:col-span-2">
                 <CardHeader title="既存の AI システムからの受付 (AI テキスト相談・AI 音声相談・AI 電話受付)" description="各 AI システムの「受付が終わったときの送信 (Webhook)」を下の URL に設定すると、受付ごとに問い合わせを登録し、会話の記録をやりとり履歴に残して、担当者に引き継ぎます。同じ受付 ID は 1 件だけ登録します" />
@@ -366,8 +374,26 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                   {(["chat", "voice", "phone"] as const).map((k) => (
                     <li key={k}><span className="inline-block w-28 text-ink-3">{k === "chat" ? "AI テキスト相談" : k === "voice" ? "AI 音声相談" : "AI 電話受付"}</span><span className="font-mono text-[11px] break-all">POST {base}/api/integrations/ai-intake?source={k}</span></li>
                   ))}
-                  <li className="text-ink-3">認証: ヘッダー Authorization: Bearer &lt;AI_INTAKE_SECRET&gt; (ヘッダーを設定できないシステムは URL の末尾に &amp;token=&lt;AI_INTAKE_SECRET&gt;)。受け取る項目: name・phone・email・address・summary (要約)・purpose (用件)・transcript (会話)・desiredDate (希望日)・callbackPhone (折返し先)・store (店舗)・handoff (引き継ぎが必要)・urgency・id (受付 ID) など</li>
+                  <li className="text-ink-3">認証: ヘッダー Authorization: Bearer &lt;AI_INTAKE_SECRET&gt; (ヘッダーを設定できないシステムは URL の末尾に &amp;token=&lt;AI_INTAKE_SECRET&gt;)。受け取る項目: name・kana・phone (+81 の形も可)・email・postalCode・address・summary (要約)・purpose (用件)・transcript (会話)・desiredDate (希望日)・callbackPhone (折返し先)・store (店舗)・media (当社を知ったきっかけ)・handoff (引き継ぎが必要)・urgency・assignee (担当者のメール)・recordingUrl・id (受付 ID) など。電話番号・メールが一致する顧客に自動でひも付け、会話の記録はその顧客のやりとり履歴に入ります</li>
                 </ul>
+                <div className="mb-3 text-xs">
+                  <div className="mb-1 font-medium text-ink-2">最近の受付</div>
+                  {recentIntakes.length ? (
+                    <ul className="space-y-0.5">
+                      {recentIntakes.map((i) => (
+                        <li key={i.id} className="flex flex-wrap gap-x-2 text-ink-2">
+                          <span className="tnum text-ink-3">{fmtDateTime(i.receivedAt)}</span>
+                          <span>{CHANNEL_LABEL[i.channel]}</span>
+                          <Link href={`/inquiries/${i.id}`} className="text-accent hover:underline">{i.number}</Link>
+                          <span>{i.customerId ? "顧客にひも付け済み" : "顧客は未登録"}</span>
+                          <span className="text-ink-3">担当 {userName(i.assignedUserId)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-ink-3">まだ受付はありません (各 AI システムの送信先に上の URL を設定すると、ここに表示されます)。</p>
+                  )}
+                </div>
                 <form action={updateAiIntakeSettings} className="space-y-3">
                   <fieldset disabled={!admin} className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
                     <Field label="店舗が分からないときの登録先">

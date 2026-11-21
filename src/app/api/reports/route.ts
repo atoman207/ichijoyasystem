@@ -3,7 +3,7 @@ import { getSessionUser } from "@/lib/auth/session";
 import { addAudit, mutate, syncDb } from "@/lib/db/store";
 import { canViewReports } from "@/lib/auth/permissions";
 import { toCsv } from "@/lib/csv";
-import { MGMT_CSV_SECTIONS, managementReport, mgmtCsvRows, resolvePeriod, type MgmtCsvSection } from "@/lib/management";
+import { MGMT_CSV_SECTIONS, managementReport, mgmtCsvRows, resolvePeriod, staffOptions, type MgmtCsvSection } from "@/lib/management";
 import type { StoreId } from "@/lib/db/types";
 
 export const maxDuration = 60;
@@ -11,7 +11,7 @@ export const maxDuration = 60;
 /**
  * 経営ダッシュボードの CSV (店長・本部スタッフ・管理者。店長は自店舗のみ)
  * /api/reports?section=summary|monthly|stores|staff|pipeline|invoices|categories|channels|expenses
- *   &period=last_12m (または from=YYYY-MM-DD&to=YYYY-MM-DD) &store=koshi &staff=<社員 ID>
+ * |surveys &period=last_12m (または from=YYYY-MM-DD&to=YYYY-MM-DD) &store=koshi &staff=<社員 ID または name:<名前>>
  * 画面と同じ集計 (src/lib/management.ts)。UTF-8 (BOM 付き)
  */
 export async function GET(req: Request) {
@@ -24,9 +24,10 @@ export async function GET(req: Request) {
   const db = await syncDb();
   const period = resolvePeriod(sp);
   const store = db.stores.some((s) => s.id === sp.store) ? (sp.store as StoreId) : undefined;
-  const staff = sp.staff && db.users.some((u) => u.id === sp.staff) ? sp.staff : undefined;
+  const staffOption = sp.staff ? staffOptions(db, user).find((o) => o.key === sp.staff) : undefined;
+  const staff = staffOption?.key;
   const report = managementReport(db, user, { from: period.from, to: period.to, storeId: store, staffId: staff });
-  const scope = [report.filter.storeId ? db.stores.find((s) => s.id === report.filter.storeId)?.name : report.stores.length === 1 ? report.stores[0].name : "全店舗", staff ? db.users.find((u) => u.id === staff)?.name : ""].filter(Boolean).join(" · ");
+  const scope = [report.filter.storeId ? db.stores.find((s) => s.id === report.filter.storeId)?.name : report.stores.length === 1 ? report.stores[0].name : "全店舗", staffOption ? `担当 ${staffOption.name}` : ""].filter(Boolean).join(" · ");
   const label = `経営ダッシュボード (${MGMT_CSV_SECTIONS[section]} · ${period.label} · ${scope})`;
   await mutate((d) => {
     addAudit(d, { userId: user.id, action: "export", entity: "data", entityId: `report_${section}`, entityLabel: label, summary: `データを書き出し: ${label}`, storeId: report.stores.length === 1 ? report.stores[0].id : undefined });

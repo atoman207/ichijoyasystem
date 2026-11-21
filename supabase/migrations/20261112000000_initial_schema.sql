@@ -121,7 +121,8 @@ create table if not exists inquiries (
   source text,
   source_ref text,
   media text,
-  promotion_id text
+  promotion_id text,
+  intake jsonb
 );
 comment on table inquiries is '問い合わせ';
 
@@ -689,7 +690,12 @@ create table if not exists knowledge (
   updated_by text,
   updated_at timestamptz not null,
   visibility text,
-  record_date date
+  record_date date,
+  owner_id text,
+  review_due date,
+  review_interval_days integer,
+  reviewed_at timestamptz,
+  reviewed_by text
 );
 comment on table knowledge is '社内資料 (ナレッジ・AI の回答の根拠)';
 
@@ -1400,6 +1406,43 @@ create table if not exists condolences (
 );
 comment on table condolences is '慶弔リスト (通夜・葬儀・慶事への対応。ご家族の情報を含むため事務担当・本部・管理者だけが見る)';
 
+-- 文書の下書き (AI アシスタントで作った文面の保存・版の履歴・確認・承認・送信)
+create table if not exists doc_drafts (
+  id text primary key,
+  number text not null unique,
+  title text not null,
+  template text not null,
+  format text not null check (format in ('email','line','document')),
+  audience text not null check (audience in ('customer','internal')),
+  subject text,
+  body text not null default '',
+  status text not null check (status in ('draft','reviewed','approved','sent','discarded')),
+  store_id text not null references stores(id),
+  refs jsonb not null default '[]',
+  provider text not null default 'rules',
+  notes text,
+  version integer not null default 1,
+  versions jsonb not null default '[]',
+  events jsonb not null default '[]',
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz not null,
+  reviewed_by text,
+  reviewed_at timestamptz,
+  approved_by text,
+  approved_at timestamptz,
+  sent_by text,
+  sent_at timestamptz,
+  channel text,
+  recipient text,
+  recipient_label text,
+  delivery_ids jsonb not null default '[]',
+  comm_log_id text,
+  copied_from text
+);
+comment on table doc_drafts is '文書の下書き (AI アシスタントで作った文面の保存・版の履歴・確認・承認・送信)';
+
 -- 既存のテーブルに後から追加した列 (schema.ts に列を足したとき、作成済みのテーブルへ反映する)
 -- 注意: not null で既定値のない列を、行があるテーブルへ追加すると失敗する。その場合は既定値を付けるか、手動で移行する
 alter table stores add column if not exists code text not null;
@@ -1477,6 +1520,7 @@ alter table inquiries add column if not exists source text;
 alter table inquiries add column if not exists source_ref text;
 alter table inquiries add column if not exists media text;
 alter table inquiries add column if not exists promotion_id text;
+alter table inquiries add column if not exists intake jsonb;
 alter table products add column if not exists category text not null;
 alter table products add column if not exists name text not null;
 alter table products add column if not exists grade text;
@@ -1889,6 +1933,11 @@ alter table knowledge add column if not exists updated_by text;
 alter table knowledge add column if not exists updated_at timestamptz not null;
 alter table knowledge add column if not exists visibility text;
 alter table knowledge add column if not exists record_date date;
+alter table knowledge add column if not exists owner_id text;
+alter table knowledge add column if not exists review_due date;
+alter table knowledge add column if not exists review_interval_days integer;
+alter table knowledge add column if not exists reviewed_at timestamptz;
+alter table knowledge add column if not exists reviewed_by text;
 alter table purchase_orders add column if not exists number text not null unique;
 alter table purchase_orders add column if not exists supplier_id text not null references suppliers(id);
 alter table purchase_orders add column if not exists store_id text not null references stores(id);
@@ -2398,6 +2447,37 @@ alter table condolences add column if not exists created_by text not null;
 alter table condolences add column if not exists created_at timestamptz not null;
 alter table condolences add column if not exists updated_by text;
 alter table condolences add column if not exists updated_at timestamptz not null;
+alter table doc_drafts add column if not exists number text not null unique;
+alter table doc_drafts add column if not exists title text not null;
+alter table doc_drafts add column if not exists template text not null;
+alter table doc_drafts add column if not exists format text not null check (format in ('email','line','document'));
+alter table doc_drafts add column if not exists audience text not null check (audience in ('customer','internal'));
+alter table doc_drafts add column if not exists subject text;
+alter table doc_drafts add column if not exists body text not null default '';
+alter table doc_drafts add column if not exists status text not null check (status in ('draft','reviewed','approved','sent','discarded'));
+alter table doc_drafts add column if not exists store_id text not null references stores(id);
+alter table doc_drafts add column if not exists refs jsonb not null default '[]';
+alter table doc_drafts add column if not exists provider text not null default 'rules';
+alter table doc_drafts add column if not exists notes text;
+alter table doc_drafts add column if not exists version integer not null default 1;
+alter table doc_drafts add column if not exists versions jsonb not null default '[]';
+alter table doc_drafts add column if not exists events jsonb not null default '[]';
+alter table doc_drafts add column if not exists created_by text not null;
+alter table doc_drafts add column if not exists created_at timestamptz not null;
+alter table doc_drafts add column if not exists updated_by text;
+alter table doc_drafts add column if not exists updated_at timestamptz not null;
+alter table doc_drafts add column if not exists reviewed_by text;
+alter table doc_drafts add column if not exists reviewed_at timestamptz;
+alter table doc_drafts add column if not exists approved_by text;
+alter table doc_drafts add column if not exists approved_at timestamptz;
+alter table doc_drafts add column if not exists sent_by text;
+alter table doc_drafts add column if not exists sent_at timestamptz;
+alter table doc_drafts add column if not exists channel text;
+alter table doc_drafts add column if not exists recipient text;
+alter table doc_drafts add column if not exists recipient_label text;
+alter table doc_drafts add column if not exists delivery_ids jsonb not null default '[]';
+alter table doc_drafts add column if not exists comm_log_id text;
+alter table doc_drafts add column if not exists copied_from text;
 
 -- 索引 (検索・読み込みの並び順)
 create index if not exists stores_load_order_idx on stores (code, id);
@@ -2536,6 +2616,9 @@ create index if not exists promotions_kind_idx on promotions (kind);
 create index if not exists promotions_load_order_idx on promotions (start_date, id);
 create index if not exists office_improvements_load_order_idx on office_improvements (year, date, created_at, id);
 create index if not exists condolences_load_order_idx on condolences (date, created_at, id);
+create index if not exists doc_drafts_store_id_idx on doc_drafts (store_id);
+create index if not exists doc_drafts_status_idx on doc_drafts (status);
+create index if not exists doc_drafts_load_order_idx on doc_drafts (created_at, id);
 
 -- 後から not null を外した列 (データは変えない。外した後に実行しても変化なし)
 alter table comm_logs alter column customer_id drop not null;
@@ -2738,6 +2821,9 @@ grant select, insert, update, delete on table office_improvements to service_rol
 alter table condolences enable row level security;
 revoke all on table condolences from anon, authenticated;
 grant select, insert, update, delete on table condolences to service_role;
+alter table doc_drafts enable row level security;
+revoke all on table doc_drafts from anon, authenticated;
+grant select, insert, update, delete on table doc_drafts to service_role;
 
 -- 書き込みのたびにリビジョンを +1 (他のサーバーインスタンスが変更を検知して読み直す)
 create or replace function public.bump_revision() returns bigint

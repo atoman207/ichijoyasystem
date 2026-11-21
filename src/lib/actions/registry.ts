@@ -9,6 +9,7 @@ import { putObject, removeObjects } from "@/lib/storage";
 import { ACTION_LABEL, REGISTRY_CATEGORIES, type RegistryAction } from "@/lib/registry/classify";
 import { addRun, deleteDoc, effAction, effCategory, effVisibility, getDoc, openMaterials, setKnowledgeIds, setOverride, type MaterialsSqlite } from "@/lib/registry/materials-db";
 import { promoteFromMaterials } from "@/lib/registry/promote";
+import { initialReview, reviewSettings } from "@/lib/knowledge-review";
 import { ingestUpload, UPLOAD_EXTS } from "@/lib/registry/ingest";
 import { KNOWLEDGE_VISIBILITY_LABEL } from "@/lib/knowledge";
 import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
@@ -43,7 +44,8 @@ function done(back: string, msg: string): never {
 /** 社内資料を資料庫に合わせる (指定の資料、または全部) */
 async function syncKnowledge(user: User, mdb: MaterialsSqlite, docIds: string[] | undefined, label: string) {
   const r = await mutate((db) => {
-    const x = promoteFromMaterials(db, mdb, { userId: user.id, now: nowIso(), newId: () => newId("kn") }, { docIds });
+    const rs = reviewSettings(db);
+    const x = promoteFromMaterials(db, mdb, { userId: user.id, now: nowIso(), newId: () => newId("kn"), review: (d) => initialReview(rs, d.category) }, { docIds });
     if (x.added || x.updated || x.removed) {
       addAudit(db, { userId: user.id, action: "import", entity: "knowledge", entityId: docIds?.length === 1 ? docIds[0] : "registry", entityLabel: label, summary: `データ台帳から社内資料をそろえる (${label}: 追加 ${x.added}・更新 ${x.updated}・削除 ${x.removed})` });
     }

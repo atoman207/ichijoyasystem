@@ -7,6 +7,7 @@
  *   node scripts/import/import-sales-csv.mjs <CSV> --json=<ファイル> → JSON のデータで試算 (ローカル確認用。書き込まない)
  *   node scripts/import/import-sales-csv.mjs <CSV> --base=data/backup/<ファイル> --yes
  *     → 書き込みが途中で止まったとき: --yes の実行時に保存した「書き込む前のデータ」から同じ変更を計算して書き直す
+ *   (受け取った CSV は source/03_売上・実績/販売管理ソフトの売上明細/ に置く。source/README.md)
  *
  * - 取込の中身は src/lib/sales-ledger.ts (画面の「データ入出力 → 売上明細の取込」と同じ処理)。何度実行しても同じ状態になる
  * - 接続は NEXT_PUBLIC_SUPABASE_URL と SUPABASE_SECRET_KEY (.env.local)。書き込み後にリビジョンを +1 するので、

@@ -4,6 +4,8 @@
  *
  *   node scripts/ops/import-schedule-plan.mjs --plan "<予定表 2026.11.xlsx>" --plan "<2026.12.xlsx>" --vehicles "<車両点検表.xlsx>"          (試し: 何も書かない)
  *   node scripts/ops/import-schedule-plan.mjs ... --apply                                                                              (書き込む)
+ *   node scripts/ops/import-schedule-plan.mjs [--history] [--apply]   → 指定がなければ source/ の予定表 (04_予定表・作業日報/予定表。過去分を含む) と
+ *                                                                      車両点検表 (source/ のどこか) を読む (source/README.md)
  *
  * 登録するもの (資料に書かれている値だけ。書かれていない値は今の設定のまま):
  * - 店舗の 1 日の上限 (畳・襖換算) = 人数 × 11 (「スプレッド入力ルール」と「係数・電話当番」の店舗人数)、始業・終業 8:00〜17:00 (求人票)
@@ -27,26 +29,30 @@ import { loadEnv } from "../import/env.mjs";
 const args = process.argv.slice(2);
 const APPLY = args.includes("--apply");
 const HISTORY = args.includes("--history");
-const planDir = args.includes("--plan-dir") ? args[args.indexOf("--plan-dir") + 1] : undefined;
+const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+const jiti = createJiti(import.meta.url, { alias: { "@": path.join(root, "src"), "server-only": path.join(root, "scripts/tests/maps/empty.cjs") } });
+const imp = (p) => jiti.import(path.join(root, "src", p));
+const { findSourceFiles, sourceDir } = await imp("lib/registry/source.ts");
+// 指定がなければクライアント資料のフォルダー source/ から (予定表のフォルダー・車両点検表)
+const SOURCE = sourceDir(root);
+const explicitPlans = args.some((a) => a === "--plan" || a === "--plan-dir");
+const planDir = args.includes("--plan-dir") ? args[args.indexOf("--plan-dir") + 1] : explicitPlans ? undefined : path.join(SOURCE, "04_予定表・作業日報", "予定表");
 const monthOf = (file) => {
   const b = path.basename(file).normalize("NFKC");
   const m = b.match(/(20\d\d)\.(\d{1,2})/) ?? b.match(/(20\d\d)年(\d{1,2})月/);
   return m ? { y: m[1], m: String(Number(m[2])).padStart(2, "0") } : null;
 };
 const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : /\.xlsx$/i.test(e.name) ? [path.join(d, e.name)] : []));
-const plans = [...args.flatMap((a, i) => (a === "--plan" ? [args[i + 1]] : [])), ...(planDir ? walk(planDir).filter((f) => monthOf(f) && !/原紙/.test(f)) : [])];
-const vehiclesFile = args[args.indexOf("--vehicles") + 1];
+const plans = [...args.flatMap((a, i) => (a === "--plan" ? [args[i + 1]] : [])), ...(planDir && fs.existsSync(planDir) ? walk(planDir).filter((f) => monthOf(f) && !/原紙/.test(f)) : [])];
+const vehiclesFile = args.includes("--vehicles") ? args[args.indexOf("--vehicles") + 1] : findSourceFiles(SOURCE, /(^|\/)車両点検表\.xlsx$/)[0];
 if (!plans.length || !vehiclesFile) {
-  console.error("使い方: --plan <予定表.xlsx> [--plan …] --vehicles <車両点検表.xlsx> [--apply]");
+  console.error(`使い方: --plan <予定表.xlsx> [--plan …] | --plan-dir <フォルダー>  --vehicles <車両点検表.xlsx> [--apply]\n(指定がなければ ${path.relative(root, SOURCE)}/04_予定表・作業日報/予定表 と source/ の車両点検表.xlsx。見つかりませんでした)`);
   process.exit(2);
 }
 
 loadEnv();
 process.env.DB_SNAPSHOT = "off"; // 本番の控え (/srv/ichijoya/data/cache) に書かない
 process.env.ICHIJOYA_DATA_DB = "off"; // VPS の写しに書かない (アプリが変更の記録から取り込む)
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
-const jiti = createJiti(import.meta.url, { alias: { "@": path.join(root, "src"), "server-only": path.join(root, "scripts/tests/maps/empty.cjs") } });
-const imp = (p) => jiti.import(path.join(root, "src", p));
 const XLSX = createRequire(import.meta.url)("xlsx");
 
 const store = await imp("lib/db/store.ts");

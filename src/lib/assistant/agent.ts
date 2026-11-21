@@ -5,6 +5,7 @@ import { toDateKey } from "@/lib/format";
 import { canSeeAllStores, canViewChatLog, canViewKnowledge } from "@/lib/auth/permissions";
 import { runToolLoop, type ToolCall, type ToolDef } from "@/lib/ai/provider";
 import { knowledgeExcerpt, searchKnowledge } from "@/lib/knowledge";
+import { isStale, staleNote, todayKey } from "@/lib/knowledge-review";
 import { listChatLogs, searchDocs } from "@/lib/chatbot/store";
 import { analysisCatalog, analysisText, runAnalysis, type AnalysisResult, type AnalysisSpec } from "./analyze";
 import { getRecord, lastSearchSource, listSchedule, searchAll, storeScopeNote, RECORD_TYPE_LABEL } from "./search";
@@ -399,7 +400,7 @@ function systemPrompt(db: Database, user: User, now: Date): string {
       ? [
           "## 管理会計 (店舗別独立採算) の質問",
           "- 店舗別の損益・粗利益・材料費・外注費・材料原価率・内部受注・共通経費の案分・未確認の仕入明細・前年より粗利益が減った店舗 は management_accounting で調べる (経営ダッシュボードの「簡易粗利」とは定義が違う。管理会計は 粗利益 = 管理売上 − 材料費 − 外注費、金額は税抜)。",
-          "- 粗利益・損益は management_accounting の数字を使う。business_overview の「簡易粗利」(税込・売上 − 仕入 − 経費) や analyze の「粗利」(売上 − 記録された原価) とは定義が違うので混ぜない。売上の数字を粗利益として書かない。",
+          "- 粗利益・損益は management_accounting の数字を使う。business_overview の「簡易粗利」(税込・売上 − 畳原価 − 仕入 − 経費) や analyze の「粗利」(売上 − 記録された原価) とは定義が違うので混ぜない。売上の数字を粗利益として書かない。",
           "- 回答には 対象期間・金額の税 (税抜/税込)・集計の条件・確定か暫定か を書く。暫定の理由 (未確定の設定・要確認の明細・未確定の案分) も一言添える。金額は道具の結果をそのまま使い、計算し直さない。",
           "- 管理会計のデータを変える操作はしない (登録・確定は /management の画面で人が行う)。",
           "",
@@ -541,7 +542,9 @@ function makeExecutor(db: Database, user: User, now: Date, out: { tables: Analys
           out.docKeys.push(d.key);
           if (d.href) addSource({ label: d.title.replace(/^(使い方|画面の詳細|画面|権限|ロール): /, ""), href: d.href, kind: "使い方" });
         }
-        for (const h of know.slice(0, 3)) addSource({ label: h.entry.title, href: `/knowledge/${h.entry.id}`, kind: "社内資料" });
+        // 確認期限を過ぎた資料は根拠の名前に印を付け、本文の前に「古い可能性」の注記を入れる (knowledge-review.ts)
+        const today = todayKey();
+        for (const h of know.slice(0, 3)) addSource({ label: `${h.entry.title}${isStale(h.entry, today) ? " (確認期限切れ)" : ""}`, href: `/knowledge/${h.entry.id}`, kind: "社内資料" });
         if (know.length) out.usedKnowledge = true;
         // クライアント資料 (資料庫) の候補も添える
         const mats = materialsForGuides(user, q);
@@ -554,7 +557,7 @@ function makeExecutor(db: Database, user: User, now: Date, out: { tables: Analys
         return [
           ...(perms.length ? [`## このロール (${ROLE_LABEL[user.role]}) の権限 (関係しそうなもの。操作を案内する前に確かめる)\n${perms.join("\n")}`] : []),
           ...docs.map((d) => `### ${d.title}${d.href ? ` (画面: ${d.href})` : ""}\n${d.body.slice(0, 1500)}`),
-          ...know.map((h) => `### 社内資料: ${h.entry.title} (分類 ${h.entry.category || "その他"}${h.entry.recordDate ? ` / 日付 ${h.entry.recordDate}` : ""}) [開く](/knowledge/${h.entry.id})\n${knowledgeExcerpt(h.entry.body, q, 2500)}`),
+          ...know.map((h) => `### 社内資料: ${h.entry.title} (分類 ${h.entry.category || "その他"}${h.entry.recordDate ? ` / 日付 ${h.entry.recordDate}` : ""}${h.entry.reviewedAt ? ` / 最終確認 ${h.entry.reviewedAt.slice(0, 10)}` : ""}) [開く](/knowledge/${h.entry.id})\n${staleNote(h.entry, today) ? `${staleNote(h.entry, today)}\n` : ""}${knowledgeExcerpt(h.entry.body, q, 2500)}`),
           ...(mats ? [mats.text] : []),
         ].join("\n\n");
       }

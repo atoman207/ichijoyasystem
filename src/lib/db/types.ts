@@ -16,6 +16,8 @@ import type { Condolence, OfficeImprovement } from "./types-office";
 export type * from "./types-office";
 import type { MediaKey, Promotion, WorkReportDay } from "./types-ops";
 export type * from "./types-ops";
+import type { DocDraft } from "./types-drafts";
+export type * from "./types-drafts";
 
 export type Role = "admin" | "store_manager" | "store_staff" | "hq_staff";
 
@@ -187,6 +189,35 @@ export interface Inquiry {
   media?: MediaKey;
   /** この問い合わせのきっかけになった販促 (チラシ・イベントなど。promotions) */
   promotionId?: string;
+  /** 既存の AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) から受け取った項目 (src/lib/ai-intake.ts)。顧客の登録・重複の確認に使う */
+  intake?: InquiryIntake;
+}
+
+/** AI 受付で受け取った項目 (受け取ったまま。電話番号だけ国内の形にそろえる) */
+export interface InquiryIntake {
+  /** お客様が名乗ったお名前 (顧客にひも付いたときも残す) */
+  name?: string;
+  kana?: string;
+  phone?: string;
+  callbackPhone?: string;
+  email?: string;
+  postalCode?: string;
+  address?: string;
+  desiredDate?: string;
+  urgency?: "high" | "normal" | "low";
+  /** AI が「担当者への引き継ぎが必要」とした */
+  handoffRequested?: boolean;
+  handoffReason?: string;
+  /** 録音・会話の画面 (https のみ) */
+  recordingUrl?: string;
+  /** AI システムの受付 ID */
+  externalId?: string;
+  /** 当社を知ったきっかけ (受け取った言葉。対応表で媒体に読み替えられたときは Inquiry.media) */
+  mediaText?: string;
+  /** 電話番号ではない送信元 (チャットの利用者 ID など) */
+  senderId?: string;
+  /** 電話番号・メールが一致したお客様の件数 (2 件以上なら最近更新したお客様にひも付けた) */
+  matchedCount?: number;
 }
 
 export interface Product {
@@ -837,6 +868,16 @@ export interface KnowledgeEntry {
   visibility?: KnowledgeVisibility;
   /** 日付 (議事録の会議の日・決定事項の日など。AI が「いつ決まったか」を答えるのに使う) */
   recordDate?: string;
+  /**
+   * 内容の管理 (2026-11。src/lib/knowledge-review.ts):
+   * 担当者 (内容に責任を持ち、定期的に確かめる社員の ID)・次に確かめる日・確かめる間隔 (日)・最後に確かめた日時と人。
+   * 次に確かめる日を過ぎると「確認期限切れ」(担当者への通知・AI は古い可能性を添える)
+   */
+  ownerId?: string;
+  reviewDue?: string;
+  reviewIntervalDays?: number;
+  reviewedAt?: string;
+  reviewedBy?: string;
 }
 
 export type KnowledgeVisibility = "all" | "manager" | "hq" | "admin";
@@ -1532,6 +1573,8 @@ export interface Database {
   /* 事務 (types-office.ts。事務改善シート・慶弔リスト) */
   officeImprovements: OfficeImprovement[];
   condolences: Condolence[];
+  /* 文書の下書き (types-drafts.ts。AI アシスタントの「文書の作成」の保存・確認・承認・送信) */
+  docDrafts: DocDraft[];
 }
 
 export type CollectionName = Exclude<keyof Database, "meta">;

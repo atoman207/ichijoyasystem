@@ -1,4 +1,4 @@
-import type { Database, KnowledgeEntry } from "@/lib/db/types";
+import type { Database, KnowledgeEntry, KnowledgeVisibility } from "@/lib/db/types";
 
 /**
  * 社内資料 (ナレッジ)
@@ -11,18 +11,57 @@ import type { Database, KnowledgeEntry } from "@/lib/db/types";
 
 export const KNOWLEDGE_SOURCES_ID = "knowledge_sources";
 
-/** 同期する Google スプレッドシート (設定に保存) */
+/** 同期する Google スプレッドシート (設定に保存)。同期は一方向 (シート → システム。knowledge-sync.ts) */
 export interface KnowledgeSheetSource {
   id: string;
   label: string;
   url: string;
   /** シートに「分類」の列がないときの分類 */
   category: string;
+  /** シートに列がないときの 担当者・見られる人・確かめる間隔 (新しく増えた資料に付ける) */
+  ownerId?: string;
+  visibility?: KnowledgeVisibility;
+  reviewIntervalDays?: number;
+  /** 最後に同期を試みた日時 (成功・失敗とも) */
   lastSyncedAt?: string;
+  /** 最後に成功した日時 */
+  lastSuccessAt?: string;
   lastResult?: string;
   lastCount?: number;
   lastError?: string;
+  /** 続けて失敗した回数 (成功で 0) */
+  failCount?: number;
+  /** 失敗を最後に知らせた日時 (同じ失敗を 24 時間に 1 回まで知らせる) */
+  lastNotifiedAt?: string;
+  /** 最後に取り込んだシートの中身の SHA-256 */
+  lastHash?: string;
+  /** 同期の記録 (新しい順に 20 件) */
+  history?: KnowledgeSyncRun[];
 }
+
+export interface KnowledgeSyncRun {
+  at: string;
+  ok: boolean;
+  /** cron = 定期の同期 / manual = 画面のボタン */
+  trigger: "cron" | "manual";
+  by: string;
+  result: string;
+}
+
+/**
+ * 表の見出し (シートの同期・CSV の取込)。タイトル・内容のほかに 分類・タグ・見られる人・担当者・次回確認日・日付 を読む。
+ * それ以外の列は「見出し: 値」で内容に足す
+ */
+export const KNOWLEDGE_HEAD = {
+  title: /^(タイトル|題名|見出し|項目|質問|問い?|q|title|question|subject|件名|名称|商品名)$/i,
+  body: /^(内容|本文|回答|答え?|説明|詳細|a|answer|body|content|text|description)$/i,
+  category: /^(分類|カテゴリー?|区分|種別|category|type)$/i,
+  tags: /^(タグ|キーワード|tags?|keywords?)$/i,
+  visibility: /^(見られる人|公開範囲|閲覧範囲|閲覧できる人|visibility)$/i,
+  owner: /^(担当者|内容の担当者|責任者|管理者|owner)$/i,
+  reviewDue: /^(次回確認日|次に確認する日|次に確かめる日|確認期限|見直し日|review|reviewdue|review_due)$/i,
+  recordDate: /^(日付|決定日|会議日|会議の日|record_?date|date)$/i,
+};
 
 export function knowledgeSources(db: Pick<Database, "settings">): KnowledgeSheetSource[] {
   const v = db.settings.find((s) => s.id === KNOWLEDGE_SOURCES_ID)?.value as { sources?: KnowledgeSheetSource[] } | undefined;
@@ -190,12 +229,7 @@ export interface KnowledgeDraft {
   tags: string[];
 }
 
-const HEAD = {
-  title: /^(タイトル|題名|見出し|項目|質問|問い?|q|title|question|subject|件名|名称|商品名)$/i,
-  body: /^(内容|本文|回答|答え?|説明|詳細|a|answer|body|content|text|description)$/i,
-  category: /^(分類|カテゴリー?|区分|種別|category|type)$/i,
-  tags: /^(タグ|キーワード|tags?|keywords?)$/i,
-};
+const HEAD = KNOWLEDGE_HEAD;
 
 export const splitTags = (v: string) => [...new Set(v.split(/[,、，;；\s]+/).map((t) => t.trim()).filter(Boolean))].slice(0, 20);
 
@@ -211,13 +245,15 @@ export function parseKnowledgeRows(rows: string[][]): KnowledgeDraft[] {
   let bi = head.findIndex((h) => HEAD.body.test(h));
   const ci = head.findIndex((h) => HEAD.category.test(h));
   const gi = head.findIndex((h) => HEAD.tags.test(h));
+  // 見られる人・担当者・次回確認日・日付の列は内容に入れない (シートの同期は knowledge-sheet.ts で読む)
+  const meta = [HEAD.visibility, HEAD.owner, HEAD.reviewDue, HEAD.recordDate].map((re) => head.findIndex((h) => re.test(h))).filter((i) => i >= 0);
   const hasHeader = ti >= 0 || bi >= 0;
   if (!hasHeader) {
     ti = 0;
     bi = 1;
   }
-  if (ti < 0) ti = head.findIndex((_, i) => i !== bi && i !== ci && i !== gi);
-  const extra = head.map((_, i) => i).filter((i) => i !== ti && i !== bi && i !== ci && i !== gi);
+  if (ti < 0) ti = head.findIndex((_, i) => i !== bi && i !== ci && i !== gi && !meta.includes(i));
+  const extra = head.map((_, i) => i).filter((i) => i !== ti && i !== bi && i !== ci && i !== gi && (!hasHeader || !meta.includes(i)));
   const out: KnowledgeDraft[] = [];
   for (const r of hasHeader ? clean.slice(1) : clean) {
     const title = (r[ti] ?? "").slice(0, 200);

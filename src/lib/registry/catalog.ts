@@ -6,7 +6,7 @@ import { TABLES } from "@/lib/db/schema";
 import { mirrorStatus } from "@/lib/datastore/mirror";
 import { storageStats } from "@/lib/storage";
 import { chatbotDb, chatbotDbPath } from "@/lib/chatbot/store";
-import { materialsPath, materialsStats, openMaterials, type MaterialsStats } from "./materials-db";
+import { materialsPath, materialsStats, openMaterials, recentRuns, type MaterialsStats } from "./materials-db";
 
 /**
  * データ台帳: システムの全データの一覧 (表ごとの件数・期間・最終更新) と、データフォルダーの中身
@@ -34,7 +34,7 @@ export interface CatalogTable {
 const GROUPS: [string, RegExp][] = [
   ["営業・施工", /^(customers|inquiries|quotes|orders|schedule|surveys|qualityIssues|reviews|commLogs|photoAlbums|scheduleHolds|jobSpecs|productionJobs|resourceBookings|workReportDays|promotions|products)$/],
   ["経理", /^(invoices|payments|expenses|purchases|suppliers|purchaseOrders|cashEntries)$/],
-  ["社内・事務", /^(users|stores|threads|messages|approvals|knowledge|attachments|documents|holidays|leaveRequests|leaveGrants|holidayWorks|officeImprovements|condolences)$/],
+  ["社内・事務", /^(users|stores|threads|messages|approvals|knowledge|attachments|documents|holidays|leaveRequests|leaveGrants|holidayWorks|officeImprovements|condolences|docDrafts)$/],
   ["FAX・地図", /^(faxMessages|faxNumbers|map.*)$/],
   ["管理会計", /^(materials|materialCosts|boms|materialUsages|stockMoves|mgmt.*|salesAdjustments|orderAttributions|expenseClasses|allocationRuns|periodCloses|purchaseLineAllocs|itemCategories|salesAreas)$/],
   ["システム", /^(auditLogs|deliveries|settings|sourceFiles)$/],
@@ -70,7 +70,7 @@ export function dataCatalog(db: Database): { tables: CatalogTable[]; totalRows: 
 }
 
 export interface DataStore {
-  key: "supabase" | "mirror" | "materials" | "chatbot" | "uploads" | "backups";
+  key: "supabase" | "mirror" | "materials" | "source" | "chatbot" | "uploads" | "backups";
   name: string;
   role: string;
   location: string;
@@ -144,6 +144,21 @@ export async function dataStores(db: Database, backend: string): Promise<{ store
     });
   } else {
     out.push({ key: "materials", name: "資料庫", role: "クライアント資料の中身", location: mfile ?? "(止めています)", status: "off", detail: "まだ作られていません (scripts/registry/scan-materials.mjs)" });
+  }
+  // クライアント資料のファイル (source/。読み取りのスクリプトが最後に読んだ場所。アプリ自身はファイルを読まない)
+  const lastScan = mdb ? recentRuns(mdb, 50).find((r) => r.kind === "scan") : undefined;
+  const srcDir = typeof lastScan?.summary.dirAbs === "string" ? lastScan.summary.dirAbs : undefined;
+  if (srcDir || materials) {
+    const exists = srcDir ? fs.existsSync(srcDir) : false;
+    const files = Number(lastScan?.summary.files ?? 0);
+    out.push({
+      key: "source",
+      name: "クライアント資料のフォルダー (source/)",
+      role: "クライアントから受け取った資料の本体 (業務の分野ごと)。資料庫はここを読んで作る",
+      location: srcDir ?? "source/ (リポジトリ直下)",
+      status: exists ? "ok" : "warn",
+      detail: exists ? `${files.toLocaleString()} ファイル (最後の読み取り)。決まりは source/README.md` : "最後の読み取りの場所が見つかりません (scripts/registry/scan-materials.mjs を実行してください)",
+    });
   }
   try {
     const c = chatbotDb();

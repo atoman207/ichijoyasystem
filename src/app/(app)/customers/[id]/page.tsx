@@ -14,6 +14,7 @@ import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { toDateKey } from "@/lib/format";
 import { findDuplicateCustomers } from "@/lib/duplicates";
 import { AiSummary } from "@/components/features/AiSummary";
+import { RecordDocDrafts } from "@/components/features/DocDrafts";
 import { contactLabel, phoneDigits } from "@/lib/customer-contacts";
 import { MapInfoCard } from "@/components/maps/MapInfoCard";
 import { customerMedia, mediaIndex } from "@/lib/media";
@@ -143,6 +144,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
             )}
           </Card>
           <AiSummary kind="customer" id={c.id} label="AI で履歴を要約" />
+          <RecordDocDrafts db={db} user={user} type="customer" id={c.id} number={c.code} />
           <RecordStamp db={db} targets={[{ entity: "customer", id: c.id }]} created={{ at: c.createdAt }} />
           {changeApprovals.length > 0 && <ApprovalHistoryCard approvals={changeApprovals} title="重要情報の変更の承認履歴" />}
           <HistoryCard db={db} user={user} targets={[{ entity: "customer", id: c.id }]} description="顧客情報の登録・変更 (変更前と変更後の値)・承認の記録" />

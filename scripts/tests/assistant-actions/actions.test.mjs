@@ -238,7 +238,7 @@ ok(pr.ok && pr.notes.some((n) => /按分した目安/.test(n)), "按分した目
 const cat = AN.runAnalysis(db, admin, { subject: "sales", metrics: ["cost"], group_by: ["category"], customers: ["C-A2"], from: "2031-03-01", to: "2031-03-31" });
 const catCost = cat.ok ? cat.rows.reduce((a, r) => a + (typeof r[cat.columns.find((c) => /原価/.test(c.label)).key] === "number" ? r[cat.columns.find((c) => /原価/.test(c.label)).key] : 0), 0) : NaN;
 ok(catCost === 15000, "商品別の原価の合計 = 種別ごとの原価の合計 = 案件の原価");
-ok(!AN.runAnalysis(db, admin, { subject: "sales", metrics: ["simple_gross"], group_by: ["product"], from: "2020-01-01", to: "2031-12-31" }).ok, "簡易粗利 (売上−仕入−経費) は商品別には出さない");
+ok(!AN.runAnalysis(db, admin, { subject: "sales", metrics: ["simple_gross"], group_by: ["product"], from: "2020-01-01", to: "2031-12-31" }).ok, "簡易粗利 (売上−畳原価−仕入−経費) は商品別には出さない");
 
 /* ------------------------------------------------------------------ */
 console.log(`\n${pass} passed, ${fails.length} failed`);

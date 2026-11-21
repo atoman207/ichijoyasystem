@@ -1,4 +1,4 @@
-import type { Approval, Attachment, AuditLog, CashEntry, Expense, FaxMessage, KnowledgeEntry, KnowledgeVisibility, MapDocument, PurchaseInvoice, PurchaseOrder, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
+import type { Approval, Attachment, AuditLog, CashEntry, DocDraft, Expense, FaxMessage, KnowledgeEntry, KnowledgeVisibility, MapDocument, PurchaseInvoice, PurchaseOrder, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
 
 /**
  * 権限ルール
@@ -228,6 +228,14 @@ export function canViewThread(user: User, t: Pick<Thread, "storeId" | "participa
   return canSeeAllStores(user) || t.participants.includes(user.id) || t.createdBy === user.id || !t.storeId || t.storeId === user.storeId;
 }
 
+/**
+ * 業務依頼の「報告の確認 (完了)」「差し戻し」ができる: 依頼した人・管理者。
+ * システム (外部連携。AI 受付の引き継ぎで店長が引き継ぎ先のとき) が依頼した業務は、依頼先が自分で完了にできる (確かめる人がいないため)
+ */
+export function canConfirmTask(user: User, t: Pick<Thread, "createdBy" | "assigneeIds">): boolean {
+  return t.createdBy === user.id || user.role === "admin" || (t.createdBy === "system" && (t.assigneeIds ?? []).includes(user.id));
+}
+
 /** 資料台帳 (経営・人事・経理の資料を含む Google ドライブの共有資料一覧) を閲覧できる: 管理者・本部スタッフ */
 export function canViewSourceFiles(user: User): boolean {
   return canSeeAllStores(user);
@@ -306,7 +314,7 @@ export function canExportAccounting(user: User): boolean {
 
 /** 店舗スタッフが自店舗の履歴を見られる対象 (案件・顧客・予定・請求など。経費・承認・設定などは見ない) */
 /** 店舗スタッフが見られる変更履歴の対象 (所属店舗のもの)。AI の SQL の範囲 (model.ts の scopeStatements) も同じものを使う */
-export const STAFF_AUDIT_ENTITIES = new Set(["customer", "inquiry", "quote", "order", "invoice", "payment", "schedule", "document", "attachment", "survey", "quality", "review", "comm", "cash", "thread", "purchase_order", "fax", "map_location", "map_document", "work_report"]);
+export const STAFF_AUDIT_ENTITIES = new Set(["customer", "inquiry", "quote", "order", "invoice", "payment", "schedule", "document", "attachment", "survey", "quality", "review", "comm", "cash", "thread", "purchase_order", "fax", "map_location", "map_document", "work_report", "doc_draft"]);
 
 /**
  * 変更履歴 (監査ログ) の閲覧範囲
@@ -413,6 +421,50 @@ export function canManageKnowledgeSources(user: User): boolean {
   return user.role === "admin" || user.role === "hq_staff";
 }
 
+/* ---------------- 文書の下書き (AI アシスタントの「文書の作成」。src/lib/doc-drafts.ts) ---------------- */
+
+type DraftRef = Pick<DocDraft, "storeId" | "createdBy" | "status">;
+
+/** 文書を承認できるロール: 管理者・本部スタッフ・その店舗の店長 */
+function isDraftApprover(user: User, d: Pick<DocDraft, "storeId">): boolean {
+  return user.role === "admin" || user.role === "hq_staff" || (user.role === "store_manager" && user.storeId === d.storeId);
+}
+
+/** 文書の下書きを見られる: 作成者と、文書の店舗を見られる人 (店舗のロールは自店舗、本部・管理者は全店舗) */
+export function canViewDocDraft(user: User, d: Pick<DocDraft, "storeId" | "createdBy">): boolean {
+  return d.createdBy === user.id || canAccessStore(user, d.storeId);
+}
+
+/** 文面の修正: 送信前の文書を、作成者と承認できる人 (修正すると確認・承認はやり直し) */
+export function canEditDocDraft(user: User, d: DraftRef): boolean {
+  return (d.status === "draft" || d.status === "reviewed" || d.status === "approved") && canViewDocDraft(user, d) && (d.createdBy === user.id || isDraftApprover(user, d));
+}
+
+/** 「内容を確認した」(下書き → 確認済み): 文書を見られる人 (作成者を含む) */
+export function canReviewDocDraft(user: User, d: DraftRef): boolean {
+  return d.status === "draft" && canViewDocDraft(user, d);
+}
+
+/** 承認 (確認済み → 承認済み): 管理者・本部スタッフ・その店舗の店長。作成者は自分の文書を承認できない (管理者 = 社長は省略できる skipsApproval) */
+export function canApproveDocDraft(user: User, d: DraftRef): boolean {
+  return d.status === "reviewed" && canViewDocDraft(user, d) && isDraftApprover(user, d) && (d.createdBy !== user.id || skipsApproval(user));
+}
+
+/** 差し戻し (確認済み・承認済み → 下書き): 作成者と承認できる人 */
+export function canReturnDocDraft(user: User, d: DraftRef): boolean {
+  return (d.status === "reviewed" || d.status === "approved") && canViewDocDraft(user, d) && (d.createdBy === user.id || isDraftApprover(user, d));
+}
+
+/** 破棄 (送信前) と、破棄した文書を下書きに戻す: 作成者と承認できる人 */
+export function canDiscardDocDraft(user: User, d: DraftRef): boolean {
+  return d.status !== "sent" && canViewDocDraft(user, d) && (d.createdBy === user.id || isDraftApprover(user, d));
+}
+
+/** 送信 (メール・LINE・Chatwork) と「郵送・手渡しで送った」の記録: 承認済みの文書を、作成者と承認できる人 */
+export function canSendDocDraft(user: User, d: DraftRef): boolean {
+  return d.status === "approved" && canViewDocDraft(user, d) && (d.createdBy === user.id || isDraftApprover(user, d));
+}
+
 /* ---------------- 発注書・FAX ---------------- */
 
 /**
@@ -494,6 +546,11 @@ export function canPlanSchedule(user: User, storeId: StoreId): boolean {
 
 /** 計画のマスタ (作業種別・製造工程・技能・車両と設備・経路・最適化の重み・計画の基準) の変更: 管理者 */
 export function canManageScheduling(user: User): boolean {
+  return user.role === "admin";
+}
+
+/** 休日カレンダー (会社の休業日の登録・変更・まとめて登録、祝日の追加・変更・外す): 管理者。見るのは全員 */
+export function canManageHolidays(user: User): boolean {
   return user.role === "admin";
 }
 

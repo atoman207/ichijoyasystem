@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Message, RelatedType, StoreId, TaskStatus } from "@/lib/db/types";
-import { canViewThread } from "@/lib/auth/permissions";
+import { canConfirmTask, canViewThread } from "@/lib/auth/permissions";
 import { TASK_STATUS, THREAD_KIND_LABEL } from "@/lib/constants";
 import { mentionNotices, taskNotices } from "@/lib/notify/events";
 import { sendAndRecord, type Outgoing } from "@/lib/notify/send";
@@ -140,7 +140,7 @@ export async function taskStep(threadId: string, step: TaskStep, formData: FormD
     const t = db.threads.find((x) => x.id === threadId);
     if (!t || !t.taskStatus) fail("/messages", "業務依頼が見つかりません。");
     const isAssignee = (t.assigneeIds ?? []).includes(user.id);
-    const isRequester = t.createdBy === user.id || user.role === "admin";
+    const isRequester = canConfirmTask(user, t);
     if (def.by === "assignee" && !isAssignee) fail(back, "依頼先の担当者が操作します。");
     if (def.by === "requester" && !isRequester) fail(back, "依頼した人が操作します。");
     if (!def.from.includes(t.taskStatus)) fail(back, `「${TASK_STATUS[t.taskStatus].label}」の依頼には、この操作はできません。`);
@@ -162,11 +162,21 @@ export async function taskStep(threadId: string, step: TaskStep, formData: FormD
     t.participants = [...new Set([...t.participants, user.id])];
     db.messages.push({ id: newId("msg"), threadId, userId: user.id, body: body || def.label, at: now, mentions: [], event: step });
     addAudit(db, { userId: user.id, action: "status", entity: "thread", entityId: t.id, entityLabel: t.title, summary: `業務依頼: ${def.label}${body ? ` (${body.slice(0, 40)})` : ""}`, storeId: t.storeId, changes: [{ field: "taskStatus", before: TASK_STATUS[before].label, after: TASK_STATUS[def.to].label }] });
+    // 問い合わせの引き継ぎ: 依頼先が確認・報告したら、未対応の問い合わせを「対応中」にする
+    if ((step === "ack" || step === "report") && t.relatedType === "inquiry") {
+      const inq = db.inquiries.find((x) => x.id === t.relatedId);
+      if (inq && inq.status === "new") {
+        inq.status = "in_progress";
+        inq.updatedAt = now;
+        addAudit(db, { userId: user.id, action: "status", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `引き継ぎの${step === "ack" ? "確認" : "報告"}で対応中に変更`, storeId: inq.storeId, changes: [{ field: "status", before: "new", after: "in_progress" }] });
+      }
+    }
   });
   const db = getDb();
   const t = db.threads.find((x) => x.id === threadId);
   if (t) await sendAndRecord(taskNotices(db, t, user.id, step, body), user.id);
   revalidatePath("/messages");
   revalidatePath(back);
+  if (t?.relatedType === "inquiry" && t.relatedId) revalidatePath(`/inquiries/${t.relatedId}`);
   redirect(withMsg(back, step === "confirm" ? "報告を確認し、依頼を完了にしました。" : step === "reopen" ? "報告を差し戻しました。" : step === "report" ? "対応を報告しました。依頼者に通知されます。" : "依頼を確認しました。"));
 }

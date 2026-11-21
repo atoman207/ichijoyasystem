@@ -4,11 +4,12 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, getDb, mutate } from "@/lib/db/store";
 import { canManageChatbot } from "@/lib/auth/permissions";
-import { askChatbot } from "@/lib/chatbot/answer";
 import { getChatLog } from "@/lib/chatbot/store";
 import { aiStatus } from "@/lib/ai/provider";
 import { aiBudget, DEFAULT_PRICES, saveAiBudget, saveAiPrices, type AiPrice } from "@/lib/chatbot/monitor";
-import { csvToCases, deleteEvalCase, getEvalCase, saveEvalCase, seedEvalCases, setEvalCaseActive, startEvalRun, stopEvalRun, type AskFn, type EvalExpect } from "@/lib/chatbot/eval";
+import { createSignoff, csvToCases, deleteEvalCase, getEvalCase, revokeSignoff, saveEvalCase, seedEvalCases, setEvalCaseActive, setEvalCaseRepresentative, startEvalRun, stopEvalRun, type EvalExpect, type EvalTarget } from "@/lib/chatbot/eval";
+import { evalAsk, evalRunners } from "@/lib/chatbot/eval-runners";
+import type { Role } from "@/lib/db/types";
 import type { User } from "@/lib/db/types";
 import { fail, requireActionUser, str, withMsg } from "./guards";
 
@@ -31,12 +32,6 @@ async function audit(user: User, summary: string, entityId = "chatbot-eval") {
   });
 }
 
-/** 評価の質問 (askChatbot を「評価」として呼ぶ: 履歴・蓄えた回答・1 時間の上限に触れない) */
-const evalAsk: AskFn = async (db, user, history, question) => {
-  const r = await askChatbot(db, user, history.map((h) => ({ role: h.role, content: h.content, specs: h.specs as never })), question, { evaluation: true });
-  return { answer: r.answer, tools: r.tools, sources: r.sources, source: r.source, checks: r.checks, tables: r.tables };
-};
-
 export async function startChatbotEval(formData: FormData) {
   const user = await requireManager();
   const db = getDb();
@@ -46,7 +41,10 @@ export async function startChatbotEval(formData: FormData) {
   const { listEvalCases } = await import("@/lib/chatbot/eval");
   const ids = only ? listEvalCases({ activeOnly: true, category: only }).map((c) => c.id) : undefined;
   if (ids && !ids.length) fail(BACK, "この分類には有効な質問がありません。");
-  const r = startEvalRun(db, evalAsk, { label: str(formData, "label").slice(0, 60) || (only ? `分類: ${only}` : "手動"), by: user.name, caseIds: ids, provider: `${aiStatus().label} ${aiStatus().model ?? ""}`.trim() });
+  const rep = str(formData, "scope") === "representative";
+  const repIds = rep ? listEvalCases({ activeOnly: true }).filter((c) => c.representative).map((c) => c.id) : undefined;
+  if (repIds && !repIds.length) fail(BACK, "代表シナリオがありません (正解付きの質問で「代表シナリオ」に印を付けてください)。");
+  const r = startEvalRun(db, evalAsk, { label: str(formData, "label").slice(0, 60) || (rep ? "代表シナリオ" : only ? `分類: ${only}` : "手動"), by: user.name, caseIds: repIds ?? ids, provider: `${aiStatus().label} ${aiStatus().model ?? ""}`.trim(), runners: evalRunners });
   if (!r.ok) fail(BACK, r.reason);
   await audit(user, `AI アシスタントの精度の評価を開始${only ? ` (分類 ${only})` : ""}`);
   revalidatePath("/ai");
@@ -85,6 +83,18 @@ function expectFromForm(fd: FormData): EvalExpect {
   if (lines(str(fd, "links")).length) e.links = lines(str(fd, "links")).filter((l) => l.startsWith("/"));
   if (fd.get("unknown")) e.unknown = true;
   if (fd.get("refuse")) e.refuse = true;
+  // 2026-11: 対象 (質問する・要約・文書の作成)・対象を選ぶ SQL・必要な根拠・出してはいけない根拠・ロールの組み合わせ
+  const target = (["ask", "summary", "draft"] as EvalTarget[]).find((t) => t === str(fd, "target")) ?? "ask";
+  if (target !== "ask") e.target = target;
+  if (target === "summary") e.summary = { kind: str(fd, "summaryKind") || "order", id: str(fd, "summaryId"), ...(Number(str(fd, "summaryDays")) > 0 ? { days: Number(str(fd, "summaryDays")) } : {}), ...(lines(str(fd, "summarySections")).length ? { sections: lines(str(fd, "summarySections")) } : {}) };
+  if (target === "draft") e.draft = { template: str(fd, "draftTemplate") || "quote_send", format: str(fd, "draftFormat") || "email", ...(str(fd, "draftRef") ? { ref: str(fd, "draftRef") } : {}), ...(str(fd, "draftNotes") ? { notes: str(fd, "draftNotes").slice(0, 1000) } : {}) };
+  if (str(fd, "pick")) e.pick = str(fd, "pick").slice(0, 4000);
+  if (str(fd, "pickScope") === "user") e.pickScope = "user";
+  if (lines(str(fd, "pickNumbers")).length) e.pickNumbers = lines(str(fd, "pickNumbers"));
+  if (lines(str(fd, "sources")).length) e.sources = lines(str(fd, "sources")).filter((l) => l.startsWith("/"));
+  if (lines(str(fd, "forbidSources")).length) e.forbidSources = lines(str(fd, "forbidSources")).filter((l) => l.startsWith("/"));
+  const roles = fd.getAll("matrixRoles").map(String).filter((r): r is Role => ["admin", "hq_staff", "store_manager", "store_staff"].includes(r));
+  if (roles.length) e.matrix = { roles, stores: str(fd, "matrixStores") === "all" ? "all" : "own" };
   return e;
 }
 
@@ -95,7 +105,8 @@ export async function saveChatbotEvalCase(formData: FormData) {
   const question = str(formData, "question");
   if (question.length < 2) fail(BACK, "質問を入力してください。");
   const expect = expectFromForm(formData);
-  if (!Object.keys(expect).filter((k) => !["tools", "sqlMode", "sqlScope"].includes(k)).length) fail(BACK, "正解の条件 (含む言葉・数字・SQL・答えられない・断る のどれか) を入力してください。");
+  if (!Object.keys(expect).filter((k) => !["tools", "sqlMode", "sqlScope", "target", "summary", "draft", "pick", "pickScope", "matrix"].includes(k)).length) fail(BACK, "正解の条件 (含む言葉・数字・SQL・必要な根拠・答えられない・断る のどれか) を入力してください。");
+  if (expect.target === "summary" && !expect.summary?.id) fail(BACK, "要約の確かめには、記録の ID (または {列名}) を入力してください。");
   if (id && !getEvalCase(id)) fail(BACK, "質問が見つかりません。");
   saveEvalCase(
     {
@@ -109,6 +120,7 @@ export async function saveChatbotEvalCase(formData: FormData) {
       evidenceNote: str(formData, "evidenceNote"),
       origin: str(formData, "origin") || "manual",
       active: true,
+      representative: formData.get("representative") === "on",
     },
     user.id,
     id,
@@ -225,4 +237,45 @@ export async function saveChatbotBudget(formData: FormData) {
   });
   revalidatePath("/ai");
   redirect(withMsg(`${BACK}#usage`, `予算と単価を保存しました。${errors.length ? ` 読めなかった単価の行: ${errors.join(" / ")}` : ""}`));
+}
+
+/* ================================================================== */
+/* 代表シナリオとお客様の承認                                                */
+/* ================================================================== */
+
+export async function toggleChatbotEvalRepresentative(id: number) {
+  const user = await requireManager();
+  const c = getEvalCase(id);
+  if (!c) fail(BACK, "質問が見つかりません。");
+  setEvalCaseRepresentative(id, !c.representative);
+  await audit(user, `評価の質問を代表シナリオ${c.representative ? "から外す" : "にする"} (${c.question.slice(0, 40)})`);
+  revalidatePath("/ai");
+  redirect(withMsg(`${BACK}#cases`, c.representative ? "代表シナリオから外しました。" : "代表シナリオにしました。お客様の承認の対象になります。"));
+}
+
+/** お客様の承認 (代表シナリオの評価の結果を見て承認した人・日時・版を残す) */
+export async function signoffChatbotEval(formData: FormData) {
+  const user = await requireManager();
+  const runId = Number(str(formData, "runId"));
+  if (!runId) fail(BACK, "評価を選んでください。");
+  if (formData.get("confirmRead") !== "on") fail(`${BACK}#signoff`, "代表シナリオの回答をすべて読んだことを確かめてください。");
+  let id = 0;
+  try {
+    id = createSignoff(runId, user.id, { signerName: str(formData, "signerName"), signerOrg: str(formData, "signerOrg"), comment: str(formData, "comment") });
+  } catch (err) {
+    fail(`${BACK}#signoff`, (err as Error).message);
+  }
+  await audit(user, `代表シナリオの評価 #${runId} をお客様が承認 (承認 #${id}・${str(formData, "signerName").slice(0, 30)})`, `signoff-${id}`);
+  revalidatePath("/ai");
+  redirect(withMsg(`${BACK}#signoff`, `評価 #${runId} の代表シナリオの承認を記録しました (承認 #${id})。`));
+}
+
+export async function revokeChatbotSignoff(id: number, formData: FormData) {
+  const user = await requireManager();
+  const reason = str(formData, "reason");
+  if (!reason) fail(`${BACK}#signoff`, "取り消しの理由を入力してください。");
+  revokeSignoff(id, user.id, reason);
+  await audit(user, `代表シナリオの承認 #${id} を取り消し (${reason.slice(0, 60)})`, `signoff-${id}`);
+  revalidatePath("/ai");
+  redirect(withMsg(`${BACK}#signoff`, `承認 #${id} を取り消しました。`));
 }

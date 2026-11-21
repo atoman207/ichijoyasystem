@@ -1,13 +1,17 @@
 "use client";
 
 import { useActionState, useRef, useState } from "react";
-import { Copy, FileText } from "lucide-react";
-import { draftDocumentAction } from "@/lib/actions/ai";
+import { Copy, FileText, Save } from "lucide-react";
+import { draftDocumentAction, type DraftActionState } from "@/lib/actions/ai";
+import { saveDocDraft } from "@/lib/actions/doc-drafts";
 import Link from "@/components/ui/Link";
 
-type State = { ok: boolean; text: string; provider: string; message?: string; used?: { label: string; href: string } } | null;
+type State = DraftActionState;
 
-/** 資料・報告文の作成 (/ai?tab=draft)。下書きは保存しない (コピーしてメール・LINE・文書に貼る) */
+/**
+ * 資料・報告文の作成 (/ai?tab=draft)。作った文面はその場で直して、コピーするか「下書きとして保存」する
+ * (保存すると文書の下書き /ai/drafts/<ID> になり、確認 → 承認 → 送信 (メール・LINE・Chatwork) まで管理できる)
+ */
 export function DraftForm({ templates, formats, defaultRef, aiEnabled }: { templates: { id: string; label: string; audience: string; hint: string }[]; formats: { id: string; label: string }[]; defaultRef?: string; aiEnabled: boolean }) {
   const [state, action, pending] = useActionState<State, FormData>(draftDocumentAction, null);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -58,15 +62,26 @@ export function DraftForm({ templates, formats, defaultRef, aiEnabled }: { templ
         </div>
         {state && !state.ok && <p className="text-sm text-critical-ink">{state.message}</p>}
         {state?.ok ? (
-          <>
-            <textarea ref={box} key={state.text} defaultValue={state.text} className="field min-h-[360px] font-sans text-sm leading-relaxed" aria-label="下書き" />
+          <form action={saveDocDraft}>
+            <input type="hidden" name="template" value={state.input?.template ?? ""} />
+            <input type="hidden" name="format" value={state.input?.format ?? ""} />
+            <input type="hidden" name="ref" value={state.input?.ref ?? ""} />
+            <input type="hidden" name="notes" value={state.input?.notes ?? ""} />
+            <input type="hidden" name="provider" value={state.provider} />
+            <textarea ref={box} key={state.text} name="body" defaultValue={state.text} className="field min-h-[360px] font-sans text-sm leading-relaxed" aria-label="下書き" />
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button type="submit" className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-medium text-white hover:bg-accent-hover" data-testid="save-draft">
+                <Save className="h-3.5 w-3.5" aria-hidden /> 下書きとして保存
+              </button>
+              <span className="text-[11px] text-ink-3">保存すると、確認 → 承認 → 送信 (メール・LINE・Chatwork) まで管理できます。直した文面も保存されます</span>
+            </div>
             <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink-3">
               <span>{state.provider === "openai" ? "OpenAI で作成" : state.provider === "claude" ? "Claude で作成" : "定型文"}</span>
               {state.used && <span>参照: <Link href={state.used.href} className="text-accent hover:underline">{state.used.label}</Link></span>}
-              <span>下書きは保存されません。内容を確認・修正してから使ってください。</span>
+              <span>内容を確認・修正してから使ってください。</span>
             </div>
             {state.message && <p className="mt-1 text-[11px] text-warn-ink">{state.message}</p>}
-          </>
+          </form>
         ) : (
           !state && <p className="text-sm text-ink-3">左の欄を入力して「下書きを作る」を押すと、ここに文面が表示されます。【 】の部分は記録にない情報です。埋めてから使ってください。</p>
         )}

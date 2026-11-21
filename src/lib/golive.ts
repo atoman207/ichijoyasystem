@@ -7,7 +7,10 @@ import { missingTables } from "@/lib/db/supabase";
 import { isDemoAccount } from "@/lib/auth/permissions";
 import { aiStatus } from "@/lib/ai/provider";
 import { integrationStatuses } from "@/lib/notify/config";
-import { knowledgeSources } from "@/lib/knowledge";
+import { knowledgeSources, type KnowledgeSheetSource } from "@/lib/knowledge";
+import { knowledgeQuality, reviewCtx } from "@/lib/knowledge-review";
+import { cronHealth, sourceHealth } from "@/lib/knowledge-sync";
+import { googleSheetsStatus } from "@/lib/google/sheets";
 import { backupDir, readBackupStatus } from "@/lib/backup";
 import { storageDir } from "@/lib/storage";
 import { customerPhoneDigits } from "@/lib/customer-contacts";
@@ -88,7 +91,7 @@ export function goLiveChecks(db: Database, now = new Date()): CheckGroup[] {
     title: "AI・外部連携",
     items: [
       ai.enabled ? { label: "AI", status: "ok", detail: `${ai.label} · ${ai.model} (キー: ${ai.source})` } : { label: "AI", status: "warn", detail: "未設定 (サンプルモード)", fix: "OPENAI_API_KEY を設定し、設定 → 外部連携・AI の「接続を確認」で確かめてください" },
-      { label: "社内資料 (ナレッジ)", status: db.knowledge.some((k) => k.active) ? "ok" : "warn", detail: `${db.knowledge.filter((k) => k.active).length} 件 · スプレッドシート ${sources.length} 件${sources.some((s) => s.lastError) ? " (同期の失敗あり)" : ""}`, fix: "社内資料の画面で、AI が回答に使う資料を登録してください" },
+      ...knowledgeChecks(db, sources, now),
       ...integ.map((i): CheckItem => ({ label: i.name, status: i.configured ? "ok" : "info", detail: i.configured ? i.detail : `未設定 (送信は「記録のみ」): ${i.detail}` })),
       { label: "定期実行の鍵 (CRON_SECRET)", status: env("CRON_SECRET") ? "ok" : onVercel ? "info" : "warn", detail: env("CRON_SECRET") ? "設定あり (社内資料の自動同期)" : "未設定", fix: "サーバーの設定ファイルに CRON_SECRET を設定してください" },
     ],
@@ -162,4 +165,28 @@ function storageCheck(db: Database): CheckItem {
   return missing
     ? { label: "ファイルの保存先", status: "ng", detail: `この VPS (${dir}) · 台帳 ${db.attachments.length} 件のうち ${missing} 件の本体がありません`, fix: "node scripts/ops/migrate-storage-to-vps.mjs で確かめてください" }
     : { label: "ファイルの保存先", status: "ok", detail: `この VPS (${dir}) · ${db.attachments.length} 件 (Supabase には台帳の文字とパスだけ)` };
+}
+
+/** 社内資料の準備 (マニュアル・議事録の登録、担当者・確認期限、スプレッドシートの同期と定期実行、サービスアカウント) */
+function knowledgeChecks(db: Database, sources: KnowledgeSheetSource[], now: Date): CheckItem[] {
+  const q = knowledgeQuality(db.knowledge, reviewCtx(db, now));
+  const minutes = db.knowledge.filter((k) => k.active && /議事録/.test(k.category)).length;
+  const manuals = db.knowledge.filter((k) => k.active && /マニュアル|手順|ルール/.test(k.category)).length;
+  const gs = googleSheetsStatus();
+  const failing = sources.filter((s) => s.failCount);
+  const cron = cronHealth(db, now.getTime());
+  const missing = q.counts.no_owner + q.counts.owner_invalid + q.counts.no_review + q.counts.no_visibility;
+  return [
+    q.active
+      ? { label: "社内資料 (マニュアル・議事録)", status: minutes && manuals ? "ok" : "warn", detail: `AI に使う資料 ${q.active} 件 (マニュアル・手順・ルール ${manuals} 件・議事録 ${minutes} 件)`, fix: "既存のマニュアルと議事録を取り込んでください (データ台帳の「社内資料をそろえる」、または npm run registry:promote -- --apply)" }
+      : { label: "社内資料 (マニュアル・議事録)", status: "ng", detail: "AI が回答に使う社内資料がありません", fix: "既存のマニュアルと議事録を取り込んでください (データ台帳の「社内資料をそろえる」、または npm run registry:promote -- --apply)" },
+    { label: "社内資料の担当者・確認期限", status: !q.total ? "info" : missing ? "warn" : q.counts.overdue ? "warn" : "ok", detail: q.total ? `整っている ${q.ready} / ${q.total} 件 · 担当者なし ${q.counts.no_owner} · 担当者を見直す ${q.counts.owner_invalid} · 確認日なし ${q.counts.no_review} · 公開範囲が未設定 ${q.counts.no_visibility} · 確認期限切れ ${q.counts.overdue}` : "資料がありません", fix: "社内資料の画面の「資料の管理の状況」から絞り込み、選んだ資料をまとめて変更で担当者・見られる人を割り当ててください" },
+    sources.length
+      ? { label: "スプレッドシートの同期", status: failing.length ? "ng" : sources.every((s) => sourceHealth(s, now.getTime()).tone === "good") ? "ok" : "warn", detail: sources.map((s) => `${s.label}: ${sourceHealth(s, now.getTime()).label} (最終成功 ${s.lastSuccessAt ? new Date(s.lastSuccessAt).toLocaleString("ja-JP") : "なし"})`).join(" / "), fix: "社内資料 → 取込元の画面で理由を確かめ、「シートを確認する」から同期してください" }
+      : { label: "スプレッドシートの同期", status: "info", detail: "同期するシートは登録されていません (社内資料の画面で登録できます)" },
+    ...(sources.length ? [{ label: "社内資料の定期の同期 (cron)", status: (cron.ok ? "ok" : "ng") as CheckStatus, detail: cron.detail, fix: "sudo install -m 644 deploy/ichijoya.cron /etc/cron.d/ichijoya と CRON_SECRET を確かめてください" }] : []),
+    gs.configured
+      ? { label: "Google のサービスアカウント", status: "ok", detail: `${gs.email} (${gs.source})。読むシートは「共有」でこのアドレスを閲覧者に追加してください` }
+      : { label: "Google のサービスアカウント", status: gs.error ? "ng" : sources.length ? "warn" : "info", detail: gs.error ? `鍵を読めません: ${gs.error}` : "未設定 (リンクの共有のシートだけ読めます)", fix: "deploy/README.md の「Google スプレッドシートのサービスアカウント」の手順で鍵を /etc/ichijoya/google-service-account.json に置き、GOOGLE_SERVICE_ACCOUNT_FILE を設定して再起動してください" },
+  ];
 }

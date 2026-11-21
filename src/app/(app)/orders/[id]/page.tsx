@@ -24,6 +24,7 @@ import { QUALITY_CATEGORIES, QUALITY_KIND_HELP, QUALITY_KIND_LABEL, kpiSettings 
 import { SCORE_QUESTIONS, SCORE_LABEL } from "@/lib/survey";
 import { deliveryOf } from "@/lib/kpi";
 import { AiSummary } from "@/components/features/AiSummary";
+import { RecordDocDrafts } from "@/components/features/DocDrafts";
 import { lineGroupName, lineGroups } from "@/lib/line-groups";
 import { linkLineGroup, unlinkLineGroup } from "@/lib/actions/line-groups";
 import { FaxHistoryCard, PurchaseOrderTable } from "@/components/fax/FaxParts";
@@ -508,6 +509,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           )}
 
           <AiSummary kind="order" id={o.id} />
+          <RecordDocDrafts db={db} user={user} type="order" id={o.id} number={o.number} />
           <RecordStamp db={db} targets={[{ entity: "order", id: o.id }]} created={{ by: o.createdBy, at: o.createdAt }} approved={o.approvedBy ? [{ by: o.approvedBy }] : []} />
           <HistoryCard
             db={db}

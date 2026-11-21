@@ -55,6 +55,8 @@ export interface CalendarContext {
   dayHref: (date: string) => string;
   /** 会社の休業日 (休日カレンダー) */
   closedDays?: Set<string>;
+  /** 祝日名 (管理者の変更を反映。src/lib/holiday-calendar.ts の holidayResolver)。なければ規則どおりの祝日 */
+  holidayOf?: (d: string) => string | undefined;
 }
 
 /** 仮押さえ (予定表に点線で表示。ID は "hold:<仮押さえの ID>") */
@@ -177,13 +179,13 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
 }
 
 /** 祝日名、または会社の休業日 */
-export function offLabel(ctx: Pick<CalendarContext, "closedDays">, d: string): string | undefined {
-  const h = holidayName(d);
+export function offLabel(ctx: Pick<CalendarContext, "closedDays" | "holidayOf">, d: string): string | undefined {
+  const h = ctx.holidayOf ? ctx.holidayOf(d) : holidayName(d);
   if (h) return ctx.closedDays?.has(d) ? `${h} (休業日)` : h;
   return ctx.closedDays?.has(d) ? "休業日" : undefined;
 }
 
-function dayNumberClass(d: string, ctx: Pick<CalendarContext, "closedDays" | "today">): string {
+function dayNumberClass(d: string, ctx: Pick<CalendarContext, "closedDays" | "holidayOf" | "today">): string {
   const today = ctx.today;
   if (d === today) return "bg-accent text-white";
   if (dayOfWeek(d) === 0 || offLabel(ctx, d)) return "text-critical-ink";

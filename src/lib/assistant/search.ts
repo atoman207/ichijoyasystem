@@ -288,7 +288,7 @@ function describe(db: Database, type: RecordType, id: string): { label: string; 
     case "order": {
       const o = db.orders.find((x) => x.id === id)!;
       const f = salesFacts(db).byId.get(id);
-      return { label: `受注 ${o.number} ${cn(o.customerId)} 様`, snippet: `${o.title} ${yen(o.total)} ${ORDER_STATUS[o.status].label} 施工 ${fmtDate(o.salesDate ?? o.scheduledStart ?? o.contractDate)} / 現場 ${o.siteAddress || "-"} / 担当 ${f?.staff.join("・") ?? un(o.createdBy)}${o.workerIds.length ? ` / 施工 ${o.workerIds.map(un).join("・")}` : ""}${f?.items.length ? ` / 明細: ${f.items.slice(0, 4).map((i) => `${i.product}×${i.qty}`).join("、")}` : ""}` };
+      return { label: `受注 ${o.number} ${cn(o.customerId)} 様`, snippet: `${o.title} ${yen(o.total)} ${ORDER_STATUS[o.status].label} 施工 ${fmtDate(o.salesDate ?? o.scheduledStart ?? o.contractDate)} / 現場 ${o.siteAddress || "-"} / 担当 ${f?.staff.join("・") ?? un(o.createdBy)}${f?.workerNames.length ? ` / 施工 ${f.workerNames.join("・")}` : o.workerIds.length ? ` / 施工 ${o.workerIds.map(un).join("・")}` : ""}${f?.items.length ? ` / 明細: ${f.items.slice(0, 4).map((i) => `${i.product}×${i.qty}`).join("、")}` : ""}` };
     }
     case "invoice": {
       const i = db.invoices.find((x) => x.id === id)!;
@@ -520,7 +520,7 @@ export function getRecord(db: Database, user: User, type: string | undefined, re
   const facts = salesFacts(db).byId;
   const orderLine = (o: (typeof db.orders)[number]) => {
     const f = facts.get(o.id);
-    return `- ${link("order", o.id, o.number)} ${fmtDate(o.salesDate ?? o.contractDate)} ${o.title} ${yen(o.total)} ${ORDER_STATUS[o.status].label} 担当 ${f?.staff.join("・") ?? un(o.createdBy)}${o.workerIds.length ? ` 施工 ${o.workerIds.map(un).join("・")}` : ""}${o.siteAddress ? ` 現場 ${o.siteAddress}` : ""}${f?.items.length ? `\n  明細: ${f.items.map((i) => `${i.product} ${i.qty}×${yen(i.unitPrice)}`).join(" / ").slice(0, 300)}` : ""}`;
+    return `- ${link("order", o.id, o.number)} ${fmtDate(o.salesDate ?? o.contractDate)} ${o.title} ${yen(o.total)} ${ORDER_STATUS[o.status].label} 担当 ${f?.staff.join("・") ?? un(o.createdBy)}${f?.workerNames.length ? ` 施工 ${f.workerNames.join("・")}` : o.workerIds.length ? ` 施工 ${o.workerIds.map(un).join("・")}` : ""}${o.siteAddress ? ` 現場 ${o.siteAddress}` : ""}${f?.items.length ? `\n  明細: ${f.items.map((i) => `${i.product} ${i.qty}×${yen(i.unitPrice)}`).join(" / ").slice(0, 300)}` : ""}`;
   };
   switch (found.type) {
     case "customer": {

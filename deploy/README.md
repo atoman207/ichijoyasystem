@@ -143,6 +143,7 @@ sudo -u ichijoya bash /srv/ichijoya/repo/deploy/deploy.sh --rollback # 1 つ前�
 - 公開のたびに `/srv/ichijoya/releases/<日時>` に展開し、ビルドが終わってから切り替えます。起動を確認できないときは自動で前の版に戻します (新しい版を 5 つ残します)。
 - ビルドの前に、データベースの表・列の追加を自動で行います (`npm run build` → `scripts/import/migrate.mjs`)。データの削除や型の変更は行いません。
 - 切り替えの再起動のあいだ (起動時にデータを読み込む約 10〜20 秒)、画面が表示されません。業務時間外に行ってください。
+- AI アシスタント (質問する・要約・文書の作成・社内資料・権限) に関わるファイルが前の版から変わっていたら、ビルドの前に `npm run test:assistant` (AI を呼ばないテストの全部。一時フォルダーのサンプルデータ) を実行し、通らなければ公開しません。公開のあとは本番の AI で精度の評価を裏で始めます (結果は AI アシスタント →「品質・費用」。1 回 100 円前後)。止めるときは `EVAL_AFTER_DEPLOY=off`、テストを飛ばすのは急ぐときだけ `SKIP_ASSISTANT_TESTS=1`。
 
 ## 4. バックアップと復元
 
@@ -217,6 +218,26 @@ OS のセキュリティ更新は自動 (unattended-upgrades) です。カーネ
 - 障害: AI の呼び出しが続けて失敗すると、3 分 (キー・残高の誤りは 30 分) は AI を呼ばずにすぐ答えます。失敗の種類と回数は同じ画面に出ます。
 - 相談の履歴の保存期間: `CHATBOT_LOG_RETENTION_DAYS` (既定 730 日)、履歴の集計の表 (お客様の名前などを含む) は `CHATBOT_LOG_TABLE_DAYS` (既定 90 日)。AI の呼び出しの記録 (数だけ) は `AI_CALLS_RETENTION_DAYS` (既定 400 日)。
 - テスト: `npm run test:chatbot` (AI を呼ばない単体テストと、モックの OpenAI・Claude を使うテスト。本物の AI・本番のデータは使わない)。本物の AI での評価は画面の「評価を実行」、またはサンプルデータで `node scripts/tests/chatbot/eval-live.mjs`。
+
+- 受入の確認: 正解付きの質問に「対象 (質問する・要約・文書の作成)」「対象の記録を選ぶ SQL」「必要な根拠・出してはいけない根拠」「ロールの組み合わせ (全ロール × 全店舗)」を付けられます。「代表にする」で代表シナリオを選び、評価が合格したら、お客様 (一畳屋の責任者) が回答を読んで「承認を記録する」を押します (受入確認書は「受入確認書を印刷」)。AI アシスタントを変えて版が変わる・代表シナリオが不合格になると「要再確認」になります。テストは `npm run test:acceptance`。
+
+## 5-K. 社内資料と Google スプレッドシートの同期
+
+- 社内資料には、どれにも担当者・次に確かめる日・見られる人・分類を付けます。期限を過ぎた資料は担当者に知らせ (右上のベル・メール。1 日 1 回の確認で、同じ人には 7 日に 1 回)、AI は「古い可能性がある」と添えて答えます。担当者・見られる人のまとめての割り当ては 社内資料 →「資料の管理の状況」で絞り込み →「選んだ資料をまとめて変更」。
+- 既存のマニュアル・議事録 (クライアント資料) の取込: `npm run registry:promote` (確認だけ) → `npm run registry:promote -- --apply --owner <担当者のログイン ID>` (Supabase に書く。担当者を省くと 確認のルールの既定の担当者、なければ「担当者なし」)。テーブル定義の反映 (`npm run db:migrate`) のあとに行います。
+- 同期は一方向 (シート → システム。読み取り専用の権限で読み、シートには書きません)。取込元を登録すると、取り込む前に行ごとの確認結果を出します。定期の同期は毎時 15 分 (`deploy/ichijoya.cron` の knowledge-sync)。失敗・シートの半分以上の行が消えたときは書かずに止め、取込元の担当者と本部・管理者に知らせます (同じ失敗は 24 時間に 1 回。直ったら「復旧しました」)。最後に成功した日時・同期の記録・定期の同期が動いているかは 社内資料 → 取込元の画面と 設定 → 外部連携・AI、本番運用の準備 に出ます。
+- cron を入れ直す (FAX・精度の評価の行を足したため。いまの /etc/cron.d/ichijoya は古い版です): `sudo install -m 644 /srv/ichijoya/current/deploy/ichijoya.cron /etc/cron.d/ichijoya`。動いているかは `/var/log/ichijoya/cron.log`。
+
+### Google スプレッドシートのサービスアカウント (非公開のシートを読む)
+
+1. Google Cloud のコンソールでプロジェクトを作る (または既存のもの) →「API とサービス」→「ライブラリ」で **Google Sheets API** を有効にする。
+2. 「IAM と管理」→「サービスアカウント」→ 作成 (ロールは付けない) →「鍵」→「鍵を追加」→ JSON をダウンロードする。
+3. 鍵をサーバーに置く (鍵の中身はリポジトリ・チャットに貼らない):
+   `sudo install -m 640 -o root -g ichijoya <ダウンロードした鍵>.json /etc/ichijoya/google-service-account.json`
+4. `/etc/ichijoya/ichijoya.env` に `GOOGLE_SERVICE_ACCOUNT_FILE=/etc/ichijoya/google-service-account.json` を足して `sudo systemctl restart ichijoya` (または `.env.local` に書いて `npm run env:apply`。`GOOGLE_SERVICE_ACCOUNT_JSON` に鍵の JSON (base64 でも可) を直接入れてもよい)。
+5. 設定 → 外部連携・AI の「Google スプレッドシート」が「サービスアカウントで接続」になり、メールアドレス (…@….iam.gserviceaccount.com) が出ることを確かめる。
+6. 読ませたいシートごとに、シートの「共有」でそのメールアドレスを **閲覧者** として追加する (編集者にしない。リンクの共有は「制限付き」のままでよい)。
+7. 社内資料 → スプレッドシートの URL を登録 → 行ごとの確認結果を見て「この内容で同期する」。
 
 ## 5-A. 発注書・クラウド FAX
 

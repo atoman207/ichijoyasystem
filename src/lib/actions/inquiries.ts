@@ -9,7 +9,7 @@ import { toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS } from "@/lib/constants";
 import { canAccessStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
-import { createHandoffTask } from "@/lib/ai-intake";
+import { createHandoffTask, linkInquiryLogs } from "@/lib/ai-intake";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
 import { assertStore, choice, fail, isKeyOf, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
@@ -165,7 +165,9 @@ export async function registerCustomerFromInquiry(id: string, formData?: FormDat
     assertStore(user, inq.storeId, back);
     if (inq.customerId) fail(back, "すでに顧客に紐づいています。");
     // 既存顧客との重複確認 (同じお客様なら「この顧客に紐づける」を使う)
-    const dup = findDuplicateCustomers(db, { name: inq.contactName, phone: inq.contactPhone });
+    // AI 受付で受け取った項目 (ふりがな・メール・住所) も登録と重複の確認に使う
+    const ik = inq.intake;
+    const dup = findDuplicateCustomers(db, { name: inq.contactName, phone: inq.contactPhone, otherPhones: [ik?.phone, ik?.callbackPhone].filter((x): x is string => Boolean(x)), email: ik?.email, postalCode: ik?.postalCode, address: ik?.address });
     if (needsConfirmation(dup) && !confirmed) fail(back, `既存の顧客と重複している可能性があります (${candidateLabel(dup)})。同じお客様なら「この顧客に紐づける」を、別のお客様なら確認のチェックを入れて登録してください。`);
     const now = nowIso();
     customerId = newId("cust");
@@ -173,11 +175,12 @@ export async function registerCustomerFromInquiry(id: string, formData?: FormDat
       id: customerId,
       code: nextCustomerCode(db),
       name: inq.contactName,
-      kana: "",
+      kana: ik?.kana ?? "",
       type: "individual",
-      phone: inq.contactPhone ?? "",
-      postalCode: "",
-      address: "",
+      phone: inq.contactPhone ?? ik?.callbackPhone ?? ik?.phone ?? "",
+      ...(ik?.email ? { email: ik.email } : {}),
+      postalCode: ik?.postalCode ?? "",
+      address: ik?.address ?? "",
       storeId: inq.storeId,
       assignedUserId: inq.assignedUserId ?? user.id,
       // AI 受付 (電話・テキスト・音声) から登録したお客様への連絡は電話にしておく (担当者が変更できる)
@@ -193,7 +196,7 @@ export async function registerCustomerFromInquiry(id: string, formData?: FormDat
     // すでに登録した案件の予定 (現地調査など) もお客様に紐づける
     for (const e of db.schedule) if (e.inquiryId === id && !e.customerId) e.customerId = customerId;
     for (const a of db.attachments) if (a.parentType === "inquiry" && a.parentId === id && !a.customerId) a.customerId = customerId;
-    db.commLogs.push({ id: newId("cl"), customerId, channel: inq.channel, direction: "inbound", subject: inq.summary, body: inq.detail || inq.summary, at: inq.receivedAt, userId: inq.createdBy, relatedType: "inquiry", relatedId: id });
+    linkInquiryLogs(db, inq, customerId);
     addAudit(db, { userId: user.id, action: "create", entity: "customer", entityId: customerId, entityLabel: inq.contactName, summary: `問い合わせ ${inq.number} から顧客を登録${needsConfirmation(dup) ? ` · 重複候補 ${candidateLabel(dup)} を確認済み` : ""}`, storeId: inq.storeId });
   });
   revalidatePath(back);
@@ -217,7 +220,8 @@ export async function linkInquiryToCustomer(id: string, customerId: string) {
     for (const e of db.schedule) if (e.inquiryId === id && !e.customerId) e.customerId = c.id;
     // 問い合わせ・見積に登録済みの資料・写真も顧客にまとめる
     for (const a of db.attachments) if (a.parentType === "inquiry" && a.parentId === id && !a.customerId) a.customerId = c.id;
-    db.commLogs.push({ id: newId("cl"), customerId: c.id, channel: inq.channel, direction: "inbound", subject: inq.summary, body: inq.detail || inq.summary, at: inq.receivedAt, userId: inq.createdBy, relatedType: "inquiry", relatedId: id });
+    // AI 受付の会話の記録など、顧客の登録前のやりとり履歴もお客様の履歴に移す
+    linkInquiryLogs(db, inq, c.id);
     c.updatedAt = nowIso();
     addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: id, entityLabel: inq.number, summary: `既存の顧客 ${c.code} ${c.name} に紐づけ`, storeId: inq.storeId, changes: [{ field: "customerId", before: null, after: c.id }] });
   });

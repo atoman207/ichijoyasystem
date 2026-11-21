@@ -1,6 +1,7 @@
 import "server-only";
 import type { Database, Order, OrderAmounts, QuoteItem } from "@/lib/db/types";
 import { ITEM_KEY, taxRate } from "@/lib/sales-ledger";
+import { compactName, orderStaffIndex } from "@/lib/order-staff";
 
 /**
  * 売上の分析用データ (受注 1 件 = 1 行、明細 1 行 = 1 行)
@@ -8,7 +9,8 @@ import { ITEM_KEY, taxRate } from "@/lib/sales-ledger";
  * - 受注: 売上計上日・店舗・顧客・担当・施工担当・種別ごとの金額 (OrderAmounts)・記録された原価 (畳原価 + 案件にひも付いた仕入)
  * - 明細: 販売管理ソフトから移行した受注は、経過メモの「明細 (税抜|税込): 畳 きずな 6×¥11,000=¥66,000 / …」を読む。
  *   システムで作った受注は見積 (金額が同じとき) または請求書の明細を使う。金額はすべて税込 (税抜の明細は当時の税率で換算)
- * - 担当者: 移行した受注は経過メモの「担当者欄: 5 平島光子、12 …」の名前 (1 件に複数いることがある)。ほかは作成者
+ * - 担当者・施工担当: src/lib/order-staff.ts (経営ダッシュボードと同じ)。移行した受注は経過メモの「担当者欄」の 1 番目 = 担当・2 番目 = 施工担当
+ *   (3 番目は伝票の入力者なので数えない)。システムで登録した受注は見積の担当者 (なければ受注の作成者)
  * データ (約 4 万 4 千件・明細 14 万行) は 1 回作ったらメモリに置き、受注・見積・仕入・請求の件数と更新日時が変わったときだけ作り直す
  */
 
@@ -53,10 +55,12 @@ export interface OrderFact {
   tatamiCost: number;
   /** 案件にひも付いた仕入 (税込) */
   purchaseCost: number;
-  /** 担当者 (名前)。移行データは「担当者欄」、ほかは作成者 */
+  /** 担当 (営業担当) の名前 (空白なし)。移行データは「担当者欄」の 1 番目、ほかは見積の担当者 (order-staff.ts) */
   staff: string[];
-  /** 施工担当 (社員 ID) */
+  /** 施工担当 (社員 ID。取込で社員と照合できた人) */
   workerIds: string[];
+  /** 施工担当の名前 (社員は登録の名前、アカウントのない人は担当者欄の名前) */
+  workerNames: string[];
   /** 地区 (顧客の地区 → 施工場所の先頭) */
   area: string;
   items: ItemFact[];
@@ -91,20 +95,6 @@ export function parseLedgerItems(body: string, date: string): ItemFact[] | null 
   return out;
 }
 
-function staffOfNotes(o: Order): string[] | null {
-  for (const n of o.progressNotes) {
-    const line = n.body.split("\n").find((l) => l.startsWith("担当者欄:"));
-    if (!line) continue;
-    const names = line
-      .replace(/^担当者欄:\s*/, "")
-      .split(/[、,]/)
-      .map((s) => s.trim().replace(/^\d+\s*/, "").replace(/[\s　]+/g, ""))
-      .filter(Boolean);
-    if (names.length) return [...new Set(names)];
-  }
-  return null;
-}
-
 function itemsFromQuote(items: QuoteItem[], taxIncluded: boolean | undefined, date: string, cat: AmountKey, productCat: Map<string, AmountKey>): ItemFact[] {
   const factor = taxIncluded ? 1 : 1 + taxRate(date);
   return items.map((i) => {
@@ -123,7 +113,7 @@ function areaOf(db: Database, o: Order, customerArea: Map<string, string>): stri
 }
 
 function buildOrderFacts(db: Database): OrderFact[] {
-  const userName = new Map((db.users ?? []).map((u) => [u.id, u.name.replace(/[\s　]+/g, "")]));
+  const staffIdx = orderStaffIndex(db);
   const customerArea = new Map((db.customers ?? []).filter((c) => c.area).map((c) => [c.id, c.area!]));
   const quoteById = new Map((db.quotes ?? []).map((q) => [q.id, q]));
   const productCat = new Map((db.products ?? []).map((p) => [p.id, CATEGORY_TO_AMOUNT[p.category] ?? "misc"]));
@@ -181,8 +171,12 @@ function buildOrderFacts(db: Database): OrderFact[] {
       amounts,
       tatamiCost: o.tatamiCost ?? 0,
       purchaseCost: purchaseByOrder.get(o.id) ?? 0,
-      staff: staffOfNotes(o) ?? [userName.get(o.createdBy) ?? "(不明)"],
+      staff: (() => {
+        const keys = staffIdx.byOrder.get(o.id)?.sales ?? [];
+        return keys.length ? keys.map((k) => compactName(staffIdx.label(k))) : ["(不明)"];
+      })(),
       workerIds: o.workerIds,
+      workerNames: (staffIdx.byOrder.get(o.id)?.workers ?? []).map((k) => staffIdx.label(k)),
       area: areaOf(db, o, customerArea),
       items,
       itemSource,
@@ -197,7 +191,10 @@ function signature(db: Database): string {
   let latest = "";
   for (const o of db.orders ?? []) if (o.updatedAt > latest) latest = o.updatedAt;
   for (const p of db.purchases ?? []) if (p.updatedAt > latest) latest = p.updatedAt;
-  return [db.orders?.length, db.quotes?.length, db.purchases?.length, db.invoices?.length, latest].join("|");
+  let quoteLatest = "";
+  for (const q of db.quotes ?? []) if (q.updatedAt > quoteLatest) quoteLatest = q.updatedAt;
+  const users = (db.users ?? []).map((u) => `${u.id}:${u.name}:${u.active ? 1 : 0}`).join(",");
+  return [db.orders?.length, db.quotes?.length, db.purchases?.length, db.invoices?.length, latest, quoteLatest, users].join("|");
 }
 
 /** 売上の分析用データ (キャンセルを除く全受注。閲覧範囲の絞り込みは呼び出し側で行う) */

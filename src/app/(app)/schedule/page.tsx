@@ -1,6 +1,6 @@
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
-import { CalendarDays, ChartGantt, ChevronLeft, ChevronRight, Columns3, Gauge, LayoutGrid, List, Plus, Route, Rows3, TriangleAlert, UserRound } from "lucide-react";
+import { CalendarDays, CalendarOff, ChartGantt, ChevronLeft, ChevronRight, Columns3, Gauge, LayoutGrid, List, Plus, Route, Rows3, TriangleAlert, UserRound } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import type { ScheduleEvent, ScheduleKind, StoreId } from "@/lib/db/types";
@@ -14,6 +14,7 @@ import { Card, CardHeader, Flash, LinkButton, LinkTabs, PageHeader } from "@/com
 import { ConflictList, DayView, ListView, MonthView, StaffView, WeekView, type CalendarContext, type CalUser } from "@/components/schedule/CalendarViews";
 import { KindLegend } from "@/components/schedule/parts";
 import { activeHolds } from "@/lib/scheduling/context";
+import { holidayResolver } from "@/lib/holiday-calendar";
 import { expireHoldsNow } from "@/lib/actions/scheduling";
 
 type View = "month" | "week" | "staff" | "day" | "list";
@@ -135,6 +136,7 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
     addHref: addBase,
     dayHref: (d) => link({ view: "day", date: d }),
     closedDays: new Set(db.holidays.map((h) => h.date)),
+    holidayOf: holidayResolver(db),
   };
 
   const storeTabs = [
@@ -161,6 +163,10 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
             <LinkButton href="/schedule/planning" variant="secondary" size="sm">
               <Route />
               計画・最適化
+            </LinkButton>
+            <LinkButton href="/schedule/holidays" variant="secondary" size="sm">
+              <CalendarOff />
+              休日カレンダー
             </LinkButton>
             <LinkButton href="/schedule/capacity" variant="secondary" size="sm">
               <Gauge />

@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { getDb, syncDb } from "@/lib/db/store";
-import { askChatbot } from "@/lib/chatbot/answer";
 import { aiStatus } from "@/lib/ai/provider";
-import { seedEvalCases, startEvalRun, type AskFn } from "@/lib/chatbot/eval";
+import { seedEvalCases, startEvalRun } from "@/lib/chatbot/eval";
+import { evalAsk, evalRunners } from "@/lib/chatbot/eval-runners";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +13,7 @@ export const dynamic = "force-dynamic";
  * サーバーの cron から呼ぶ (例: 毎週月曜 4:00):
  *   curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" https://<ドメイン>/api/cron/chatbot-eval
  * 裏で実行してすぐに戻る。AI の費用がかかるので、回数は週 1 回・月 1 回程度にする
+ * デプロイのあと (AI アシスタントに関わるファイルが変わったとき。deploy/deploy.sh) は ?trigger=deploy&rev=<版> で呼ぶ (評価の名前に版を残す)
  */
 export async function POST(req: Request) {
   const secret = (process.env.CRON_SECRET ?? "").trim();
@@ -25,10 +26,9 @@ export async function POST(req: Request) {
   await syncDb();
   const db = getDb();
   seedEvalCases(db);
-  const ask: AskFn = async (d, user, history, question) => {
-    const r = await askChatbot(d, user, history.map((h) => ({ role: h.role, content: h.content, specs: h.specs as never })), question, { evaluation: true });
-    return { answer: r.answer, tools: r.tools, sources: r.sources, source: r.source, checks: r.checks, tables: r.tables };
-  };
-  const r = startEvalRun(db, ask, { label: "定期", by: "cron", provider: `${status.label} ${status.model ?? ""}`.trim() });
+  const url = new URL(req.url);
+  const deploy = url.searchParams.get("trigger") === "deploy";
+  const rev = (url.searchParams.get("rev") ?? "").replace(/[^0-9a-f]/gi, "").slice(0, 12);
+  const r = startEvalRun(db, evalAsk, { label: deploy ? `デプロイのあと${rev ? ` (${rev.slice(0, 7)})` : ""}` : "定期", by: deploy ? "deploy" : "cron", provider: `${status.label} ${status.model ?? ""}`.trim(), runners: evalRunners });
   return NextResponse.json(r, { status: r.ok ? 202 : 409 });
 }

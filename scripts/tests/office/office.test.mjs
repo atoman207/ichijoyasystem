@@ -166,11 +166,14 @@ section("慶弔リスト: .xlsx の取込 (「〃」・見出しのない列は�
 
 section("クライアントの実際のシート (あれば。件数だけを確かめる)");
 {
-  const dir = path.join(root, "other/client-materials/08_事務");
-  const kaizen = path.join(dir, "事務改善シート.xlsx");
-  const keicho = path.join(dir, "慶弔リスト.xlsx");
-  const heri = fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).find((d) => d.name.startsWith("縁在庫表")) : undefined;
-  if (fs.existsSync(kaizen) && fs.existsSync(keicho)) {
+  // クライアント資料は source/ に分野ごとに置く (src/lib/registry/source.ts)。場所が変わっても名前で探す
+  const SRC = await imp("lib/registry/source.ts");
+  const dir = SRC.sourceDir(root);
+  const one = (re) => SRC.findSourceFiles(dir, re)[0];
+  const kaizen = one(/(^|\/)事務改善シート\.xlsx$/);
+  const keicho = one(/(^|\/)慶弔リスト\.xlsx$/);
+  const heri = one(/(^|\/)縁在庫表[^/]*\.xlsx$/);
+  if (kaizen && keicho) {
     const empty = { officeImprovements: [], condolences: [], users: db.users };
     const pk = O.planImprovementImport(empty, O.readUploadTables(fs.readFileSync(kaizen)));
     ok(pk.counts.create >= 30 && pk.counts.error === 0 && pk.records.every((x) => x.year >= 2024), `事務改善シート: ${pk.counts.create} 行を読める (エラー ${pk.counts.error})`);
@@ -178,14 +181,14 @@ section("クライアントの実際のシート (あれば。件数だけを確
     const pc = O.planCondolenceImport(empty, O.readUploadTables(fs.readFileSync(keicho)));
     ok(pc.counts.create >= 15 && pc.counts.error === 0, `慶弔リスト: ${pc.counts.create} 行を読める (エラー ${pc.counts.error})`);
     if (heri) {
-      const items = H.parseHeriWorkbook(fs.readFileSync(path.join(dir, heri.name)));
+      const items = H.parseHeriWorkbook(fs.readFileSync(heri));
       const counted = items.filter((i) => i.qty !== undefined);
       ok(counted.length >= 80 && items.some((i) => i.lineup), `縁在庫表: 数量のある品番 ${counted.length} 件・ラインナップ ${items.filter((i) => i.lineup).length} 件`);
       const plan = H.planHeriImport({ materials: [], stockMoves: [] }, items);
       ok(plan.lines.filter((l) => l.status === "error").length === 0, "縁在庫表: 取込の確認でエラーなし");
     }
-    const lineupFile = path.join(dir, "通常ヘリ　ラインナップ.xlsx");
-    if (fs.existsSync(lineupFile)) {
+    const lineupFile = one(/(^|\/)通常ヘリ ラインナップ\.xlsx$/);
+    if (lineupFile) {
       const items = H.parseHeriWorkbook(fs.readFileSync(lineupFile));
       ok(items.length >= 20 && items.every((i) => i.lineup && i.qty === undefined), `通常ヘリ ラインナップ: ${items.length} 品番 (数量・価格は読まない)`);
     }

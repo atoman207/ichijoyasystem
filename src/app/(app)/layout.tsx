@@ -14,6 +14,12 @@ import { canApproveLeave } from "@/lib/auth/permissions";
 import { canManageHeriStock } from "@/lib/auth/permissions";
 import { officeCtx } from "@/lib/office";
 import { heriBelow } from "@/lib/heri-stock";
+import { canManageKnowledgeSources, canViewKnowledge } from "@/lib/auth/permissions";
+import { BACKEND } from "@/lib/db/store";
+import { knowledgeSources } from "@/lib/knowledge";
+import { myReviewItems, reviewCtx } from "@/lib/knowledge-review";
+import { cronHealth } from "@/lib/knowledge-sync";
+import { docDraftAttention } from "@/lib/doc-drafts";
 
 export const dynamic = "force-dynamic";
 
@@ -137,9 +143,33 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   if (faxFailed > 0) {
     notifications.push({ kind: "fax", title: `FAX の送信に失敗 ${faxFailed} 件`, detail: "理由を確認して再送してください", href: "/fax?tab=outbox" });
   }
+  // 文書の下書き (src/lib/doc-drafts.ts): 承認を待っている文書 (承認できる人)・差し戻された自分の文書
+  const drafts = docDraftAttention(getDb(), user);
+  if (drafts.toApprove.length > 0) {
+    notifications.push({ kind: "approval", title: `文書の承認依頼 ${drafts.toApprove.length} 件`, detail: `${drafts.toApprove.slice(0, 3).map((d) => d.title).join("・")}${drafts.toApprove.length > 3 ? " ほか" : ""}。内容を読んで承認するか差し戻してください`, href: "/ai/drafts?view=approve" });
+  }
+  if (drafts.returned.length > 0) {
+    notifications.push({ kind: "task", title: `差し戻された文書 ${drafts.returned.length} 件`, detail: "理由を確かめて文面を直し、もう一度「内容を確認した」を押してください", href: "/ai/drafts?view=returned" });
+  }
   if (leavePending.length > 0) {
     const nameOf = (id: string) => getDb().users.find((u) => u.id === id)?.name ?? "";
     notifications.push({ kind: "approval", title: `休暇の申請 ${leavePending.length} 件`, detail: `${leavePending.slice(0, 3).map((r) => `${nameOf(r.userId)} ${r.date.slice(5).replace("-", "/")}`).join("・")}${leavePending.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/leave?tab=approve" });
+  }
+  // 社内資料: 自分が担当で確認期限を過ぎたもの / スプレッドシートの同期の失敗・定期の同期の停止 (本部・管理者)。src/lib/knowledge-review.ts・knowledge-sync.ts
+  {
+    const kdb = getDb();
+    const mine = myReviewItems(kdb.knowledge.filter((k) => canViewKnowledge(user, k)), user.id, reviewCtx(kdb));
+    if (mine.overdue.length > 0) {
+      notifications.push({ kind: "knowledge", title: `確認期限を過ぎた社内資料 ${mine.overdue.length} 件`, detail: `${mine.overdue.slice(0, 3).map((k) => k.title).join("・")}${mine.overdue.length > 3 ? " ほか" : ""}。内容を確かめて「確認した」を押してください`, href: "/knowledge?health=mine" });
+    }
+    if (canManageKnowledgeSources(user)) {
+      const sources = knowledgeSources(kdb);
+      for (const s of sources.filter((x) => x.failCount)) {
+        notifications.push({ kind: "knowledge", title: `社内資料の同期に失敗: ${s.label}`, detail: `${s.failCount} 回続けて失敗 · ${(s.lastError ?? "").slice(0, 80)}`, href: `/knowledge/sources/${s.id}` });
+      }
+      const cron = cronHealth(kdb);
+      if (sources.length && !cron.ok && BACKEND === "supabase") notifications.push({ kind: "knowledge", title: "社内資料の定期の同期が止まっています", detail: cron.detail, href: "/knowledge" });
+    }
   }
   if (signups.length > 0) {
     notifications.push({ kind: "signup", title: `新規登録の申請 ${signups.length} 件`, detail: `${signups.slice(0, 3).map((u) => `${u.name} (${ROLE_LABEL[u.role]})`).join("・")}${signups.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/staff#signups" });

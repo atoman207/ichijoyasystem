@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
@@ -16,6 +17,7 @@ import { CasePlanCard } from "@/components/scheduling/CasePlanCard";
 import { caseEvents } from "@/lib/db/schedule";
 import { toDateKey } from "@/lib/format";
 import { AiSummary } from "@/components/features/AiSummary";
+import { RecordDocDrafts } from "@/components/features/DocDrafts";
 import { MediaSelect, MediaTag, PromotionSelect, promotionOptions } from "@/components/ops-reports/MediaFields";
 import { inquiryMediaMap } from "@/lib/ops-reports/promo-analysis";
 import { MEDIA_SOURCE_LABEL, mediaLabel } from "@/lib/media";
@@ -33,20 +35,43 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const order = quote ? db.orders.find((o) => o.quoteId === quote.id) : undefined;
   const store = db.stores.find((s) => s.id === inq.storeId);
   const users = db.users.filter((u) => u.active && (canSeeAllStores(user) || u.storeId === inq.storeId));
-  const comms = customer ? db.commLogs.filter((c) => c.customerId === customer.id && (c.relatedId === inq.id || !c.relatedId)).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 10) : [];
+  const isAiChannel = (ch: string) => ch === "ai_phone" || ch === "ai_chat" || ch === "ai_voice";
+  // AI 受付の会話の記録は下の「…の記録」に出すので、やりとりの一覧には重ねない
+  const comms = customer ? db.commLogs.filter((c) => c.customerId === customer.id && (c.relatedId === inq.id || !c.relatedId) && !(c.relatedId === inq.id && isAiChannel(c.channel))).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 10) : [];
   const logs = db.auditLogs.filter((l) => l.entity === "inquiry" && l.entityId === inq.id).reverse();
   const events = caseEvents(db, { inquiryId: inq.id, quoteId: quote?.id, orderId: order?.id });
   const caseParam = order ? `orderId=${order.id}` : quote ? `quoteId=${quote.id}` : `inquiryId=${inq.id}`;
   const open = !["lost", "closed"].includes(inq.status);
   // 顧客未登録のとき: 既存の顧客 (全店舗) と照合した候補
-  const dup = customer ? null : findDuplicateCustomers(db, { name: inq.contactName, phone: inq.contactPhone });
+  const ik = inq.intake;
+  const dup = customer ? null : findDuplicateCustomers(db, { name: inq.contactName, phone: inq.contactPhone, otherPhones: [ik?.phone, ik?.callbackPhone].filter((x): x is string => Boolean(x)), email: ik?.email, postalCode: ik?.postalCode, address: ik?.address });
   const candidates = dup ? [...dup.high.map((m) => ({ ...m, level: "high" as const })), ...dup.check.map((m) => ({ ...m, level: "check" as const })), ...dup.sameName.slice(0, 5).map((m) => ({ ...m, level: "name" as const }))] : [];
   const storeName = (sid: string) => db.stores.find((s) => s.id === sid)?.name ?? sid;
   // AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) からの受付: 会話の記録
-  const fromAi = inq.channel === "ai_phone" || inq.channel === "ai_chat" || inq.channel === "ai_voice";
-  const aiLogs = db.commLogs.filter((c) => c.relatedType === "inquiry" && c.relatedId === inq.id && (c.channel === "ai_phone" || c.channel === "ai_chat" || c.channel === "ai_voice"));
-  // 担当者への引き継ぎ (業務依頼)
+  const fromAi = isAiChannel(inq.channel);
+  const aiLogs = db.commLogs.filter((c) => c.relatedType === "inquiry" && c.relatedId === inq.id && isAiChannel(c.channel));
+  // AI システムから受け取った項目 (src/lib/ai-intake.ts。顧客の登録で使う)
+  const intakeRows: [string, ReactNode][] = ik
+    ? ([
+        ["名乗ったお名前", ik.name],
+        ["ふりがな", ik.kana],
+        ["電話", ik.phone],
+        ["折返し先", ik.callbackPhone && ik.callbackPhone !== ik.phone ? ik.callbackPhone : undefined],
+        ["メール", ik.email],
+        ["住所", ik.postalCode || ik.address ? `${ik.postalCode ? `〒${ik.postalCode} ` : ""}${ik.address ?? ""}` : undefined],
+        ["希望日", ik.desiredDate],
+        ["緊急度", ik.urgency === "high" ? <Badge key="u" tone="critical">高</Badge> : ik.urgency === "low" ? "低" : ik.urgency ? "普通" : undefined],
+        ["引き継ぎ", ik.handoffRequested ? `AI が必要と判断${ik.handoffReason ? ` (${ik.handoffReason})` : ""}` : ik.handoffReason],
+        ["当社を知ったきっかけ", ik.mediaText],
+        ["一致したお客様", ik.matchedCount && ik.matchedCount > 1 ? `${ik.matchedCount} 件 (最近更新したお客様にひも付け)` : undefined],
+        ["録音", ik.recordingUrl ? <a key="r" href={ik.recordingUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">開く</a> : undefined],
+        ["受付 ID", ik.externalId],
+        ["送信元 ID", ik.senderId],
+      ].filter(([, v]) => v !== undefined && v !== "") as [string, ReactNode][])
+    : [];
+  // 担当者への引き継ぎ (業務依頼)。依頼先の最後の報告も出す
   const handoffs = db.threads.filter((t) => t.kind === "request" && t.relatedType === "inquiry" && t.relatedId === inq.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const lastReport = (threadId: string) => db.messages.filter((m) => m.threadId === threadId && m.event === "report").sort((a, b) => b.at.localeCompare(a.at))[0];
   const handoffUsers = db.users.filter((u) => u.active && (u.storeId === inq.storeId || u.role === "admin" || u.role === "hq_staff" || canSeeAllStores(user)));
   // 媒体 (当社を知ったきっかけ): 入力がなければ過去の記録からの推定 (src/lib/media.ts)
   const media = inquiryMediaMap(db, [inq]).get(inq.id)!;
@@ -83,9 +108,10 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             </div>
           </Card>
 
-          {aiLogs.length > 0 && (
+          {(aiLogs.length > 0 || intakeRows.length > 0) && (
             <Card>
-              <CardHeader title={`${CHANNEL_LABEL[inq.channel]}の記録`} description="AI システムから受け取った会話・要約 (受け取ったまま保存しています)" />
+              <CardHeader title={`${CHANNEL_LABEL[inq.channel]}の記録`} description={`AI システムから受け取った項目と会話・要約 (受け取ったまま保存しています)${customer ? "" : "。「顧客として登録する」で、お名前・ふりがな・電話・メール・住所を顧客の情報に入れます"}`} />
+              {intakeRows.length > 0 && <div className="mb-3"><Dl columns={3} items={intakeRows} /></div>}
               {aiLogs.map((c) => (
                 <details key={c.id} className="text-sm" open={aiLogs.length === 1}>
                   <summary className="cursor-pointer text-xs text-ink-3"><span className="tnum">{fmtDateTime(c.at)}</span> · {c.subject}</summary>
@@ -106,6 +132,10 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                       <span className="ml-2 text-xs text-ink-3">依頼 {userName(t.createdBy)} · {fmtDateTime(t.createdAt)}{t.dueDate ? ` · 期限 ${fmtDate(t.dueDate)}` : ""}</span>
                     </span>
                     {t.taskStatus && <StatusBadge value={t.taskStatus} map={TASK_STATUS} />}
+                    {(() => {
+                      const r = lastReport(t.id);
+                      return r ? <p className="w-full text-xs whitespace-pre-wrap text-ink-2">報告 ({userName(r.userId)} · {fmtDateTime(r.at)}): {r.body.slice(0, 400)}</p> : null;
+                    })()}
                   </li>
                 ))}
               </ul>
@@ -220,6 +250,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
 
         <div className="space-y-4">
           <AiSummary kind="inquiry" id={inq.id} />
+          <RecordDocDrafts db={db} user={user} type="inquiry" id={inq.id} number={inq.number} />
           <Card>
             <CardHeader title="お客様" />
             {customer ? (

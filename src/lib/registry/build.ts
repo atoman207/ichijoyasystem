@@ -13,7 +13,7 @@ export const CHUNK_CHARS = 3500;
 /** 1 つの資料で資料庫に入れる文字の上限 (大きな表の写し・様式の部品で資料庫がふくらまないように) */
 export const DOC_MAX_CHARS = 250_000;
 /** 分類の規則を変えたら上げる (読み直しの判定に使う) */
-export const RULES_VERSION = "2026-11-20.2";
+export const RULES_VERSION = "2026-11-21.1";
 
 export interface BuildInput {
   id: string;
@@ -29,6 +29,8 @@ export interface BuildInput {
   sha1?: string;
   driveUrl?: string;
   storageKey?: string;
+  /** 整理する前の場所 (source/_index/manifest.json の from) */
+  originalPath?: string;
   /** null = 読めない形式 / [] = 文字なし */
   sections: Section[] | null;
   error?: string;
@@ -98,6 +100,7 @@ export function buildDoc(input: BuildInput, cls: Classification, now = new Date(
     sha1: input.sha1,
     driveUrl: input.driveUrl,
     storageKey: input.storageKey,
+    originalPath: input.originalPath,
     ruleId: cls.ruleId,
     ruleKey: `${RULES_VERSION}|${classificationKey(cls)}`,
     action: cls.action,

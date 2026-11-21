@@ -291,7 +291,7 @@ function factRow(f: OrderFact, names: { store: Map<string, string>; cust: Map<st
     f.tatamiCost,
     f.purchaseCost,
     f.staff.join("・"),
-    f.workerIds.map((w) => names.user.get(w) ?? w).join("・"),
+    f.workerNames.join("・"),
     f.itemSource,
   ];
 }

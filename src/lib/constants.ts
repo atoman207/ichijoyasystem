@@ -390,11 +390,13 @@ export const ENTITY_LABEL: Record<string, string> = {
   holiday_work: "休日出勤",
   leave_grant: "有給の付与",
   work_report: "作業日報",
+  holiday: "休日カレンダー",
   promotion: "販促の記録",
   office_improvement: "事務改善シート",
   condolence: "慶弔リスト",
   material: "材料マスタ (縁の品番など)",
   stock_move: "在庫の移動 (縁在庫・材料)",
+  doc_draft: "文書の下書き",
 };
 
 /** 勘定科目 (仕入) */

@@ -1,6 +1,6 @@
 import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
-import { canViewThread } from "@/lib/auth/permissions";
+import { canConfirmTask, canViewThread } from "@/lib/auth/permissions";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { userName } from "@/lib/db/queries";
@@ -36,7 +36,7 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
   const href = relatedHref(t.relatedType, t.relatedId);
   const isTask = Boolean(t.taskStatus);
   const isAssignee = (t.assigneeIds ?? []).includes(user.id);
-  const isRequester = t.createdBy === user.id || user.role === "admin";
+  const isRequester = canConfirmTask(user, t);
   const overdue = isTask && t.taskStatus !== "confirmed" && t.dueDate && t.dueDate < toDateKey(new Date());
 
   return (
@@ -94,10 +94,13 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
                 <Field label="ひとこと (任意)" className="flex-1"><Textarea name="body" rows={1} placeholder="例: ありがとうございました" /></Field>
                 <Button type="submit" size="sm">報告を確認して完了にする</Button>
               </form>
-              <form action={taskStep.bind(null, t.id, "reopen")} className="flex flex-wrap items-end gap-2">
-                <Field label="差し戻す理由" className="flex-1"><Textarea name="body" rows={1} required placeholder="例: 写真も添付してください" /></Field>
-                <Button type="submit" size="sm" variant="secondary">差し戻す</Button>
-              </form>
+              {/* システムの依頼 (AI 受付の引き継ぎ) を依頼先が自分で完了にするときは、差し戻しは出さない */}
+              {!(t.createdBy === "system" && isAssignee) && (
+                <form action={taskStep.bind(null, t.id, "reopen")} className="flex flex-wrap items-end gap-2">
+                  <Field label="差し戻す理由" className="flex-1"><Textarea name="body" rows={1} required placeholder="例: 写真も添付してください" /></Field>
+                  <Button type="submit" size="sm" variant="secondary">差し戻す</Button>
+                </form>
+              )}
             </div>
           )}
           {!isAssignee && !isRequester && t.taskStatus !== "confirmed" && <p className="text-xs text-ink-3">依頼先・依頼した人が操作します。</p>}

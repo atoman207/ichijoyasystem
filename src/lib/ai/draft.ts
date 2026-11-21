@@ -1,7 +1,7 @@
 import "server-only";
 import type { Database, User } from "@/lib/db/types";
 import { documentSettings } from "@/lib/doc-settings";
-import { scopeByStore } from "@/lib/auth/permissions";
+import { canViewKnowledge, scopeByStore } from "@/lib/auth/permissions";
 import { AiError, aiEnabled, generateText } from "./provider";
 import { plainText, recordFacts, type RecordFacts } from "./summary";
 import { searchKnowledge } from "@/lib/knowledge";
@@ -10,7 +10,8 @@ import { searchKnowledge } from "@/lib/knowledge";
  * 資料・報告文の作成の補助
  * ------------------------------------------------------------
  * ひな形 (お客様向けの案内・社内の報告など) と、関係する記録 (見積・受注・問い合わせ・請求・顧客の番号) と要点から、
- * AI が下書きを作る。キーがないときは、ひな形に記録の内容を差し込んだ定型文を返す。下書きは保存しない (コピーして使う)
+ * AI が下書きを作る。キーがないときは、ひな形に記録の内容を差し込んだ定型文を返す。
+ * 作った文面は画面で「下書きとして保存」すると文書の下書き (src/lib/doc-drafts.ts) になり、確認 → 承認 → 送信 まで管理できる
  */
 
 export type DraftTemplate = "quote_send" | "schedule" | "complete_report" | "payment_request" | "apology" | "daily_report" | "work_report" | "meeting_memo" | "free";
@@ -99,7 +100,8 @@ export async function draftDocument(db: Database, user: User, input: DraftInput)
   if (input.ref && !f) return { ok: false, text: "", provider: "rules", message: `番号「${input.ref}」の記録が見つかりません (閲覧できる店舗の見積・受注・問い合わせ・請求・顧客コードを入力してください)。` };
   const used = f ? { label: f.label, href: f.href } : undefined;
   if (!aiEnabled()) return { ok: true, text: rulesDraft(db, user, input, f), provider: "rules", used, message: "AI の API キーが未設定のため、ひな形に記録の内容を差し込んだ定型文です。" };
-  const knowledge = searchKnowledge(db.knowledge, `${t.label} ${input.notes ?? ""}`, { limit: 3 });
+  // 社内資料は作る人が見られるものだけ (見られる人の設定。店舗のロールに本部向けの資料を使わない)
+  const knowledge = searchKnowledge(db.knowledge.filter((k) => canViewKnowledge(user, k)), `${t.label} ${input.notes ?? ""}`, { limit: 3 });
   try {
     const r = await generateText({
       system: [

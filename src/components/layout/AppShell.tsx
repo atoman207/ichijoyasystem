@@ -77,6 +77,7 @@ import {
   ClipboardPen,
   Megaphone,
   Database,
+  BookOpenCheck,
 } from "lucide-react";
 import { Avatar, Badge } from "@/components/ui";
 import { IchijoyaLogo } from "@/components/brand/Logo";
@@ -191,7 +192,7 @@ export interface ShellUser {
 }
 
 export interface NotificationItem {
-  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict" | "task" | "signup" | "fax";
+  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict" | "task" | "signup" | "fax" | "knowledge";
   title: string;
   detail?: string;
   href: string;
@@ -208,6 +209,7 @@ const NOTIFICATION_STYLE: Record<NotificationItem["kind"], { icon: LucideIcon; c
   task: { icon: ListTodo, cls: "bg-warn-soft text-warn-ink" },
   signup: { icon: UserPlus, cls: "bg-accent-soft text-accent-ink" },
   fax: { icon: Printer, cls: "bg-warn-soft text-warn-ink" },
+  knowledge: { icon: BookOpenCheck, cls: "bg-warn-soft text-warn-ink" },
 };
 
 const CREATE_ITEMS: { href: string; label: string; desc: string; icon: LucideIcon }[] = [

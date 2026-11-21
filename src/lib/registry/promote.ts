@@ -75,6 +75,14 @@ export function knowledgeDrafts(doc: MaterialDoc, chunks: MaterialChunk[]): Mate
   return out;
 }
 
+export interface PromoteCtx {
+  userId: string;
+  now: string;
+  newId: () => string;
+  /** 新しく登録する資料の 担当者・次に確かめる日・間隔 (knowledge-review.ts の initialReview)。登録済みの資料の値は変えない */
+  review?: (d: MaterialKnowledgeDraft) => Pick<KnowledgeEntry, "ownerId" | "reviewDue" | "reviewIntervalDays">;
+}
+
 export interface PromoteResult {
   added: number;
   updated: number;
@@ -90,7 +98,7 @@ export function applyKnowledgeDrafts(
   db: Pick<Database, "knowledge">,
   docId: string,
   drafts: MaterialKnowledgeDraft[],
-  ctx: { userId: string; now: string; newId: () => string },
+  ctx: PromoteCtx,
 ): PromoteResult {
   const prefix = `${MATERIAL_REF_PREFIX}${docId}#`;
   const existing = new Map(db.knowledge.filter((k) => k.sourceRef?.startsWith(prefix)).map((k) => [k.sourceRef!, k]));
@@ -113,7 +121,7 @@ export function applyKnowledgeDrafts(
     } else {
       const id = ctx.newId();
       ids.push(id);
-      db.knowledge.push({ id, ...next, source: "file", sourceRef: d.sourceRef, active: true, createdBy: ctx.userId, createdAt: ctx.now, updatedAt: ctx.now });
+      db.knowledge.push({ id, ...next, source: "file", sourceRef: d.sourceRef, active: true, createdBy: ctx.userId, createdAt: ctx.now, updatedAt: ctx.now, ...(ctx.review?.(d) ?? {}) });
       added++;
     }
   }
@@ -139,7 +147,7 @@ export function materialIdOf(k: Pick<KnowledgeEntry, "sourceRef">): string | und
 export function promoteFromMaterials(
   db: Pick<Database, "knowledge">,
   mdb: MaterialsSqlite,
-  ctx: { userId: string; now: string; newId: () => string },
+  ctx: PromoteCtx,
   opts: { docIds?: string[] } = {},
 ): PromoteResult & { perDoc: Map<string, string[]>; docs: number } {
   const total: PromoteResult = { added: 0, updated: 0, removed: 0, ids: [] };

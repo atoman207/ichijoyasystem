@@ -6,6 +6,7 @@ import { AssistantPage } from "@/components/chatbot/AssistantPage";
 import { avatarUrl } from "@/lib/account-rules";
 import { ChatHistory } from "@/components/chatbot/ChatHistory";
 import { DraftForm } from "@/components/features/DraftForm";
+import { RecentDocDrafts } from "@/components/features/DocDrafts";
 import Link from "@/components/ui/Link";
 import { Badge, Card, CardHeader, Flash, LinkTabs, PageHeader } from "@/components/ui";
 import { ChatbotAdmin } from "@/components/chatbot/ChatbotAdmin";
@@ -45,7 +46,10 @@ export default async function AiPage({ searchParams }: { searchParams: Promise<R
       ) : tab === "history" ? (
         <ChatHistory user={user} db={db} sp={sp} />
       ) : tab === "draft" ? (
-        <DraftForm templates={Object.entries(DRAFT_TEMPLATES).map(([id, t]) => ({ id, ...t }))} formats={Object.entries(DRAFT_FORMAT_LABEL).map(([id, label]) => ({ id, label }))} defaultRef={sp.ref} aiEnabled={enabled} />
+        <>
+          <DraftForm templates={Object.entries(DRAFT_TEMPLATES).map(([id, t]) => ({ id, ...t }))} formats={Object.entries(DRAFT_FORMAT_LABEL).map(([id, label]) => ({ id, label }))} defaultRef={sp.ref} aiEnabled={enabled} />
+          <RecentDocDrafts db={db} user={user} />
+        </>
       ) : (
         <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-4">
           <div className="@4xl:col-span-3">

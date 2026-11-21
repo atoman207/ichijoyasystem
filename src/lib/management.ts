@@ -1,20 +1,29 @@
-import type { Channel, Database, Order, ServiceCategory, StoreId, User } from "@/lib/db/types";
+import type { Channel, Database, Order, Quote, ServiceCategory, StoreId, User } from "@/lib/db/types";
 import { canSeeAllStores } from "@/lib/auth/permissions";
 import { addDays, fmtMonth, toDateKey, toMonthKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, ROLE_LABEL } from "@/lib/constants";
+import { NAME_KEY_PREFIX, orderStaffIndex } from "@/lib/order-staff";
+import { orderDate, storeKpi } from "@/lib/kpi";
+import { SCORE_QUESTIONS, type ScoreKey } from "@/lib/survey";
 
 /**
  * 経営ダッシュボード (レポート) の集計
  * ------------------------------------------------------------
  * 期間 (から〜まで)・店舗・担当者で絞り込み、売上・受注・問い合わせ・施工・請求・入金・経費・仕入を集計する。
- * - 売上: 受注の売上計上日 (施工完了) が期間内のもの。税込
+ * - 売上: 受注の売上計上日 (施工完了) が期間内のもの (キャンセルを除く)。税込
  * - 受注: 契約日が期間内のもの (キャンセルを除く)
  * - 請求: 請求日が期間内のもの (下書き・無効を除く) / 入金: 入金日が期間内のもの
  * - 経費: 日付が期間内で、承認済・精算済のもの (承認待ちは別に数える)
  * - 仕入: 請求日が期間内のもの (支払却下を除く)
+ * - 畳原価: 売上に数えた受注の畳原価 (販売管理ソフトの売上台帳から移行した値)
+ * - 簡易粗利 = 売上 − 畳原価 − 仕入 − 経費 (税込のまま。会計上の利益ではない。AI アシスタントの simple_gross と同じ)
  * - 未入金残高・期日超過は「今日時点」の値 (期間に関係しない)
- * - 簡易粗利 = 売上 − 仕入 − 経費 (税込のまま。会計上の利益ではない)
- * 店舗のロールは自店舗だけ。担当者で絞ると、その人が作成・担当した記録だけを数える
+ * - 前年同期: 期間を 1 年前にずらす。期間の終わりが今日より後なら今日までにそろえる (今年の途中と昨年の同じ日までを比べる)
+ * - 移行データ (販売管理ソフトから移行した受注。source = import): 状態はすべて「入金済」、契約日 = 売上計上日で、見積・請求書・入金の記録はない。
+ *   そのため受注の進み具合と「問い合わせ → 見積 → 受注」はシステムで登録した受注だけで数え、移行データは別に示す
+ * - 担当者: src/lib/order-staff.ts (AI アシスタントと同じ)。担当 = 見積の担当者 / 移行データは担当者欄の 1 番目。
+ *   施工完了は施工担当。アカウントのない人 (退職者など) も名前で 1 行にする
+ * 店舗のロールは自店舗だけ。担当者で絞ると、その人が担当・施工担当の受注と、その人の問い合わせ・見積・経費・仕入だけを数える
  */
 
 export type PeriodPreset = "this_month" | "last_month" | "last_3m" | "last_6m" | "last_12m" | "this_year" | "last_year" | "custom";
@@ -39,6 +48,7 @@ export interface Period {
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const validDate = (v?: string) => (v && DATE_RE.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00`)) ? v : undefined);
+const slash = (d: string) => d.replaceAll("-", "/");
 
 /** 画面・CSV の検索条件から期間を決める (既定: 直近12か月)。指定期間は最長 5 年 */
 export function resolvePeriod(sp: { period?: string; from?: string; to?: string; months?: string }, now = new Date()): Period {
@@ -93,8 +103,22 @@ export function resolvePeriod(sp: { period?: string; from?: string; to?: string;
       }
     }
   }
-  const label = preset === "custom" ? `${from.replaceAll("-", "/")} 〜 ${to.replaceAll("-", "/")}` : `${PERIOD_LABEL[preset]} (${from.replaceAll("-", "/")} 〜 ${to.replaceAll("-", "/")})`;
+  const label = preset === "custom" ? `${slash(from)} 〜 ${slash(to)}` : `${PERIOD_LABEL[preset]} (${slash(from)} 〜 ${slash(to)})`;
   return { preset, from, to, label };
+}
+
+/** 日付 (YYYY-MM-DD) を n 年ずらす。2/29 はない年なら 2/28 */
+export function shiftYears(d: string, n: number): string {
+  const y = Number(d.slice(0, 4)) + n;
+  const md = d.slice(5, 10);
+  if (md === "02-29" && !(y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0))) return `${y}-02-28`;
+  return `${String(y).padStart(4, "0")}-${md}`;
+}
+
+/** 前年同期 (期間を 1 年前にずらす。期間が今日をまたぐときは、終わりを今日にそろえてからずらす) */
+export function previousYearRange(from: string, to: string, today: string): { from: string; to: string } {
+  const end = from <= today && to > today ? today : to;
+  return { from: shiftYears(from, -1), to: shiftYears(end, -1) };
 }
 
 /** 期間に含まれる月 (YYYY-MM)。最長 60 か月 */
@@ -116,18 +140,29 @@ export function monthsBetween(from: string, to: string): string[] {
   return out;
 }
 
+/** 販売管理ソフトから移行した受注 (状態はすべて入金済・契約日 = 売上計上日・見積と請求書なし) */
+export const isImportedOrder = (o: Pick<Order, "source">): boolean => o.source === "import";
+
 export interface MgmtFilter {
   from: string;
   to: string;
   storeId?: StoreId;
+  /** 担当者のキー (社員 ID、またはアカウントのない人は "name:<名前>"。order-staff.ts) */
   staffId?: string;
 }
 
 export interface MgmtTotals {
   sales: number;
   salesCount: number;
+  /** うち移行データの売上 */
+  importedSales: number;
+  importedSalesCount: number;
   orderCount: number;
   orderAmount: number;
+  /** 受注のうちシステムで登録したもの (問い合わせ → 見積 → 受注 の受注) */
+  funnelOrders: number;
+  /** 受注のうち移行データ */
+  importedOrderCount: number;
   inquiries: number;
   quotes: number;
   jobsCompleted: number;
@@ -139,7 +174,13 @@ export interface MgmtTotals {
   overdueCount: number;
   expenses: number;
   expensesPending: number;
+  /** 期間内の経費の記録の件数 (却下・差戻しを除く) */
+  expenseCount: number;
   purchases: number;
+  purchaseCount: number;
+  /** 売上に数えた受注の畳原価 */
+  tatamiCost: number;
+  /** 簡易粗利 = 売上 − 畳原価 − 仕入 − 経費 */
   gross: number;
 }
 
@@ -147,8 +188,11 @@ export interface MgmtMonth {
   month: string;
   sales: number;
   byStore: Record<string, number>;
+  /** 前年同月の売上 */
+  prevSales: number;
   orderAmount: number;
   received: number;
+  tatamiCost: number;
   expenses: number;
   purchases: number;
 }
@@ -167,13 +211,21 @@ export interface StoreRow extends MgmtTotals {
   storeName: string;
   winRate: number | null;
   avgOrder: number;
+  /** 前年同期の売上と伸び (前年同期の売上がなければ null) */
+  prevSales: number;
+  salesGrowth: number | null;
 }
 
 export interface StaffRow {
-  userId: string;
+  /** 担当者のキー (社員 ID または "name:<名前>") */
+  key: string;
+  /** アカウントのある社員の ID */
+  userId?: string;
   name: string;
   role: string;
-  storeId: StoreId;
+  hasAccount: boolean;
+  active: boolean;
+  storeId?: StoreId;
   storeName: string;
   inquiries: number;
   quotes: number;
@@ -184,18 +236,45 @@ export interface StaffRow {
   expenses: number;
 }
 
+export interface StaffOption {
+  key: string;
+  name: string;
+  storeId: StoreId;
+  active: boolean;
+  hasAccount: boolean;
+}
+
+export interface SurveyRow {
+  storeId: StoreId | "all";
+  storeName: string;
+  /** アンケートはがきの枚数 */
+  n: number;
+  /** 返信率 (個人のお客様の施工完了に対する割合。0〜1) */
+  replyRate: number | null;
+  scores: Record<ScoreKey, number | null>;
+  /** 次回も依頼したい (はい ÷ はい・いいえ の回答。0〜1) */
+  againRate: number | null;
+}
+
 export interface MgmtReport {
   filter: MgmtFilter;
   stores: { id: StoreId; name: string; color: string }[];
   totals: MgmtTotals;
+  /** 前年同期 (totals) と、比べる今期 (base: 期間の終わりを今日にそろえた今期。期間が今日をまたがなければ totals と同じ) */
+  previous: { from: string; to: string; label: string; totals: MgmtTotals; base: MgmtTotals };
   months: MgmtMonth[];
+  /** システムで登録した受注の進み具合 (契約日が期間内) */
   pipeline: PipelineRow[];
+  /** 契約日が期間内の移行データ (キャンセルを除く) */
+  migrated: { count: number; amount: number };
   invoiceStatus: { key: string; label: string; count: number; amount: number; balance: number }[];
   storeRows: StoreRow[];
   staffRows: StaffRow[];
   categories: { key: ServiceCategory | string; label: string; amount: number; count: number }[];
   channels: { key: Channel | string; label: string; count: number }[];
   expenseAccounts: { account: string; amount: number; count: number }[];
+  /** お客様アンケート (KPI の画面と同じ集計。店舗ごと + 複数店舗のときは合計) */
+  surveys: SurveyRow[];
 }
 
 const OPEN_INVOICE = ["issued", "partially_paid", "overdue"];
@@ -216,20 +295,66 @@ const PIPELINE: { key: string; label: string; statuses: Order["status"][] }[] = 
 const INVOICE_LABEL: Record<string, string> = { issued: "発行済 (入金待ち)", partially_paid: "一部入金", overdue: "期日超過", paid: "入金済" };
 
 function emptyTotals(): MgmtTotals {
-  return { sales: 0, salesCount: 0, orderCount: 0, orderAmount: 0, inquiries: 0, quotes: 0, jobsCompleted: 0, invoiced: 0, invoiceCount: 0, received: 0, receivables: 0, overdue: 0, overdueCount: 0, expenses: 0, expensesPending: 0, purchases: 0, gross: 0 };
+  return {
+    sales: 0,
+    salesCount: 0,
+    importedSales: 0,
+    importedSalesCount: 0,
+    orderCount: 0,
+    orderAmount: 0,
+    funnelOrders: 0,
+    importedOrderCount: 0,
+    inquiries: 0,
+    quotes: 0,
+    jobsCompleted: 0,
+    invoiced: 0,
+    invoiceCount: 0,
+    received: 0,
+    receivables: 0,
+    overdue: 0,
+    overdueCount: 0,
+    expenses: 0,
+    expensesPending: 0,
+    expenseCount: 0,
+    purchases: 0,
+    purchaseCount: 0,
+    tatamiCost: 0,
+    gross: 0,
+  };
 }
 
-const inRange = (d: string | undefined, f: MgmtFilter) => Boolean(d) && d!.slice(0, 10) >= f.from && d!.slice(0, 10) <= f.to;
+type Range = { from: string; to: string };
+const inRange = (d: string | undefined, f: Range) => Boolean(d) && d!.slice(0, 10) >= f.from && d!.slice(0, 10) <= f.to;
+
+/** 見積の担当 (営業担当)。order-staff.ts と同じ */
+const quoteStaff = (q: Pick<Quote, "estimatorId" | "createdBy">): string | undefined => q.estimatorId ?? q.createdBy;
 
 /** 閲覧できる店舗 (店舗のロールは自店舗だけ) */
 export function visibleStores(db: Database, user: User): StoreId[] {
   return canSeeAllStores(user) ? db.stores.map((s) => s.id) : [user.storeId];
 }
 
-/** 担当者の絞り込み候補: 閲覧できる店舗の社員 (退職者を含む。記録が残っているため) */
-export function staffOptions(db: Database, user: User): User[] {
+/**
+ * 担当者の絞り込み候補: 閲覧できる店舗の社員 (退職者を含む。記録が残っているため) と、
+ * 移行データの担当者欄にだけ名前があるアカウントのない人 (受注がいちばん多い店舗に並べる)
+ */
+export function staffOptions(db: Database, user: User): StaffOption[] {
   const stores = new Set(visibleStores(db, user));
-  return db.users.filter((u) => stores.has(u.storeId) && u.id !== "system").sort((a, b) => a.storeId.localeCompare(b.storeId) || a.kana.localeCompare(b.kana, "ja"));
+  const order = new Map(db.stores.map((s, i) => [s.id, i]));
+  const byStore = (a: StaffOption, b: StaffOption) => (order.get(a.storeId) ?? 99) - (order.get(b.storeId) ?? 99);
+  const kana = new Map(db.users.map((u) => [u.id, u.kana]));
+  const users: StaffOption[] = db.users
+    .filter((u) => stores.has(u.storeId) && u.id !== "system")
+    .map((u) => ({ key: u.id, name: u.name, storeId: u.storeId, active: u.active, hasAccount: true }))
+    .sort((a, b) => byStore(a, b) || (kana.get(a.key) ?? "").localeCompare(kana.get(b.key) ?? "", "ja"));
+  const idx = orderStaffIndex(db);
+  const unlinked: StaffOption[] = [];
+  for (const [key, counts] of idx.unlinked) {
+    const top = [...counts].filter(([s]) => stores.has(s)).sort((a, b) => b[1] - a[1])[0];
+    if (top) unlinked.push({ key, name: idx.label(key), storeId: top[0], active: false, hasAccount: false });
+  }
+  unlinked.sort((a, b) => byStore(a, b) || a.name.localeCompare(b.name, "ja"));
+  return [...users, ...unlinked];
 }
 
 export function managementReport(db: Database, user: User, filter: MgmtFilter, now = new Date()): MgmtReport {
@@ -239,11 +364,21 @@ export function managementReport(db: Database, user: User, filter: MgmtFilter, n
   const inStores = new Set<StoreId>(storeIds);
   const staff = filter.staffId;
   const stores = db.stores.filter((s) => inStores.has(s.id)).map((s) => ({ id: s.id, name: s.name, color: s.color }));
+  const range: Range = { from: filter.from, to: filter.to };
+  const prevRange = previousYearRange(filter.from, filter.to, today);
+  /** 前年同期と比べる今期 (終わりを今日にそろえる) */
+  const cmpRange: Range = { from: filter.from, to: filter.from <= today && filter.to > today ? today : filter.to };
 
   // ---- 範囲内の記録 (店舗・担当者で絞る) ----
-  const orders = db.orders.filter((o) => inStores.has(o.storeId) && (!staff || o.createdBy === staff || o.workerIds.includes(staff)));
-  const orderIds = new Set(orders.map((o) => o.id));
-  const quotes = db.quotes.filter((q) => inStores.has(q.storeId) && (!staff || q.createdBy === staff));
+  const idx = orderStaffIndex(db);
+  const NONE = { sales: [] as string[], workers: [] as string[] };
+  const staffOf = (o: Order) => idx.byOrder.get(o.id) ?? NONE;
+  const scoped = db.orders.filter((o) => inStores.has(o.storeId) && (!staff || staffOf(o).sales.includes(staff) || staffOf(o).workers.includes(staff)));
+  const orderIds = new Set(scoped.map((o) => o.id));
+  // 集計に使うのは前年同期の始まり〜期間の終わりの受注だけ (全期間の約 4 万件を何度も見ない)
+  const win: Range = { from: prevRange.from, to: range.to };
+  const orders = scoped.filter((o) => inRange(o.salesDate, win) || inRange(o.contractDate, win) || inRange(o.completedAt, win));
+  const quotes = db.quotes.filter((q) => inStores.has(q.storeId) && (!staff || quoteStaff(q) === staff));
   const inquiries = db.inquiries.filter((i) => inStores.has(i.storeId) && (!staff || i.assignedUserId === staff || i.createdBy === staff));
   const invoices = db.invoices.filter((i) => inStores.has(i.storeId) && (!staff || orderIds.has(i.orderId)) && i.status !== "draft" && i.status !== "void");
   const invoiceById = new Map(invoices.map((i) => [i.id, i]));
@@ -252,24 +387,33 @@ export function managementReport(db: Database, user: User, filter: MgmtFilter, n
   const purchases = db.purchases.filter((p) => inStores.has(p.storeId) && p.status !== "rejected" && (!staff || p.registeredBy === staff));
 
   // ---- 合計 ----
-  const totalsFor = (sid?: StoreId): MgmtTotals => {
+  const totalsFor = (sid: StoreId | undefined, f: Range): MgmtTotals => {
     const t = emptyTotals();
     const own = <T extends { storeId: StoreId }>(rows: T[]) => (sid ? rows.filter((r) => r.storeId === sid) : rows);
     for (const o of own(orders)) {
-      if (inRange(o.salesDate, filter)) {
+      if (o.status === "cancelled") continue;
+      const imported = isImportedOrder(o);
+      if (inRange(o.salesDate, f)) {
         t.sales += o.total;
         t.salesCount++;
+        t.tatamiCost += o.tatamiCost ?? 0;
+        if (imported) {
+          t.importedSales += o.total;
+          t.importedSalesCount++;
+        }
       }
-      if (inRange(o.contractDate, filter) && o.status !== "cancelled") {
+      if (inRange(o.contractDate, f)) {
         t.orderCount++;
         t.orderAmount += o.total;
+        if (imported) t.importedOrderCount++;
+        else t.funnelOrders++;
       }
-      if (inRange(o.completedAt, filter)) t.jobsCompleted++;
+      if (inRange(o.completedAt, f)) t.jobsCompleted++;
     }
-    t.inquiries = own(inquiries).filter((i) => inRange(i.receivedAt, filter)).length;
-    t.quotes = own(quotes).filter((q) => inRange(q.createdAt, filter)).length;
+    t.inquiries = own(inquiries).filter((i) => inRange(i.receivedAt, f)).length;
+    t.quotes = own(quotes).filter((q) => inRange(q.createdAt, f)).length;
     for (const i of own(invoices)) {
-      if (inRange(i.issueDate, filter)) {
+      if (inRange(i.issueDate, f)) {
         t.invoiced += i.total;
         t.invoiceCount++;
       }
@@ -284,47 +428,68 @@ export function managementReport(db: Database, user: User, filter: MgmtFilter, n
     }
     for (const p of payments) {
       const inv = invoiceById.get(p.invoiceId)!;
-      if ((!sid || inv.storeId === sid) && inRange(p.date, filter)) t.received += p.amount;
+      if ((!sid || inv.storeId === sid) && inRange(p.date, f)) t.received += p.amount;
     }
     for (const e of own(expenses)) {
-      if (!inRange(e.date, filter)) continue;
-      if (COUNTED_EXPENSE.includes(e.status)) t.expenses += e.amount;
-      else if (e.status === "pending_approval") t.expensesPending += e.amount;
+      if (!inRange(e.date, f)) continue;
+      if (COUNTED_EXPENSE.includes(e.status)) {
+        t.expenses += e.amount;
+        t.expenseCount++;
+      } else if (e.status === "pending_approval") {
+        t.expensesPending += e.amount;
+        t.expenseCount++;
+      }
     }
-    t.purchases = own(purchases).filter((p) => inRange(p.invoiceDate, filter)).reduce((a, p) => a + p.amount, 0);
-    t.gross = t.sales - t.purchases - t.expenses;
+    for (const p of own(purchases)) {
+      if (!inRange(p.invoiceDate, f)) continue;
+      t.purchases += p.amount;
+      t.purchaseCount++;
+    }
+    t.gross = t.sales - t.tatamiCost - t.purchases - t.expenses;
     return t;
   };
-  const totals = totalsFor();
+  const totals = totalsFor(undefined, range);
+  const sameCmp = cmpRange.to === range.to;
+  const previous = { ...prevRange, label: `${slash(prevRange.from)} 〜 ${slash(prevRange.to)}`, totals: totalsFor(undefined, prevRange), base: sameCmp ? totals : totalsFor(undefined, cmpRange) };
 
   // ---- 月次 ----
   const monthKeys = monthsBetween(filter.from, filter.to);
-  const monthMap = new Map<string, MgmtMonth>(monthKeys.map((k) => [k, { month: k, sales: 0, byStore: Object.fromEntries(storeIds.map((s) => [s, 0])), orderAmount: 0, received: 0, expenses: 0, purchases: 0 }]));
+  const monthMap = new Map<string, MgmtMonth>(monthKeys.map((k) => [k, { month: k, sales: 0, byStore: Object.fromEntries(storeIds.map((s) => [s, 0])), prevSales: 0, orderAmount: 0, received: 0, tatamiCost: 0, expenses: 0, purchases: 0 }]));
   const bump = (d: string | undefined, fn: (row: MgmtMonth) => void) => {
-    if (!inRange(d, filter)) return;
+    if (!inRange(d, range)) return;
     const row = monthMap.get(d!.slice(0, 7));
     if (row) fn(row);
   };
+  const prevMonthsRange: Range = { from: shiftYears(filter.from, -1), to: shiftYears(filter.to, -1) };
   for (const o of orders) {
+    if (o.status === "cancelled") continue;
     bump(o.salesDate, (r) => {
       r.sales += o.total;
       r.byStore[o.storeId] = (r.byStore[o.storeId] ?? 0) + o.total;
+      r.tatamiCost += o.tatamiCost ?? 0;
     });
-    if (o.status !== "cancelled") bump(o.contractDate, (r) => (r.orderAmount += o.total));
+    bump(o.contractDate, (r) => (r.orderAmount += o.total));
+    if (inRange(o.salesDate, prevMonthsRange)) {
+      const row = monthMap.get(shiftYears(o.salesDate!.slice(0, 10), 1).slice(0, 7));
+      if (row) row.prevSales += o.total;
+    }
   }
   for (const p of payments) bump(p.date, (r) => (r.received += p.amount));
   for (const e of expenses) if (COUNTED_EXPENSE.includes(e.status)) bump(e.date, (r) => (r.expenses += e.amount));
   for (const p of purchases) bump(p.invoiceDate, (r) => (r.purchases += p.amount));
 
-  // ---- 受注の進み具合 (契約日が期間内) ----
-  const periodOrders = orders.filter((o) => inRange(o.contractDate, filter));
+  // ---- 受注の進み具合 (契約日が期間内。システムで登録した受注だけ。移行データは別に数える) ----
+  const periodOrders = orders.filter((o) => inRange(o.contractDate, range));
+  const systemOrders = periodOrders.filter((o) => !isImportedOrder(o));
   const pipeline = PIPELINE.map((p) => {
-    const rows = periodOrders.filter((o) => p.statuses.includes(o.status));
+    const rows = systemOrders.filter((o) => p.statuses.includes(o.status));
     return { ...p, count: rows.length, amount: rows.reduce((a, o) => a + o.total, 0) };
   });
+  const migratedRows = periodOrders.filter((o) => isImportedOrder(o) && o.status !== "cancelled");
+  const migrated = { count: migratedRows.length, amount: migratedRows.reduce((a, o) => a + o.total, 0) };
 
   // ---- 請求の状況 (請求日が期間内) ----
-  const periodInvoices = invoices.filter((i) => inRange(i.issueDate, filter));
+  const periodInvoices = invoices.filter((i) => inRange(i.issueDate, range));
   const invoiceStatus = ["issued", "partially_paid", "overdue", "paid"].map((k) => {
     const rows = periodInvoices.filter((i) => (k === "overdue" ? i.status === "overdue" || (OPEN_INVOICE.includes(i.status) && i.dueDate < today) : k === "issued" || k === "partially_paid" ? i.status === k && i.dueDate >= today : i.status === k));
     return { key: k, label: INVOICE_LABEL[k], count: rows.length, amount: rows.reduce((a, i) => a + i.total, 0), balance: rows.reduce((a, i) => a + (i.total - i.paidAmount), 0) };
@@ -332,40 +497,79 @@ export function managementReport(db: Database, user: User, filter: MgmtFilter, n
 
   // ---- 店舗別 ----
   const storeRows: StoreRow[] = stores.map((s) => {
-    const t = totalsFor(s.id);
-    const decided = quotes.filter((q) => q.storeId === s.id && inRange(q.createdAt, filter) && ["accepted", "rejected", "expired"].includes(q.status));
+    const t = totalsFor(s.id, range);
+    const prevSales = totalsFor(s.id, prevRange).sales;
+    const curSales = sameCmp ? t.sales : totalsFor(s.id, cmpRange).sales;
+    const decided = quotes.filter((q) => q.storeId === s.id && inRange(q.createdAt, range) && ["accepted", "rejected", "expired"].includes(q.status));
     const won = decided.filter((q) => q.status === "accepted").length;
-    return { ...t, storeId: s.id, storeName: s.name, winRate: decided.length ? won / decided.length : null, avgOrder: t.orderCount ? Math.round(t.orderAmount / t.orderCount) : 0 };
+    return { ...t, storeId: s.id, storeName: s.name, winRate: decided.length ? won / decided.length : null, avgOrder: t.orderCount ? Math.round(t.orderAmount / t.orderCount) : 0, prevSales, salesGrowth: prevSales > 0 ? (curSales - prevSales) / prevSales : null };
   });
 
-  // ---- 担当者別 ----
-  const people = staffOptions(db, user).filter((u) => (!staff || u.id === staff) && (!filter.storeId || u.storeId === filter.storeId || orders.some((o) => o.storeId === filter.storeId && (o.createdBy === u.id || o.workerIds.includes(u.id)))));
+  // ---- 担当者別 (担当 = 見積の担当者 / 移行データは担当者欄の 1 番目。施工完了は施工担当) ----
+  type Acc = Omit<StaffRow, "key" | "userId" | "name" | "role" | "hasAccount" | "active" | "storeId" | "storeName"> & { stores: Map<StoreId, number> };
+  const acc = new Map<string, Acc>();
+  const get = (key: string): Acc => {
+    let a = acc.get(key);
+    if (!a) {
+      a = { inquiries: 0, quotes: 0, orderCount: 0, orderAmount: 0, sales: 0, jobsCompleted: 0, expenses: 0, stores: new Map() };
+      acc.set(key, a);
+    }
+    return a;
+  };
+  const seenAt = (a: Acc, s: StoreId) => a.stores.set(s, (a.stores.get(s) ?? 0) + 1);
+  for (const o of orders) {
+    if (o.status === "cancelled") continue;
+    const st = staffOf(o);
+    const contracted = inRange(o.contractDate, range);
+    const sold = inRange(o.salesDate, range);
+    for (const k of st.sales) {
+      if (!contracted && !sold) continue;
+      const a = get(k);
+      if (contracted) {
+        a.orderCount++;
+        a.orderAmount += o.total;
+      }
+      if (sold) a.sales += o.total;
+      seenAt(a, o.storeId);
+    }
+    if (inRange(o.completedAt, range))
+      for (const k of st.workers) {
+        const a = get(k);
+        a.jobsCompleted++;
+        seenAt(a, o.storeId);
+      }
+  }
+  for (const i of inquiries) if (i.assignedUserId && inRange(i.receivedAt, range)) get(i.assignedUserId).inquiries++;
+  for (const q of quotes) {
+    const k = quoteStaff(q);
+    if (k && inRange(q.createdAt, range)) get(k).quotes++;
+  }
+  for (const e of expenses) if (inRange(e.date, range) && COUNTED_EXPENSE.includes(e.status)) get(e.submittedBy).expenses += e.amount;
   const storeName = new Map(db.stores.map((s) => [s.id, s.name]));
-  const staffRows: StaffRow[] = people
-    .map((u) => {
-      const created = orders.filter((o) => o.createdBy === u.id);
+  const staffRows: StaffRow[] = [...acc]
+    .filter(([key, a]) => key !== "system" && (!staff || key === staff) && a.inquiries + a.quotes + a.orderCount + a.jobsCompleted + a.expenses + a.sales > 0)
+    .map(([key, a]) => {
+      const u = idx.userOf(key);
+      const { stores: seen, ...metrics } = a;
+      const sid = u?.storeId ?? [...seen].sort((x, y) => y[1] - x[1])[0]?.[0];
       return {
-        userId: u.id,
-        name: u.name,
-        role: ROLE_LABEL[u.role],
-        storeId: u.storeId,
-        storeName: storeName.get(u.storeId) ?? u.storeId,
-        inquiries: inquiries.filter((i) => i.assignedUserId === u.id && inRange(i.receivedAt, filter)).length,
-        quotes: quotes.filter((q) => q.createdBy === u.id && inRange(q.createdAt, filter)).length,
-        orderCount: created.filter((o) => inRange(o.contractDate, filter) && o.status !== "cancelled").length,
-        orderAmount: created.filter((o) => inRange(o.contractDate, filter) && o.status !== "cancelled").reduce((a, o) => a + o.total, 0),
-        sales: created.filter((o) => inRange(o.salesDate, filter)).reduce((a, o) => a + o.total, 0),
-        jobsCompleted: orders.filter((o) => o.workerIds.includes(u.id) && inRange(o.completedAt, filter)).length,
-        expenses: expenses.filter((e) => e.submittedBy === u.id && inRange(e.date, filter) && COUNTED_EXPENSE.includes(e.status)).reduce((a, e) => a + e.amount, 0),
+        key,
+        userId: u?.id,
+        name: idx.label(key),
+        role: u ? ROLE_LABEL[u.role] : key.startsWith(NAME_KEY_PREFIX) ? "アカウントなし" : "退職・不明",
+        hasAccount: Boolean(u),
+        active: Boolean(u?.active),
+        storeId: sid,
+        storeName: sid ? (storeName.get(sid) ?? sid) : "-",
+        ...metrics,
       };
     })
-    .filter((r) => r.inquiries + r.quotes + r.orderCount + r.jobsCompleted + r.expenses + r.sales > 0)
-    .sort((a, b) => b.orderAmount - a.orderAmount || b.sales - a.sales);
+    .sort((a, b) => b.sales - a.sales || b.orderAmount - a.orderAmount || b.jobsCompleted - a.jobsCompleted || a.name.localeCompare(b.name, "ja"));
 
   // ---- 種別・入口・勘定科目 ----
   const cat = new Map<string, { amount: number; count: number }>();
   for (const o of orders) {
-    if (!inRange(o.salesDate, filter)) continue;
+    if (o.status === "cancelled" || !inRange(o.salesDate, range)) continue;
     const c = cat.get(o.category) ?? { amount: 0, count: 0 };
     c.amount += o.total;
     c.count++;
@@ -373,19 +577,55 @@ export function managementReport(db: Database, user: User, filter: MgmtFilter, n
   }
   const categories = [...cat.entries()].map(([key, v]) => ({ key, label: CATEGORY_LABEL[key as ServiceCategory] ?? key, ...v })).sort((a, b) => b.amount - a.amount);
   const ch = new Map<string, number>();
-  for (const i of inquiries) if (inRange(i.receivedAt, filter)) ch.set(i.channel, (ch.get(i.channel) ?? 0) + 1);
+  for (const i of inquiries) if (inRange(i.receivedAt, range)) ch.set(i.channel, (ch.get(i.channel) ?? 0) + 1);
   const channels = [...ch.entries()].map(([key, count]) => ({ key, label: CHANNEL_LABEL[key as Channel] ?? key, count })).sort((a, b) => b.count - a.count);
-  const acc = new Map<string, { amount: number; count: number }>();
+  const accounts = new Map<string, { amount: number; count: number }>();
   for (const e of expenses) {
-    if (!inRange(e.date, filter) || !COUNTED_EXPENSE.includes(e.status)) continue;
-    const a = acc.get(e.account) ?? { amount: 0, count: 0 };
+    if (!inRange(e.date, range) || !COUNTED_EXPENSE.includes(e.status)) continue;
+    const a = accounts.get(e.account) ?? { amount: 0, count: 0 };
     a.amount += e.amount;
     a.count++;
-    acc.set(e.account, a);
+    accounts.set(e.account, a);
   }
-  const expenseAccounts = [...acc.entries()].map(([account, v]) => ({ account, ...v })).sort((a, b) => b.amount - a.amount);
+  const expenseAccounts = [...accounts.entries()].map(([account, v]) => ({ account, ...v })).sort((a, b) => b.amount - a.amount);
 
-  return { filter: { ...filter, storeId: storeIds.length === 1 && filter.storeId ? filter.storeId : undefined }, stores, totals, months: monthKeys.map((k) => monthMap.get(k)!), pipeline, invoiceStatus, storeRows, staffRows, categories, channels, expenseAccounts };
+  // ---- お客様アンケート (KPI と同じ storeKpi。担当者の絞り込みは使わない) ----
+  const kpiDb = { ...db, orders: db.orders.filter((o) => inRange(orderDate(o), range)) };
+  const surveyRow = (sid: StoreId | undefined, name: string): SurveyRow => {
+    const k = storeKpi(kpiDb, range, sid);
+    return {
+      storeId: sid ?? "all",
+      storeName: name,
+      n: k.surveys,
+      replyRate: k.replyRate === null ? null : k.replyRate / 100,
+      scores: k.scores,
+      againRate: k.againAnswered ? k.againYes / k.againAnswered : null,
+    };
+  };
+  const surveys = stores.map((s) => surveyRow(s.id, s.name)).filter((x) => x.n > 0);
+  if (surveys.length > 1 && stores.length === db.stores.length) surveys.push(surveyRow(undefined, "全店舗"));
+
+  return {
+    filter: { ...filter, storeId: storeIds.length === 1 && filter.storeId ? filter.storeId : undefined },
+    stores,
+    totals,
+    previous,
+    months: monthKeys.map((k) => monthMap.get(k)!),
+    pipeline,
+    migrated,
+    invoiceStatus,
+    storeRows,
+    staffRows,
+    categories,
+    channels,
+    expenseAccounts,
+    surveys,
+  };
+}
+
+/** 前年同期との伸び (前年同期が 0 なら null) */
+export function growth(cur: number, prev: number): number | null {
+  return prev > 0 ? (cur - prev) / prev : null;
 }
 
 /* ================================================================== */
@@ -402,6 +642,7 @@ export const MGMT_CSV_SECTIONS = {
   categories: "種別別の売上",
   channels: "問い合わせの入口別",
   expenses: "経費の勘定科目別",
+  surveys: "お客様アンケート",
 } as const;
 
 export type MgmtCsvSection = keyof typeof MGMT_CSV_SECTIONS;
@@ -409,8 +650,10 @@ export type MgmtCsvSection = keyof typeof MGMT_CSV_SECTIONS;
 const TOTAL_COLUMNS: [keyof MgmtTotals, string][] = [
   ["sales", "売上 (税込)"],
   ["salesCount", "売上件数"],
+  ["importedSales", "うち移行データの売上"],
   ["orderCount", "受注件数"],
   ["orderAmount", "受注金額"],
+  ["funnelOrders", "受注件数 (システムで登録)"],
   ["inquiries", "問い合わせ"],
   ["quotes", "見積"],
   ["jobsCompleted", "施工完了"],
@@ -418,24 +661,34 @@ const TOTAL_COLUMNS: [keyof MgmtTotals, string][] = [
   ["received", "入金額"],
   ["receivables", "未入金残高 (今日時点)"],
   ["overdue", "うち期日超過"],
+  ["tatamiCost", "畳原価"],
+  ["purchases", "仕入"],
   ["expenses", "経費 (承認済・精算済)"],
   ["expensesPending", "経費 (承認待ち)"],
-  ["purchases", "仕入"],
-  ["gross", "簡易粗利 (売上−仕入−経費)"],
+  ["gross", "簡易粗利 (売上−畳原価−仕入−経費)"],
 ];
+
+/** 今日時点の値 (前年同期と比べない) */
+const POINT_IN_TIME = new Set<keyof MgmtTotals>(["receivables", "overdue"]);
+
+const percent1 = (v: number | null) => (v === null ? "" : Math.round(v * 1000) / 10);
+const score2 = (v: number | null) => (v === null ? "" : Math.round(v * 100) / 100);
 
 export function mgmtCsvRows(r: MgmtReport, section: MgmtCsvSection, periodLabel: string): (string | number)[][] {
   switch (section) {
     case "summary":
-      return [["項目", "値"], ["期間", periodLabel], ...TOTAL_COLUMNS.map(([k, label]) => [label, r.totals[k]])];
+      return [["項目", "値", "前年同期"], ["期間", periodLabel, r.previous.label], ...TOTAL_COLUMNS.map(([k, label]) => [label, r.totals[k], POINT_IN_TIME.has(k) ? "" : r.previous.totals[k]])];
     case "monthly":
-      return [["月", "売上", ...r.stores.map((s) => `売上 ${s.name}`), "受注金額", "入金額", "経費", "仕入", "簡易粗利"], ...r.months.map((m) => [fmtMonth(m.month), m.sales, ...r.stores.map((s) => m.byStore[s.id] ?? 0), m.orderAmount, m.received, m.expenses, m.purchases, m.sales - m.purchases - m.expenses])];
+      return [
+        ["月", "売上", ...r.stores.map((s) => `売上 ${s.name}`), "前年同月の売上", "受注金額", "入金額", "畳原価", "仕入", "経費", "簡易粗利"],
+        ...r.months.map((m) => [fmtMonth(m.month), m.sales, ...r.stores.map((s) => m.byStore[s.id] ?? 0), m.prevSales, m.orderAmount, m.received, m.tatamiCost, m.purchases, m.expenses, m.sales - m.tatamiCost - m.purchases - m.expenses]),
+      ];
     case "stores":
-      return [["店舗", ...TOTAL_COLUMNS.map(([, l]) => l), "成約率 (%)", "平均受注単価"], ...r.storeRows.map((s) => [s.storeName, ...TOTAL_COLUMNS.map(([k]) => s[k]), s.winRate === null ? "" : Math.round(s.winRate * 1000) / 10, s.avgOrder])];
+      return [["店舗", ...TOTAL_COLUMNS.map(([, l]) => l), "成約率 (%)", "平均受注単価", "前年同期の売上", "前年同期比 (%)"], ...r.storeRows.map((s) => [s.storeName, ...TOTAL_COLUMNS.map(([k]) => s[k]), percent1(s.winRate), s.avgOrder, s.prevSales, percent1(s.salesGrowth)])];
     case "staff":
-      return [["担当者", "役割", "所属", "問い合わせ (担当)", "見積", "受注件数", "受注金額", "売上 (受注担当)", "施工完了", "経費"], ...r.staffRows.map((s) => [s.name, s.role, s.storeName, s.inquiries, s.quotes, s.orderCount, s.orderAmount, s.sales, s.jobsCompleted, s.expenses])];
+      return [["担当者", "役割", "所属", "アカウント", "問い合わせ (担当)", "見積", "受注件数", "受注金額", "売上 (担当)", "施工完了", "経費"], ...r.staffRows.map((s) => [s.name, s.role, s.storeName, s.hasAccount ? (s.active ? "あり" : "あり (無効)") : "なし", s.inquiries, s.quotes, s.orderCount, s.orderAmount, s.sales, s.jobsCompleted, s.expenses])];
     case "pipeline":
-      return [["状態", "件数", "金額"], ...r.pipeline.map((p) => [p.label, p.count, p.amount])];
+      return [["状態", "件数", "金額"], ...r.pipeline.map((p) => [p.label, p.count, p.amount]), ["移行データ (販売管理ソフトの売上・入金済として移行)", r.migrated.count, r.migrated.amount]];
     case "invoices":
       return [["状態", "件数", "請求額", "未入金残高"], ...r.invoiceStatus.map((i) => [i.label, i.count, i.amount, i.balance])];
     case "categories":
@@ -444,5 +697,7 @@ export function mgmtCsvRows(r: MgmtReport, section: MgmtCsvSection, periodLabel:
       return [["入口", "件数"], ...r.channels.map((c) => [c.label, c.count])];
     case "expenses":
       return [["勘定科目", "件数", "金額"], ...r.expenseAccounts.map((e) => [e.account, e.count, e.amount])];
+    case "surveys":
+      return [["店舗", "回答数", "返信率 (%)", ...SCORE_QUESTIONS.map((q) => `${q.no} ${q.label}`), "次回も依頼したい (%)"], ...r.surveys.map((s) => [s.storeName, s.n, percent1(s.replyRate), ...SCORE_QUESTIONS.map((q) => score2(s.scores[q.key])), percent1(s.againRate)])];
   }
 }

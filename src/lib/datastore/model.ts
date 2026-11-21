@@ -548,9 +548,11 @@ export const VIEWS: ViewDef[] = [
   {
     name: "v_knowledge",
     label: "社内資料 (業務ルール・議事録・マニュアル・価格など。見られる範囲のものだけ)",
-    description: "資料 1 件 = 1 行。title・category・record_date (議事録の日付)・body (本文)・tags・updated_at。言葉で探すときは body like '%…%'",
+    description: "資料 1 件 = 1 行。title・category・record_date (議事録の日付)・body (本文)・tags・updated_at・owner_name (内容の担当者)・review_due (次に確かめる日)・reviewed_at (最後に確かめた日時)・is_stale (確認期限切れ = 1)。言葉で探すときは body like '%…%'",
     sql: `
-      select k.id knowledge_id, k.title, k.category, k.record_date, k.body, k.tags, k.updated_at
+      select k.id knowledge_id, k.title, k.category, k.record_date, k.body, k.tags, k.updated_at,
+        (select u.name from users u where u.id = k.owner_id) owner_name, k.review_due, k.reviewed_at,
+        case when k.review_due is not null and k.review_due < date('now', 'localtime') then 1 else 0 end is_stale
       from knowledge k where coalesce(k.active, 1) = 1`,
   },
   {
@@ -598,6 +600,8 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
     v("messages", `select * from main.messages where thread_id in (select id from main.threads where store_id is null or store_id = ${store} or created_by = ${me} or participants like ${sq(`%"${user.id}"%`)})`),
     // 社内資料: 見られる人の設定
     v("knowledge", `select * from main.knowledge where active = 1 and (visibility is null or visibility in ${knowledgeVis[user.role]})`),
+    // 文書の下書き (permissions.ts の canViewDocDraft と同じ: 所属店舗の文書と自分が作った文書)
+    v("doc_drafts", `select * from main.doc_drafts where store_id = ${store} or created_by = ${me}`),
     // 社員: 名前・ロール・所属だけ
     v("users", "select id, name, kana, role, store_id, title, active from main.users"),
     // FAX: 自店舗の送信・仕分け済みの受信、担当・登録したもの
@@ -644,8 +648,8 @@ export const METRICS: { name: string; definition: string }[] = [
   { name: "種別ごとの売上", definition: "sales_orders の amt_tatami (畳)・amt_fusuma (襖)・amt_shoji (障子)・amt_amido (網戸)・amt_curtain (カーテン)・amt_cloth (クロス)・amt_own (自社商品・小売)・amt_misc (諸経費・雑工事)・amt_discount (値引)。合計すると total" },
   { name: "商品別の売上・数量・平均単価", definition: "sales_items (明細のある受注だけ)。平均単価 = sum(amount) / sum(qty)。品名は表記ゆれがあるので product like '%きずな%' のように探す" },
   { name: "粗利", definition: "売上 − 記録された原価 (tatami_cost + purchase_cost)。襖・障子などの材料原価は記録がなく、粗利は実際より大きく出ることを必ず添える" },
-  { name: "簡易粗利 (経営ダッシュボード)", definition: "売上 − 仕入 (purchases の amount、請求日) − 経費 (expenses の承認済・精算済の amount)" },
-  { name: "担当者別の売上", definition: "v_staff_sales (order_staff と sales_orders) で sum(total) group by staff_name。1 件に複数の担当者がいるとそれぞれに全額を数える" },
+  { name: "簡易粗利 (経営ダッシュボード)", definition: "売上 − 畳原価 (sales_orders の tatami_cost、売上計上日) − 仕入 (purchases の amount、請求日) − 経費 (expenses の承認済・精算済の amount)" },
+  { name: "担当者別の売上", definition: "v_staff_sales (order_staff と sales_orders) で sum(total) group by staff_name。担当 = 見積の担当者 (移行データは販売管理ソフトの担当者欄の 1 番目。3 番目の伝票の入力者は数えない)。経営ダッシュボードの担当者別と同じ" },
   { name: "未入金・売掛", definition: "v_invoices の balance (total − paid_amount)。状態が 発行済・一部入金・期日超過 のもの。期日超過は is_overdue = 1。お客様ごとの未入金残高は v_customers.receivable (その人の請求の残高の合計。MAX ではなく合計)" },
   { name: "人・店舗・顧客ごとの合計", definition: "ごとの合計は sum() で数える (1 件の最大 max() と取り違えない)。件数は count(*)、平均は avg() か 合計÷件数" },
   { name: "成約率", definition: "受注になった見積 ÷ 結果が出た見積 (受注・失注・期限切れ)。v_quotes の status と order_number" },

@@ -110,18 +110,23 @@ export function workOf(e: Pick<ScheduleEvent, "title" | "memo">): Work {
 
 /* ---------------- 休業日 ---------------- */
 
-const closedCache: { n: number; set: Set<string>; max: string } = { n: -1, set: new Set(), max: "" };
+/**
+ * 休業日の索引は配列ごとに持つ。休日カレンダーの変更 (src/lib/holiday-calendar.ts)・他のインスタンスの変更の取り込み・
+ * 書き込みの失敗の巻き戻しは、どれも db.holidays を新しい配列にする。念のため件数が変わったときも作り直す
+ */
+const closedCache = new WeakMap<object, { n: number; set: Set<string>; max: string }>();
+const NO_HOLIDAYS: never[] = [];
 
 /** 休業日か (休日カレンダー。カレンダーの登録より先の日付は日曜を休みとみなす) */
 export function isClosedDay(db: Pick<Database, "holidays">, date: string): boolean {
-  const hs = db.holidays ?? [];
-  if (closedCache.n !== hs.length) {
-    closedCache.n = hs.length;
-    closedCache.set = new Set(hs.map((h) => h.date));
-    closedCache.max = hs.reduce((m, h) => (h.date > m ? h.date : m), "");
+  const hs = db.holidays ?? NO_HOLIDAYS;
+  let c = closedCache.get(hs);
+  if (!c || c.n !== hs.length) {
+    c = { n: hs.length, set: new Set(hs.map((h) => h.date)), max: hs.reduce((m, h) => (h.date > m ? h.date : m), "") };
+    closedCache.set(hs, c);
   }
-  if (closedCache.set.has(date)) return true;
-  return date > closedCache.max && dayOfWeek(date) === 0;
+  if (c.set.has(date)) return true;
+  return date > c.max && dayOfWeek(date) === 0;
 }
 
 /* ---------------- 過去の実績 (自動の上限・担当の経験) ---------------- */

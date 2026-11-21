@@ -12,6 +12,7 @@ import { Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, Pa
 import { HistoryCard, RecordStamp } from "@/components/features/History";
 import { ContactList } from "@/components/features/Contacts";
 import { SendDocumentCard } from "@/components/features/SendDocument";
+import { RecordDocDrafts } from "@/components/features/DocDrafts";
 
 /** PDF を作ってメールで送る (送信の応答を待つ) ため */
 export const maxDuration = 60;
@@ -186,6 +187,7 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
               </form>
             </Card>
           )}
+          <RecordDocDrafts db={db} user={user} type="invoice" id={inv.id} number={inv.number} />
           <HistoryCard db={db} user={user} targets={[{ entity: "invoice", id: inv.id }, { entity: "payment", id: inv.id }]} />
         </div>
       </div>

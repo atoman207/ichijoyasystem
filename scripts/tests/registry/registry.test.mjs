@@ -69,27 +69,46 @@ section("読み取り: 表・Word・PowerPoint・zip・文字");
 section("分類: 規則・個人情報の除外・全店の数字は本部以上・店舗の資料");
 {
   const c = (rel, kind = "spreadsheet") => C.classifyPath(rel, kind);
-  eq(c("08_事務/慶弔リスト.xlsx").action, "exclude", "慶弔リスト (ご家族の情報) は取り込まない");
-  eq(c("02_無題のフォルダ/武蔵ヶ丘病院健診申込書.xlsx").action, "exclude", "健康診断の申込は取り込まない");
-  eq(c("08_事務/有給管理表2026.7.xlsx").action, "exclude", "有給の管理表は取り込まない (有給・休日出勤の画面で取り込む)");
-  ok(c("04_平島/光子/経営審査関係/工事履歴書様式2号.xls").action !== "exclude", "工事履歴書は「履歴書」(個人) と区別する");
-  eq(c("03_売上・作業日報・材料/合志店　売上.xlsx").action, "structured", "売上台帳は取込済みのデータ (要約だけ)");
-  const manual = c("08_事務/社内総合マニュアル.xlsx");
+  eq(c("15_人事・労務/個人の情報（取り込まない）/慶弔リスト.xlsx").action, "exclude", "慶弔リスト (ご家族の情報) は取り込まない");
+  eq(c("15_人事・労務/個人の情報（取り込まない）/武蔵ヶ丘病院健診申込書.xlsx").action, "exclude", "健康診断の申込は取り込まない");
+  eq(c("15_人事・労務/個人の情報（取り込まない）/有給管理表2026.7.xlsx").action, "exclude", "有給の管理表は取り込まない (有給・休日出勤の画面で取り込む)");
+  ok(c("08_経営・計画/経営審査関係/工事履歴書様式2号.xls").action !== "exclude", "工事履歴書は「履歴書」(個人) と区別する");
+  eq(c("03_売上・実績/店舗別の売上台帳/合志店　売上.xlsx").action, "structured", "売上台帳は取込済みのデータ (要約だけ)");
+  const manual = c("01_社内ルール・マニュアル/社内総合マニュアル.xlsx");
   eq([manual.action, manual.visibility], ["knowledge", "all"], "社内総合マニュアルは社内資料 (全員)");
   eq(C.sheetPolicy(manual, "【営業】23：業者価格表").visibility, "hq", "マニュアルの業者価格表のシートは本部以上");
   eq(C.sheetPolicy(manual, "【共通】01：経営理念").category, "社内ルール", "シートごとの分類");
-  eq(c("07_販促/年間チラシ計画.xlsx").visibility, "hq", "全店の数字 (チラシ計画・個人の売上目標) は本部以上");
-  eq(c("08_事務/お客様アンケート集計表.xlsx").visibility, "hq", "アンケートの KPI (全店の数字) は本部以上");
-  eq(C.sheetPolicy(c("08_事務/お客様アンケート集計表.xlsx"), "クレーム手直し処理オペレーション").visibility, "manager", "クレーム手直しの処理の手順は店長以上");
-  eq(c("07_販促/議事録.xlsx").visibility, "manager", "議事録は店長以上");
-  const koshiFlyer = c("04_平島/2025年度オリコミ/合志/R7.11月6.7日ポス合志店スタッフ40485枚【按分】.xlsx");
+  eq(c("05_販促・広告/計画・分析/年間チラシ計画.xlsx").visibility, "hq", "全店の数字 (チラシ計画・個人の売上目標) は本部以上");
+  eq(c("02_お客様対応・アンケート/アンケート/お客様アンケート集計表.xlsx").visibility, "hq", "アンケートの KPI (全店の数字) は本部以上");
+  eq(C.sheetPolicy(c("02_お客様対応・アンケート/アンケート/お客様アンケート集計表.xlsx"), "クレーム手直し処理オペレーション").visibility, "manager", "クレーム手直しの処理の手順は店長以上");
+  eq(c("07_議事録・会議/議事録.xlsx").visibility, "manager", "議事録は店長以上");
+  const koshiFlyer = c("05_販促・広告/折込・ポスティング/2025年度/合志/R7.11月6.7日ポス合志店スタッフ40485枚【按分】.xlsx");
   eq([koshiFlyer.visibility, koshiFlyer.storeId, koshiFlyer.recordDate], ["manager", "koshi", "2025-11-06"], "店舗の折込の資料: 店長以上・店舗・日付 (令和)");
-  eq(c("04_平島/折込関連/ハイコムポスティング(株)　通常エリア表【2024年11月4日更新】.xlsx").visibility, "hq", "店舗が決まらない折込の資料は本部以上");
+  eq(c("05_販促・広告/折込・ポスティング/ハイコムポスティング(株)　通常エリア表【2024年11月4日更新】.xlsx").visibility, "hq", "店舗が決まらない折込の資料は本部以上");
   eq(C.sheetPolicy(koshiFlyer, "エリアマスタ").keep, false, "様式の部品 (マスタ) のシートは取り込まない");
   eq(C.dateFromName("議事録 2026.8.18"), "2026-08-18", "日付: 西暦");
   eq(C.dateFromName("2026.10.xlsx"), "2026-10-01", "日付: 年月だけ → 1 日");
   eq(C.dateFromName("見積"), undefined, "日付なし");
-  eq(c("02_無題のフォルダ/IMG_0001.HEIC", "image").action, "ledger", "写真は台帳だけ");
+  eq(c("20_写真/その他/IMG_0001.HEIC", "image").action, "ledger", "写真は台帳だけ");
+  // source/ の分野のフォルダー
+  const f = (rel, kind = "spreadsheet") => { const x = c(rel, kind); return [x.ruleId, x.action, x.category, x.visibility]; };
+  eq(f(`${"15_人事・労務/個人の情報（取り込まない）"}/何かの名簿.xlsx`).slice(1), ["exclude", "人事・労務", "admin"], "個人の情報のフォルダーに置いた資料は、名前が何でも取り込まない");
+  eq(f("15_人事・労務/個人の情報（取り込まない）/従業員写真/a.JPG", "image").slice(1, 2), ["exclude"], "社員の写真も取り込まない");
+  eq(f("12_商品・価格/新しい資料.xlsx"), ["folder:商品・価格", "materials", "商品・価格", "hq"], "あとから置いた資料は分野のフォルダーの扱い");
+  eq(f("01_社内ルール・マニュアル/旅費規程/出張旅費規程.docx", "document").slice(1), ["materials", "社内ルール", "manager"], "社内ルールのフォルダー");
+  eq(f("05_販促・広告/チラシ/表面 (1).png", "image").slice(1), ["ledger", "販促・広告", "manager"], "資料のフォルダーの写真は台帳だけ (分類・見られる人はそのフォルダー)");
+  eq(f("07_議事録・会議/会議資料　平島.xlsx")[0], "meeting", "会議資料は議事録のフォルダーにあっても会議資料 (議事録の規則は名前だけを見る)");
+  eq(f("07_議事録・会議/議事録.xlsx")[0], "minutes", "議事録");
+  eq(f("04_予定表・作業日報/休日カレンダー.xlsx").slice(1), ["structured", "予定・作業日報", "manager"], "休日カレンダーは取込済み (会社の休業日)");
+  eq(f("04_予定表・作業日報/予定表/過去/2022.6.xlsx")[0], "schedule-sheet", "予定表のフォルダー (過去分も)");
+  eq(f("03_売上・実績/販売管理ソフトの売上明細/2026.11.13 11時時点.CSV", "spreadsheet").slice(0, 2), ["sales-csv", "structured"], "売上明細の CSV は取込済み");
+  eq(f("30_書類の見本/合志店.pdf", "pdf")[0], "top-pdf", "書類の見本");
+  eq(f("99_その他/winmail.dat", "other").slice(1), ["ledger", "その他", "hq"], "その他");
+  eq(C.classifyPath("05_販促・広告/折込・ポスティング/2025年度/合志/x.xlsx", "spreadsheet").storeId, "koshi", "店舗のフォルダー (合志) は分野のフォルダーの下でも店舗");
+  ok(C.SOURCE_FOLDERS.every((x) => !C.storeFromPath(x.folder) && C.FOLDER_LABEL[x.folder] === x.label), "分野のフォルダー名に店舗の名前を入れない (店舗の判定を変えない)・表示名");
+  ok(C.SOURCE_FOLDERS.every((x) => C.classifyPath(`${x.folder}/まだ規則のない資料.xlsx`, "spreadsheet").ruleId !== "generic"), "どの分野のフォルダーに置いても規則に当たる");
+  const readme = fs.existsSync(path.join(root, "source/README.md")) ? fs.readFileSync(path.join(root, "source/README.md"), "utf8") : "";
+  ok(readme && C.SOURCE_FOLDERS.every((x) => readme.includes(`\`${x.folder}/\``)), "source/README.md (コミットする説明) にすべての分野のフォルダー");
   const blank = C.piiSignals("生年月日\n年　月　日\n口座番号");
   eq(blank.markers, [], "空の様式 (生年月日・口座番号の欄だけ) は個人情報としない");
   eq(C.piiSignals("生年月日 昭和50年3月1日").markers, ["生年月日"], "生年月日の値があれば個人情報");
@@ -99,7 +118,7 @@ section("分類: 規則・個人情報の除外・全店の数字は本部以上
   const red = C.redactSecrets("利用者ID：abc123 パス：別紙でログイン\nPW: 1234567\nhttps://zoom.us/j/9123?pwd=eXyZ.1\nミーティング ID: 612 345 6789\nID等は管理者のみで管理\n認定支援機関ID番号 | 1 | 0\nID:Pabc123で地図だし");
   ok(!/abc123|1234567|eXyZ|612 345|Pabc123/.test(red.text) && red.count === 5, "ID・パスワード・暗証番号・URL の pwd の値を伏せる");
   ok(red.text.includes("パス：別紙でログイン") && red.text.includes("ID等は管理者のみで管理") && red.text.includes("ID番号 | 1 | 0") && red.text.includes("で地図だし"), "値のない書き方・日本語の説明は伏せない");
-  const sec = B.buildDoc({ id: "d_sec", origin: "client", folder: "08_事務", folderLabel: "事務", path: "社内総合マニュアル.xlsx", name: "社内総合マニュアル.xlsx", ext: "xlsx", kind: "spreadsheet", sections: [{ title: "【事務】11：通常業務", text: "elTAX にログイン 利用者ID：abc123 PW：xyz789 → 納税 → 個人住民税" }, { title: "【共通】01：経営理念", text: "畳をとおして心と暮らしを豊かに" }] }, manual);
+  const sec = B.buildDoc({ id: "d_sec", origin: "client", folder: "01_社内ルール・マニュアル", folderLabel: "社内ルール・マニュアル", path: "社内総合マニュアル.xlsx", name: "社内総合マニュアル.xlsx", ext: "xlsx", kind: "spreadsheet", sections: [{ title: "【事務】11：通常業務", text: "elTAX にログイン 利用者ID：abc123 PW：xyz789 → 納税 → 個人住民税" }, { title: "【共通】01：経営理念", text: "畳をとおして心と暮らしを豊かに" }] }, manual);
   const secChunk = sec.chunks.find((x) => x.section.includes("通常業務"));
   ok(!secChunk.body.includes("abc123") && !secChunk.body.includes("xyz789") && secChunk.visibility === "hq", "資料庫には伏せた文字だけを入れ、その節は本部以上にする");
   eq(sec.chunks.find((x) => x.section.includes("経営理念")).visibility, "all", "伏せ字のない節はそのまま");
@@ -110,8 +129,8 @@ section("分類: 規則・個人情報の除外・全店の数字は本部以上
 section("処理: 節・会議ごとの分割・取込済みは要約だけ・同じ内容");
 {
   const minutes = B.buildDoc(
-    { id: "d_min", origin: "client", folder: "07_販促", folderLabel: "販促", path: "議事録.xlsx", name: "議事録.xlsx", ext: "xlsx", kind: "spreadsheet", sections: [{ title: "議事録", text: "| ※書き方の注意: 見出しに日付を書く (はじめに)\n10月DM 2026.8.18\n| ①10月のDM内容決定 | 表替え13200→9900\n店長会議 2026.9.2\n| 年末の段取り" }] },
-    C.classifyPath("07_販促/議事録.xlsx", "spreadsheet"),
+    { id: "d_min", origin: "client", folder: "07_議事録・会議", folderLabel: "議事録・会議", path: "議事録.xlsx", name: "議事録.xlsx", ext: "xlsx", kind: "spreadsheet", sections: [{ title: "議事録", text: "| ※書き方の注意: 見出しに日付を書く (はじめに)\n10月DM 2026.8.18\n| ①10月のDM内容決定 | 表替え13200→9900\n店長会議 2026.9.2\n| 年末の段取り" }] },
+    C.classifyPath("07_議事録・会議/議事録.xlsx", "spreadsheet"),
   );
   const titles = minutes.chunks.map((x) => x.section);
   ok(titles.includes("10月DM 2026.8.18") && titles.includes("店長会議 2026.9.2"), "議事録は会議ごとの節");
@@ -119,15 +138,15 @@ section("処理: 節・会議ごとの分割・取込済みは要約だけ・同
   ok(minutes.chunks.every((x) => x.knowledge && x.visibility === "manager"), "議事録の節は社内資料に登録 (店長以上)");
 
   const sales = B.buildDoc(
-    { id: "d_sales", origin: "client", folder: "03_売上・作業日報・材料", folderLabel: "売上", path: "合志店　売上.xlsx", name: "合志店　売上.xlsx", ext: "xlsx", kind: "spreadsheet", sections: [{ title: "2024.1", text: "山田 太郎 | 090-1111-2222 | 表替え" }], sheetRows: { "2024.1": 312 } },
-    C.classifyPath("03_売上・作業日報・材料/合志店　売上.xlsx", "spreadsheet"),
+    { id: "d_sales", origin: "client", folder: "03_売上・実績", folderLabel: "売上・実績", path: "店舗別の売上台帳/合志店　売上.xlsx", name: "合志店　売上.xlsx", ext: "xlsx", kind: "spreadsheet", sections: [{ title: "2024.1", text: "山田 太郎 | 090-1111-2222 | 表替え" }], sheetRows: { "2024.1": 312 } },
+    C.classifyPath("03_売上・実績/店舗別の売上台帳/合志店　売上.xlsx", "spreadsheet"),
   );
   eq(sales.chunks.length, 1, "取込済みのデータは要約の節だけ");
   ok(sales.chunks[0].body.includes("2024.1 (312 行)") && !sales.chunks[0].body.includes("山田"), "要約はシート名と行数 (お客様の名前・電話は入れない)");
 
-  const ex = B.buildDoc({ id: "d_ex", origin: "client", folder: "08_事務", folderLabel: "事務", path: "慶弔リスト.xlsx", name: "慶弔リスト.xlsx", ext: "xlsx", kind: "spreadsheet", sections: [{ title: "シート1", text: "" }] }, C.classifyPath("08_事務/慶弔リスト.xlsx", "spreadsheet"));
+  const ex = B.buildDoc({ id: "d_ex", origin: "client", folder: "15_人事・労務", folderLabel: "人事・労務", path: "個人の情報（取り込まない）/慶弔リスト.xlsx", name: "慶弔リスト.xlsx", ext: "xlsx", kind: "spreadsheet", sections: [{ title: "シート1", text: "" }] }, C.classifyPath("15_人事・労務/個人の情報（取り込まない）/慶弔リスト.xlsx", "spreadsheet"));
   eq([ex.doc.status, ex.chunks.length], ["skipped", 0], "取り込まない資料は中身なし");
-  const dup = B.buildDoc({ id: "d_dup", origin: "client", folder: "07_販促", folderLabel: "販促", path: "x.xlsx", name: "x.xlsx", ext: "xlsx", kind: "spreadsheet", sections: null, duplicateOf: { id: "d_min", path: "07_販促/議事録.xlsx" } }, C.classifyPath("07_販促/議事録.xlsx", "spreadsheet"));
+  const dup = B.buildDoc({ id: "d_dup", origin: "client", folder: "07_議事録・会議", folderLabel: "議事録・会議", path: "x.xlsx", name: "x.xlsx", ext: "xlsx", kind: "spreadsheet", sections: null, duplicateOf: { id: "d_min", path: "07_議事録・会議/議事録.xlsx" } }, C.classifyPath("07_議事録・会議/議事録.xlsx", "spreadsheet"));
   eq([dup.doc.duplicateOf, dup.chunks.length], ["d_min", 0], "同じ内容のファイルは先の資料を指し、中身は持たない");
   const long = B.splitText(Array.from({ length: 400 }, (_, i) => `${i}行目 ${"あ".repeat(30)}`).join("\n"));
   ok(long.length > 1 && long.every((x) => x.length <= B.CHUNK_CHARS), "長い節は検索の単位の大きさに分ける");
@@ -142,13 +161,13 @@ const mdb = M.openMaterials();
     const { doc, chunks } = B.buildDoc({ id, origin: "client", folder: rel.split("/")[0], folderLabel: rel.split("/")[0], path: rel.split("/").slice(1).join("/"), name: rel.split("/").pop(), ext: "xlsx", kind: "spreadsheet", sha1: id, sections }, cls);
     M.upsertDoc(mdb, doc, chunks);
   };
-  put("d_manual", "08_事務/社内総合マニュアル.xlsx", [
+  put("d_manual", "01_社内ルール・マニュアル/社内総合マニュアル.xlsx", [
     { title: "【現場】31：畳", text: "畳の表替えの手順\n1. 古い畳表をはがす (縁も外す)\n2. 新しい畳表を張る (框から順に)\n3. 縁を縫い付ける" },
     { title: "【営業】23：業者価格表", text: "業者価格 表替え 8000円 / 新調 15000円 / 裏返し 5000円 (税抜・1 枚あたり)" },
   ]);
-  put("d_koshi", "04_平島/2025年度オリコミ/合志/R7.11月6.7日ポス合志店スタッフ40485枚【按分】.xlsx", [{ title: "入力", text: "合志店 ポスティング 40485枚 スタッフチラシ" }]);
-  put("d_chuo", "04_平島/2025年度オリコミ/中央/（店舗別）中央R7.7月3.4　38804　メニュー.xlsx", [{ title: "入力", text: "中央店 ポスティング 38804枚 メニューチラシ" }]);
-  put("d_minutes", "07_販促/議事録.xlsx", [{ title: "議事録", text: "10月DM 2026.8.18\n| 表替え13200→9900 申込期限10月20日" }]);
+  put("d_koshi", "05_販促・広告/折込・ポスティング/2025年度/合志/R7.11月6.7日ポス合志店スタッフ40485枚【按分】.xlsx", [{ title: "入力", text: "合志店 ポスティング 40485枚 スタッフチラシ" }]);
+  put("d_chuo", "05_販促・広告/折込・ポスティング/2025年度/中央/（店舗別）中央R7.7月3.4　38804　メニュー.xlsx", [{ title: "入力", text: "中央店 ポスティング 38804枚 メニューチラシ" }]);
+  put("d_minutes", "07_議事録・会議/議事録.xlsx", [{ title: "議事録", text: "10月DM 2026.8.18\n| 表替え13200→9900 申込期限10月20日" }]);
 
   const vis = (u) => PERM.knowledgeVisibilities(u);
   eq(vis(koshiStaff), ["all"], "店舗スタッフの見られる人: 全員の資料だけ");
@@ -164,7 +183,7 @@ const mdb = M.openMaterials();
 
   M.setKnowledgeIds(mdb, "d_minutes", ["kn_x"]);
   M.setOverride(mdb, "d_minutes", { visibility: "hq", note: "全店の数字あり" }, admin.id);
-  put("d_minutes", "07_販促/議事録.xlsx", [{ title: "議事録", text: "10月DM 2026.8.18\n| 表替え13200→9900 申込期限10月20日 (読み直し)" }]);
+  put("d_minutes", "07_議事録・会議/議事録.xlsx", [{ title: "議事録", text: "10月DM 2026.8.18\n| 表替え13200→9900 申込期限10月20日 (読み直し)" }]);
   const again = M.getDoc(mdb, "d_minutes");
   eq([again.override?.visibility, again.override?.note, again.knowledgeIds], ["hq", "全店の数字あり", ["kn_x"]], "読み直しても人が変えた扱い・社内資料の ID は残る");
   ok(!M.searchMaterials(mdb, "申込期限", { visibilities: vis(koshiMgr) }).length, "人が変えた見られる人 (本部以上) で検索の範囲も変わる");
@@ -301,42 +320,113 @@ section("社内資料の抜粋: 長い資料は質問の言葉のあたりを渡
 }
 
 /* ================================================================== */
-section("スクリプト: クライアント資料のフォルダーを読み取り、社内資料をそろえる (サンプルデータ)");
+section("スクリプト: クライアント資料のフォルダー (source/) を読み取り、社内資料をそろえる (サンプルデータ)");
 {
-  const dir = path.join(work, "client", "client-materials");
-  fs.mkdirSync(path.join(dir, "08_事務"), { recursive: true });
-  fs.mkdirSync(path.join(dir, "07_販促"), { recursive: true });
-  fs.writeFileSync(path.join(dir, "08_事務", "社内総合マニュアル.xlsx"), xlsxBuffer([["【共通】01：経営理念", [["理念"], ["畳をとおして「心」と「暮らし」を豊かに"], ["ビジョン: 日本一安心して頼める畳屋になる"]]], ["【営業】23：業者価格表", [["品名", "業者価格", "備考"], ["表替え", 8000, "税抜・1 枚"], ["新調", 15000, "税抜・1 枚"]]]]));
-  fs.writeFileSync(path.join(dir, "08_事務", "慶弔リスト.xlsx"), xlsxBuffer([["シート1", [["年月日", "名前"], ["2024.1.15", "テスト 太郎"]]]]));
-  fs.writeFileSync(path.join(dir, "07_販促", "議事録.xlsx"), xlsxBuffer([["議事録", [["10月DM 2026.8.18"], ["", "①10月のDM内容決定", "表替え13200→9900 (申込期限 10月20日)"]]]]));
-  fs.writeFileSync(path.join(dir, "07_販促", "議事録 のコピー.xlsx"), fs.readFileSync(path.join(dir, "07_販促", "議事録.xlsx")));
-  fs.writeFileSync(path.join(dir, "08_事務", "_download-log.md"), "# ログ");
+  const SRC = await imp("lib/registry/source.ts");
+  const dir = path.join(work, "client", "source");
+  const P15 = "15_人事・労務/個人の情報（取り込まない）";
+  for (const d of ["01_社内ルール・マニュアル", P15, "07_議事録・会議", "_index/download-logs/08_事務"]) fs.mkdirSync(path.join(dir, d), { recursive: true });
+  fs.writeFileSync(path.join(dir, "01_社内ルール・マニュアル", "社内総合マニュアル.xlsx"), xlsxBuffer([["【共通】01：経営理念", [["理念"], ["畳をとおして「心」と「暮らし」を豊かに"], ["ビジョン: 日本一安心して頼める畳屋になる"]]], ["【営業】23：業者価格表", [["品名", "業者価格", "備考"], ["表替え", 8000, "税抜・1 枚"], ["新調", 15000, "税抜・1 枚"]]]]));
+  fs.writeFileSync(path.join(dir, P15, "慶弔リスト.xlsx"), xlsxBuffer([["シート1", [["年月日", "名前"], ["2024.1.15", "テスト 太郎"]]]]));
+  fs.writeFileSync(path.join(dir, "07_議事録・会議", "議事録.xlsx"), xlsxBuffer([["議事録", [["10月DM 2026.8.18"], ["", "①10月のDM内容決定", "表替え13200→9900 (申込期限 10月20日)"]]]]));
+  fs.writeFileSync(path.join(dir, "07_議事録・会議", "議事録 のコピー.xlsx"), fs.readFileSync(path.join(dir, "07_議事録・会議", "議事録.xlsx")));
+  fs.writeFileSync(path.join(dir, "_index/download-logs/08_事務", "_download-log.md"), "# ログ");
+  fs.writeFileSync(path.join(dir, "README.md"), "# source");
+  fs.writeFileSync(path.join(dir, "07_議事録・会議", "Thumbs.db"), "x");
+  // 整理したときの索引 (整理する前の場所 from を持つ。ID は整理する前と同じ計算)
+  const crypto = await import("node:crypto");
+  const sha = (f) => crypto.createHash("sha1").update(fs.readFileSync(path.join(dir, f))).digest("hex");
+  const legacy = (from) => `mf_${crypto.createHash("sha1").update(from).digest("hex").slice(0, 12)}`;
+  const entries = [
+    ["01_社内ルール・マニュアル/社内総合マニュアル.xlsx", "08_事務/社内総合マニュアル.xlsx"],
+    [`${P15}/慶弔リスト.xlsx`, "08_事務/慶弔リスト.xlsx"],
+    ["07_議事録・会議/議事録.xlsx", "07_販促/議事録.xlsx"],
+    ["07_議事録・会議/議事録 のコピー.xlsx", "07_販促/議事録 のコピー.xlsx"],
+  ].map(([p, from]) => ({ path: p, from, role: "material", id: legacy(from), sha1: sha(p) }));
+  SRC.writeManifest(dir, { version: 1, organizedAt: "2026-11-21T00:00:00.000Z", from: "other/client-materials", entries: [...entries, { path: "_index/download-logs/08_事務/_download-log.md", from: "08_事務/_download-log.md", role: "download-log" }] });
+  ok(fs.readFileSync(path.join(dir, "_index/manifest.csv"), "utf8").includes("other/client-materials/08_事務/社内総合マニュアル.xlsx"), "索引の CSV に整理する前の場所");
+
   const mfile = path.join(work, "script-materials.sqlite");
   const report = path.join(work, "report");
   const env = { ...process.env, ICHIJOYA_MATERIALS_DB_PATH: mfile };
-  const out = execFileSync("node", [path.join(root, "scripts/registry/scan-materials.mjs"), "--dir", dir, "--db", mfile, "--report", report, "--no-parent"], { cwd: work, env, encoding: "utf8" });
-  ok(/読み直し 4・変わらず 0/.test(out), "4 件を読む (ダウンロードの記録は読まない)");
+  const scan = () => execFileSync("node", [path.join(root, "scripts/registry/scan-materials.mjs"), "--dir", dir, "--db", mfile, "--report", report], { cwd: work, env, encoding: "utf8" });
+  const out = scan();
+  ok(/読み直し 4・変わらず 0/.test(out), "4 件を読む (索引・取得の記録・README・OS の管理ファイルは読まない)");
   const md = fs.readFileSync(path.join(report, "scan-report.md"), "utf8");
   ok(md.includes("慶弔リスト.xlsx — 慶弔") && md.includes("社内総合マニュアル.xlsx — マニュアル"), "報告: 社内資料に登録する資料と取り込まない資料");
-  const out2 = execFileSync("node", [path.join(root, "scripts/registry/scan-materials.mjs"), "--dir", dir, "--db", mfile, "--report", report, "--no-parent"], { cwd: work, env, encoding: "utf8" });
-  ok(/読み直し 0・変わらず 4/.test(out2), "2 回目は変わったファイルだけ読む");
-  const sdb = new (process.getBuiltinModule("node:sqlite").DatabaseSync)(mfile, { readOnly: true });
+  const out2 = scan();
+  ok(/読み直し 0・変わらず 4/.test(out2) && /あとから追加 0・場所が変わった 0/.test(out2), "2 回目は変わったファイルだけ読む");
+  let sdb = new (process.getBuiltinModule("node:sqlite").DatabaseSync)(mfile, { readOnly: true });
+  const manualRow = sdb.prepare("select id, folder, folder_label, path, orig_path from docs where name = '社内総合マニュアル.xlsx'").get();
+  eq([manualRow.id, manualRow.folder, manualRow.folder_label, manualRow.path, manualRow.orig_path], [legacy("08_事務/社内総合マニュアル.xlsx"), "01_社内ルール・マニュアル", "社内ルール・マニュアル", "社内総合マニュアル.xlsx", "08_事務/社内総合マニュアル.xlsx"], "ID は整理する前と同じ・場所は source/ の分野のフォルダー・整理する前の場所も持つ");
   const dupRows = sdb.prepare("select duplicate_of from docs where path in ('議事録.xlsx', '議事録 のコピー.xlsx')").all();
   ok(dupRows.length === 2 && dupRows.filter((r) => r.duplicate_of).length === 1, "同じ内容のコピーは 1 件だけ中身を持ち、もう 1 件は先の資料を指す");
   ok(!sdb.prepare("select count(*) n from chunks c join docs d on d.id = c.doc_id where d.name = '慶弔リスト.xlsx'").get().n, "取り込まない資料の中身は資料庫に入らない");
   sdb.close();
   const dataFile = "registry-script-db.json";
   const penv = { ...env, DATA_FILE_NAME: dataFile };
-  const dry = execFileSync("node", [path.join(root, "scripts/registry/promote-knowledge.mjs"), "--json", "--db", mfile], { cwd: work, env: penv, encoding: "utf8" });
+  const promote = (...a) => execFileSync("node", [path.join(root, "scripts/registry/promote-knowledge.mjs"), "--json", "--db", mfile, ...a], { cwd: work, env: penv, encoding: "utf8" });
+  const dry = promote();
   ok(/追加 3・更新 0・削除 0/.test(dry) && dry.includes("確認だけ") === false && dry.includes("--apply"), "確認だけ (書き込まない): 追加 3");
-  const applied = execFileSync("node", [path.join(root, "scripts/registry/promote-knowledge.mjs"), "--json", "--db", mfile, "--apply"], { cwd: work, env: penv, encoding: "utf8" });
+  const applied = promote("--apply");
   ok(/書き込みました \(サンプルデータ\): 追加 3/.test(applied), "サンプルデータに書き込む");
   const saved = JSON.parse(fs.readFileSync(path.join(work, "data", dataFile), "utf8"));
   const kn = saved.knowledge.filter((k) => k.sourceRef?.startsWith("material:"));
   eq(kn.map((k) => k.visibility).sort(), ["all", "hq", "manager"], "社内資料の見られる人: 理念 = 全員・業者価格表 = 本部以上・議事録 = 店長以上");
+  ok(kn.some((k) => k.body.includes("01_社内ルール・マニュアル/社内総合マニュアル.xlsx")), "社内資料の出典は source/ の場所");
   ok(saved.auditLogs.some((l) => l.entity === "knowledge" && l.summary.includes("クライアント資料から社内資料を登録")), "変更履歴に残す");
-  const again = execFileSync("node", [path.join(root, "scripts/registry/promote-knowledge.mjs"), "--json", "--db", mfile], { cwd: work, env: penv, encoding: "utf8" });
-  ok(/追加 0・更新 0・削除 0/.test(again), "もう一度そろえても変わらない");
+  ok(/追加 0・更新 0・削除 0/.test(promote()), "もう一度そろえても変わらない");
+
+  // 人がファイルを動かす・新しい資料を置く → ID を引き継ぐ・新しい資料は分野のフォルダーの扱い・索引も新しくなる
+  fs.mkdirSync(path.join(dir, "01_社内ルール・マニュアル", "マニュアル"), { recursive: true });
+  fs.renameSync(path.join(dir, "01_社内ルール・マニュアル", "社内総合マニュアル.xlsx"), path.join(dir, "01_社内ルール・マニュアル", "マニュアル", "社内総合マニュアル.xlsx"));
+  fs.mkdirSync(path.join(dir, "12_商品・価格"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "12_商品・価格", "新商品の案内.xlsx"), xlsxBuffer([["案内", [["新商品", "和紙畳 (テスト)"]]]]));
+  const out3 = scan();
+  ok(/読み直し 2・変わらず 3/.test(out3) && /あとから追加 1・場所が変わった 1/.test(out3), "動かした資料と新しい資料だけ読む");
+  const man = SRC.readManifest(dir);
+  const movedEntry = man.entries.find((e) => e.path === "01_社内ルール・マニュアル/マニュアル/社内総合マニュアル.xlsx");
+  eq([movedEntry?.id, movedEntry?.from], [legacy("08_事務/社内総合マニュアル.xlsx"), "08_事務/社内総合マニュアル.xlsx"], "索引: 動かした資料は ID と整理する前の場所を引き継ぐ");
+  const addedEntry = man.entries.find((e) => e.path === "12_商品・価格/新商品の案内.xlsx");
+  ok(addedEntry?.id?.startsWith("ms_") && addedEntry.addedAt && !addedEntry.from, "索引: あとから置いた資料 (ms_ の ID)");
+  ok(man.entries.some((e) => e.role === "download-log"), "索引: 取得の記録の行は残す");
+  sdb = new (process.getBuiltinModule("node:sqlite").DatabaseSync)(mfile, { readOnly: true });
+  eq(sdb.prepare("select count(*) n from docs").get().n, 5, "資料庫: 動かした資料は同じ行 (増えない)");
+  const addedRow = sdb.prepare("select folder, category, visibility, rule_id from docs where id = ?").get(addedEntry.id);
+  eq([addedRow.folder, addedRow.category, addedRow.visibility, addedRow.rule_id], ["12_商品・価格", "商品・価格", "hq", "folder:商品・価格"], "資料庫: 新しい資料は分野のフォルダーの扱い");
+  sdb.close();
+  ok(/追加 0・更新 2・削除 0/.test(promote()), "動かしても同じ社内資料を更新する (出典の場所だけ。追加・削除にならない)");
+
+  // 整理する前の並びを前提にした取込のための再現
+  const view = SRC.legacyView(dir);
+  ok(fs.realpathSync(path.join(view, "08_事務/社内総合マニュアル.xlsx")) === fs.realpathSync(path.join(dir, "01_社内ルール・マニュアル/マニュアル/社内総合マニュアル.xlsx")) && fs.existsSync(path.join(view, "08_事務/_download-log.md")), "整理する前の並びを一時フォルダーに再現できる (取得の記録も)");
+  fs.rmSync(view, { recursive: true, force: true });
+  eq(SRC.findSourceFiles(dir, /(^|\/)慶弔リスト\.xlsx$/).map((f) => path.relative(dir, f)), [`${P15}/慶弔リスト.xlsx`], "名前で source/ の資料を探す");
+  eq(SRC.locateByOrigin(dir, "07_販促/議事録.xlsx"), path.join(dir, "07_議事録・会議", "議事録.xlsx"), "整理する前の場所から、いまの場所");
+}
+
+/* ================================================================== */
+section("source/ (実際のクライアント資料。あれば): 索引とファイルが合っている・どのファイルも規則に当たる");
+{
+  const SRC = await imp("lib/registry/source.ts");
+  const real = SRC.sourceDir(root);
+  const man = fs.existsSync(real) ? SRC.readManifest(real) : null;
+  if (man) {
+    const files = SRC.listSourceFiles(real);
+    const inIndex = new Set(man.entries.filter((e) => e.role === "material").map((e) => e.path.normalize("NFC")));
+    const notIndexed = files.filter((f) => !inIndex.has(f.rel.normalize("NFC")));
+    const missing = [...inIndex].filter((p) => !fs.existsSync(path.join(real, ...p.split("/"))));
+    ok(!missing.length, `索引の資料はすべてある (${inIndex.size} 件${missing.length ? `。ない: ${missing.slice(0, 3).join("、")}` : ""})`);
+    ok(true, `索引にまだない資料 ${notIndexed.length} 件 (次の読み取りで索引に入る)`);
+    const ids = man.entries.filter((e) => e.id).map((e) => e.id);
+    eq(new Set(ids).size, ids.length, "索引の ID は重ならない");
+    const generic = files.filter((f) => C.classifyPath(f.rel, E.kindOfExt((/\.([^./]+)$/.exec(f.rel)?.[1] ?? "").toLowerCase())).ruleId === "generic");
+    ok(!generic.length, `どのファイルも規則か分野のフォルダーに当たる${generic.length ? ` (当たらない: ${generic.slice(0, 3).map((f) => f.rel).join("、")})` : ""}`);
+    const top = new Set(files.map((f) => f.rel.split("/")[0]));
+    ok([...top].every((t) => C.SOURCE_FOLDERS.some((x) => x.folder === t)), `資料は分野のフォルダーにだけある (${[...top].filter((t) => !C.SOURCE_FOLDERS.some((x) => x.folder === t)).join("、") || "ほかなし"})`);
+    const personal = files.filter((f) => f.rel.startsWith("15_人事・労務/個人の情報"));
+    ok(personal.every((f) => C.classifyPath(f.rel, "spreadsheet").action === "exclude"), `個人の情報のフォルダー (${personal.length} 件) はすべて取り込まない`);
+  } else ok(true, "source/ がないため省略");
 }
 
 M.closeMaterials();
