@@ -106,7 +106,8 @@ export async function logout() {
     });
   }
   await clearSessionCookie();
-  redirect("/login");
+  // ログアウトしたらトップページ (公開ホーム。ログインなしの / と同じ) へ
+  redirect("/home");
 }
 
 /** 自分のパスワードを変更する (現在のパスワードの確認が必要) */
