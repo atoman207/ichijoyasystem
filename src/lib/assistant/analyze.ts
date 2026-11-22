@@ -775,5 +775,24 @@ export function analysisText(r: AnalysisResult, maxRows = 40): string {
   const body = r.rows.slice(0, maxRows).map((row) => `| ${r.columns.map((c) => fmt(c, row[c.key])).join(" | ")} |`).join("\n");
   const total = Object.keys(r.total).length ? `\n| ${r.columns.map((c) => fmt(c, r.total[c.key] ?? "")).join(" | ")} |` : "";
   const more = r.rows.length > maxRows || r.omitted ? `\n(ほか ${r.rows.length - Math.min(maxRows, r.rows.length) + r.omitted} 行)` : "";
-  return [`【${r.title}】期間 ${r.period.label}${r.compareLabel ? ` / 比較: ${r.compareLabel}` : ""}`, head, body + total + more, r.notes.length ? `注記:\n${r.notes.map((n) => `- ${n}`).join("\n")}` : ""].filter(Boolean).join("\n");
+  return [`【${r.title}】期間 ${r.period.label}${r.compareLabel ? ` / 比較: ${r.compareLabel}` : ""}`, compareSummary(r, fmt), head, body + total + more, r.notes.length ? `注記:\n${r.notes.map((n) => `- ${n}`).join("\n")}` : ""].filter(Boolean).join("\n");
+}
+
+/**
+ * 比較の要点 (全体の 1 行): 今の期間・比べる期間・増減・増減率を文で書く。
+ * 表と注記の割合 (原価の記録率など) から別の % を拾って「増減率」として答えた回答があったため、答えに使う値を先に示す
+ */
+function compareSummary(r: AnalysisResult, fmt: (c: AnalysisColumn, v: Cell) => string): string {
+  const prevCol = r.columns.find((c) => c.key.endsWith("_prev"));
+  if (!prevCol || !r.compareLabel) return "";
+  const key = prevCol.key.slice(0, -"_prev".length);
+  const cur = r.columns.find((c) => c.key === key);
+  const diff = r.columns.find((c) => c.key === `${key}_diff`);
+  const ratio = r.columns.find((c) => c.key === `${key}_ratio`);
+  // 軸があるときは合計の行、軸がないときは 1 行目 (= 全体)
+  const row = Object.keys(r.total).length ? r.total : r.rows[0];
+  if (!cur || !row || typeof row[key] !== "number") return "";
+  const g = ratio ? row[ratio.key] : null;
+  const dir = typeof g === "number" ? (g > 0 ? "増えた" : g < 0 ? "減った" : "変わらない") : "";
+  return `比較の要点 (全体・${cur.label}): ${r.period.label} ${fmt(cur, row[key])} / ${r.compareLabel} ${fmt(prevCol, row[prevCol.key])}${diff ? ` / 増減 ${fmt(diff, row[diff.key])}` : ""}${ratio ? ` / ${ratio.label} ${fmt(ratio, row[ratio.key])}` : ""}${dir ? ` (${dir})` : ""}。「何%増減したか」はこの${ratio?.label ?? "増減"}で答える (注記・ほかの列の % と取り違えない)`;
 }
