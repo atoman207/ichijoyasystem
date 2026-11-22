@@ -17,6 +17,7 @@
 #   sudo ichijoya-testweek end                … いますぐ本番に戻し、テスト用のデータベースを削除する
 #   sudo ichijoya-testweek status             … いまの状態
 #   sudo ichijoya-testweek refresh-app        … テスト用のサーバーを本番の版にそろえる (deploy.sh が自動で実行)
+#   sudo ichijoya-testweek reset-data         … テスト用のデータベースを、いまの本番の写しで作り直す (練習のデータを消す。控えは残す)
 #   ログ: /var/log/ichijoya/testweek.log
 set -euo pipefail
 
@@ -257,6 +258,27 @@ cmd_end() {
   log "試験期間を終えました: 画面・データは本番のデータベース (試験期間の前と同じ内容) です"
 }
 
+# 期間中のデータベースを、いまの本番のデータの写しで作り直す (練習で入れたデータを消す。アプリの版はそのまま)。
+# 例: 11/23 の会議の練習のあと、11/24 から本番さながらに使い、そのデータを 12/1 に本番に引き継ぐとき
+cmd_reset_data() {
+  active || die "試験期間ではありません"
+  [[ -f "$LIB" ]] || die "$LIB がありません (sudo bash deploy/testweek.sh schedule を先に実行してください)"
+  log "テスト用のデータベースを、いまの本番のデータの写しで作り直します (期間中に入れたデータは控えを残して消えます)"
+  local keep="$EXPORT_DIR/testweek-before-reset-$(date +%Y%m%d-%H%M).tar.gz"
+  mkdir -p "$EXPORT_DIR"
+  if [[ -f "$DATA/testweek-db.json" ]]; then
+    ( umask 077 && tar -czf "$keep" -C "$DATA" testweek-db.json ) && log "  作り直す前のデータベースの控え: $keep"
+  fi
+  systemctl stop "$UNIT"
+  as_app python3 "$LIB" export-inbound "$EXPORT_DIR/testweek-inbound-before-reset-$(date +%Y%m%d-%H%M).csv" 2>/dev/null || true
+  rm -rf "$DATA"
+  as_app python3 "$LIB" build "$W/app"
+  date '+%Y-%m-%d %H:%M:%S' > "$W/started-at"
+  systemctl start "$UNIT"
+  wait_test || die "テスト用のサーバーが起動しません (journalctl -u $UNIT)"
+  log "作り直しました (この時点からのデータが、引き継ぐときの対象です)"
+}
+
 cmd_status() {
   if active; then echo "モード: 試験期間 (https://$DOMAIN → テスト用のサーバー 127.0.0.1:$PORT・データベースだけがテスト用)"; else echo "モード: 本番"; fi
   echo "本番 (3000):          $(health 3000 | head -c 200)"
@@ -298,6 +320,7 @@ case "${1:-}" in
   end) cmd_end ;;
   status) cmd_status ;;
   refresh-app) cmd_refresh_app ;;
+  reset-data) cmd_reset_data ;;
   schedule) cmd_schedule ;;
-  *) echo "使い方: sudo bash $0 {schedule|start|end|status|refresh-app}"; exit 1 ;;
+  *) echo "使い方: sudo bash $0 {schedule|start|end|status|refresh-app|reset-data}"; exit 1 ;;
 esac
