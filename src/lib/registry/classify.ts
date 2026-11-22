@@ -230,7 +230,16 @@ export const RULES: RegistryRule[] = [
   { id: "flyer-plan", test: /年間チラシ計画/, action: "knowledge", category: "販促・広告", visibility: "hq", note: "年間のチラシ計画・町別の反応率・個人の売上目標 (全店の数字のため本部以上)", sheets: { knowledge: /チラシ計画|反応率|個人件数/ } },
   { id: "promo-plan", test: /^05_販促・広告\/(?:[^/]+\/)?販促\.xlsx$/, action: "knowledge", category: "経営・計画", visibility: "hq", note: "販促計画・売上アップの行動計画 (全店・店舗ごとの目標のため本部以上)" },
   { id: "sns", test: /SNS管理表/, action: "knowledge", category: "販促・広告", visibility: "all", note: "SNS の運用 (キャッチコピー・ネタ帳・お客様の悩み・畳の効能)" },
-  { id: "survey-kpi", test: /お客様アンケート集計表/, action: "knowledge", category: "お客様対応", visibility: "hq", note: "アンケートの KPI (全店の数字のため本部以上)・クレーム手直しの処理 (店長以上)", sheets: { knowledge: /KPI|オペレーション|口コミ/, visibility: [[/オペレーション/, "manager"]] } },
+  // お客様アンケート集計表: タブごとの CSV (Google スプレッドシートのダウンロード。新しい版) はタブで扱いを分ける。
+  // クレーム手直し内容・Google口コミ集計・集計表は KPI → スプレッドシートの取込 (src/lib/survey-workbook/) でシステムのデータに取込済み
+  { id: "survey-claims", test: /お客様アンケート集計表.*クレーム手直し内容[^/]*\.csv$/, action: "structured", category: "お客様対応", visibility: "hq", importedTo: "quality_issues (クレーム・手直し)", note: "クレーム・手直しの一覧 (全店の記録・現場名を含む)。KPI → スプレッドシートの取込 で取込済み" },
+  { id: "survey-reviews", test: /お客様アンケート集計表.*口コミ集計[^/]*\.csv$/, action: "structured", category: "お客様対応", visibility: "hq", importedTo: "google_reviews (Google 口コミ)", note: "Google 口コミの記録 (担当者・ポイント・支払日)。KPI → スプレッドシートの取込 で取込済み" },
+  { id: "survey-history", test: /お客様アンケート集計表.*(集計|比較)\s*\.csv$/, action: "structured", category: "お客様対応", visibility: "hq", importedTo: "survey_history (アンケートの過去の集計)", note: "H26〜R4 のアンケートの集計表 (全社・店舗ごとの数字)。KPI → アンケート の「年度ごとの比較」に取込済み" },
+  { id: "survey-comments", test: /お客様アンケート集計表.*コメント\s*\.csv$/, action: "materials", category: "お客様対応", visibility: "hq", note: "お客様の声の分類と件数 (年度・店舗ごと。全店の数字のため本部以上)" },
+  { id: "survey-operation", test: /お客様アンケート集計表.*オペレーション\s*\.csv$/, action: "knowledge", category: "お客様対応", visibility: "manager", note: "クレーム・手直しの定義・判断の事例・事務と店舗の処理の手順" },
+  { id: "survey-kpi-tab", test: /お客様アンケート集計表.*KPI\s*\.csv$/, action: "knowledge", category: "お客様対応", visibility: "hq", note: "KPI・インセンティブの評価方法と年度ごとの集計 (全店・社員ごとの数字のため本部以上)" },
+  // .xlsx (全タブ) は資料庫だけ (社内資料・取込はタブごとの CSV の新しい版を使う。同じ内容を社内資料に二重に入れない)
+  { id: "survey-kpi", test: /お客様アンケート集計表/, action: "materials", category: "お客様対応", visibility: "hq", note: "アンケートの KPI・クレーム手直し・口コミ・集計表 (全店の数字のため本部以上。クレーム手直しの処理は店長以上)。社内資料・システムの取込はタブごとの CSV (新しい版) から", sheets: { visibility: [[/オペレーション/, "manager"]] } },
   { id: "media", test: /情報媒体/, action: "knowledge", category: "販促・広告", visibility: "hq", note: "情報媒体 (当社を知ったきっかけ) の月別集計 (全社の数字のため本部以上) と聞き方 (全員)", sheets: { visibility: [[/媒体の聞き方/, "all"]], skip: /フォームの回答/ } },
   { id: "kaizen", test: /事務改善シート/, action: "knowledge", category: "マニュアル", visibility: "all", note: "事務改善シート (起きたこと・原因・改善策)。事務 (/office) でも取り込めます" },
   { id: "heri", test: /ヘリ.*ラインナップ|縁在庫表/, action: "knowledge", category: "商品・価格", visibility: "all", note: "縁 (ヘリ) のラインナップ・在庫。縁在庫 (/heri) でも取り込めます" },

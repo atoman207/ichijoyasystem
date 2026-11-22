@@ -131,6 +131,7 @@ else
 fi
 # 既存の AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) からの受信の共有鍵 (AI システムの完成後、送信先に設定する)
 [[ -n "$(env_value AI_INTAKE_SECRET)" ]] || set_env AI_INTAKE_SECRET "$(openssl rand -hex 24)"
+[[ -n "$(env_value PHONE_INTAKE_SECRET)" ]] || set_env PHONE_INTAKE_SECRET "$(openssl rand -hex 24)"
 # 既存の .env.local などから、空の値を写す
 if [[ -n "$ENV_FROM" ]]; then
   while IFS= read -r line || [[ -n "$line" ]]; do

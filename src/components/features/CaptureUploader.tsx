@@ -17,13 +17,24 @@ const SAMPLES: Record<DocumentKind, string[]> = {
   receipt: ["receipt_eneos_給油.jpg", "receipt_ETC_高速代.png", "receipt_ホームセンター.jpg"],
   contract: ["契約書_畳表替え.pdf"],
   survey_postcard: ["アンケートはがき_No13338.jpg", "アンケートはがき_T698.jpg"],
+  reception: ["受付メモ_来店.jpg"],
   other: ["書類.jpg"],
 };
 
-function SubmitButton({ hasFile, pending }: { hasFile: boolean; pending: boolean }) {
+/** 画面ごとの文言 (金額の計算・書き写しの確認で使う) */
+export interface UploaderLabels {
+  submit?: string;
+  pending?: string;
+  sample?: string;
+  drop?: string;
+  dropNote?: string;
+  note?: string;
+}
+
+function SubmitButton({ hasFile, pending, labels }: { hasFile: boolean; pending: boolean; labels: UploaderLabels }) {
   return (
-    <button type="submit" disabled={pending} className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-accent text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-60">
-      {pending ? "AI が読み取り中…" : hasFile ? "アップロードして読み取る" : "サンプル画像で読み取りを試す"}
+    <button type="submit" disabled={pending} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-60">
+      {pending ? (labels.pending ?? "AI が読み取り中…") : hasFile ? (labels.submit ?? "アップロードして読み取る") : (labels.sample ?? "サンプル画像で読み取りを試す")}
     </button>
   );
 }
@@ -35,6 +46,10 @@ export function CaptureUploader({
   defaultStoreId,
   canChooseStore,
   aiEnabled,
+  fixedKind = false,
+  hideStore = false,
+  hidden,
+  labels = {},
 }: {
   action: (formData: FormData) => Promise<void>;
   defaultKind: DocumentKind;
@@ -42,6 +57,13 @@ export function CaptureUploader({
   defaultStoreId: StoreId;
   canChooseStore: boolean;
   aiEnabled: boolean;
+  /** 書類の種類を選ばせない (defaultKind で送る) */
+  fixedKind?: boolean;
+  /** 店舗を選ばせない (書類の店舗を使う画面) */
+  hideStore?: boolean;
+  /** 一緒に送る値 (mode・書類の ID など) */
+  hidden?: Record<string, string>;
+  labels?: UploaderLabels;
 }) {
   const [kind, setKind] = useState<DocumentKind>(defaultKind);
   const [preview, setPreview] = useState<string | null>(null);
@@ -89,6 +111,8 @@ export function CaptureUploader({
 
   return (
     <form action={action} onSubmit={onSubmit} className="space-y-4">
+      {Object.entries(hidden ?? {}).map(([k, v]) => <input key={k} type="hidden" name={k} value={v} />)}
+      {fixedKind ? <input type="hidden" name="kind" value={kind} /> : (
       <label className="block">
         <span className="label">書類の種類</span>
         <select
@@ -101,11 +125,14 @@ export function CaptureUploader({
           }}
           className="field"
         >
-          {(Object.keys(DOCUMENT_KIND_LABEL) as DocumentKind[]).map((k) => (
+          {/* 受付メモは問い合わせの「受付を登録」で取り込む */}
+          {(Object.keys(DOCUMENT_KIND_LABEL) as DocumentKind[]).filter((k) => k !== "reception").map((k) => (
             <option key={k} value={k}>{DOCUMENT_KIND_LABEL[k]}</option>
           ))}
         </select>
       </label>
+      )}
+      {!hideStore && (
       <label className="block">
         <span className="label">店舗</span>
         <select name="storeId" defaultValue={defaultStoreId} disabled={!canChooseStore} className="field">
@@ -114,6 +141,7 @@ export function CaptureUploader({
           ))}
         </select>
       </label>
+      )}
 
       <div
         className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-line-strong px-4 py-8 text-center transition hover:border-accent hover:bg-accent-soft/40"
@@ -137,8 +165,8 @@ export function CaptureUploader({
         ) : (
           <>
             <div className="flex gap-3 text-ink-3"><Camera className="h-8 w-8" /><Upload className="h-8 w-8" /></div>
-            <p className="mt-3 text-sm font-medium text-ink">タップして撮影 / 画像・PDF を選択</p>
-            <p className="mt-1 text-xs text-ink-3">スマートフォン・タブレットのカメラで撮影した写真をそのまま取り込めます (写真は自動で縮小。PDF は 4MB まで)</p>
+            <p className="mt-3 text-sm font-medium text-ink">{labels.drop ?? "タップして撮影 / 画像・PDF を選択"}</p>
+            <p className="mt-1 text-xs text-ink-3">{labels.dropNote ?? "スマートフォン・タブレットのカメラで撮影した写真をそのまま取り込めます (写真は自動で縮小。PDF は 4MB まで)"}</p>
           </>
         )}
         {fileName && <p className="mt-2 text-xs text-ink-2">{fileName}</p>}
@@ -156,11 +184,11 @@ export function CaptureUploader({
       )}
 
       {error && <p role="alert" className="rounded-lg bg-critical-soft px-3 py-2 text-xs text-critical-ink">{error}</p>}
-      <SubmitButton hasFile={Boolean(fileName)} pending={pending} />
+      <SubmitButton hasFile={Boolean(fileName)} pending={pending} labels={labels} />
       <p className="text-[11px] leading-relaxed text-ink-3">
-        {aiEnabled
+        {labels.note ?? (aiEnabled
           ? "AI が画像・PDF を読み取り、書類の種類ごとの項目 (日付・取引先・品名・数量・金額など) に整理します。結果は登録前に確認・修正できます。"
-          : "AI の API キーが未設定のため、サンプルの読取結果が表示されます。キーを設定すると、撮影した画像・PDF を AI が読み取り、同じ画面に結果が表示されます。"}
+          : "AI の API キーが未設定のため、サンプルの読取結果が表示されます。キーを設定すると、撮影した画像・PDF を AI が読み取り、同じ画面に結果が表示されます。")}
       </p>
     </form>
   );

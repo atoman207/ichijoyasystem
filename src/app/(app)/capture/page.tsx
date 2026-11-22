@@ -1,4 +1,6 @@
 import Link from "@/components/ui/Link";
+import { redirect } from "next/navigation";
+import { receptionHref } from "@/lib/reception";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
@@ -18,6 +20,7 @@ import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { accuracyStats } from "@/lib/ocr-accuracy";
 import { customerHasPhone } from "@/lib/customer-contacts";
 import { Badge, Card, CardHeader, Flash, LinkButton, Note, PageHeader, Pager, StatusBadge, StoreTag, paginate } from "@/components/ui";
+import { Calculator } from "lucide-react";
 
 /** AI の読み取り (最大 50 秒) を待つため、Vercel の処理時間の上限を 60 秒にする */
 export const maxDuration = 60;
@@ -56,7 +59,9 @@ export default async function CapturePage({ searchParams }: { searchParams: Prom
   const db = getDb();
   const ai = aiStatus();
   const allStores = canSeeAllStores(user);
-  const docs = scopeByStore(user, db.documents).sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+  // 受付メモ (問い合わせの受付) は受付の画面で扱う
+  if (sp.doc && db.documents.some((d) => d.id === sp.doc && d.kind === "reception")) redirect(receptionHref(sp.doc));
+  const docs = scopeByStore(user, db.documents).filter((d) => d.kind !== "reception").sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
   const selected = docs.find((d) => d.id === sp.doc) ?? (sp.doc ? undefined : docs.find((d) => d.status === "extracted" || d.status === "failed"));
   const kind = (sp.kind && DOCUMENT_KIND_LABEL[sp.kind as DocumentKind] ? sp.kind : "handwritten_quote") as DocumentKind;
   const paged = paginate(docs, sp.page, 50);
@@ -64,6 +69,7 @@ export default async function CapturePage({ searchParams }: { searchParams: Prom
   const ex = (selected?.extracted ?? {}) as Record<string, unknown>;
   const warnings = Array.isArray(ex._warnings) ? (ex._warnings as string[]) : [];
   const edited = ex._edited as { by?: string; at?: string } | undefined;
+  const calcCheck = ex._calcCheck as { checked?: number; issues?: string[] } | undefined;
   const providerText = selected ? `${PROVIDER_LABEL[String(ex._provider)] ?? "読取"}${ex._model ? ` (${ex._model})` : ""}` : "";
   const editable = Boolean(selected && (selected.status === "extracted" || selected.status === "failed" || selected.status === "uploaded"));
   const original = selected ? attachmentsOf(db, "document", selected.id)[0] : undefined;
@@ -130,6 +136,7 @@ export default async function CapturePage({ searchParams }: { searchParams: Prom
         title="書類取込 (紙 → データ)"
         description="手書き見積・図面・施工資料・請求書・レシートを撮影して読み取り、確認・修正してから登録します"
         badge={<Badge tone={ai.enabled ? "good" : "neutral"}>{ai.enabled ? `AI 読取: ${ai.label}` : "AI 読取: サンプルモード"}</Badge>}
+        actions={<LinkButton href="/capture/calc" variant="secondary"><Calculator className="h-4 w-4" /> 見積の金額の計算 (金額を書く前に撮影)</LinkButton>}
       />
       <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-5">
         <Card className="@4xl:col-span-2">
@@ -150,6 +157,8 @@ export default async function CapturePage({ searchParams }: { searchParams: Prom
                   AI で読み取れませんでした: {String(ex._error ?? "原因不明のエラー")} — 下の欄に手入力して登録するか、「もう一度読み取る」を押してください。
                 </p>
               )}
+              {calcCheck && !calcCheck.issues?.length && <Note tone="accent">書き写しの確認: {calcCheck.checked} 行の金額と合計が、すべてシステムの計算と一致しています。</Note>}
+              {ex._mode === "calc" && <Note tone="accent">「金額を書く前に撮影」した見積書です。金額・合計はシステムの計算です。 <Link href={`/capture/calc?doc=${selected!.id}`} className="font-medium underline">計算の画面を開く</Link></Note>}
               {warnings.length > 0 && selected.status !== "failed" && <Note tone="warn">{warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}</Note>}
               {ex._provider === "mock" && <p className="text-[11px] text-ink-3">AI の API キーが未設定のため、サンプルの読取結果を表示しています。</p>}
 
@@ -244,8 +253,8 @@ export default async function CapturePage({ searchParams }: { searchParams: Prom
                 return (
                   <tr key={d.id} className={`border-t border-line hover:bg-subtle/70 ${selected?.id === d.id ? "bg-accent-soft/40" : ""}`}>
                     <td className="px-5 py-2 text-xs tnum">{fmtDateTime(d.uploadedAt)}</td>
-                    <td className="px-3 py-2"><Link href={`/capture?doc=${d.id}`} className="font-medium text-ink hover:text-accent">{d.fileName}</Link></td>
-                    <td className="px-3 py-2 text-xs text-ink-2">{DOCUMENT_KIND_LABEL[d.kind]}</td>
+                    <td className="px-3 py-2"><Link href={d.extracted?._mode === "calc" && d.status === "extracted" ? `/capture/calc?doc=${d.id}` : `/capture?doc=${d.id}`} className="font-medium text-ink hover:text-accent">{d.fileName}</Link></td>
+                    <td className="px-3 py-2 text-xs text-ink-2">{DOCUMENT_KIND_LABEL[d.kind]}{d.extracted?._mode === "calc" ? " (金額の計算)" : d.extracted?._calc ? " (計算 → 書き写し済み)" : ""}</td>
                     <td className="px-3 py-2"><StoreTag store={db.stores.find((s) => s.id === d.storeId)} short /></td>
                     <td className="px-3 py-2 text-xs text-ink-2">{userName(d.uploadedBy)}</td>
                     <td className="px-3 py-2 text-right text-xs tnum">{d.status !== "failed" && d.confidence ? `${Math.round(d.confidence * 100)}%` : "-"}</td>

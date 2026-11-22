@@ -217,6 +217,17 @@ export const CAPTURE_LAYOUT: Record<DocumentKind, KindLayout> = {
     tables: [],
     bottom: [{ key: "comment", label: "⑧ ご指摘・お褒めの言葉", type: "textarea", wide: true }],
   },
+  // 受付メモは受付の画面 (/inquiries/reception) で確かめる。書類取込の画面からは開かない
+  reception: {
+    top: [
+      { key: "customerName", label: "お名前", type: "text" },
+      { key: "phone", label: "電話番号", type: "text" },
+      { key: "address", label: "住所", type: "text", wide: true },
+      { key: "summary", label: "用件", type: "text", wide: true },
+    ],
+    tables: [],
+    bottom: [{ key: "detail", label: "内容", type: "textarea", wide: true }],
+  },
   other: {
     top: [
       { key: "title", label: "件名", type: "text", wide: true },
@@ -239,6 +250,7 @@ export const REGISTER_TARGETS: Record<DocumentKind, RegisterTarget[]> = {
   receipt: ["expense"],
   contract: ["quote"],
   survey_postcard: ["survey"],
+  reception: [],
   other: [],
 };
 

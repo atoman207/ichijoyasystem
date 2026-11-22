@@ -54,7 +54,7 @@ export default async function IncentivesPage({ searchParams }: { searchParams: P
     <div>
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader title={`KPI · 年間インセンティブ (${fy}年度)`} description={`集計期間 ${period.from.replace(/-/g, "/")}〜${period.to.replace(/-/g, "/")} · 12 月末に現金で支給 · ${done ? "期間終了 (確定値)" : "期間中のため現時点の見込み"}`} />
-      <KpiTabs current="/kpi/incentives" sp={sp} />
+      <KpiTabs current="/kpi/incentives" sp={sp} user={user} />
       <PeriodSelect action="/kpi/incentives" value={`fy:${fy}`} startMonth={settings.fiscalStartMonth} today={today} />
 
       <Card padded={false}>

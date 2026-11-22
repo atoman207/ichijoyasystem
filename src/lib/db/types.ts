@@ -88,6 +88,8 @@ export type Channel =
   | "line"
   | "chatwork"
   | "visit"
+  /** 担当者・店舗の携帯電話に直接かかってきた電話 */
+  | "mobile"
   | "mail"
   | "event"
   | "referral"
@@ -974,6 +976,8 @@ export type DocumentKind =
   | "receipt"
   | "contract"
   | "survey_postcard"
+  /** 受付 (問い合わせの手書きメモの写真・話して入力・通話の文字起こし。src/lib/reception.ts。画面は /inquiries/reception) */
+  | "reception"
   | "other";
 
 /** failed = AI の読取に失敗 (手入力で登録するか、読み取り直す) */
@@ -1092,8 +1096,15 @@ export type QualityKind = "rework" | "claim" | "claim_rework";
 export interface QualityIssue {
   id: string;
   number: string;
-  orderId: string;
+  /** 案件 (受注)。スプレッドシートから取り込んだ記録・LINE の報告から登録した記録は、案件が決まるまで空 (現場名 siteName で分かる) */
+  orderId?: string;
   customerId?: string;
+  /** 現場名 (案件にひも付く前の記録。例: （滑石）坂西邸) */
+  siteName?: string;
+  /** 発生のきっかけ (点検 DM・点検電話・アンケート・電話・LINE・現場 など) */
+  origin?: string;
+  /** 取り込んだ元 (sheet:claims:… = スプレッドシート「お客様アンケート集計表」の行。画面で登録した記録は空) */
+  sourceRef?: string;
   /** 集計する店舗 (登録時の案件の担当店舗) */
   storeId: StoreId;
   kind: QualityKind;
@@ -1141,9 +1152,35 @@ export interface GoogleReview {
   orderId?: string;
   customerId?: string;
   note?: string;
+  /** 取り込んだ元 (sheet:reviews:… = スプレッドシート「お客様アンケート集計表」の Google口コミ集計 の行。画面で登録した口コミは空) */
+  sourceRef?: string;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * アンケートの過去の集計 (スプレッドシート「お客様アンケート集計表」の H26〜R4 の集計表)。
+ * はがき 1 枚ごとの回答がない年度の、店舗 × 設問 × 回答 の件数 (期間の合計)。システムの回答 (surveys) と年度ごとに比べる
+ */
+export interface SurveyHistoryRow {
+  id: string;
+  /** 年度の表示 (シートの見出し。H26・R2 など) */
+  fiscalLabel: string;
+  /** 集計の始まりの年 (西暦。H26 = 2014、R2 = 2020) */
+  startYear: number;
+  /** 集計した期間 (シートの列の見出し。例: 2020年7月〜2021年6月) */
+  period: string;
+  /** 店舗 (店舗別の表。全社の表は空) */
+  storeId?: StoreId;
+  /** 設問 (回答数・電話応対・営業担当者・職人の対応・工事の仕上り・重視したこと・情報媒体・次回) */
+  question: string;
+  /** 回答 (大変満足・チラシ など。回答数の行は空) */
+  answer: string;
+  count: number;
+  /** 取り込んだ元 (sheet:history:<シート>:<店舗>:<設問>:<回答>) */
+  sourceRef: string;
+  importedAt: string;
 }
 
 /** 資料台帳 (Google ドライブで共有された業務資料 1 ファイル) */
@@ -1528,6 +1565,8 @@ export interface Database {
   surveys: SurveyResponse[];
   qualityIssues: QualityIssue[];
   reviews: GoogleReview[];
+  /** アンケートの過去の集計 (H26〜R4。後から追加) */
+  surveyHistory: SurveyHistoryRow[];
   sourceFiles: SourceFile[];
   photoAlbums: PhotoAlbum[];
   settings: AppSetting[];

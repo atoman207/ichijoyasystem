@@ -6,6 +6,7 @@ import { normalizeIntake, recordAiIntake } from "@/lib/ai-intake";
 import { SYSTEM_USER } from "@/lib/notify/inbound";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
+import { storeInquiryNotices } from "@/lib/notify/store-line";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +48,8 @@ export async function POST(req: Request) {
     // 依頼の文はシステムが書いたもの (依頼者が店長でも、店長の名前で知らせない)
     if (t) await sendAndRecord(taskNotices(db, t, SYSTEM_USER, "request", r.inquiry.summary), SYSTEM_USER).catch((err) => console.warn("[ai-intake] notify failed:", (err as Error).message));
   }
+  // 店舗の LINE グループ (店舗別・問い合わせを知らせる) にも送る
+  if (r.created) await sendAndRecord(storeInquiryNotices(getDb(), r.inquiry), SYSTEM_USER).catch((err) => console.warn("[ai-intake] store LINE notice failed:", (err as Error).message));
   // 再送 (同じ受付) のときは、最初の受付で作った引き継ぎを返す
   const db = getDb();
   const thread = r.thread ?? (r.duplicate ? db.threads.find((t) => t.kind === "request" && t.relatedType === "inquiry" && t.relatedId === r.inquiry.id) : undefined);

@@ -46,7 +46,7 @@ export default async function VoicePage({ searchParams }: { searchParams: Promis
     <div>
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader title="KPI · お客様の声 (⑧ 自由記述)" description="はがきのご指摘・お褒めの言葉を分類・分析し、強みとさらに磨く点を把握します" />
-      <KpiTabs current="/kpi/voice" sp={sp} />
+      <KpiTabs current="/kpi/voice" sp={sp} user={user} />
       <PeriodSelect
         action="/kpi/voice"
         value={rp.value}

@@ -368,6 +368,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             // 最近の受付 (接続できているかの確認)
             const recentIntakes = db.inquiries.filter((i) => i.sourceRef?.startsWith("ai:")).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt)).slice(0, 5);
             return (
+              <>
               <Card className="@2xl:col-span-2">
                 <CardHeader title="既存の AI システムからの受付 (AI テキスト相談・AI 音声相談・AI 電話受付)" description="各 AI システムの「受付が終わったときの送信 (Webhook)」を下の URL に設定すると、受付ごとに問い合わせを登録し、会話の記録をやりとり履歴に残して、担当者に引き継ぎます。同じ受付 ID は 1 件だけ登録します" />
                 <ul className="mb-3 space-y-1 text-xs text-ink-2">
@@ -418,6 +419,15 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                   {admin && <Button type="submit" size="sm">保存</Button>}
                 </form>
               </Card>
+              <Card className="@2xl:col-span-2">
+                <CardHeader title="電話のシステムからの通話 (会社の電話の文字起こし)" description="通話の録音・文字起こしができる電話のサービス (クラウド電話・IP 電話など) の「通話が終わったときの送信 (Webhook)」を下の URL に設定すると、通話ごとに AI が内容を読み取り、受付の確認待ちに入れます (問い合わせ・案件への登録は担当者が確かめてから)。同じ通話 ID は 1 件だけ。短い通話 (無言・すぐ切れた) は登録しません" />
+                <ul className="space-y-1 text-xs text-ink-2">
+                  <li><span className="font-mono text-[11px] break-all">POST {base}/api/integrations/phone-call</span></li>
+                  <li className="text-ink-3">認証: ヘッダー Authorization: Bearer &lt;PHONE_INTAKE_SECRET&gt; (ヘッダーを設定できないシステムは URL の末尾に ?token=&lt;PHONE_INTAKE_SECRET&gt;)。{process.env.PHONE_INTAKE_SECRET ? "鍵は設定済みです。" : "鍵が未設定のため、受け付けていません。"} 受け取る項目: callId (通話 ID)・from (発信元)・to (着信先。店舗の電話番号と一致すればその店舗)・direction (inbound / outbound)・startedAt・duration (秒)・transcript (文字起こし。文字列か [{"{"}speaker, text{"}"}])・summary・recordingUrl (https)・extension (内線)・staff (受けた社員のメール・名前)・store (店舗)</li>
+                  <li className="text-ink-3">録音のファイルしか出せない電話機・録音装置は、問い合わせ →「受付を登録」→「通話の録音」でファイルを選ぶと文字にして読み取ります。<Link href="/inquiries/reception" className="text-accent hover:underline">受付を登録</Link></li>
+                </ul>
+              </Card>
+              </>
             );
           })()}
           {(() => {

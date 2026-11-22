@@ -6,7 +6,8 @@ import { revalidatePath } from "next/cache";
 import { addAudit, getDb, mutate } from "@/lib/db/store";
 import type { Database, User } from "@/lib/db/types";
 import { canAccessStore, canManageIntegrations } from "@/lib/auth/permissions";
-import { findLineGroup, lineGroupName, touchLineGroups, LINE_GROUP_ID_RE } from "@/lib/line-groups";
+import { LINE_GROUP_PURPOSES, LINE_GROUP_PURPOSE_LABEL, findLineGroup, lineGroupName, touchLineGroups, trimPending, LINE_GROUP_ID_RE, type LineGroupPurpose } from "@/lib/line-groups";
+import type { StoreId } from "@/lib/db/types";
 import { recordLineGroupMessage, type LineMediaJob } from "@/lib/notify/inbound";
 import { checkLine, saveLineMedia, setLineWebhook } from "@/lib/notify/line-api";
 import { checkChatwork } from "@/lib/notify/chatwork-api";
@@ -54,6 +55,10 @@ export async function linkLineGroup(formData: FormData) {
     const before = [g.orderId ?? "", g.supplierId ?? "", g.label ?? ""].join(" / ");
     g.orderId = order?.id;
     g.supplierId = supplier?.id;
+    // 現場・業者のグループにする (店舗別・クレーム報告などの用途は外す)
+    g.purpose = undefined;
+    g.storeId = undefined;
+    g.notifyInquiries = undefined;
     if (formData.has("label")) g.label = label || undefined;
     name = lineGroupName(g);
     for (const m of g.pending) {
@@ -101,6 +106,49 @@ export async function unlinkLineGroup(formData: FormData) {
   revalidatePath("/settings");
   if (orderId) revalidatePath(`/orders/${orderId}`);
   redirect(withMsg(back, `LINE グループ「${name}」のひも付けを外しました (この後のメッセージは保留になります)。`));
+}
+
+/**
+ * グループの用途と店舗 (管理者。設定 → 外部連携・AI)。一畳屋の社内の LINE グループ (店舗別・クレーム・手直し報告・施工事例写真・整理整頓など) をシステムにつなぐ:
+ * 店舗別グループは新しい問い合わせを知らせる (notifyInquiries)・クレーム・手直し報告は KPI → クレーム・手直し に報告を並べる。それ以外はメッセージを残す
+ */
+export async function setLineGroupPurpose(formData: FormData) {
+  const user = await requireActionUser();
+  const back = safeReturn(str(formData, "returnTo"), "/settings?tab=integrations");
+  if (!canManageIntegrations(user)) fail(back, "LINE グループの用途を変更できるのは管理者です。");
+  const groupId = str(formData, "groupId");
+  const raw = str(formData, "purpose");
+  const purpose = (LINE_GROUP_PURPOSES as string[]).includes(raw) ? (raw as LineGroupPurpose) : "site";
+  const storeRaw = str(formData, "storeId");
+  let name = "";
+  await mutate((db) => {
+    const g = findLineGroup(db, groupId);
+    if (!g) fail(back, "LINE グループが見つかりません。");
+    const storeId = storeRaw && db.stores.some((s) => s.id === storeRaw) ? (storeRaw as StoreId) : undefined;
+    if (purpose === "store" && !storeId) fail(back, "店舗別グループは店舗を選んでください。");
+    if (purpose !== "site" && (g.orderId || g.supplierId)) fail(back, "案件・協力業者にひも付いているグループです。先に「ひも付けを外す」を押してください。");
+    const before = [g.purpose ?? "site", g.storeId ?? "", g.notifyInquiries ? "知らせる" : "", g.label ?? ""].join(" / ");
+    g.purpose = purpose === "site" ? undefined : purpose;
+    g.storeId = purpose === "site" ? undefined : storeId;
+    g.notifyInquiries = purpose === "store" && formData.get("notifyInquiries") === "on" ? true : undefined;
+    if (formData.has("label")) g.label = str(formData, "label").slice(0, 60) || undefined;
+    trimPending(g);
+    name = lineGroupName(g);
+    touchLineGroups(db, user.id);
+    addAudit(db, {
+      userId: user.id,
+      action: "update",
+      entity: "settings",
+      entityId: g.id,
+      entityLabel: name,
+      summary: `LINE グループ「${name}」の用途を「${LINE_GROUP_PURPOSE_LABEL[purpose]}」に変更${g.storeId ? ` (${db.stores.find((s) => s.id === g.storeId)?.name ?? g.storeId})` : ""}${g.notifyInquiries ? " · 新しい問い合わせを知らせる" : ""}`,
+      storeId: g.storeId ?? "hq",
+      changes: [{ field: "linePurpose", before, after: [g.purpose ?? "site", g.storeId ?? "", g.notifyInquiries ? "知らせる" : "", g.label ?? ""].join(" / ") }],
+    });
+  });
+  revalidatePath("/settings");
+  revalidatePath("/kpi/quality");
+  redirect(withMsg(back, `LINE グループ「${name}」の用途を保存しました。`));
 }
 
 /* ---------------- 接続の確認 (設定 → 外部連携・AI) ---------------- */

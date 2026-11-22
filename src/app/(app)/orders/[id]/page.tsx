@@ -21,6 +21,7 @@ import { updateSiteInfo } from "@/lib/actions/cases";
 import { CaseStatusCard } from "@/components/features/CaseStatusCard";
 import { SiteInfoCard } from "@/components/features/SiteInfo";
 import { QUALITY_CATEGORIES, QUALITY_KIND_HELP, QUALITY_KIND_LABEL, kpiSettings } from "@/lib/kpi-settings";
+import { QualityGuide } from "@/components/kpi/QualityGuide";
 import { SCORE_QUESTIONS, SCORE_LABEL } from "@/lib/survey";
 import { deliveryOf } from "@/lib/kpi";
 import { AiSummary } from "@/components/features/AiSummary";
@@ -273,6 +274,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
                       ))}
                     </div>
                   </fieldset>
+                  <QualityGuide />
                   <div className="grid grid-cols-1 gap-3 @xl:grid-cols-3">
                     <Field label="発生日" required><Input type="date" name="occurredOn" defaultValue={today} required /></Field>
                     <Field label="ポイントの単位 (原因)" hint="見積の原因は売上の店舗">

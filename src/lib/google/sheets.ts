@@ -183,6 +183,30 @@ export async function readSheetCsv(spreadsheetId: string, gid?: string): Promise
   return { text, title: sheet.title!, label: `Google スプレッドシート (${spreadsheetId.slice(0, 8)}… シート「${sheet.title}」・サービスアカウント)` };
 }
 
+/**
+ * サービスアカウントで、1 つのスプレッドシートの複数のシートを読む (pick で選んだシート。まとめて 1 回で取得)。
+ * 行 × 列の文字で返す (お客様アンケート集計表の取込など、シートの名前で中身を見分けるとき)
+ */
+export async function readSheetsValues(spreadsheetId: string, pick: (title: string) => boolean): Promise<{ title: string; rows: string[][]; label: string }[]> {
+  const s = serviceAccount();
+  if (!s.account) throw new Error(s.error ? `サービスアカウントの鍵を読めません: ${s.error}` : "サービスアカウントが設定されていません。");
+  const sa = s.account;
+  const id = encodeURIComponent(spreadsheetId);
+  const meta = (await (await api(sa, `/v4/spreadsheets/${id}?fields=${encodeURIComponent("sheets.properties(sheetId,title)")}`)).json()) as { sheets?: { properties?: { title?: string } }[] };
+  const titles = (meta.sheets ?? []).map((x) => x.properties?.title).filter((t): t is string => typeof t === "string" && pick(t));
+  if (!titles.length) return [];
+  const ranges = titles.map((t) => `ranges=${encodeURIComponent(`'${t.replace(/'/g, "''")}'`)}`).join("&");
+  const res = await api(sa, `/v4/spreadsheets/${id}/values:batchGet?${ranges}&valueRenderOption=FORMATTED_VALUE&majorDimension=ROWS`);
+  const body = await res.text();
+  if (body.length > MAX_BYTES * 4) throw new Error("シートが大きすぎます。タブごとの CSV をダウンロードして取り込んでください。");
+  const json = JSON.parse(body) as { valueRanges?: { range?: string; values?: unknown[][] }[] };
+  return (json.valueRanges ?? []).map((vr, i) => ({
+    title: titles[i],
+    rows: (vr.values ?? []).filter((r) => Array.isArray(r)).map((r) => r.map((c) => (c === null || c === undefined ? "" : String(c)))),
+    label: `Google スプレッドシート (${spreadsheetId.slice(0, 8)}… シート「${titles[i]}」・サービスアカウント)`,
+  }));
+}
+
 /** テスト用: 読み込んだ鍵・トークンを忘れる */
 export function resetGoogleSheetsCache(): void {
   loaded = undefined;

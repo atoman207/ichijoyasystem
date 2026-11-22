@@ -12,6 +12,7 @@ import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib
 import { createHandoffTask, linkInquiryLogs } from "@/lib/ai-intake";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
+import { storeInquiryNotices } from "@/lib/notify/store-line";
 import { assertStore, choice, fail, isKeyOf, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 import { MEDIA_LABEL, isMediaKey, mapMediaText, readMediaRules } from "@/lib/media";
 import type { MediaKey } from "@/lib/db/types";
@@ -26,6 +27,14 @@ function readMedia(formData: FormData, back: string): MediaKey {
   const mapped = v ? mapMediaText(readMediaRules(getDb()).rules, v) : null;
   if (!mapped) fail(back, MEDIA_REQUIRED);
   return mapped;
+}
+
+/** 店舗の LINE グループ (店舗別・問い合わせを知らせる) に新しい問い合わせを送る。送れなくても問い合わせの登録は取り消さない */
+async function notifyStoreGroup(id: string, userId: string) {
+  const db = getDb();
+  const inq = db.inquiries.find((x) => x.id === id);
+  if (!inq) return;
+  await sendAndRecord(storeInquiryNotices(db, inq), userId).catch((err) => console.warn("[inquiry] store LINE notice failed:", (err as Error).message));
 }
 
 export async function createInquiry(formData: FormData) {
@@ -82,6 +91,7 @@ export async function createInquiry(formData: FormData) {
       customer.updatedAt = now;
     }
   });
+  await notifyStoreGroup(id, user.id);
   revalidatePath("/inquiries");
   redirect(withMsg(`/inquiries/${id}`, "問い合わせを登録しました。届いた書類・写真は下の「資料・写真」から添付できます。"));
 }
@@ -90,6 +100,7 @@ export async function updateInquiry(id: string, formData: FormData) {
   const user = await requireActionUser();
   const back = `/inquiries/${id}`;
   let moved = false;
+  let storeMovedTo = "";
   let storeName = "";
   await mutate((db) => {
     const inq = db.inquiries.find((x) => x.id === id);
@@ -126,8 +137,11 @@ export async function updateInquiry(id: string, formData: FormData) {
     const changes = diffChanges(before, inq, ["status", "assignedUserId", "category", "nextAction", "nextActionDue", "detail", "storeId", "media", "promotionId"]);
     storeName = db.stores.find((s) => s.id === inq.storeId)?.name ?? "";
     const storeMoved = changes.some((c) => c.field === "storeId");
+    if (storeMoved) storeMovedTo = inq.storeId;
     addAudit(db, { userId: user.id, action: changes.some((c) => c.field === "status") ? "status" : "update", entity: "inquiry", entityId: id, entityLabel: inq.number, summary: storeMoved ? `問い合わせを${storeName}へ回しました` : `問い合わせを更新 (${changes.map((c) => c.field).join(", ") || "変更なし"})`, storeId: inq.storeId, changes });
   });
+  // 回した先の店舗の LINE グループに知らせる (店舗別グループ・問い合わせを知らせる)
+  if (storeMovedTo) await notifyStoreGroup(id, user.id);
   revalidatePath(back);
   revalidatePath("/inquiries");
   // 自分の閲覧範囲の外へ回したときは一覧へ戻る

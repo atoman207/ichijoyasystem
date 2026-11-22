@@ -6,11 +6,12 @@ import { userName } from "@/lib/db/queries";
 import { fmtDate, fmtDateTime, toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS } from "@/lib/constants";
 import type { InquiryStatus } from "@/lib/db/types";
-import { Button, ChannelTag, EmptyRow, Flash, Input, LinkButton, LinkTabs, PageHeader, Select, StatusBadge, StoreTag, Table, Td, Th, Tr, Pager, paginate } from "@/components/ui";
+import { Button, ChannelTag, EmptyRow, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select, StatusBadge, StoreTag, Table, Td, Th, Tr, Pager, paginate } from "@/components/ui";
 import { isDateKey } from "@/lib/calendar";
 import { MEDIA_KEYS, MEDIA_LABEL, MEDIA_NONE, UNCLASSIFIED, isMediaKey } from "@/lib/media";
 import { filterInquiries, inquiryMediaMap } from "@/lib/ops-reports/promo-analysis";
 import { MediaTag } from "@/components/ops-reports/MediaFields";
+import { pendingReceptionCount } from "@/lib/reception";
 
 export default async function InquiriesPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -38,12 +39,20 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
   const storeMap = new Map(db.stores.map((s) => [s.id, s]));
   const count = (f: (s: InquiryStatus) => boolean) => scoped.filter((i) => f(i.status)).length;
   const base = "/inquiries";
+  const pendingReceptions = pendingReceptionCount(db, user);
   const current = status ? `${base}?status=${status}` : base;
 
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title="問い合わせ" actions={<>{canImportData(user) && <LinkButton href="/data" variant="secondary">CSV 取込・書き出し</LinkButton>}<LinkButton href="/inquiries/new">+ 問い合わせを登録</LinkButton></>} />
+      <PageHeader title="問い合わせ" actions={<>{canImportData(user) && <LinkButton href="/data" variant="secondary">CSV 取込・書き出し</LinkButton>}<LinkButton href="/inquiries/new" variant="secondary">+ 手入力で登録</LinkButton><LinkButton href="/inquiries/reception">+ 受付を登録 (メモ・話す・録音)</LinkButton></>} />
+      {pendingReceptions > 0 && (
+        <div className="mb-4">
+          <Note tone="warn">
+            確認待ちの受付が {pendingReceptions} 件あります (メモの写真・電話の内容などを AI が読み取ったもの)。<Link href="/inquiries/reception" className="font-medium underline">受付の一覧で確かめて登録する</Link>
+          </Note>
+        </div>
+      )}
       <LinkTabs
         current={current}
         items={[

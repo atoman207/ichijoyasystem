@@ -1,7 +1,7 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, scopeByStore } from "@/lib/auth/permissions";
+import { canAccessStore, canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
 import { answerCounts, deliveryOf, fmtRate, inPeriod, isCard, storeKpi, surveyDate } from "@/lib/kpi";
 import { kpiSettings } from "@/lib/kpi-settings";
 import { resolvePeriod } from "@/lib/kpi-period";
@@ -10,6 +10,8 @@ import { SCORE_QUESTIONS } from "@/lib/survey";
 import { KpiTabs } from "@/components/kpi/KpiTabs";
 import { PeriodSelect } from "@/components/kpi/PeriodSelect";
 import { Card, CardHeader, Flash, LinkButton, PageHeader, Pager, Select, StoreTag, paginate } from "@/components/ui";
+import { SurveyYearCompare } from "@/components/kpi/SurveyYearCompare";
+import { surveyYearComparison } from "@/lib/survey-workbook/compare";
 
 function Bars({ rows, total }: { rows: [string, number][]; total: number }) {
   if (!rows.length) return <p className="text-xs text-ink-3">回答はありません</p>;
@@ -49,6 +51,10 @@ export default async function SurveysPage({ searchParams }: { searchParams: Prom
   const stores = db.stores.filter((s) => s.kind === "store" && canAccessStore(user, s.id));
   const cmap = customers;
   const SOURCE: Record<string, string> = { import: "移行", capture: "写真", manual: "手入力" };
+  // 年度ごとの比較: 店舗のロールは自店舗だけ (全社・ほかの店舗の数字を見せない)
+  const compareStore = canSeeAllStores(user) ? ((store || undefined) as typeof user.storeId | undefined) : user.storeId;
+  const compareCols = surveyYearComparison(db, { storeId: compareStore, fiscalStartMonth: settings.fiscalStartMonth });
+  const compareLabel = compareStore ? (db.stores.find((s) => s.id === compareStore)?.name ?? compareStore) : "全社";
 
   return (
     <div>
@@ -62,7 +68,7 @@ export default async function SurveysPage({ searchParams }: { searchParams: Prom
           </>
         }
       />
-      <KpiTabs current="/kpi/surveys" sp={sp} />
+      <KpiTabs current="/kpi/surveys" sp={sp} user={user} />
       <PeriodSelect
         action="/kpi/surveys"
         value={rp.value}
@@ -96,6 +102,8 @@ export default async function SurveysPage({ searchParams }: { searchParams: Prom
           <p className="mt-3 text-xs text-ink-2">⑦ 次回も依頼したい: はい {counts.again.yes} / いいえ {counts.again.no}</p>
         </Card>
       </div>
+
+      <SurveyYearCompare cols={compareCols} scopeLabel={compareLabel} />
 
       <Card className="mt-4" padded={false}>
         <div className="px-5 pt-5"><CardHeader title={`アンケート一覧 (${rp.label})`} description={`${rows.length.toLocaleString("ja-JP")} 枚`} /></div>

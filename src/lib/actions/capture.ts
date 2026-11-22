@@ -7,7 +7,8 @@ import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
 import { attachmentsOf, detectType, discardStored, relinkDocumentAttachments, storeFile } from "@/lib/attachments";
 import { readObject } from "@/lib/storage";
 import type { Attachment, CapturedDocument, Database, DocumentKind, User } from "@/lib/db/types";
-import { aiEnabled, extractDocument, FIELD_KEYS, normalizeExtracted, type OcrResult } from "@/lib/ai/ocr";
+import { aiEnabled, extractDocument, FIELD_KEYS, normalizeExtracted, type LineItem, type OcrMode, type OcrResult } from "@/lib/ai/ocr";
+import { calcSheet, compareTranscription } from "@/lib/quote-sheet-calc";
 import { REGISTER_TARGETS } from "@/lib/capture-fields";
 import { DOCUMENT_KIND_LABEL } from "@/lib/constants";
 import { findOrderByPostcard, storeFromPostcard, surveyFromExtracted } from "@/lib/survey-link";
@@ -20,10 +21,11 @@ const MAX_BYTES = 4 * 1024 * 1024;
 
 const PROVIDER_LABEL: Record<OcrResult["provider"], string> = { claude: "Claude", openai: "OpenAI", mock: "サンプル", error: "読取失敗" };
 
-/** 読取結果を書類に保存する形 (_ で始まる項目は読取の記録) */
-function toExtracted(result: OcrResult, sample: boolean): Record<string, unknown> {
+/** 読取結果を書類に保存する形 (_ で始まる項目は読取の記録)。mode = calc は「金額を書く前に撮影」した見積書 */
+function toExtracted(result: OcrResult, sample: boolean, mode?: OcrMode): Record<string, unknown> {
   return {
     ...result.extracted,
+    ...(mode ? { _mode: mode } : {}),
     _provider: result.provider,
     _model: result.model,
     _warnings: result.warnings,
@@ -37,8 +39,42 @@ function toExtracted(result: OcrResult, sample: boolean): Record<string, unknown
   };
 }
 
-function readMessage(result: OcrResult): string {
+function readMessage(result: OcrResult, mode?: OcrMode): string {
+  if (mode === "calc") return `読み取って計算しました (${PROVIDER_LABEL[result.provider]})。数量・単価が用紙と同じか確かめてから、金額を書き写してください。`;
   return `読み取りが完了しました (${PROVIDER_LABEL[result.provider]} / 確度 ${Math.round(result.confidence * 100)}%)。内容を確認・修正してから登録してください。`;
+}
+
+/** 書類の画面 (金額の計算の書類は計算の画面) */
+const docPath = (id: string, mode?: unknown) => (mode === "calc" ? `/capture/calc?doc=${id}` : `/capture?doc=${id}`);
+
+/** 送られた写真・PDF を読む (写真は画面側で縮小済み) */
+async function readUpload(formData: FormData, back: string): Promise<{ fileName: string; mimeType: string; base64: string } | null> {
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) return null;
+  if (file.size > MAX_BYTES) fail(back, "ファイルサイズは 4MB 以下にしてください (写真は自動で縮小されます)。");
+  const fileName = file.name.slice(0, 200) || "document";
+  const t = detectType(fileName, file.type);
+  if (!t || (!t.photo && t.contentType !== "application/pdf")) fail(back, "写真 (JPEG・PNG など) か PDF を取り込んでください。");
+  return { fileName, mimeType: t.contentType, base64: Buffer.from(await file.arrayBuffer()).toString("base64") };
+}
+
+/** 元の画像・PDF を書類の添付ファイルとして保存する。保存できなくても読取結果は登録する (undefined) */
+async function storeOriginal(user: User, formData: FormData, doc: { id: string; storeId: CapturedDocument["storeId"]; fileName: string }, up: { fileName: string; mimeType: string; base64: string }): Promise<Attachment | undefined> {
+  const noTable = BACKEND === "supabase" && missingTables().includes("attachments") && (await recheckMissingTables()).includes("attachments");
+  if (noTable) return undefined;
+  try {
+    const thumb = formData.get("thumb");
+    return await storeFile({
+      user,
+      parent: { type: "document", id: doc.id, storeId: doc.storeId, label: `取込書類 ${doc.fileName}`, href: `/capture?doc=${doc.id}`, entity: "document" },
+      file: { name: up.fileName, type: up.mimeType, bytes: Buffer.from(up.base64, "base64") },
+      thumb: thumb instanceof File && thumb.size > 0 ? { name: "thumb.jpg", type: "image/jpeg", bytes: Buffer.from(await thumb.arrayBuffer()) } : undefined,
+      takenAt: str(formData, "takenAt") || undefined,
+    });
+  } catch (err) {
+    console.warn("[capture] original not stored:", (err as Error).message);
+    return undefined;
+  }
 }
 
 function failMessage(result: OcrResult): string {
@@ -47,58 +83,34 @@ function failMessage(result: OcrResult): string {
 
 export async function uploadDocument(formData: FormData) {
   const user = await requireActionUser();
-  const back = "/capture";
-  const kind = choice(formData, "kind", DOCUMENT_KIND_LABEL, "other");
+  // mode = calc: 金額を書く前に撮影した手書き見積書 (数量・単価を読み、金額はシステムが計算する)
+  const mode: OcrMode | undefined = str(formData, "mode") === "calc" ? "calc" : undefined;
+  const back = mode === "calc" ? "/capture/calc" : "/capture";
+  const kind = mode === "calc" ? "handwritten_quote" : choice(formData, "kind", DOCUMENT_KIND_LABEL, "other");
+  if (kind === "reception") fail(back, "受付メモは 問い合わせ →「受付を登録」から取り込んでください。");
   const storeId = resolveStoreId(user, str(formData, "storeId"));
   assertStore(user, storeId, back);
-  const file = formData.get("file");
-  const sampleName = str(formData, "sampleName").slice(0, 120);
-  let fileName = sampleName || "sample.jpg";
-  let mimeType = "image/jpeg";
-  let base64: string | undefined;
-  if (file instanceof File && file.size > 0) {
-    if (file.size > MAX_BYTES) fail(back, "ファイルサイズは 4MB 以下にしてください (写真は自動で縮小されます)。");
-    fileName = file.name.slice(0, 200) || "document";
-    const t = detectType(fileName, file.type);
-    if (!t || (!t.photo && t.contentType !== "application/pdf")) fail(back, "写真 (JPEG・PNG など) か PDF を取り込んでください。");
-    mimeType = t.contentType;
-    base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
-  } else if (aiEnabled()) {
-    fail(back, "書類を撮影するか、画像・PDF のファイルを選んでください。");
-  }
+  const up = await readUpload(formData, back);
+  if (!up && aiEnabled()) fail(back, "書類を撮影するか、画像・PDF のファイルを選んでください。");
+  const fileName = up?.fileName ?? (str(formData, "sampleName").slice(0, 120) || "sample.jpg");
   const db = getDb();
-  const result = await extractDocument({ kind, fileName, mimeType, base64, products: db.products, storeId });
+  const result = await extractDocument({ kind, fileName, mimeType: up?.mimeType ?? "image/jpeg", base64: up?.base64, products: db.products, storeId, mode });
   const id = newId("doc");
   // 元の画像・PDF を保存する (確認画面・登録した見積・経費・仕入請求書・受注の画面で表示する)。保存できなくても読取結果は登録する
-  let original: Attachment | undefined;
-  const noTable = BACKEND === "supabase" && missingTables().includes("attachments") && (await recheckMissingTables()).includes("attachments");
-  if (base64 && !noTable) {
-    try {
-      const thumb = formData.get("thumb");
-      original = await storeFile({
-        user,
-        parent: { type: "document", id, storeId, label: `取込書類 ${fileName}`, href: `/capture?doc=${id}`, entity: "document" },
-        file: { name: fileName, type: mimeType, bytes: Buffer.from(base64, "base64") },
-        thumb: thumb instanceof File && thumb.size > 0 ? { name: "thumb.jpg", type: "image/jpeg", bytes: Buffer.from(await thumb.arrayBuffer()) } : undefined,
-        takenAt: str(formData, "takenAt") || undefined,
-      });
-    } catch (err) {
-      console.warn("[capture] original not stored:", (err as Error).message);
-      original = undefined;
-    }
-  }
+  const original = up ? await storeOriginal(user, formData, { id, storeId, fileName }, up) : undefined;
   const failed = result.provider === "error";
   await mutate((d) => {
     if (original) d.attachments.push(original!);
-    d.documents.push({ id, kind, fileName, uploadedBy: user.id, storeId, uploadedAt: nowIso(), status: failed ? "failed" : "extracted", extracted: toExtracted(result, !base64), confidence: result.confidence });
-    addAudit(d, { userId: user.id, action: "create", entity: "document", entityId: id, entityLabel: fileName, summary: `書類を取込・AI読取 (${DOCUMENT_KIND_LABEL[kind]} / ${PROVIDER_LABEL[result.provider]}${failed ? `: ${result.error}` : ""})`, storeId });
+    d.documents.push({ id, kind, fileName, uploadedBy: user.id, storeId, uploadedAt: nowIso(), status: failed ? "failed" : "extracted", extracted: toExtracted(result, !up, mode), confidence: result.confidence });
+    addAudit(d, { userId: user.id, action: "create", entity: "document", entityId: id, entityLabel: fileName, summary: `書類を取込・AI読取 (${DOCUMENT_KIND_LABEL[kind]}${mode === "calc" ? "・金額の計算" : ""} / ${PROVIDER_LABEL[result.provider]}${failed ? `: ${result.error}` : ""})`, storeId });
   }).catch(async (err) => {
     if (original) await discardStored(original);
     throw err;
   });
-  revalidatePath(back);
-  if (failed) redirect(withErr(`${back}?doc=${id}`, failMessage(result)));
-  redirect(withMsg(`${back}?doc=${id}`, readMessage(result)));
+  revalidatePath("/capture");
+  if (mode === "calc") revalidatePath(back);
+  if (failed) redirect(withErr(docPath(id, mode), failMessage(result)));
+  redirect(withMsg(docPath(id, mode), readMessage(result, mode)));
 }
 
 function findDoc(db: Database, user: User, id: string): CapturedDocument {
@@ -107,6 +119,9 @@ function findDoc(db: Database, user: User, id: string): CapturedDocument {
   assertStore(user, doc.storeId, "/capture");
   return doc;
 }
+
+/** 金額を書く前に撮影した手書き見積書 (金額・合計はシステムの計算) */
+const calcMode = (doc: CapturedDocument): OcrMode | undefined => (doc.kind === "handwritten_quote" && doc.extracted?._mode === "calc" ? "calc" : undefined);
 
 function assertEditable(doc: CapturedDocument, back: string) {
   if (doc.status === "confirmed") fail(back, "登録済みの書類は変更できません (登録先の画面で修正してください)。");
@@ -117,11 +132,14 @@ function assertEditable(doc: CapturedDocument, back: string) {
 export async function retryExtraction(formData: FormData) {
   const user = await requireActionUser();
   const id = str(formData, "id");
-  const back = `/capture?doc=${id}`;
   const db = getDb();
   const doc = findDoc(db, user, id);
+  // 金額の計算の書類は、計算の読み方のまま読み直す
+  const mode: OcrMode | undefined = doc.extracted?._mode === "calc" && doc.kind === "handwritten_quote" ? "calc" : undefined;
+  const back = docPath(id, mode);
   assertEditable(doc, back);
-  const kind = choice(formData, "kind", DOCUMENT_KIND_LABEL, doc.kind);
+  const kind = mode === "calc" ? "handwritten_quote" : choice(formData, "kind", DOCUMENT_KIND_LABEL, doc.kind);
+  if (kind === "reception" || doc.kind === "reception") fail(back, "受付メモは 問い合わせ →「受付を登録」の画面で読み直してください。");
   const sample = Boolean(doc.extracted?._sample);
   let base64: string | undefined;
   let mimeType = "image/jpeg";
@@ -132,21 +150,22 @@ export async function retryExtraction(formData: FormData) {
     base64 = bytes.toString("base64");
     mimeType = original.contentType;
   }
-  const result = await extractDocument({ kind, fileName: doc.fileName, mimeType, base64, products: db.products, storeId: doc.storeId });
+  const result = await extractDocument({ kind, fileName: doc.fileName, mimeType, base64, products: db.products, storeId: doc.storeId, mode });
   const failed = result.provider === "error";
   await mutate((d) => {
     const x = findDoc(d, user, id);
     assertEditable(x, back);
     const before = x.kind;
     x.kind = kind;
-    x.extracted = toExtracted(result, sample);
+    x.extracted = toExtracted(result, sample, mode);
     x.confidence = result.confidence;
     x.status = failed ? "failed" : "extracted";
     addAudit(d, { userId: user.id, action: "update", entity: "document", entityId: id, entityLabel: x.fileName, summary: `書類を読み直し (${before !== kind ? `${DOCUMENT_KIND_LABEL[before]} → ` : ""}${DOCUMENT_KIND_LABEL[kind]} / ${PROVIDER_LABEL[result.provider]}${failed ? `: ${result.error}` : ""})`, storeId: x.storeId });
   });
   revalidatePath("/capture");
+  if (mode) revalidatePath("/capture/calc");
   if (failed) redirect(withErr(back, failMessage(result)));
-  redirect(withMsg(back, readMessage(result)));
+  redirect(withMsg(back, readMessage(result, mode)));
 }
 
 /** 画面で確認・修正した内容を受け取る (書類の種類ごとに決めた項目だけ。長さも制限する) */
@@ -171,7 +190,7 @@ function parseEdited(formData: FormData, kind: DocumentKind, back: string): Reco
   return Object.fromEntries(Object.entries(data as Record<string, unknown>).filter(([k]) => allowed.has(k)).map(([k, v]) => [k, clip(v)]));
 }
 
-const META_KEYS = ["_provider", "_model", "_aiWarnings", "_error", "_ms", "_readAt", "_sample", "_ai", "_accountCandidates"];
+const META_KEYS = ["_provider", "_model", "_aiWarnings", "_error", "_ms", "_readAt", "_sample", "_ai", "_accountCandidates", "_mode", "_calc", "_calcCheck"];
 
 /** 読取の確認が必要か (AI が自信がないとした項目・行が残っている) */
 function needsConfirmation(prev: Record<string, unknown> | undefined, edited: Record<string, unknown>): boolean {
@@ -183,9 +202,10 @@ function needsConfirmation(prev: Record<string, unknown> | undefined, edited: Re
 function applyEdits(doc: CapturedDocument, edited: Record<string, unknown>, warnings: string[], user: User, confirmed = false) {
   const prev = doc.extracted ?? {};
   const meta = Object.fromEntries(META_KEYS.filter((k) => prev[k] !== undefined).map((k) => [k, prev[k]]));
-  // AI が「自信がない」とした項目は、担当者が確認するまで残す
+  // AI が「自信がない」とした項目・「消して書き直した」とした箇所は、担当者が確認するまで残す
   const unsure = edited.uncertainFields ?? prev.uncertainFields;
-  doc.extracted = { ...edited, ...(unsure ? { uncertainFields: unsure } : {}), ...meta, _warnings: warnings, _edited: { by: user.id, at: nowIso() }, ...(confirmed ? { _confirmed: { by: user.id, at: nowIso() } } : prev._confirmed ? { _confirmed: prev._confirmed } : {}) };
+  const corrections = edited.corrections ?? prev.corrections;
+  doc.extracted = { ...edited, ...(unsure ? { uncertainFields: unsure } : {}), ...(corrections ? { corrections } : {}), ...meta, _warnings: warnings, _edited: { by: user.id, at: nowIso() }, ...(confirmed ? { _confirmed: { by: user.id, at: nowIso() } } : prev._confirmed ? { _confirmed: prev._confirmed } : {}) };
   if (doc.status === "failed" || doc.status === "uploaded") doc.status = "extracted";
 }
 
@@ -206,7 +226,7 @@ export async function saveExtraction(formData: FormData) {
   const doc0 = findDoc(db, user, id);
   assertEditable(doc0, back);
   if (intent !== "save" && intent !== "confirm" && !REGISTER_TARGETS[doc0.kind].includes(intent)) fail(back, "この種類の書類は、その登録先には登録できません。");
-  const { extracted, warnings } = normalizeExtracted(doc0.kind, parseEdited(formData, doc0.kind, back), db.products);
+  const { extracted, warnings } = normalizeExtracted(doc0.kind, parseEdited(formData, doc0.kind, back), db.products, { mode: calcMode(doc0) });
   const confirmed = formData.get("confirmedUncertain") === "on";
   if (intent !== "save" && intent !== "confirm" && needsConfirmation(doc0.extracted, extracted) && !confirmed) {
     // 入力した修正は保存してから断る (修正が消えないように)
@@ -336,7 +356,7 @@ export async function attachDocument(formData: FormData) {
   const target0 = resolveTarget(db, ref);
   if (!target0) fail(back, `「${ref}」に当たる受注・問い合わせ・顧客が見つかりません。番号を確認してください。`);
   assertStore(user, target0.storeId, back);
-  const { extracted, warnings } = normalizeExtracted(doc0.kind, parseEdited(formData, doc0.kind, back), db.products);
+  const { extracted, warnings } = normalizeExtracted(doc0.kind, parseEdited(formData, doc0.kind, back), db.products, { mode: calcMode(doc0) });
   let label = "";
   let href = "";
   await mutate((d) => {
@@ -393,4 +413,144 @@ export async function confirmDocument(id: string) {
   });
   revalidatePath("/capture");
   redirect(withMsg(`/capture?doc=${id}`, "読取内容を確定しました。"));
+}
+
+/* ================================================================== */
+/* 金額を書く前に撮影した手書き見積書 (/capture/calc)                      */
+/* ================================================================== */
+
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
+/** 計算の画面で確かめた数量・単価 (と税込・税抜・値引き) を保存する。ほかの読取項目はそのまま */
+export async function saveCalc(formData: FormData) {
+  const user = await requireActionUser();
+  const id = str(formData, "id");
+  const back = `/capture/calc?doc=${id}`;
+  const raw = String(formData.get("data") ?? "");
+  let data: { items?: unknown; taxMode?: unknown; discount?: unknown };
+  try {
+    if (raw.length > 200_000) throw new Error("too large");
+    data = JSON.parse(raw || "{}");
+  } catch {
+    fail(back, "入力内容を読み取れませんでした。もう一度お試しください。");
+  }
+  if (!Array.isArray(data.items)) fail(back, "明細を読み取れませんでした。");
+  const items = (data.items as Record<string, unknown>[]).slice(0, 100).map((r) => ({
+    name: typeof r?.name === "string" ? r.name.slice(0, 200) : "",
+    spec: typeof r?.spec === "string" ? r.spec.slice(0, 200) : "",
+    unit: typeof r?.unit === "string" ? r.unit.slice(0, 20) : "",
+    qty: num(r?.qty) ?? null,
+    unitPrice: num(r?.unitPrice) ?? null,
+    amount: num(r?.amount) ?? null,
+    rate: num(r?.rate) ?? null,
+    uncertain: r?.uncertain === true,
+    corrected: r?.corrected === true,
+  }));
+  const taxMode = data.taxMode === "税抜" ? "税抜" : "税込";
+  const discount = Math.max(0, Math.round(num(data.discount) ?? 0));
+  const db = getDb();
+  const doc0 = findDoc(db, user, id);
+  assertEditable(doc0, back);
+  if (doc0.kind !== "handwritten_quote") fail(back, "金額の計算は手書き見積書だけです。");
+  const prev = Object.fromEntries(Object.entries(doc0.extracted ?? {}).filter(([k]) => !k.startsWith("_")));
+  const { extracted, warnings } = normalizeExtracted("handwritten_quote", { ...prev, items, taxMode, discount: discount || null }, db.products, { mode: "calc" });
+  let before = 0;
+  await mutate((d) => {
+    const doc = findDoc(d, user, id);
+    assertEditable(doc, back);
+    before = num(doc.extracted?.total) ?? 0;
+    const meta = Object.fromEntries(Object.entries(doc.extracted ?? {}).filter(([k]) => k.startsWith("_") && k !== "_warnings" && k !== "_edited"));
+    doc.extracted = { ...extracted, ...meta, _warnings: warnings, _edited: { by: user.id, at: nowIso() } };
+    if (doc.status === "failed" || doc.status === "uploaded") doc.status = "extracted";
+    addAudit(d, {
+      userId: user.id,
+      action: "update",
+      entity: "document",
+      entityId: id,
+      entityLabel: doc.fileName,
+      summary: `金額の計算: 数量・単価を確認・修正 (合計 ${num(extracted.total)?.toLocaleString("ja-JP") ?? "-"} 円)`,
+      storeId: doc.storeId,
+      changes: before !== num(extracted.total) ? [{ field: "total", before, after: num(extracted.total) ?? 0 }] : undefined,
+    });
+  });
+  revalidatePath("/capture/calc");
+  revalidatePath("/capture");
+  redirect(withMsg(back, "確かめた数量・単価と計算結果を保存しました。この金額を見積書に書き写してください。"));
+}
+
+/**
+ * 金額を書き写した見積書をもう一度撮影し、書き写した金額が計算と同じか確かめる。
+ * 写真は同じ書類の添付ファイルに足し (計算に使った写真も残す)、読取結果は記入済みの見積書として置き換える
+ * (このあと通常の確認画面で お客様・見積の登録へ進む)。計算の結果は _calc、照合の結果は _calcCheck に残す
+ */
+export async function recheckCalc(formData: FormData) {
+  const user = await requireActionUser();
+  const id = str(formData, "id");
+  const back = `/capture/calc?doc=${id}`;
+  const db = getDb();
+  const doc0 = findDoc(db, user, id);
+  assertEditable(doc0, back);
+  if (doc0.kind !== "handwritten_quote") fail(back, "書き写しの確認は手書き見積書だけです。");
+  const up = await readUpload(formData, back);
+  if (!up && aiEnabled()) fail(back, "金額を書き写した見積書を撮影してください。");
+  // 照合のもと: 計算の画面の結果 (保存されている明細から計算し直す)
+  const ex0 = doc0.extracted ?? {};
+  const calcItems = Array.isArray(ex0.items) ? (ex0.items as LineItem[]) : [];
+  const taxIncluded = ex0.taxIncluded !== false;
+  const discount = num(ex0.discount) ?? 0;
+  const calc = calcSheet(calcItems, { taxIncluded, discount });
+  const snapshot = {
+    items: calcItems.map((it, i) => ({ name: it.name, spec: it.spec, qty: it.qty, unit: it.unit, unitPrice: it.unitPrice, amount: calc.rows[i].amount ?? undefined })),
+    subtotal: calc.subtotal,
+    discount: calc.discount,
+    tax: calc.tax,
+    total: calc.total,
+    taxIncluded,
+    at: nowIso(),
+    by: user.id,
+  };
+  const result = await extractDocument({ kind: "handwritten_quote", fileName: up?.fileName ?? doc0.fileName, mimeType: up?.mimeType ?? "image/jpeg", base64: up?.base64, products: db.products, storeId: doc0.storeId });
+  const failed = result.provider === "error";
+  // 読めなかった写真は残さない (計算の画面の写真・「もう一度読み取る」は計算に使った写真のまま)
+  const original = up && !failed ? await storeOriginal(user, formData, doc0, up) : undefined;
+  let check: ReturnType<typeof compareTranscription> | undefined;
+  await mutate((d) => {
+    const doc = findDoc(d, user, id);
+    assertEditable(doc, back);
+    if (failed) {
+      addAudit(d, { userId: user.id, action: "update", entity: "document", entityId: id, entityLabel: doc.fileName, summary: `金額の計算: 書き写した見積書の読取に失敗 (${result.error ?? ""})`, storeId: doc.storeId });
+      return;
+    }
+    if (original) d.attachments.push(original);
+    const readItems = Array.isArray(result.extracted.items) ? (result.extracted.items as LineItem[]) : [];
+    const readTotal = num(result.extracted.totalTaxIncluded) ?? num(result.extracted.total);
+    check = compareTranscription({ rows: snapshot.items, total: snapshot.total }, { rows: readItems, total: readTotal });
+    const items = readItems.map((it, i) => (check!.rows.includes(i) ? { ...it, uncertain: true } : it));
+    const head = check.issues.length
+      ? `書き写しの確認: 計算と違う・読み取れない箇所が ${check.issues.length} 件あります。見積書の金額を確かめてください`
+      : `書き写しの確認: ${check.checked} 行の金額と合計が、すべて計算と一致しました`;
+    const ex = toExtracted({ ...result, extracted: { ...result.extracted, items }, warnings: [head, ...check.issues, ...result.warnings] }, false);
+    doc.extracted = { ...ex, _calc: snapshot, _calcCheck: { checked: check.checked, matched: check.matched, issues: check.issues, totalMatched: check.totalMatched, at: nowIso() } };
+    doc.confidence = result.confidence;
+    doc.status = "extracted";
+    addAudit(d, {
+      userId: user.id,
+      action: "update",
+      entity: "document",
+      entityId: id,
+      entityLabel: doc.fileName,
+      summary: `金額の計算: 書き写した見積書を照合 (${check.matched}/${check.checked} 行が一致${check.totalMatched === false ? "・合計が違う" : ""})`,
+      storeId: doc.storeId,
+      changes: [{ field: "status", before: "金額の計算", after: "記入済みの見積書" }],
+    });
+  }).catch(async (err) => {
+    if (original) await discardStored(original);
+    throw err;
+  });
+  revalidatePath("/capture");
+  revalidatePath("/capture/calc");
+  if (failed) redirect(withErr(back, `書き写した見積書を読み取れませんでした: ${result.error ?? "原因不明のエラー"} もう一度撮影してください。`));
+  const c = check!;
+  if (c.issues.length) redirect(withErr(`/capture?doc=${id}`, `書き写しの確認: 計算と違う・読み取れない箇所が ${c.issues.length} 件あります (黄色の行と上の注意を確かめてください)。`));
+  redirect(withMsg(`/capture?doc=${id}`, `書き写しの確認: ${c.checked} 行の金額と合計が、すべて計算と一致しました。お客様・内容を確かめて見積を作成してください。`));
 }

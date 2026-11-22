@@ -35,6 +35,8 @@ export function userById(id?: string): User | undefined {
 }
 export function userName(id?: string): string {
   if (id === "system") return "システム (外部連携)";
+  // アカウントのない人 (退職者・スプレッドシートから取り込んだ名前など) は「name:<名前>」
+  if (id?.startsWith("name:")) return `${id.slice(5)} (アカウントなし)`;
   return userById(id)?.name ?? "-";
 }
 export function storeById(id?: StoreId) {

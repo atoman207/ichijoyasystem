@@ -7,6 +7,7 @@ import { deleteQualityIssue, updateQualityIssue } from "@/lib/actions/kpi";
 import { QUALITY_CATEGORIES, QUALITY_KIND_HELP, QUALITY_KIND_LABEL, kpiSettings } from "@/lib/kpi-settings";
 import { fmtDate, fmtDateTime } from "@/lib/format";
 import { userName } from "@/lib/db/queries";
+import { QualityGuide } from "@/components/kpi/QualityGuide";
 import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, PageHeader, Select, StoreTag, Textarea } from "@/components/ui";
 
 export default async function QualityDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | undefined>> }) {
@@ -17,7 +18,7 @@ export default async function QualityDetailPage({ params, searchParams }: { para
   const q = db.qualityIssues.find((x) => x.id === id);
   if (!q) notFound();
   if (!canAccessStore(user, q.storeId)) redirect("/kpi/quality?err=" + encodeURIComponent("この記録を閲覧する権限がありません。"));
-  const order = db.orders.find((o) => o.id === q.orderId);
+  const order = q.orderId ? db.orders.find((o) => o.id === q.orderId) : undefined;
   const customer = order ? db.customers.find((c) => c.id === order.customerId) : undefined;
   const manage = canManageKpi(user);
   const canEdit = manage || q.reportedBy === user.id || q.responsibleUserIds.includes(user.id);
@@ -39,7 +40,7 @@ export default async function QualityDetailPage({ params, searchParams }: { para
         <div className="space-y-4 @4xl:col-span-2">
           <Card>
             <CardHeader title="内容" />
-            <Dl columns={1} items={[["案件", order ? <Link key="o" href={`/orders/${order.id}`} className="text-accent hover:underline">{order.number} {customer?.name} 様 · {order.title}</Link> : "-"], ["対象の担当者", q.responsibleUserIds.map((u) => userName(u)).join("・") || "-"], ["ポイントの単位", q.attribution === "office" ? "事務" : "店舗"], ["カテゴリー", q.category ?? "-"], ["内容", <span key="d" className="whitespace-pre-wrap">{q.description}</span>], ["原因", <span key="c" className="whitespace-pre-wrap">{q.cause ?? "未入力"}</span>], ["対策・再発防止", <span key="m" className="whitespace-pre-wrap">{q.countermeasure ?? "未入力"}</span>]]} />
+            <Dl columns={1} items={[["案件", order ? <Link key="o" href={`/orders/${order.id}`} className="text-accent hover:underline">{order.number} {customer?.name} 様 · {order.title}</Link> : <span key="o" className="text-warn-ink">未設定 (下の「案件 (受注番号)」でひも付けてください)</span>], ["現場名", q.siteName ?? "-"], ["発生のきっかけ", q.origin ?? "-"], ["登録のもと", q.sourceRef ? "スプレッドシート「お客様アンケート集計表」から取込 (シートの行が変わると、次の取込で内容が更新されます)" : "システムで登録"], ["対象の担当者", q.responsibleUserIds.map((u) => userName(u)).join("・") || "-"], ["ポイントの単位", q.attribution === "office" ? "事務" : "店舗"], ["カテゴリー", q.category ?? "-"], ["内容", <span key="d" className="whitespace-pre-wrap">{q.description}</span>], ["原因", <span key="c" className="whitespace-pre-wrap">{q.cause ?? "未入力"}</span>], ["対策・再発防止", <span key="m" className="whitespace-pre-wrap">{q.countermeasure ?? "未入力"}</span>]]} />
           </Card>
           {canEdit && (
             <Card>
@@ -58,6 +59,12 @@ export default async function QualityDetailPage({ params, searchParams }: { para
                     ))}
                   </div>
                 </fieldset>
+                <QualityGuide />
+                <div className="grid grid-cols-1 gap-3 @xl:grid-cols-3">
+                  <Field label="案件 (受注番号)" hint={manage ? "空欄にするとひも付けを外します" : undefined}><Input name="orderRef" defaultValue={order?.number ?? ""} placeholder="O-2026-0012" /></Field>
+                  <Field label="現場名"><Input name="siteName" defaultValue={q.siteName ?? ""} placeholder="（地区）お客様名" /></Field>
+                  <Field label="発生のきっかけ"><Input name="origin" defaultValue={q.origin ?? ""} placeholder="電話・アンケート・LINE・点検DM など" /></Field>
+                </div>
                 <div className="grid grid-cols-1 gap-3 @xl:grid-cols-3">
                   <Field label="発生日"><Input type="date" name="occurredOn" defaultValue={q.occurredOn} /></Field>
                   <Field label="ポイントの単位 (原因)"><Select name="attribution" defaultValue={q.attribution ?? "store"} disabled={!manage}><option value="store">店舗 (施工・見積の原因)</option><option value="office">事務 (事務の原因)</option></Select></Field>

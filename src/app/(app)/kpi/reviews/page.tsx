@@ -38,7 +38,7 @@ export default async function ReviewsPage({ searchParams }: { searchParams: Prom
     <div>
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader title="KPI · Google 口コミ" description="口コミの返信で名前を出した担当者にポイント (星の評価・コメント・写真で 1 点ずつ)。事務の入力月で集計し、翌月末に現金で支給します" />
-      <KpiTabs current="/kpi/reviews" sp={sp} />
+      <KpiTabs current="/kpi/reviews" sp={sp} user={user} />
       <PeriodSelect action="/kpi/reviews" value={rp.value} startMonth={settings.fiscalStartMonth} today={today} />
 
       <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-3">
@@ -114,7 +114,7 @@ export default async function ReviewsPage({ searchParams }: { searchParams: Prom
                   <td className="px-2 py-2">{userName(r.userId)}{users.get(r.userId) && !isPayable(users.get(r.userId)!, settings) && <span className="ml-1 text-[10px] text-ink-3">(支給対象外)</span>}</td>
                   <td className="px-2 py-2"><StoreTag store={db.stores.find((s) => s.id === r.storeId)} short /></td>
                   <td className="px-2 py-2 text-xs text-warn-ink">{r.rating ? "★".repeat(r.rating) : "-"}</td>
-                  <td className="max-w-[20rem] px-2 py-2 text-xs text-ink-2">{r.reviewerName ?? ""}{r.comment ? ` 「${r.comment}」` : ""}{r.hasPhoto ? " (写真あり)" : ""}</td>
+                  <td className="max-w-[20rem] px-2 py-2 text-xs text-ink-2">{r.reviewerName ?? ""}{r.comment ? ` 「${r.comment}」` : ""}{r.hasPhoto ? " (写真あり)" : ""}{r.note && <span className="block text-[11px] text-ink-3">{r.note}{r.sourceRef ? " · スプレッドシートから取込" : ""}</span>}</td>
                   <td className="px-2 py-2 text-right tnum">{r.points}</td>
                   <td className="px-4 py-2 text-right">
                     {(manage || r.createdBy === user.id) && (

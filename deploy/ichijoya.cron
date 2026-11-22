@@ -10,6 +10,9 @@ TZ=Asia/Tokyo
 # 社内資料 (Google スプレッドシート) の同期 毎時 15 分
 15 * * * * ichijoya bash /srv/ichijoya/current/deploy/run-task.sh knowledge-sync >> /var/log/ichijoya/cron.log 2>&1
 
+# お客様アンケート集計表 (Google スプレッドシート) の同期 毎日 6:20 (KPI → スプレッドシートの取込 で「定期の同期」をオンにしたときだけ取り込む)
+20 6 * * * ichijoya bash /srv/ichijoya/current/deploy/run-task.sh survey-workbook >> /var/log/ichijoya/cron.log 2>&1
+
 # FAX の定期処理 2 分ごと (送信の状態の確認・通信エラーの自動の再送・AI の判定待ちの読み直し。FAX サービスが未接続なら何もしない)
 */2 * * * * ichijoya bash /srv/ichijoya/current/deploy/run-task.sh fax >> /var/log/ichijoya/cron.log 2>&1
 

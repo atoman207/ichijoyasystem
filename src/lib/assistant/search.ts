@@ -114,7 +114,7 @@ function buildIndex(db: Database): Entry[] {
   for (const m of db.messages) msgs.set(m.threadId, [...(msgs.get(m.threadId) ?? []), m.body]);
   for (const t of db.threads) push("thread", t.id, t.title, [t.relatedLabel, ...(msgs.get(t.id) ?? [])], t.updatedAt, t.storeId);
   for (const k of db.knowledge) if (k.active) push("knowledge", k.id, `${k.title} ${k.tags.join(" ")}`, [k.category, k.body], k.recordDate ?? k.updatedAt);
-  for (const q of db.qualityIssues) push("quality", q.id, `${q.number} ${q.description.slice(0, 40)}`, [q.description, q.cause, q.countermeasure, q.category, cname.get(q.customerId ?? "")], q.occurredOn, q.storeId);
+  for (const q of db.qualityIssues) push("quality", q.id, `${q.number} ${q.description.slice(0, 40)}`, [q.description, q.cause, q.countermeasure, q.category, q.siteName, q.origin, cname.get(q.customerId ?? "")], q.occurredOn, q.storeId);
   for (const s of db.surveys) if (s.comment || s.priorities) push("survey", s.id, `アンケート ${s.postcardNo ?? ""}`, [s.comment, s.priorities, s.salesName, s.craftsmanName, cname.get(s.customerId ?? "")], s.receivedAt, s.storeId);
   for (const r of db.reviews) push("review", r.id, `口コミ ${r.reviewerName ?? ""}`, [r.comment, r.note], r.postedOn, r.storeId);
   for (const f of db.faxMessages) push("fax", f.id, `${f.number} ${f.remoteName ?? ""}`, [f.ai?.summary, f.ai?.documentType, f.ai?.senderName, f.remoteNumber, sname.get(f.supplierId ?? "")], f.at, f.storeId);
@@ -613,7 +613,11 @@ export function getRecord(db: Database, user: User, type: string | undefined, re
       }
       if (found.type === "quality") {
         const q = db.qualityIssues.find((x) => x.id === found.id)!;
-        lines.push(`原因: ${q.cause ?? "-"} / 対策: ${q.countermeasure ?? "-"} / 状態: ${q.status === "resolved" ? "解決" : "対応中"} / 担当 ${q.responsibleUserIds.map(un).join("・")}`);
+        lines.push(`原因: ${q.cause ?? "-"} / 対策: ${q.countermeasure ?? "-"} / 状態: ${q.status === "resolved" ? "解決" : "対応中"} / 担当 ${q.responsibleUserIds.map(un).join("・") || "-"}`);
+        if (q.orderId) lines.push(`受注: ${link("order", q.orderId, db.orders.find((o) => o.id === q.orderId)?.number ?? "受注")}`);
+        if (q.siteName) lines.push(`現場名: ${q.siteName}${q.orderId ? "" : " (案件にまだひも付いていない)"}`);
+        if (q.origin) lines.push(`発生のきっかけ: ${q.origin}`);
+        if (q.counted === false) lines.push("集計: 記録のみ (KPI に入れない)");
       }
     }
   }

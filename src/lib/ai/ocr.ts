@@ -4,9 +4,11 @@ import { addDays, toDateKey } from "@/lib/format";
 import { EXPENSE_ACCOUNTS } from "@/lib/constants";
 import { readCandidates, suggestAccounts } from "@/lib/expense-account";
 import { matchProduct } from "@/lib/product-match";
+import { calcSheet } from "@/lib/quote-sheet-calc";
 import { COMMENT_TAGS, MEDIA_OPTIONS, PRIORITY_OPTIONS, normPostcardNo, tagComment } from "@/lib/survey";
 import { EQUIPMENT_OPTIONS, PAYMENT_OPTIONS, SITE_MEDIA_OPTIONS } from "@/lib/site-info";
 import { AiError, aiEnabled, generateJson, type AiPart } from "./provider";
+import { RECEPTION_SCHEMA } from "./reception";
 
 export { aiEnabled } from "./provider";
 
@@ -18,7 +20,12 @@ export { aiEnabled } from "./provider";
  * - 読み取りに失敗したとき: provider = "error" と空の項目を返す (サンプルの値は入れない。画面で手入力・再読取)
  * - API キーがないとき (デモ): ファイル名と種類から決まるサンプルの結果
  * 読み取った値は必ず担当者が画面で確認・修正してから登録する (src/app/(app)/capture)
+ * 手書き見積書の mode = "calc" は「金額を書く前に撮影」: 数量・単価だけを読み、金額・合計はシステムが計算する
+ * (src/lib/quote-sheet-calc.ts。画面は src/app/(app)/capture/calc)
  */
+
+/** 手書き見積書の読み方: 記入済み (既定) / calc = 金額を書く前の見積書 (数量・単価まで) */
+export type OcrMode = "calc";
 
 export interface LineItem {
   name: string;
@@ -30,6 +37,12 @@ export interface LineItem {
   productId?: string;
   /** 読みにくい・判断が難しい行 (担当者が書類と見比べて確認する) */
   uncertain?: boolean;
+  /** 取り消し線で消して書き直した行 (AI の読取。訂正後の値を読んだか確かめる) */
+  corrected?: boolean;
+  /** 金額欄が読み取れず、数量 × 単価で計算して埋めた */
+  amountCalculated?: boolean;
+  /** 割合の値引き (0.2 = 2割引)。金額は上の行から計算する (quote-sheet-calc.ts) */
+  rate?: number;
   /** 仕入請求書の明細: 品番・明細に書かれた店舗名・現場名・備考 (管理会計の明細の振り分けに使う) */
   code?: string;
   storeName?: string;
@@ -107,11 +120,12 @@ const SCHEMAS: Record<DocumentKind, Schema> = {
       obj({
         ...ITEM_PROPS,
         uncertain: { type: "boolean", description: "読みにくい・判断が難しい行なら true (無理に決めない)" },
+        corrected: { type: "boolean", description: "この行の数字・文字を取り消し線などで消して書き直していれば true" },
       }),
-      "明細 (上から順に。諸経費の行も含める。取り消し線で消した行は含めない)",
+      "明細 (上から順に。諸経費の行も含める。行ごと取り消し線で消した行は含めない。数字が書かれた行は品名が読めなくても含める)",
     ),
     subtotal: n("小計 (訂正があれば訂正後)"),
-    discount: n("値引き (明細とは別に書かれた値引きの合計。なければ null)"),
+    discount: n("値引き (明細とは別に書かれた値引きの合計。▲ が付いていても正の数。なければ null)"),
     tax: n("消費税 (書かれていなければ null)"),
     total: n("合計 (訂正があれば訂正後)"),
     note: s("備考欄の内容 (取り消し線の部分は除く)"),
@@ -131,6 +145,7 @@ const SCHEMAS: Record<DocumentKind, Schema> = {
     fusumaPaper: s("襖紙の欄 (例: しずか166/6枚)"),
     otherNotes: s("欄外・余白の書き込み (取り消し線の部分は除く)"),
     uncertainFields: arr({ type: "string" }, "読み取りに自信がない項目の名前 (customerName・phone・totalTaxIncluded など上の項目名)"),
+    corrections: arr({ type: "string" }, "取り消し線・二重線・塗りつぶしで消して書き直した箇所 (例: 「合計 753,500 を消して 740,000」「2 行目の単価 16,850 を消して 15,950」。なければ空)"),
     ...COMMON,
   }),
   drawing: obj({
@@ -233,6 +248,8 @@ const SCHEMAS: Record<DocumentKind, Schema> = {
     commentTone: { type: "string", enum: ["praise", "request", "complaint", "neutral"], description: "⑧ の内容の種類 (praise=お褒め, request=ご要望, complaint=ご指摘, neutral=その他・記述なし)" },
     ...COMMON,
   }),
+  // 受付メモ (問い合わせの手書きメモ)。読み取り・登録は受付の画面 (src/lib/ai/reception.ts・/inquiries/reception)
+  reception: RECEPTION_SCHEMA as unknown as Schema,
   other: obj({
     title: s("書類名・件名"),
     documentDate: s(`書類の${DATE}`),
@@ -255,7 +272,9 @@ const KIND_HINT: Record<DocumentKind, string> = {
     "- 品名・規格の欄の「〃」「ヽ」「ゝ」「ミ」「4」のような記号は「上と同じ」の意味です。上の行の文字に置き換えてください (例: 1 行目が「畳表替え」で 2 行目が「〃」なら 2 行目も「畳表替え」)。",
     "- 明細の金額欄はケタごとの枠です。単価 × 数量と金額が合うか確かめ、合わないときは uncertain を true にしてください。",
     "- ▲ や △ が付いた数 (値引き・割引) はマイナスの数にしてください。",
-    "- 取り消し線で消した行・数字は使わず、訂正後の数字を使ってください。",
+    "- 取り消し線・二重線・塗りつぶしで消した数字・文字は使わず、書き直した値 (枠の上・横・すぐ下に小さく書かれることが多い) を使ってください。消して書き直した箇所はすべて corrections に「どこを・消した値 → 書き直した値」で書き、その明細の行は corrected を true にしてください。消した値しかなく書き直しが見つからないときは uncertain を true に。",
+    "- 数量・単価・金額のどれかが書かれている行は、品名が読めなくても省かずに入れてください (品名は読める範囲で書き、uncertain を true に)。明細の行の金額欄にある ▲ 付きの数字 (値引き・金券・割引) も、1 つずつ明細の行にします。小計・消費税・合計の欄やその近くに書かれた ▲ の値引きは、明細ではなく discount (正の数) に入れます。行を省くと合計が合わなくなります。",
+    "- 最後に、明細の金額の合計 − 値引き が 書かれた合計 (税込合計金額) と合うか見直してください。合わなければ、読み落とした行・▲ の数字・読み違えた桁がないか画像をもう一度確かめ、それでも合わなければ warnings に書いてください (合わせるために数字を作らないでください)。",
     "- 「税込 / 税抜」に○があれば taxMode に。単価が税込のことが多いです。",
     "- 読めない・判断が難しい文字は推測で埋めず、項目名を uncertainFields に入れてください。",
     "- よく出る言葉 (読み取りの参考): 畳表替え・新調・裏返し・へり (縁)・防ダニ・織部・さくら・めぐみ・古都・襖 (フスマ) 張替え・板戸・片面・両面・裏貼り・両開き・引手・丁番・下地補修・朱雀・しずか・ちどり・鳥の子・障子張替え・ストライク・ワーロン・雲竜・無地・網戸 (アミド) 張替え・18メッシュ・グレー・ブラック・カーテン・レース・Aフック・タッセル・2割引・DM値引・諸経費・処分・引取。",
@@ -267,13 +286,24 @@ const KIND_HINT: Record<DocumentKind, string> = {
   contract: "工事の契約書です。契約者・契約日・工事名・現場・契約金額・明細を読み取ってください。",
   survey_postcard:
     "株式会社一畳屋のお客様アンケートはがき (手書きの記入・○囲み) です。左上の No.、右上の日付、設問①〜④は○が付いた番号 (1〜5)、⑤⑥は○が付いた項目すべて、⑦ははい/いいえ、⑧は自由記述、下部の営業担当・工事担当の名前を読み取ってください。○が数字と項目名のどちらに付いていても、その選択肢を選んだものとして扱ってください。○が 2 つにまたがるなど判断できない設問は null にして warnings に書いてください。",
+  reception: "来店・イベント・電話のときに社員が書いた手書きの受付メモです。お客様のお名前・電話番号・住所・用件・内容を読み取ってください。",
   other: "書類の内容を読み取り、件名・日付・取引先・要約と主な項目をまとめてください。",
 };
 
-function systemPrompt(kind: DocumentKind, products: Product[]): string {
+/** 金額を書く前に撮影した見積書 (mode = calc) の読み方 */
+const CALC_HINT = [
+  "■ この見積書は、職人が金額を書く前 (品名・規格・数量・単価まで記入した段階) に撮影したものです。数量 × 単価・小計・合計はこのあとシステムが計算し、その結果を職人が書き写します。",
+  "- 数量と単価は掛け算に使うため、1 文字ずつ正確に読み取ってください。少しでも迷う数字 (1 と 7、6 と 8、0 と 6、桁の数) があれば、その行の uncertain を true にし、warnings に書いてください。",
+  "- 金額欄・小計・消費税・合計・税込合計金額は空欄が普通です。空欄の金額を自分で計算して埋めないでください (amount・subtotal・tax・total・totalTaxIncluded は null)。",
+  "- 金額欄に数字が書かれている行 (諸経費・▲ の値引き・金券など) は、その金額を amount に入れてください。",
+  "- 「2割引」「20%引」のように割合だけが書かれた値引きの行は、品名にそのまま書き、数量・単価・金額は null にしてください (システムが計算します)。",
+].join("\n");
+
+function systemPrompt(kind: DocumentKind, products: Product[], mode?: OcrMode): string {
   return [
     "あなたは畳・襖・障子・網戸の専門店 (株式会社一畳屋、熊本) の事務担当です。撮影・スキャンした業務書類を読み取り、指定の JSON の項目に入れてください。",
     KIND_HINT[kind],
+    ...(mode === "calc" && kind === "handwritten_quote" ? [CALC_HINT] : []),
     "- 書かれている内容だけを使い、推測で値を作らないでください。読めない・書かれていない項目は、文字なら空文字、数値なら null にしてください。読みにくい箇所は warnings に書いてください。",
     "- 金額は円の整数 (カンマ・円記号なし)。日付は YYYY-MM-DD (令和・平成などの和暦は西暦に直す)。",
     "- 手書きの数字で迷う箇所 (1 と 7、6 と 8 など) は warnings に書いてください。",
@@ -287,9 +317,10 @@ function systemPrompt(kind: DocumentKind, products: Product[]): string {
 /* 読取                                                                 */
 /* ================================================================== */
 
-export async function extractDocument(params: { kind: DocumentKind; fileName: string; mimeType: string; base64?: string; products: Product[]; storeId: StoreId }): Promise<OcrResult> {
+export async function extractDocument(params: { kind: DocumentKind; fileName: string; mimeType: string; base64?: string; products: Product[]; storeId: StoreId; mode?: OcrMode }): Promise<OcrResult> {
   const { kind, fileName, mimeType, base64, products } = params;
-  if (!aiEnabled() || !base64) return mockExtract(kind, fileName, products);
+  const mode = kind === "handwritten_quote" ? params.mode : undefined;
+  if (!aiEnabled() || !base64) return mockExtract(kind, fileName, products, mode);
   const isPdf = mimeType === "application/pdf" || /\.pdf$/i.test(fileName);
   const isImage = /^image\/(png|jpeg|jpg|webp|gif)$/.test(mimeType);
   if (!isPdf && !isImage) {
@@ -298,13 +329,13 @@ export async function extractDocument(params: { kind: DocumentKind; fileName: st
   const document: AiPart = isPdf ? { type: "pdf", base64, fileName } : { type: "image", mediaType: mimeType === "image/jpg" ? "image/jpeg" : mimeType, base64 };
   try {
     const r = await generateJson<Record<string, unknown>>({
-      system: systemPrompt(kind, products),
-      parts: [document, { type: "text", text: `書類の種類: ${kind}。この書類を読み取ってください。` }],
+      system: systemPrompt(kind, products, mode),
+      parts: [document, { type: "text", text: `書類の種類: ${kind}${mode === "calc" ? " (金額を書く前の見積書)" : ""}。この書類を読み取ってください。` }],
       schema: SCHEMAS[kind],
       schemaName: `ichijoya_${kind}`,
       maxTokens: 8000,
     });
-    const { extracted, warnings } = normalizeExtracted(kind, r.data, products);
+    const { extracted, warnings } = normalizeExtracted(kind, markCorrectedRows(r.data), products, { mode });
     const confidence = typeof r.data.confidence === "number" && r.data.confidence >= 0 && r.data.confidence <= 1 ? r.data.confidence : 0.8;
     return { provider: r.provider, model: r.model, confidence, extracted, warnings, ms: r.ms };
   } catch (err) {
@@ -312,6 +343,12 @@ export async function extractDocument(params: { kind: DocumentKind; fileName: st
     console.warn(`[ocr] extraction failed (${kind}, ${fileName}):`, err instanceof AiError ? `${err.code} ${err.detail ?? ""}` : err);
     return failed(kind, message);
   }
+}
+
+/** AI が「消して書き直した」とした明細は、確認が済むまで要確認 (黄色) にする (AI の読取の直後だけ) */
+function markCorrectedRows(data: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(data.items)) return data;
+  return { ...data, items: (data.items as Record<string, unknown>[]).map((r) => (r && r.corrected === true ? { ...r, uncertain: true } : r)) };
 }
 
 /** 読み取りに失敗したとき: 空の項目 (手入力用) */
@@ -375,7 +412,9 @@ export function normalizeItems(raw: unknown, products: Product[]): LineItem[] {
     const qty = toNum(r.qty);
     const unitPrice = toNum(r.unitPrice);
     let amount = toNum(r.amount);
-    if (amount === undefined && qty !== undefined && unitPrice !== undefined) amount = Math.round(qty * unitPrice);
+    const calculated = amount === undefined && qty !== undefined && unitPrice !== undefined;
+    if (calculated) amount = Math.round(qty * unitPrice);
+    const rate = toNum(r.rate);
     const p = matchProduct(products, `${name} ${toStr(r.spec) ?? ""}`);
     out.push({
       name,
@@ -389,6 +428,9 @@ export function normalizeItems(raw: unknown, products: Product[]): LineItem[] {
       ...(toStr(r.storeName) ? { storeName: toStr(r.storeName) } : {}),
       ...(toStr(r.siteName) ? { siteName: toStr(r.siteName) } : {}),
       ...(toStr(r.lineNote) ? { lineNote: toStr(r.lineNote) } : {}),
+      ...(r.corrected === true ? { corrected: true } : {}),
+      ...(calculated ? { amountCalculated: true } : {}),
+      ...(rate !== undefined && rate > 0 && rate < 1 ? { rate } : {}),
       ...(r.uncertain === true || (qty !== undefined && unitPrice !== undefined && amount !== undefined && Math.abs(Math.round(qty * unitPrice) - amount) > 1) ? { uncertain: true } : {}),
     });
   }
@@ -420,12 +462,38 @@ const DATE_FIELDS = ["answeredOn", "quoteDate", "drawingDate", "documentDate", "
 const NUMBER_FIELDS = ["subtotal", "discount", "tax", "total", "taxAmount", "amount", "totalTaxIncluded", "spareTatami"];
 const HW_ENUMS: Record<string, readonly string[]> = { paymentMethod: PAYMENT_OPTIONS, taxMode: ["税込", "税抜"], oneOk: ["OK", "NG"], straw: ["A", "B"], material: ["A", "B"], carryOut: ["遠", "近"], rain: ["OK", "NG"] };
 const HW_LISTS: Record<string, readonly string[]> = { equipment: EQUIPMENT_OPTIONS, media: SITE_MEDIA_OPTIONS };
-const HW_LABEL: Record<string, string> = { paperNo: "No.", quoteDate: "日付", furigana: "ふりがな", customerName: "氏名", siteAddress: "住所", phone: "Tel", staffName: "担当者", pickupAt: "引取日時", deliveryAt: "納品日時", totalTaxIncluded: "税込合計金額", paymentMethod: "支払い方法", taxMode: "税込/税抜", subtotal: "小計", tax: "消費税", total: "合計", note: "備考", baggage: "荷物", oneOk: "1人 OK/NG", spareTatami: "かえ畳", floor: "戸建て F", sizes: "サイズ", straw: "わら", material: "建材", equipment: "道具", carryOut: "搬出", rain: "雨天", media: "媒体", fusumaPaper: "襖紙" };
+const HW_LABEL: Record<string, string> = { items: "明細", title: "件名", paymentNote: "支払いの補足", discount: "値引き", otherNotes: "欄外の書き込み", mediaOther: "媒体 (その他)", paperCurtain: "紙カーテン", paperNo: "No.", quoteDate: "日付", furigana: "ふりがな", customerName: "氏名", siteAddress: "住所", phone: "Tel", staffName: "担当者", pickupAt: "引取日時", deliveryAt: "納品日時", totalTaxIncluded: "税込合計金額", paymentMethod: "支払い方法", taxMode: "税込/税抜", subtotal: "小計", tax: "消費税", total: "合計", note: "備考", baggage: "荷物", oneOk: "1人 OK/NG", spareTatami: "かえ畳", floor: "戸建て F", sizes: "サイズ", straw: "わら", material: "建材", equipment: "道具", carryOut: "搬出", rain: "雨天", media: "媒体", fusumaPaper: "襖紙" };
 const SCORE_FIELDS = ["phoneScore", "salesScore", "craftsmanScore", "finishScore"];
 const LIST_OPTIONS: Record<string, readonly string[]> = { priorityList: PRIORITY_OPTIONS, mediaList: MEDIA_OPTIONS, commentTags: COMMENT_TAGS };
 
+/**
+ * 手書き見積書の割合の値引き (「2割引」など) の行に、上の行から計算した金額を入れる (quote-sheet-calc.ts と同じ計算)。
+ * 対象の行が 2 行以上・計算できないときは要確認にする
+ */
+function applyRateRows(items: LineItem[]): LineItem[] {
+  const res = calcSheet(items, { taxIncluded: true });
+  return items.map((it, i) => {
+    const r = res.rows[i];
+    if (r.source !== "rate" && !(r.source === "missing" && r.rate)) return it;
+    if (r.amount === null) return { ...it, rate: r.rate, uncertain: true };
+    return { ...it, rate: r.rate, qty: 1, unitPrice: r.amount, amount: r.amount, ...(r.ambiguous ? { uncertain: true } : {}) };
+  });
+}
+
+/**
+ * 金額を書く前の見積書 (mode = calc): 小計・消費税・合計・税込合計金額をシステムの計算で埋める
+ * (用紙に書かれた合計ではなく、職人が書き写す金額。見積の作成画面でも同じ計算になる)
+ */
+export function applyCalcTotals(ex: Record<string, unknown>): Record<string, unknown> {
+  const items = Array.isArray(ex.items) ? (ex.items as LineItem[]) : [];
+  const taxIncluded = ex.taxMode === "税抜" ? false : ex.taxMode === "税込" ? true : ex.taxIncluded !== false;
+  const discount = typeof ex.discount === "number" ? ex.discount : 0;
+  const r = calcSheet(items, { taxIncluded, discount });
+  return { ...ex, taxIncluded, subtotal: r.subtotal, tax: r.tax, total: r.total, totalTaxIncluded: r.total };
+}
+
 /** AI・手入力の値を同じ形にそろえ、合計の食い違いなどを warnings にする */
-export function normalizeExtracted(kind: DocumentKind, raw: Record<string, unknown>, products: Product[]): { extracted: Record<string, unknown>; warnings: string[] } {
+export function normalizeExtracted(kind: DocumentKind, raw: Record<string, unknown>, products: Product[], opts: { mode?: OcrMode } = {}): { extracted: Record<string, unknown>; warnings: string[] } {
   const warnings = Array.isArray(raw.warnings) ? (raw.warnings as unknown[]).filter((w): w is string => typeof w === "string" && w.trim() !== "").map((w) => w.trim()) : [];
   const ex: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(raw)) {
@@ -437,12 +505,15 @@ export function normalizeExtracted(kind: DocumentKind, raw: Record<string, unkno
       else warnings.push(`日付「${String(v)}」を読み取れませんでした`);
     } else if (NUMBER_FIELDS.includes(k)) {
       const x = toNum(v);
-      if (x !== undefined) ex[k] = Math.round(x);
+      // 値引きは正の数 (AI が ▲ をマイナスにして返すことがある)
+      if (x !== undefined) ex[k] = k === "discount" ? Math.abs(Math.round(x)) : Math.round(x);
     } else if (kind === "handwritten_quote" && HW_ENUMS[k]) {
       if (HW_ENUMS[k].includes(String(v))) ex[k] = v;
     } else if (kind === "handwritten_quote" && HW_LISTS[k]) {
       const list = (Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,、|]/) : []).map((x) => String(x).trim());
       ex[k] = [...new Set(list.filter((x) => HW_LISTS[k].includes(x)))];
+    } else if (k === "corrections") {
+      ex.corrections = (Array.isArray(v) ? v : []).filter((x): x is string => typeof x === "string" && x.trim() !== "").map((x) => x.trim().slice(0, 200));
     } else if (k === "uncertainFields") {
       ex.uncertainFields = (Array.isArray(v) ? v : []).filter((x): x is string => typeof x === "string" && x.trim() !== "");
     } else if (k === "phone") {
@@ -493,6 +564,7 @@ export function normalizeExtracted(kind: DocumentKind, raw: Record<string, unkno
     return { extracted: ex, warnings: [...new Set(warnings)] };
   }
   if (!Array.isArray(ex.items)) ex.items = [];
+  if (kind === "handwritten_quote") ex.items = applyRateRows(ex.items as LineItem[]);
   const items = ex.items as LineItem[];
   const sum = items.reduce((a, i) => a + (i.amount ?? 0), 0);
   if (kind === "handwritten_quote") {
@@ -506,12 +578,20 @@ export function normalizeExtracted(kind: DocumentKind, raw: Record<string, unkno
       const expected = ex.taxIncluded ? sum - disc : sum - disc + Math.floor((sum - disc) * 0.1);
       if (Math.abs(expected - totalIn) > 2) warnings.push(`明細から計算した合計 (${expected.toLocaleString("ja-JP")} 円) と、書かれた合計 (${totalIn.toLocaleString("ja-JP")} 円) が一致しません`);
     }
+    const corrections = Array.isArray(ex.corrections) ? (ex.corrections as string[]) : [];
+    if (corrections.length) warnings.push(`消して書き直した箇所 (書き直した値で読んでいます。元の書類と見比べてください): ${corrections.join(" / ")}`);
     const unsure = Array.isArray(ex.uncertainFields) ? (ex.uncertainFields as string[]) : [];
     if (unsure.length) warnings.push(`要確認: ${unsure.map((k) => HW_LABEL[k] ?? k).join("・")}`);
     const rows = items.filter((i) => i.uncertain).length;
     if (rows) warnings.push(`読み取りに自信がない明細が ${rows} 行あります (黄色の行)`);
-    if (!ex.customerName) warnings.push("氏名が読み取れていません");
-    return { extracted: ex, warnings: [...new Set(warnings)] };
+    const rateRows = items.filter((i) => i.rate && i.uncertain).length;
+    if (rateRows) warnings.push(`割合の値引き (「2割引」など) の対象の行を確かめてください (${rateRows} 行)`);
+    if (opts.mode === "calc") {
+      if (!ex.taxMode) warnings.push("「税込 / 税抜」に○がないため、税込 (単価に消費税を含む) として計算しました。違うときは切り替えてください");
+      const missing = items.filter((i) => i.amount === undefined).length;
+      if (missing) warnings.push(`数量か単価が読み取れず、金額を計算できない明細が ${missing} 行あります`);
+    } else if (!ex.customerName) warnings.push("氏名が読み取れていません");
+    return { extracted: opts.mode === "calc" ? applyCalcTotals(ex) : ex, warnings: [...new Set(warnings)] };
   }
   const subtotal = ex.subtotal as number | undefined;
   const tax = (ex.tax ?? ex.taxAmount) as number | undefined;
@@ -557,7 +637,7 @@ function hashStr(str: string): number {
   return h;
 }
 
-export function mockExtract(kind: DocumentKind, fileName: string, products: Product[]): OcrResult {
+export function mockExtract(kind: DocumentKind, fileName: string, products: Product[], mode?: OcrMode): OcrResult {
   const h = hashStr(fileName + kind);
   const pick = <T>(list: readonly T[], salt = 0): T => list[(h + salt) % list.length];
   const today = toDateKey(new Date());
@@ -565,7 +645,7 @@ export function mockExtract(kind: DocumentKind, fileName: string, products: Prod
   const conf = 0.86 + (h % 11) / 100;
   const warnings: string[] = ["サンプルの読取結果です (AI の API キーが未設定)"];
   const done = (raw: Record<string, unknown>, c = conf, extra: string[] = []): OcrResult => {
-    const { extracted, warnings: w } = normalizeExtracted(kind, raw, products);
+    const { extracted, warnings: w } = normalizeExtracted(kind, raw, products, { mode });
     return { provider: "mock", confidence: c, extracted, warnings: [...warnings, ...extra, ...w] };
   };
   switch (kind) {
@@ -583,6 +663,11 @@ export function mockExtract(kind: DocumentKind, fileName: string, products: Prod
         items.splice(1, 0, { name: f.name, spec: f.grade, qty: pick([2, 4, 6], 7), unit: f.unit, unitPrice: f.unitPrice });
       }
       const subtotal = items.reduce((a, i) => a + Math.round((i.qty as number) * (i.unitPrice as number)), 0);
+      if (mode === "calc") {
+        // 金額を書く前の見積書: 金額欄・合計は空欄。割合の値引きの行を 1 つ入れる
+        items.splice(1, 0, { name: "畳 1割引" });
+        return done({ paperNo: String(100 + (h % 900)), quoteDate: today, title: `${main.name} ${qty}畳`, taxMode: "税込", items: items.map((i) => (i.name === "諸経費 (一式)" ? { ...i, qty: null, unitPrice: null, amount: 3000 } : i)) }, conf, ["数量・単価を用紙と見比べてから、金額を書き写してください"]);
+      }
       return done(
         {
           paperNo: String(100 + (h % 900)),

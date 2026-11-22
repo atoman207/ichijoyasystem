@@ -36,8 +36,11 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const store = db.stores.find((s) => s.id === inq.storeId);
   const users = db.users.filter((u) => u.active && (canSeeAllStores(user) || u.storeId === inq.storeId));
   const isAiChannel = (ch: string) => ch === "ai_phone" || ch === "ai_chat" || ch === "ai_voice";
+  // 受付 (メモの写真・話して入力・通話の文字起こし。src/lib/reception.ts) から登録した問い合わせ
+  const receptionId = inq.sourceRef?.startsWith("reception:") ? inq.sourceRef.slice("reception:".length) : undefined;
+  const isIntakeLog = (c: { channel: string; subject: string; relatedId?: string }) => c.relatedId === inq.id && (isAiChannel(c.channel) || (Boolean(receptionId) && c.subject.startsWith("受付:")));
   // AI 受付の会話の記録は下の「…の記録」に出すので、やりとりの一覧には重ねない
-  const comms = customer ? db.commLogs.filter((c) => c.customerId === customer.id && (c.relatedId === inq.id || !c.relatedId) && !(c.relatedId === inq.id && isAiChannel(c.channel))).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 10) : [];
+  const comms = customer ? db.commLogs.filter((c) => c.customerId === customer.id && (c.relatedId === inq.id || !c.relatedId) && !isIntakeLog(c)).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 10) : [];
   const logs = db.auditLogs.filter((l) => l.entity === "inquiry" && l.entityId === inq.id).reverse();
   const events = caseEvents(db, { inquiryId: inq.id, quoteId: quote?.id, orderId: order?.id });
   const caseParam = order ? `orderId=${order.id}` : quote ? `quoteId=${quote.id}` : `inquiryId=${inq.id}`;
@@ -49,7 +52,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const storeName = (sid: string) => db.stores.find((s) => s.id === sid)?.name ?? sid;
   // AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) からの受付: 会話の記録
   const fromAi = isAiChannel(inq.channel);
-  const aiLogs = db.commLogs.filter((c) => c.relatedType === "inquiry" && c.relatedId === inq.id && isAiChannel(c.channel));
+  const aiLogs = db.commLogs.filter((c) => c.relatedType === "inquiry" && isIntakeLog(c));
   // AI システムから受け取った項目 (src/lib/ai-intake.ts。顧客の登録で使う)
   const intakeRows: [string, ReactNode][] = ik
     ? ([
@@ -110,7 +113,11 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
 
           {(aiLogs.length > 0 || intakeRows.length > 0) && (
             <Card>
-              <CardHeader title={`${CHANNEL_LABEL[inq.channel]}の記録`} description={`AI システムから受け取った項目と会話・要約 (受け取ったまま保存しています)${customer ? "" : "。「顧客として登録する」で、お名前・ふりがな・電話・メール・住所を顧客の情報に入れます"}`} />
+              <CardHeader
+                title={receptionId ? "受付の記録" : `${CHANNEL_LABEL[inq.channel]}の記録`}
+                description={`${receptionId ? "受付 (メモの写真・話して入力・通話) から読み取った項目と元の内容" : "AI システムから受け取った項目と会話・要約 (受け取ったまま保存しています)"}${customer ? "" : "。「顧客として登録する」で、お名前・ふりがな・電話・メール・住所を顧客の情報に入れます"}`}
+                action={receptionId && db.documents.some((d) => d.id === receptionId) ? <LinkButton href={`/inquiries/reception/${receptionId}`} size="sm" variant="secondary">元の受付</LinkButton> : undefined}
+              />
               {intakeRows.length > 0 && <div className="mb-3"><Dl columns={3} items={intakeRows} /></div>}
               {aiLogs.map((c) => (
                 <details key={c.id} className="text-sm" open={aiLogs.length === 1}>

@@ -639,7 +639,8 @@ export const TABLES: TableDef[] = [
     columns: [
       ["id", "text primary key"],
       ["number", "text not null"],
-      ["orderId", "text not null references orders(id) on delete cascade"],
+      // スプレッドシートから取り込んだ記録・LINE の報告から登録した記録は案件が決まるまで空 (RELAXED_NOT_NULL)
+      ["orderId", "text references orders(id) on delete cascade"],
       ["customerId", "text"],
       ["storeId", "text not null references stores(id)"],
       ["kind", "text not null"],
@@ -654,6 +655,9 @@ export const TABLES: TableDef[] = [
       ["attribution", "text"],
       ["category", "text"],
       ["counted", "boolean"],
+      ["siteName", "text"],
+      ["origin", "text"],
+      ["sourceRef", "text"],
       ["reportedBy", "text not null"],
       ["createdAt", `${ts} not null`],
       ["updatedAt", `${ts} not null`],
@@ -678,12 +682,32 @@ export const TABLES: TableDef[] = [
       ["orderId", "text references orders(id) on delete set null"],
       ["customerId", "text"],
       ["note", "text"],
+      ["sourceRef", "text"],
       ["createdBy", "text not null"],
       ["createdAt", `${ts} not null`],
       ["updatedAt", `${ts} not null`],
     ],
     orderBy: ["posted_on"],
     indexes: [["store_id"]],
+  },
+  {
+    collection: "surveyHistory",
+    table: "survey_history",
+    label: "アンケートの過去の集計 (H26〜R4)",
+    columns: [
+      ["id", "text primary key"],
+      ["fiscalLabel", "text not null"],
+      ["startYear", "integer not null"],
+      ["period", "text not null"],
+      ["storeId", "text references stores(id)"],
+      ["question", "text not null"],
+      ["answer", "text not null default ''"],
+      ["count", "numeric not null"],
+      ["sourceRef", "text not null"],
+      ["importedAt", `${ts} not null`],
+    ],
+    orderBy: ["start_year", "question"],
+    indexes: [["start_year"]],
   },
   {
     collection: "sourceFiles",
@@ -1803,7 +1827,11 @@ export const SUPABASE_ONLY_TABLES: TableDef[] = [
  * 後から not null を外した列 (テーブル・列の追加と同じく、何度実行しても安全)。
  * comm_logs.customer_id: 協力業者・仕入先とのやりとりはお客様を持たないため (Phase 4)
  */
-export const RELAXED_NOT_NULL: [table: string, column: string][] = [["comm_logs", "customer_id"]];
+export const RELAXED_NOT_NULL: [table: string, column: string][] = [
+  ["comm_logs", "customer_id"],
+  // クレーム・手直し: スプレッドシートから取り込んだ記録・LINE の報告は案件が決まるまで空
+  ["quality_issues", "order_id"],
+];
 
 /** アプリ全体のメタ情報 (データ形式のバージョンと、インスタンス間の更新検知用のリビジョン) */
 export const META_TABLE = "app_meta";

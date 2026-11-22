@@ -1,3 +1,4 @@
+import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canAccessStore, canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
@@ -23,7 +24,7 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
     <div className="max-w-3xl">
       <Flash err={err} />
       <PageHeader title="問い合わせを登録" back={{ href: "/inquiries", label: "問い合わせ一覧" }} />
-      <Note tone="accent">電話・来店 (対面)・郵送・LINE などで受けた問い合わせを手入力で登録します。スマートフォン・タブレットからも入力できます。AI 電話受付・Web フォームからの自動登録は、各サービスとの接続後に使えます。</Note>
+      <Note tone="accent">電話・来店 (対面)・郵送・LINE などで受けた問い合わせを手入力で登録します。スマートフォン・タブレットからも入力できます。手書きのメモを撮影する・話して入力する・通話の録音から読み取るときは <Link href="/inquiries/reception" className="font-medium underline">受付を登録</Link> を使うと、AI がお名前・電話番号・用件を読み取り、登録済みのお客様・進行中の案件も探します。</Note>
       <Card className="mt-4">
         {choices.searchable && <CustomerSearch total={choices.total} q={cq} shown={customers.filter((c) => c.id !== customerId).length} keep={{ customerId }} />}
         <form action={createInquiry} className="space-y-5">

@@ -533,7 +533,7 @@ comment on table survey_responses is 'お客様アンケート';
 create table if not exists quality_issues (
   id text primary key,
   number text not null,
-  order_id text not null references orders(id) on delete cascade,
+  order_id text references orders(id) on delete cascade,
   customer_id text,
   store_id text not null references stores(id),
   kind text not null,
@@ -548,6 +548,9 @@ create table if not exists quality_issues (
   attribution text,
   category text,
   counted boolean,
+  site_name text,
+  origin text,
+  source_ref text,
   reported_by text not null,
   created_at timestamptz not null,
   updated_at timestamptz not null
@@ -568,11 +571,27 @@ create table if not exists google_reviews (
   order_id text references orders(id) on delete set null,
   customer_id text,
   note text,
+  source_ref text,
   created_by text not null,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
 comment on table google_reviews is 'Google 口コミ';
+
+-- アンケートの過去の集計 (H26〜R4)
+create table if not exists survey_history (
+  id text primary key,
+  fiscal_label text not null,
+  start_year integer not null,
+  period text not null,
+  store_id text references stores(id),
+  question text not null,
+  answer text not null default '',
+  count numeric not null,
+  source_ref text not null,
+  imported_at timestamptz not null
+);
+comment on table survey_history is 'アンケートの過去の集計 (H26〜R4)';
 
 -- 資料台帳 (Google ドライブの共有資料)
 create table if not exists source_files (
@@ -1880,7 +1899,7 @@ alter table survey_responses add column if not exists created_by text;
 alter table survey_responses add column if not exists created_at timestamptz;
 alter table survey_responses add column if not exists updated_at timestamptz;
 alter table quality_issues add column if not exists number text not null;
-alter table quality_issues add column if not exists order_id text not null references orders(id) on delete cascade;
+alter table quality_issues add column if not exists order_id text references orders(id) on delete cascade;
 alter table quality_issues add column if not exists customer_id text;
 alter table quality_issues add column if not exists store_id text not null references stores(id);
 alter table quality_issues add column if not exists kind text not null;
@@ -1895,6 +1914,9 @@ alter table quality_issues add column if not exists resolved_on date;
 alter table quality_issues add column if not exists attribution text;
 alter table quality_issues add column if not exists category text;
 alter table quality_issues add column if not exists counted boolean;
+alter table quality_issues add column if not exists site_name text;
+alter table quality_issues add column if not exists origin text;
+alter table quality_issues add column if not exists source_ref text;
 alter table quality_issues add column if not exists reported_by text not null;
 alter table quality_issues add column if not exists created_at timestamptz not null;
 alter table quality_issues add column if not exists updated_at timestamptz not null;
@@ -1909,9 +1931,19 @@ alter table google_reviews add column if not exists points numeric not null;
 alter table google_reviews add column if not exists order_id text references orders(id) on delete set null;
 alter table google_reviews add column if not exists customer_id text;
 alter table google_reviews add column if not exists note text;
+alter table google_reviews add column if not exists source_ref text;
 alter table google_reviews add column if not exists created_by text not null;
 alter table google_reviews add column if not exists created_at timestamptz not null;
 alter table google_reviews add column if not exists updated_at timestamptz not null;
+alter table survey_history add column if not exists fiscal_label text not null;
+alter table survey_history add column if not exists start_year integer not null;
+alter table survey_history add column if not exists period text not null;
+alter table survey_history add column if not exists store_id text references stores(id);
+alter table survey_history add column if not exists question text not null;
+alter table survey_history add column if not exists answer text not null default '';
+alter table survey_history add column if not exists count numeric not null;
+alter table survey_history add column if not exists source_ref text not null;
+alter table survey_history add column if not exists imported_at timestamptz not null;
 alter table source_files add column if not exists folder text not null;
 alter table source_files add column if not exists folder_name text not null;
 alter table source_files add column if not exists path text not null;
@@ -2637,6 +2669,8 @@ create index if not exists quality_issues_order_id_idx on quality_issues (order_
 create index if not exists quality_issues_load_order_idx on quality_issues (occurred_on, id);
 create index if not exists google_reviews_store_id_idx on google_reviews (store_id);
 create index if not exists google_reviews_load_order_idx on google_reviews (posted_on, id);
+create index if not exists survey_history_start_year_idx on survey_history (start_year);
+create index if not exists survey_history_load_order_idx on survey_history (start_year, question, id);
 create index if not exists source_files_folder_idx on source_files (folder);
 create index if not exists source_files_load_order_idx on source_files (folder, path, id);
 create index if not exists photo_albums_load_order_idx on photo_albums (date, id);
@@ -2731,6 +2765,7 @@ create index if not exists source_texts_load_order_idx on source_texts (item_id,
 
 -- 後から not null を外した列 (データは変えない。外した後に実行しても変化なし)
 alter table comm_logs alter column customer_id drop not null;
+alter table quality_issues alter column order_id drop not null;
 
 -- 行レベルセキュリティ: 有効化のみ (ポリシーなし)。publishable / anon キーからはアクセスできない
 -- アプリが使う secret キー (service_role) には読み書きの権限を明示的に付ける (プロジェクトの既定の権限に頼らない)
@@ -2810,6 +2845,9 @@ grant select, insert, update, delete on table quality_issues to service_role;
 alter table google_reviews enable row level security;
 revoke all on table google_reviews from anon, authenticated;
 grant select, insert, update, delete on table google_reviews to service_role;
+alter table survey_history enable row level security;
+revoke all on table survey_history from anon, authenticated;
+grant select, insert, update, delete on table survey_history to service_role;
 alter table source_files enable row level security;
 revoke all on table source_files from anon, authenticated;
 grant select, insert, update, delete on table source_files to service_role;

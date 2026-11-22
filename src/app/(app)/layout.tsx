@@ -20,6 +20,7 @@ import { knowledgeSources } from "@/lib/knowledge";
 import { myReviewItems, reviewCtx } from "@/lib/knowledge-review";
 import { cronHealth } from "@/lib/knowledge-sync";
 import { docDraftAttention } from "@/lib/doc-drafts";
+import { pendingReceptionCount } from "@/lib/reception";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +42,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const nav: NavItem[] = [
     { href: "/", label: "ダッシュボード", short: "ホーム", icon: "dashboard" },
     { href: "/customers", label: "顧客", icon: "customers", group: "営業・施工" },
-    { href: "/inquiries", label: "問い合わせ", icon: "inquiries", group: "営業・施工", badge: n.newInquiries || undefined },
+    { href: "/inquiries", label: "問い合わせ", icon: "inquiries", group: "営業・施工", badge: n.newInquiries + pendingReceptionCount(getDb(), user) || undefined },
     { href: "/quotes", label: "見積", icon: "quotes", group: "営業・施工" },
     { href: "/orders", label: "受注・施工", icon: "orders", group: "営業・施工" },
     { href: "/cases", label: "案件の進捗 (問い合わせ〜入金・全処理完了)", short: "案件進捗", icon: "cases", group: "営業・施工" },

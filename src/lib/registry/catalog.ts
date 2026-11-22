@@ -32,7 +32,7 @@ export interface CatalogTable {
 }
 
 const GROUPS: [string, RegExp][] = [
-  ["営業・施工", /^(customers|inquiries|quotes|orders|schedule|surveys|qualityIssues|reviews|commLogs|photoAlbums|scheduleHolds|jobSpecs|productionJobs|resourceBookings|workReportDays|promotions|products)$/],
+  ["営業・施工", /^(customers|inquiries|quotes|orders|schedule|surveys|surveyHistory|qualityIssues|reviews|commLogs|photoAlbums|scheduleHolds|jobSpecs|productionJobs|resourceBookings|workReportDays|promotions|products)$/],
   ["経理", /^(invoices|payments|expenses|purchases|suppliers|purchaseOrders|cashEntries)$/],
   ["社内・事務", /^(users|stores|threads|messages|approvals|knowledge|attachments|documents|holidays|leaveRequests|leaveGrants|holidayWorks|officeImprovements|condolences|docDrafts)$/],
   ["FAX・地図", /^(faxMessages|faxNumbers|map.*)$/],

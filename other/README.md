@@ -5,8 +5,8 @@
 | 内容 | 説明 |
 |------|------|
 | `docs/` | 設計メモ |
-| `phase1/` / `phase2/` | 納品物 (PDF・設計書など) |
-| `scripts-phase1/` / `scripts-phase2/` | 納品物の生成スクリプト |
+| `phase1/` / `phase2/` / `step5/` | 納品物 (PDF・設計書など)。`step5/` はステップ 5 (本番稼働・納品) の操作マニュアルと完了報告書、`step5/results/` はその確認の記録 |
+| `scripts-phase1/` / `scripts-phase2/` / `scripts-step5/` | 納品物の生成スクリプト |
 | `.smoke-shots/` | ブラウザ疎通テストのスクリーンショット |
 | `*.deb` | インストーラー |
 

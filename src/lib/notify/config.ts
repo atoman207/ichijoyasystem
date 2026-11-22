@@ -91,6 +91,11 @@ export function aiIntakeSecret(): string | null {
   return env("AI_INTAKE_SECRET") || null;
 }
 
+/** 電話のシステム (録音・文字起こしのできるクラウド電話など) から通話の内容を受け取る共有鍵 (/api/integrations/phone-call) */
+export function phoneIntakeSecret(): string | null {
+  return env("PHONE_INTAKE_SECRET") || null;
+}
+
 /** 通知・送付文に入れる画面の URL の先頭 (末尾の / なし) */
 export function appBaseUrl(): string {
   const v = env("APP_BASE_URL") || (env("VERCEL_PROJECT_PRODUCTION_URL") ? `https://${env("VERCEL_PROJECT_PRODUCTION_URL")}` : env("VERCEL_URL") ? `https://${env("VERCEL_URL")}` : "http://localhost:3000");

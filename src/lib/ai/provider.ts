@@ -740,8 +740,8 @@ export async function synthesizeSpeech(text: string): Promise<{ audio: ArrayBuff
   throw last ?? new AiError("unsupported", "音声のモデルを利用できません。");
 }
 
-/** 音声 → 文字 (日本語)。hint は聞き取りの手がかりの言葉 (社名・店舗名・社員名など) */
-export async function transcribeAudio(audio: Blob, fileName: string, hint: string): Promise<{ text: string; model: string }> {
+/** 音声 → 文字 (日本語)。hint は聞き取りの手がかりの言葉 (社名・店舗名・社員名など)。timeoutMs は長い録音 (通話の録音) 用 */
+export async function transcribeAudio(audio: Blob, fileName: string, hint: string, opts: { timeoutMs?: number } = {}): Promise<{ text: string; model: string }> {
   const key = openAiVoiceKey();
   if (!key) throw new AiError("config", "音声入力には OpenAI の API キーが必要です。");
   const models = [...new Set([workingSttModel, ...STT_MODELS()].filter(Boolean) as string[])];
@@ -753,7 +753,7 @@ export async function transcribeAudio(audio: Blob, fileName: string, hint: strin
     form.append("language", "ja");
     form.append("prompt", hint.slice(0, 800));
     form.append("file", audio, fileName);
-    const res = await voiceFetch("/audio/transcriptions", { method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form }, 45_000);
+    const res = await voiceFetch("/audio/transcriptions", { method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form }, opts.timeoutMs ?? 45_000);
     if (res.ok) {
       workingSttModel = model;
       const body = (await res.json().catch(() => null)) as { text?: string; usage?: { input_tokens?: number; output_tokens?: number } } | null;

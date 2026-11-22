@@ -77,7 +77,8 @@ export function storeKpi(db: Pick<Database, "orders" | "customers" | "surveys" |
   const scores = Object.fromEntries(SCORE_QUESTIONS.map((q) => [q.key, avg(surveys.map((s) => s[q.key]))])) as Record<ScoreKey, number | null>;
   const scoreCounts = Object.fromEntries(SCORE_QUESTIONS.map((q) => [q.key, surveys.filter((s) => typeof s[q.key] === "number").length])) as Record<ScoreKey, number>;
   const qualityPoints = issues.reduce((a, q) => a + q.points, 0);
-  const claimCases = new Set(issues.filter((q) => q.kind !== "rework").map((q) => q.orderId)).size;
+  // 案件ごとに 1 件 (案件にひも付いていない記録 = スプレッドシートの取込・LINE の報告は 1 件ずつ)
+  const claimCases = new Set(issues.filter((q) => q.kind !== "rework").map((q) => q.orderId ?? `qc:${q.id}`)).size;
   const answered = surveys.filter((s) => s.wouldUseAgain === "はい" || s.wouldUseAgain === "いいえ" || /はい|いいえ/.test(s.wouldUseAgain ?? ""));
   return {
     storeId: storeId ?? "all",
@@ -249,6 +250,6 @@ export function filterIssues(issues: QualityIssue[], f: { storeId?: string; user
   const q = f.q?.trim();
   return issues
     .filter((x) => (!f.storeId || x.storeId === f.storeId) && (!f.userId || x.responsibleUserIds.includes(f.userId)) && (!f.kind || x.kind === f.kind) && (!f.status || x.status === f.status) && inPeriod(x.occurredOn, f.p))
-    .filter((x) => !q || [x.number, x.description, x.cause ?? "", x.countermeasure ?? "", orderNumber(x.orderId)].some((t) => t.includes(q)))
+    .filter((x) => !q || [x.number, x.description, x.cause ?? "", x.countermeasure ?? "", x.siteName ?? "", x.origin ?? "", x.orderId ? orderNumber(x.orderId) : ""].some((t) => t.includes(q)))
     .sort((a, b) => b.occurredOn.localeCompare(a.occurredOn) || b.number.localeCompare(a.number));
 }

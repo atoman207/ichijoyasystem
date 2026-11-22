@@ -10,6 +10,7 @@ import { KPI_SETTINGS_ID, QUALITY_CATEGORIES, QUALITY_KIND_LABEL, kpiSettings, p
 import { MEDIA_OPTIONS, PRIORITY_OPTIONS, normPostcardNo, tagComment } from "@/lib/survey";
 import { findOrderByPostcard, findSurveyByPostcard, storeFromPostcard, surveyFromExtracted } from "@/lib/survey-link";
 import { analyzeVoices } from "@/lib/ai/voice";
+import { findLineGroup, markLineMessageHandled, parseLineMessageRef } from "@/lib/line-groups";
 import { assertStore, choice, fail, numField, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 const isDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
@@ -80,6 +81,98 @@ export async function createQualityIssue(orderId: string, formData: FormData) {
   redirect(withMsg(back, `${QUALITY_KIND_LABEL[kind]} ${number} を登録しました。KPI に反映されます。原因・対策は「クレーム・手直し」の画面で追記できます。`));
 }
 
+/**
+ * 案件の画面を通らずに登録する (LINE の「クレーム・手直し報告」グループの報告から・電話で受けたクレームなど)。
+ * 受注番号が分かればひも付け、分からなければ現場名で残して、あとから詳細の画面でひも付ける
+ */
+export async function registerQualityIssue(formData: FormData) {
+  const user = await requireActionUser();
+  const back = safeReturn(str(formData, "returnTo"), "/kpi/quality/new");
+  await assertTable("quality_issues", back);
+  const kind = choice(formData, "kind", QUALITY_KINDS, "rework") as QualityKind;
+  const occurredOn = str(formData, "occurredOn");
+  const description = str(formData, "description");
+  const siteName = str(formData, "siteName").slice(0, 120);
+  const orderRef = str(formData, "orderRef").normalize("NFKC").trim().toUpperCase();
+  const lineRef = str(formData, "lineRef");
+  if (!isDate(occurredOn)) fail(back, "発生日を入力してください。");
+  if (!description) fail(back, "内容を入力してください。");
+  if (!orderRef && !siteName) fail(back, "受注番号か現場名のどちらかを入力してください。");
+  let id = "";
+  let number = "";
+  await mutate((db) => {
+    const o = orderRef ? db.orders.find((x) => x.number.toUpperCase() === orderRef) : undefined;
+    if (orderRef && !o) fail(back, `受注番号「${orderRef}」が見つかりません (分からなければ空欄にして現場名を入れてください)。`);
+    const storeId = (o?.storeId ?? str(formData, "storeId")) as StoreId;
+    if (!db.stores.some((s) => s.id === storeId)) fail(back, "店舗を選んでください。");
+    assertStore(user, storeId, back);
+    const users = new Set(db.users.map((u) => u.id));
+    const responsible = [...new Set(formData.getAll("responsibleUserIds").map(String).filter((v) => users.has(v)))];
+    if (lineRef) {
+      const p = parseLineMessageRef(lineRef);
+      const g = p ? findLineGroup(db, p.groupId) : undefined;
+      if (!g || g.purpose !== "quality" || (g.storeId ? !canAccessStore(user, g.storeId) : !canManageKpi(user))) fail(back, "LINE の報告が見つかりません。");
+    }
+    const points = kpiSettings(db).qualityPoints[kind];
+    const now = nowIso();
+    number = nextNumber(db, "QC", db.qualityIssues, occurredOn);
+    id = newId("qc");
+    const cause = str(formData, "cause") || undefined;
+    const countermeasure = str(formData, "countermeasure") || undefined;
+    const resolved = formData.get("resolved") === "on" && Boolean(cause && countermeasure);
+    db.qualityIssues.push({
+      id,
+      number,
+      orderId: o?.id,
+      customerId: o?.customerId,
+      siteName: siteName || undefined,
+      origin: str(formData, "origin").slice(0, 40) || (lineRef ? "LINE" : undefined),
+      storeId,
+      kind,
+      points,
+      occurredOn,
+      responsibleUserIds: responsible,
+      description,
+      cause,
+      countermeasure,
+      attribution: str(formData, "attribution") === "office" ? "office" : "store",
+      category: (QUALITY_CATEGORIES as readonly string[]).includes(str(formData, "category")) ? str(formData, "category") : undefined,
+      counted: formData.get("notCounted") !== "on",
+      status: resolved ? "resolved" : "open",
+      resolvedOn: resolved ? occurredOn : undefined,
+      reportedBy: user.id,
+      createdAt: now,
+      updatedAt: now,
+    });
+    if (o) {
+      o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "change", body: `${QUALITY_KIND_LABEL[kind]}を登録 (${number} / ${points} 点)\n${description}` });
+      o.updatedAt = now;
+    }
+    if (lineRef) markLineMessageHandled(db, lineRef, user.id, `quality:${id}`);
+    addAudit(db, { userId: user.id, action: "create", entity: "quality", entityId: id, entityLabel: o?.number ?? (siteName || number), summary: `${QUALITY_KIND_LABEL[kind]}を登録 (${number} / ${points} 点${o ? "" : ` / 現場: ${siteName}`}${lineRef ? " / LINE の報告から" : ""})`, storeId });
+  });
+  revalidatePath("/kpi");
+  redirect(withMsg(`/kpi/quality/${id}`, `${QUALITY_KIND_LABEL[kind]} ${number} を登録しました。KPI に反映されます。${orderRef ? "" : "案件が分かったら、この画面の「案件 (受注番号)」でひも付けてください。"}`));
+}
+
+/** LINE の報告を「記録にしない」で対応済みにする (クレーム・手直しではなかった・重複の報告など) */
+export async function dismissLineReport(formData: FormData) {
+  const user = await requireActionUser();
+  const back = safeReturn(str(formData, "returnTo"), "/kpi/quality");
+  const ref = str(formData, "lineRef");
+  const reason = str(formData, "reason").slice(0, 80);
+  await mutate((db) => {
+    const p = parseLineMessageRef(ref);
+    const g = p ? findLineGroup(db, p.groupId) : undefined;
+    if (!g || g.purpose !== "quality") fail(back, "LINE の報告が見つかりません。");
+    if (g.storeId ? !canAccessStore(user, g.storeId) : !canManageKpi(user)) fail(back, "この報告を対応済みにする権限がありません。");
+    if (!markLineMessageHandled(db, ref, user.id, reason ? `dismissed:${reason}` : "dismissed")) fail(back, "LINE の報告が見つかりません。");
+    addAudit(db, { userId: user.id, action: "update", entity: "settings", entityId: g.id, entityLabel: g.label || g.name || g.id, summary: `LINE のクレーム・手直し報告を記録にせず対応済みにしました${reason ? ` (${reason})` : ""}`, storeId: g.storeId ?? "hq" });
+  });
+  revalidatePath("/kpi/quality");
+  redirect(withMsg(back, "LINE の報告を対応済みにしました。"));
+}
+
 export async function updateQualityIssue(id: string, formData: FormData) {
   const user = await requireActionUser();
   const back = safeReturn(str(formData, "returnTo"), `/kpi/quality/${id}`);
@@ -89,7 +182,8 @@ export async function updateQualityIssue(id: string, formData: FormData) {
     assertStore(user, q.storeId, back);
     const canEdit = canManageKpi(user) || q.reportedBy === user.id || q.responsibleUserIds.includes(user.id);
     if (!canEdit) fail(back, "この記録を変更できるのは、登録者・対象の担当者・店長・本部・管理者です。");
-    const before = { kind: q.kind, points: q.points, occurredOn: q.occurredOn, description: q.description, cause: q.cause ?? "", countermeasure: q.countermeasure ?? "", status: q.status, responsible: q.responsibleUserIds.join(","), attribution: q.attribution ?? "store", category: q.category ?? "", counted: q.counted !== false };
+    const snap = () => ({ kind: q.kind, points: q.points, occurredOn: q.occurredOn, description: q.description, cause: q.cause ?? "", countermeasure: q.countermeasure ?? "", status: q.status, responsible: q.responsibleUserIds.join(","), attribution: q.attribution ?? "store", category: q.category ?? "", counted: q.counted !== false, order: q.orderId ?? "", siteName: q.siteName ?? "", origin: q.origin ?? "" });
+    const before = snap();
     const kind = choice(formData, "kind", QUALITY_KINDS, q.kind) as QualityKind;
     // 区分を変えたときだけ、今のルールで点数を付け直す (区分が同じなら登録時の点数のまま)
     if (kind !== q.kind) {
@@ -102,6 +196,26 @@ export async function updateQualityIssue(id: string, formData: FormData) {
     q.description = str(formData, "description") || q.description;
     q.cause = str(formData, "cause") || undefined;
     q.countermeasure = str(formData, "countermeasure") || undefined;
+    if (formData.has("siteName")) q.siteName = str(formData, "siteName").slice(0, 120) || undefined;
+    if (formData.has("origin")) q.origin = str(formData, "origin").slice(0, 40) || undefined;
+    // 案件 (受注番号) へのひも付け: スプレッドシートから取り込んだ記録・LINE の報告から登録した記録を、あとから案件に付ける
+    if (formData.has("orderRef")) {
+      const ref = str(formData, "orderRef").normalize("NFKC").trim().toUpperCase();
+      if (!ref) {
+        if (q.orderId && !canManageKpi(user)) fail(back, "案件のひも付けを外せるのは店長・本部・管理者です。");
+        q.orderId = undefined;
+      } else {
+        const o = db.orders.find((x) => x.number.toUpperCase() === ref);
+        if (!o) fail(back, `受注番号「${ref}」が見つかりません。`);
+        assertStore(user, o.storeId, back);
+        if (o.id !== q.orderId) {
+          q.orderId = o.id;
+          q.customerId = o.customerId;
+          o.progressNotes.push({ id: newId("pn"), at: nowIso(), userId: user.id, kind: "change", body: `${QUALITY_KIND_LABEL[q.kind]} ${q.number} をこの案件にひも付けました\n${q.description}` });
+          o.updatedAt = nowIso();
+        }
+      }
+    }
     if (formData.has("attribution") && canManageKpi(user)) q.attribution = str(formData, "attribution") === "office" ? "office" : "store";
     if (formData.has("category")) q.category = (QUALITY_CATEGORIES as readonly string[]).includes(str(formData, "category")) ? str(formData, "category") : undefined;
     if (formData.has("countedField") && canManageKpi(user)) q.counted = formData.get("notCounted") !== "on";
@@ -117,12 +231,13 @@ export async function updateQualityIssue(id: string, formData: FormData) {
       q.status = "open";
       q.resolvedOn = undefined;
     }
-    const after = { kind: q.kind, points: q.points, occurredOn: q.occurredOn, description: q.description, cause: q.cause ?? "", countermeasure: q.countermeasure ?? "", status: q.status, responsible: q.responsibleUserIds.join(","), attribution: q.attribution ?? "store", category: q.category ?? "", counted: q.counted !== false };
-    const changes = (Object.keys(after) as (keyof typeof after)[]).filter((k) => before[k] !== after[k]).map((k) => ({ field: k, before: before[k], after: after[k] }));
+    const after = snap();
+    const orderNo = (id: string) => (id ? (db.orders.find((x) => x.id === id)?.number ?? id) : "");
+    const changes = (Object.keys(after) as (keyof typeof after)[]).filter((k) => before[k] !== after[k]).map((k) => (k === "order" ? { field: k, before: orderNo(before.order), after: orderNo(after.order) } : { field: k, before: before[k], after: after[k] }));
     if (!changes.length) fail(back, "変更はありませんでした。");
     q.updatedAt = nowIso();
     const o = db.orders.find((x) => x.id === q.orderId);
-    const LABEL: Record<string, string> = { kind: "区分", points: "点数", occurredOn: "発生日", description: "内容", cause: "原因", countermeasure: "対策", status: "状態", responsible: "担当者", attribution: "ポイントの単位", category: "カテゴリー", counted: "集計の対象" };
+    const LABEL: Record<string, string> = { kind: "区分", points: "点数", occurredOn: "発生日", description: "内容", cause: "原因", countermeasure: "対策", status: "状態", responsible: "担当者", attribution: "ポイントの単位", category: "カテゴリー", counted: "集計の対象", order: "案件", siteName: "現場名", origin: "発生のきっかけ" };
     addAudit(db, { userId: user.id, action: "update", entity: "quality", entityId: q.id, entityLabel: o?.number ?? q.number, summary: `${QUALITY_KIND_LABEL[q.kind]} ${q.number} を更新 (${changes.map((c) => LABEL[c.field]).join("・")})`, storeId: q.storeId, changes });
     if (o && changes.some((c) => c.field === "status") && q.status === "resolved") {
       o.progressNotes.push({ id: newId("pn"), at: nowIso(), userId: user.id, kind: "change", body: `${QUALITY_KIND_LABEL[q.kind]} ${q.number} を解決済みにしました\n原因: ${q.cause}\n対策: ${q.countermeasure}` });
@@ -142,7 +257,7 @@ export async function deleteQualityIssue(id: string, formData: FormData) {
     if (idx < 0) fail("/kpi/quality", "記録が見つかりません。");
     const q = db.qualityIssues[idx];
     assertStore(user, q.storeId, back);
-    orderId = q.orderId;
+    orderId = q.orderId ?? "";
     db.qualityIssues.splice(idx, 1);
     const o = db.orders.find((x) => x.id === q.orderId);
     addAudit(db, { userId: user.id, action: "delete", entity: "quality", entityId: q.id, entityLabel: o?.number ?? q.number, summary: `${QUALITY_KIND_LABEL[q.kind]} ${q.number} を削除 (${str(formData, "reason") || "理由未記入"})`, storeId: q.storeId });

@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
-import { mutate, syncDb } from "@/lib/db/store";
+import { getDb, mutate, syncDb } from "@/lib/db/store";
 import { webformSecret } from "@/lib/notify/config";
-import { recordWebForm, type WebFormInput } from "@/lib/notify/inbound";
+import { SYSTEM_USER, recordWebForm, type WebFormInput } from "@/lib/notify/inbound";
+import { storeInquiryNotices } from "@/lib/notify/store-line";
+import { sendAndRecord } from "@/lib/notify/send";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,5 +37,7 @@ export async function POST(req: Request) {
   await syncDb();
   const r = await mutate((db) => recordWebForm(db, input));
   if (r.error) return NextResponse.json({ error: r.error }, { status: 400 });
+  // 店舗が決まった新しい問い合わせは、その店舗の LINE グループ (店舗別・問い合わせを知らせる) に送る
+  if (r.created && r.inquiry) await sendAndRecord(storeInquiryNotices(getDb(), r.inquiry), SYSTEM_USER).catch((err) => console.warn("[webform] store LINE notice failed:", (err as Error).message));
   return NextResponse.json({ ok: true, number: r.inquiry?.number, duplicate: !r.created || undefined });
 }

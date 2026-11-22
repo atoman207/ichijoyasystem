@@ -45,7 +45,7 @@ export default async function KpiPage({ searchParams }: { searchParams: Promise<
           </>
         }
       />
-      <KpiTabs current="/kpi" sp={sp} />
+      <KpiTabs current="/kpi" sp={sp} user={user} />
       <PeriodSelect action="/kpi" value={rp.value} startMonth={settings.fiscalStartMonth} today={today} />
 
       <Card padded={false}>

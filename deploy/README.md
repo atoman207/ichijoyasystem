@@ -97,7 +97,7 @@ sudo bash deploy/go-live.sh ichijoya-system.jp <証明書の連絡先メール>
 npm run env:apply
 ```
 
-`SMTP_`・`MAIL_FROM`・`LINE_`・`CHATWORK_`・`WEBFORM_SECRET`・`AI_INTAKE_SECRET`・AI のキーだけを本番の設定ファイルに写し、変わったときだけアプリを再起動します。値が空の行は写しません (本番の値を消さない)。開発用 (3001 番) には保存した時点で反映されます。
+`SMTP_`・`MAIL_FROM`・`LINE_`・`CHATWORK_`・`WEBFORM_SECRET`・`AI_INTAKE_SECRET`・`PHONE_INTAKE_SECRET`・AI のキーだけを本番の設定ファイルに写し、変わったときだけアプリを再起動します。値が空の行は写しません (本番の値を消さない)。開発用 (3001 番) には保存した時点で反映されます。
 
 ## 2-A. ドメインがまだないとき (IP アドレスで公開)
 
@@ -108,7 +108,7 @@ npm run env:apply
    ```bash
    sudo bash deploy/setup-server.sh --ip --repo "$PWD" --env-from "$PWD/.env.local"
    ```
-   `--repo` に GitHub の URL を渡すと GitHub から取得します。`AI_INTAKE_SECRET` (既存の AI システムからの受信の鍵) は自動で作ります。
+   `--repo` に GitHub の URL を渡すと GitHub から取得します。`AI_INTAKE_SECRET` (既存の AI システムからの受信の鍵)・`PHONE_INTAKE_SECRET` (電話のシステムからの通話の受信の鍵) は自動で作ります。
 3. **ビルドして起動** (手で動かしている `next dev` は自動で止まります)
    ```bash
    sudo -u ichijoya bash /srv/ichijoya/repo/deploy/deploy.sh
@@ -227,6 +227,12 @@ OS のセキュリティ更新は自動 (unattended-upgrades) です。カーネ
 - 既存のマニュアル・議事録 (クライアント資料) の取込: `npm run registry:promote` (確認だけ) → `npm run registry:promote -- --apply --owner <担当者のログイン ID>` (Supabase に書く。担当者を省くと 確認のルールの既定の担当者、なければ「担当者なし」)。テーブル定義の反映 (`npm run db:migrate`) のあとに行います。
 - 同期は一方向 (シート → システム。読み取り専用の権限で読み、シートには書きません)。取込元を登録すると、取り込む前に行ごとの確認結果を出します。定期の同期は毎時 15 分 (`deploy/ichijoya.cron` の knowledge-sync)。失敗・シートの半分以上の行が消えたときは書かずに止め、取込元の担当者と本部・管理者に知らせます (同じ失敗は 24 時間に 1 回。直ったら「復旧しました」)。最後に成功した日時・同期の記録・定期の同期が動いているかは 社内資料 → 取込元の画面と 設定 → 外部連携・AI、本番運用の準備 に出ます。
 - cron を入れ直す (FAX・精度の評価の行を足したため。いまの /etc/cron.d/ichijoya は古い版です): `sudo install -m 644 /srv/ichijoya/current/deploy/ichijoya.cron /etc/cron.d/ichijoya`。動いているかは `/var/log/ichijoya/cron.log`。
+
+## 5-S. お客様アンケート集計表 (クレーム・手直し・Google 口コミ・アンケートの集計表) の取込
+
+- 先に `npm run db:migrate` (表 `survey_history` と クレーム・手直しの列 `site_name`・`origin`・`source_ref`・`order_id` の not null を外す・口コミの `source_ref`)。反映前は取込の画面で「確認」だけでき、取り込むボタンは押せません。
+- 最初の取込: VPS で `npm run kpi:import-workbook` (確認だけ。`source/02_お客様対応・アンケート/アンケート/` のタブごとの CSV のフォルダーを読む) → 件数・案件へのひも付け・KPI のシートとの照合を確かめて `npm run kpi:import-workbook -- --apply`。画面 (KPI →「スプレッドシートの取込」、本部・管理者) でも同じことができます。同じ行を 2 回取り込んでも二重になりません。
+- スプレッドシートを直接読む: 下の「サービスアカウント」を設定し、お客様アンケート集計表を **閲覧者** として共有 → 取込の画面の「つなぎ方の設定」に URL を登録。毎日取り込むときは「定期の同期」をオン (6:20。`deploy/ichijoya.cron` の survey-workbook。cron を入れ直す: `sudo install -m 644 /srv/ichijoya/current/deploy/ichijoya.cron /etc/cron.d/ichijoya`)。一方向 (シート → システム) で、シートから消えた行は消さず、システムで変えた案件・担当者・状態は上書きしません。
 
 ### Google スプレッドシートのサービスアカウント (非公開のシートを読む)
 

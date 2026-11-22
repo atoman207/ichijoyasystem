@@ -5,7 +5,7 @@ import { addAudit, nextNumber, nowIso } from "@/lib/db/store";
 import { CATEGORY_LABEL } from "@/lib/constants";
 import { detectType } from "@/lib/attachments";
 import { customerHasPhone } from "@/lib/customer-contacts";
-import { LINE_GROUP_ID_RE, MAX_PENDING, ensureLineGroup, findLineGroup, lineGroupName, touchLineGroups, type LineGroup, type PendingLineMessage } from "@/lib/line-groups";
+import { LINE_GROUP_ID_RE, ensureLineGroup, findLineGroup, lineGroupName, touchLineGroups, trimPending, type LineGroup, type PendingLineMessage } from "@/lib/line-groups";
 
 /**
  * 外部からの受信 (LINE・Chatwork・Web フォーム) をやりとり履歴・問い合わせに登録する
@@ -136,8 +136,9 @@ export function recordLineEvents(db: Database, events: LineEvent[]): LineInbound
       g.messageCount = (g.messageCount ?? 0) + 1;
       const pm: PendingLineMessage = { id: msgId, at, userId: ev.source?.userId, type: ev.message.type ?? "", text: ev.message.type === "text" ? String(ev.message.text ?? "").slice(0, 5000) : "", fileName: ev.message.type === "file" ? ev.message.fileName : undefined };
       if (!g.orderId && !g.supplierId) {
+        // ひも付け前・用途のグループ (店舗別・クレーム報告など) はグループのメッセージとして残す
         g.pending.push(pm);
-        if (g.pending.length > MAX_PENDING) g.pending.splice(0, g.pending.length - MAX_PENDING);
+        trimPending(g);
         res.recorded++;
         continue;
       }

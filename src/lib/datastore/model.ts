@@ -404,11 +404,11 @@ export const VIEWS: ViewDef[] = [
   {
     name: "v_quality",
     label: "クレーム・手直し (原因・対策・担当者つき)",
-    description: "1 件 = 1 行。number・occurred_on・kind と kind_label (手直し/クレーム/クレーム・手直し)・points・store_id・store_name・order_number・customer_name・description・cause (原因)・countermeasure (対策)・status と status_label (対応中/解決)・resolved_on・responsible (担当者の名前)・counted (0=集計に入れない)",
+    description: "1 件 = 1 行。number・occurred_on・kind と kind_label (手直し/クレーム/クレーム・手直し)・points・store_id・store_name・attribution (store=店舗 / office=事務のポイント)・order_number (案件。空 = まだひも付いていない)・site_name (現場名)・customer_name・description・cause (原因)・countermeasure (対策)・status と status_label (対応中/解決)・resolved_on・responsible (担当者の名前)・counted (0=集計に入れない)・category (精度・確認不足・説明不足・その他)・origin (発生のきっかけ)・from_sheet (1=スプレッドシートから取込)",
     sql: `
-      select q.id quality_id, q.number, q.occurred_on, q.kind, ${L("quality_kind", "q", "kind")} kind_label, q.points, q.store_id, s.name store_name, o.number order_number, c.name customer_name,
+      select q.id quality_id, q.number, q.occurred_on, q.kind, ${L("quality_kind", "q", "kind")} kind_label, q.points, q.store_id, s.name store_name, coalesce(q.attribution, 'store') attribution, o.number order_number, q.site_name, c.name customer_name,
              q.description, q.cause, q.countermeasure, q.status, ${L("quality_status", "q", "status")} status_label, q.resolved_on,
-             ${NAMES("q.responsible_user_ids")} responsible, coalesce(q.counted, 1) counted, q.category
+             ${NAMES("q.responsible_user_ids")} responsible, coalesce(q.counted, 1) counted, q.category, q.origin, case when q.source_ref is null then 0 else 1 end from_sheet
       from quality_issues q
       left join stores s on s.id = q.store_id
       left join orders o on o.id = q.order_id
@@ -417,13 +417,22 @@ export const VIEWS: ViewDef[] = [
   {
     name: "v_reviews",
     label: "Google 口コミ (店舗・社員・評価)",
-    description: "口コミ 1 件 = 1 行。posted_on・store_id・store_name・staff (名前の挙がった社員)・reviewer_name・rating (★)・comment・has_photo・points・order_number",
+    description: "口コミ 1 件 = 1 行。posted_on (事務の入力日 = 集計月)・store_id・store_name・staff (名前の挙がった社員。アカウントのない人は名前)・reviewer_name・rating (★)・comment・has_photo・points・order_number・note (支払日・確認などのメモ)",
     sql: `
-      select r.id review_id, r.posted_on, r.store_id, s.name store_name, u.name staff, r.reviewer_name, r.rating, r.comment, coalesce(r.has_photo, 0) has_photo, r.points, o.number order_number
+      select r.id review_id, r.posted_on, r.store_id, s.name store_name, coalesce(u.name, case when r.user_id like 'name:%' then substr(r.user_id, 6) end) staff, r.reviewer_name, r.rating, r.comment, coalesce(r.has_photo, 0) has_photo, r.points, o.number order_number, r.note
       from google_reviews r
       left join stores s on s.id = r.store_id
       left join users u on u.id = r.user_id
       left join orders o on o.id = r.order_id`,
+  },
+  {
+    name: "v_survey_history",
+    label: "アンケートの過去の集計 (H26〜R4 の集計表。年度 × 店舗 × 設問 × 回答の件数)",
+    description: "スプレッドシート「お客様アンケート集計表」の集計表 1 行 = 1 行。fiscal_label (H26・R2 など)・start_year (西暦の始まりの年)・period (期間)・store_id・store_name (空 = 全社の表。令和は店舗ごと、工場 = 合志店)・question (回答数・電話応対・営業担当者・職人の対応・工事の仕上り・重視したこと・情報媒体・次回)・answer (大変満足・チラシ など)・count。はがき 1 枚ごとの回答は survey_responses (2024 年〜)",
+    sql: `
+      select h.fiscal_label, h.start_year, h.period, h.store_id, s.name store_name, h.question, h.answer, h.count
+      from survey_history h
+      left join stores s on s.id = h.store_id`,
   },
   {
     name: "v_cashbook",
@@ -582,6 +591,8 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
   return [
     // 店舗の表
     ...["customers", "inquiries", "quotes", "orders", "invoices", "cash_entries", "quality_issues", "survey_responses", "google_reviews", "attachments", "approvals", "documents", "purchase_orders", "photo_albums", "sales_orders", "sales_items"].map(byStore),
+    // アンケートの過去の集計: 自店舗の表だけ (全社の表 = store_id が空は見せない)
+    byStore("survey_history"),
     // 予定の計画 (作業の内容・製造の予定・車両の予約・仮押さえ。src/lib/scheduling/access.ts と同じ: 自店舗)
     ...["job_specs", "production_jobs", "resource_bookings", "schedule_holds"].map(byStore),
     // 作業日報の手入力 (permissions.ts の canViewWorkReport: 自店舗)・販促の記録 (canViewPromoAnalysis: 店長は自店舗、店舗スタッフは見ない)
@@ -679,6 +690,7 @@ export const GLOSSARY: [string, string][] = [
   ["社員・スタッフ・職人・担当", "users (名前で結合)"],
   ["店舗: 合志・中央・西・玉名・本社", "store_id = koshi・chuo・nishi・tamana・hq (store_name に店舗名)"],
   ["アンケート・はがき・お客様の評価・満足度", "survey_responses / v_surveys"],
+  ["過去のアンケートの集計・H26〜R4・4年比較・年度の比較", "survey_history / v_survey_history"],
   ["クレーム・手直し・不具合・やり直し", "quality_issues / v_quality"],
   ["口コミ・レビュー・Google", "google_reviews / v_reviews"],
   ["現金・手元現金・出納", "cash_entries / v_cashbook"],

@@ -65,6 +65,7 @@ export const CHANNEL_LABEL: Record<Channel, string> = {
   line: "LINE",
   chatwork: "Chatwork",
   visit: "来店・対面",
+  mobile: "担当者の携帯",
   mail: "郵送",
   event: "イベント・展示会",
   referral: "紹介",
@@ -226,6 +227,7 @@ export const DOCUMENT_KIND_LABEL: Record<DocumentKind, string> = {
   receipt: "レシート・領収書",
   contract: "契約書",
   survey_postcard: "お客様アンケート (はがき)",
+  reception: "受付メモ (問い合わせ・電話の内容)",
   other: "その他",
 };
 

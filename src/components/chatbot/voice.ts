@@ -310,6 +310,10 @@ export interface RecorderOptions {
   onDone?: (r: RecResult) => void;
   /** サーバーの音声入力が使えなかった (ブラウザーの音声認識に切り替える) */
   onServerFail?: () => void;
+  /** 録音の長さの上限 (秒。既定 60)。受付の内容を話して入力するときは長くする */
+  maxSeconds?: number;
+  /** 話し終わってから止めるまでの無音の長さ (ミリ秒。既定 1600)。考えながら話す入力は長くする */
+  silenceMs?: number;
 }
 
 export function useRecorder(mode: VoiceMode, onText: (text: string) => void, options: RecorderOptions = {}) {
@@ -380,14 +384,14 @@ export function useRecorder(mode: VoiceMode, onText: (text: string) => void, opt
           spoke = true;
           lastVoice = now;
         }
-        if (spoke && now - lastVoice > SILENCE_MS) finish(true);
+        if (spoke && now - lastVoice > (optsRef.current.silenceMs ?? SILENCE_MS)) finish(true);
         else if (!spoke && now - t0 > NO_SPEECH_MS) {
           setError("声が聞き取れませんでした。マイクに近づいて、もう一度お話しください。");
           silent = true;
           finish(false);
         }
       }
-      if (now - t0 > MAX_SECONDS * 1000) finish(true);
+      if (now - t0 > (optsRef.current.maxSeconds ?? MAX_SECONDS) * 1000) finish(true);
     }, 100);
     const cleanup = () => {
       window.clearInterval(tick);
@@ -462,7 +466,7 @@ export function useRecorder(mode: VoiceMode, onText: (text: string) => void, opt
     const t0 = Date.now();
     const tick = window.setInterval(() => {
       setSeconds(Math.floor((Date.now() - t0) / 1000));
-      if (Date.now() - t0 > MAX_SECONDS * 1000) r.stop();
+      if (Date.now() - t0 > (optsRef.current.maxSeconds ?? MAX_SECONDS) * 1000) r.stop();
     }, 250);
     r.onresult = (e) => {
       let text = "";

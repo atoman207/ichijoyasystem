@@ -471,7 +471,7 @@ export function DocumentReview({
                 <label className="block">
                   <span className="label">書類の種類</span>
                   <select name="kind" defaultValue={kind} className="field h-9 py-1 text-sm">
-                    {(Object.keys(DOCUMENT_KIND_LABEL) as DocumentKind[]).map((k) => <option key={k} value={k}>{DOCUMENT_KIND_LABEL[k]}</option>)}
+                    {(Object.keys(DOCUMENT_KIND_LABEL) as DocumentKind[]).filter((k) => k !== "reception").map((k) => <option key={k} value={k}>{DOCUMENT_KIND_LABEL[k]}</option>)}
                   </select>
                 </label>
                 <Submit variant="secondary" pendingLabel={aiEnabled ? "AI が読み取り中…" : "読み取り中…"}>
