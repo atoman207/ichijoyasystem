@@ -8,7 +8,8 @@ import { userName } from "@/lib/db/queries";
 import { Badge, Button, Card, CardHeader, Field, Input, Select } from "@/components/ui";
 
 /** 受注・施工の画面: 案件の状態 (進捗・仕様・日程・請求・入金・事務処理) */
-export function CaseStatusCard({ db, order: o, user }: { db: Database; order: Order; user: User }) {
+/** locked: 入金完了の案件 (src/lib/case-access.ts の completedCaseLock)。状態の設定だけを止め、全処理完了の登録・再開は残す */
+export function CaseStatusCard({ db, order: o, user, locked = false }: { db: Database; order: Order; user: User; locked?: boolean }) {
   const today = toDateKey(new Date());
   const row = orderCase(o, caseIndex(db), today);
   const customer = db.customers.find((c) => c.id === o.customerId);
@@ -51,7 +52,7 @@ export function CaseStatusCard({ db, order: o, user }: { db: Database; order: Or
       )}
       {o.closedAt && <p className="mt-3 rounded-lg bg-good-soft px-3 py-2 text-xs text-good-ink">全処理完了 ({userName(o.closedBy)} {fmtDate(o.closedAt)})</p>}
 
-      {!o.closedAt && o.status !== "cancelled" && (
+      {!o.closedAt && o.status !== "cancelled" && !locked && (
         <details className="mt-3 rounded-lg border border-line px-3 py-2">
           <summary className="cursor-pointer text-sm font-medium text-accent">仕様・日程・請求・入金の予定を設定する</summary>
           <form action={updateCaseStatus.bind(null, o.id)} className="mt-3 space-y-3">

@@ -1,7 +1,8 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canImportData, canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
+import { canImportData, canSeeAllStores, canViewOpenCases, scopeByStore } from "@/lib/auth/permissions";
+import { openCaseCustomerIds } from "@/lib/case-access";
 import { userName } from "@/lib/db/queries";
 import { fmtDate, yen } from "@/lib/format";
 import { CHANNEL_LABEL } from "@/lib/constants";
@@ -15,6 +16,9 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
   const q = (sp.q ?? "").trim().toLowerCase();
   const allStores = canSeeAllStores(user);
   let rows = scopeByStore(user, db.customers);
+  // 店舗のロールが検索したときは、ほかの店舗のお客様のうち進行中の案件 (入金完了まで) があるお客様も出す (閲覧のみ。src/lib/case-access.ts)
+  const openIds = q && !allStores && canViewOpenCases(user) ? openCaseCustomerIds(db) : new Set<string>();
+  if (openIds.size) rows = [...rows, ...db.customers.filter((c) => c.storeId !== user.storeId && openIds.has(c.id))];
   if (allStores && sp.store) rows = rows.filter((c) => c.storeId === sp.store);
   if (sp.type) rows = rows.filter((c) => c.type === sp.type);
   if (q) {
@@ -99,10 +103,10 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
                   <div className="text-sm">{c.phone}</div>
                   <div className="text-[11px] text-ink-3">{CHANNEL_LABEL[c.preferredChannel]}希望{c.lineId ? " · LINE" : ""}</div>
                 </Td>
-                <Td><StoreTag store={storeMap.get(c.storeId)} /></Td>
+                <Td><StoreTag store={storeMap.get(c.storeId)} />{openIds.has(c.id) && c.storeId !== user.storeId && <span className="ml-1 text-[11px] text-ink-3">進行中 (閲覧のみ)</span>}</Td>
                 <Td className="text-ink-2">{userName(c.assignedUserId)}</Td>
-                <Td align="right">{s?.orders ?? 0}</Td>
-                <Td align="right">{yen(s?.lifetime ?? 0)}</Td>
+                <Td align="right">{!allStores && c.storeId !== user.storeId ? "-" : (s?.orders ?? 0)}</Td>
+                <Td align="right">{!allStores && c.storeId !== user.storeId ? "-" : yen(s?.lifetime ?? 0)}</Td>
                 <Td className="text-xs text-ink-2">{fmtDate(s?.last ?? c.updatedAt)}</Td>
               </Tr>
             );

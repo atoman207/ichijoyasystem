@@ -1,4 +1,6 @@
 import Link from "@/components/ui/Link";
+import { CaseViewBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
+import { customerAccess, openCaseTimeline } from "@/lib/case-access";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
@@ -27,8 +29,12 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
   const db = getDb();
   const c = db.customers.find((x) => x.id === id);
   if (!c) notFound();
-  if (!canAccessStore(user, c.storeId)) redirect("/customers?err=" + encodeURIComponent("この顧客を閲覧する権限がありません。"));
-  const t = customerTimeline(db, id);
+  // 進行中の案件は、ほかの店舗の社員も閲覧のみで開ける (src/lib/case-access.ts)
+  const access = customerAccess(db, user, c);
+  if (access === "none") redirect("/customers?err=" + encodeURIComponent("この顧客を閲覧する権限がありません (ほかの店舗の案件は、入金が完了するまでの間だけ閲覧できます)。"));
+  const viewOnly = access === "view";
+  // ほかの店舗の社員には、進行中の案件だけを見せる (入金が完了した過去の案件は通常の権限のまま)
+  const t = viewOnly ? openCaseTimeline(db, customerTimeline(db, id)) : customerTimeline(db, id);
   const store = db.stores.find((s) => s.id === c.storeId);
   const openItems = t.inquiries.filter((i) => ["new", "in_progress", "quoted"].includes(i.status)).length + t.orders.filter((o) => ["pending_approval", "returned", "confirmed", "scheduled", "in_progress"].includes(o.status)).length;
   // 重複の可能性がある既存顧客 (電話・メール・氏名と住所の一致、同じ姓と地区)
@@ -51,13 +57,15 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
         description={`${c.code} · ${c.kana} · 担当 ${userName(c.assignedUserId)} · 登録 ${fmtDate(c.createdAt)}`}
         back={{ href: "/customers", label: "顧客一覧" }}
         actions={
-          <>
+          viewOnly ? undefined : <>
             <LinkButton href={`/inquiries/new?customerId=${c.id}`} variant="secondary" size="sm">+ 問い合わせ</LinkButton>
             <LinkButton href={`/quotes/new?customerId=${c.id}`} variant="secondary" size="sm">+ 見積</LinkButton>
             <LinkButton href={`/customers/${c.id}/edit`} size="sm">編集</LinkButton>
           </>
         }
       />
+      {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what="お客様の案件" />}
+      <ReadOnlyArea readOnly={viewOnly}>
 
       {c.tradeStopped && (
         <Card className="mb-4 border-critical/40 bg-critical-soft/40">
@@ -72,7 +80,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
       )}
 
       <div className="mb-6 grid grid-cols-2 gap-3 @3xl:grid-cols-4">
-        <Stat label="累計売上 (税込)" value={yen(t.lifetime)} />
+        <Stat label="累計売上 (税込)" value={viewOnly ? "-" : yen(t.lifetime)} />
         <Stat label="案件数 (受注)" value={`${t.orders.length} 件`} sub={`見積 ${t.quotes.length} 件 · 問い合わせ ${t.inquiries.length} 件`} />
         <Stat label="進行中" value={`${openItems} 件`} />
         <Stat label="未入金" value={yen(receivable)} tone={receivable > 0 ? "warn" : undefined} />
@@ -243,6 +251,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
           />
         </div>
       </div>
+      </ReadOnlyArea>
     </div>
   );
 }

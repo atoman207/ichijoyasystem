@@ -2,7 +2,7 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canManageFinance, canManagePurchaseOrders, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
+import { canManageFinance, canManagePurchaseOrders, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
 import { orderChain, userName } from "@/lib/db/queries";
 import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, requestOrderChange, resubmitOrder, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
@@ -32,6 +32,8 @@ import { FaxHistoryCard, PurchaseOrderTable } from "@/components/fax/FaxParts";
 import { MapInfoCard } from "@/components/maps/MapInfoCard";
 import { canViewMgmtStore } from "@/lib/mgmt/access";
 import { MgmtOrderCard } from "@/components/features/MgmtOrderCard";
+import { CaseViewBanner, CompletedLockBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
+import { completedCaseLock, completedCaseReason, orderAccess } from "@/lib/case-access";
 
 const STEPS = ["pending_approval", "confirmed", "scheduled", "in_progress", "completed", "invoiced", "paid"] as const;
 
@@ -44,7 +46,11 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const db = getDb();
   const o = db.orders.find((x) => x.id === id);
   if (!o) notFound();
-  if (!canAccessStore(user, o.storeId)) redirect("/orders?err=" + encodeURIComponent("この案件を閲覧する権限がありません。"));
+  // 進行中の案件は、ほかの店舗の社員も閲覧のみで開ける (src/lib/case-access.ts)
+  const access = orderAccess(db, user, o);
+  if (access === "none") redirect("/orders?err=" + encodeURIComponent("この案件を閲覧する権限がありません (ほかの店舗の案件は、入金が完了するまでの間だけ閲覧できます)。"));
+  const viewOnly = access === "view";
+  const lock = completedCaseLock(db, user, o);
   const customer = db.customers.find((c) => c.id === o.customerId);
   const store = db.stores.find((s) => s.id === o.storeId);
   const chain = orderChain(db, o);
@@ -87,8 +93,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
         actions={
           <>
             {chain.quote && <LinkButton href={`/quotes/${chain.quote.id}`} variant="secondary" size="sm">見積 {chain.quote.number}</LinkButton>}
-            {chain.quote && <LinkButton href={`/api/pdf/quotes/${chain.quote.id}`} variant="ghost" size="sm" target="_blank">見積書 PDF</LinkButton>}
-            {chain.invoice && chain.invoice.status !== "void" && <LinkButton href={`/api/pdf/invoices/${chain.invoice.id}`} variant="secondary" size="sm" target="_blank">請求書 PDF</LinkButton>}
+            {chain.quote && !viewOnly && <LinkButton href={`/api/pdf/quotes/${chain.quote.id}`} variant="ghost" size="sm" target="_blank">見積書 PDF</LinkButton>}
+            {chain.invoice && chain.invoice.status !== "void" && !viewOnly && <LinkButton href={`/api/pdf/invoices/${chain.invoice.id}`} variant="secondary" size="sm" target="_blank">請求書 PDF</LinkButton>}
           </>
         }
       />
@@ -103,6 +109,10 @@ export default async function OrderDetailPage({ params, searchParams }: { params
         </ol>
       )}
 
+      {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} />}
+      {!viewOnly && completedCaseReason(db, o) && <CompletedLockBanner reason={completedCaseReason(db, o)} admin={!lock.locked} />}
+
+      <ReadOnlyArea readOnly={viewOnly}>
       {pending && (
         <Card className="mb-4 border-warn/40 bg-warn-soft/40">
           <CardHeader title="契約承認待ち" description={`${pending.requiredRole === "admin" ? "管理者" : "店長"}の承認が必要 · 申請 ${userName(pending.requestedBy)} ${fmtDateTime(pending.createdAt)}${pending.requestComment ? ` · ${pending.requestComment}` : ""}`} />
@@ -162,9 +172,9 @@ export default async function OrderDetailPage({ params, searchParams }: { params
 
           <MapInfoCard db={db} user={user} target={{ type: "order", id: o.id }} returnTo={returnTo} title="施工場所の地図・住宅地図" />
 
-          <CaseStatusCard db={db} order={o} user={user} />
+          <CaseStatusCard db={db} order={o} user={user} locked={lock.locked} />
 
-          <SiteInfoCard info={o.siteInfo} action={updateSiteInfo.bind(null, "order", o.id)} returnTo={returnTo} canEdit={o.status !== "cancelled"} description={chain.quote?.siteInfo ? `見積 ${chain.quote.number} (手書き見積書の備考欄以下など) から引き継ぎ。施工担当者と共有し、予定表の施工のメモにも載ります` : undefined} />
+          <SiteInfoCard info={o.siteInfo} action={updateSiteInfo.bind(null, "order", o.id)} returnTo={returnTo} canEdit={o.status !== "cancelled" && !lock.locked && !viewOnly} description={chain.quote?.siteInfo ? `見積 ${chain.quote.number} (手書き見積書の備考欄以下など) から引き継ぎ。施工担当者と共有し、予定表の施工のメモにも載ります` : undefined} />
 
           <Card>
             <CardHeader title="施工内容" description={chain.quote ? `見積 ${chain.quote.number} (第${chain.quote.version}版) から引き継ぎ。右の「案件情報」で変更できます (変更は進捗と変更履歴に残ります)` : "右の「案件情報」で入力・変更できます"} />
@@ -389,7 +399,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             </div>
           </Card>
 
-          {(orderPurchases.length > 0 || canRegisterPurchase(user)) && (
+          {!viewOnly && (orderPurchases.length > 0 || canRegisterPurchase(user)) && (
             <Card>
               <CardHeader title="この案件の仕入・外注" description={orderPurchases.length ? `${orderPurchases.length} 件 · ${yen(orderPurchases.filter((p) => p.status !== "rejected").reduce((a, p) => a + p.amount, 0))}` : "協力業者への外注・材料の仕入を案件に紐付けて登録できます"} action={canRegisterPurchase(user) && o.status !== "cancelled" ? <LinkButton href={`/purchases/new?orderRef=${encodeURIComponent(o.number)}`} variant="ghost" size="sm">仕入を登録</LinkButton> : undefined} />
               {orderPurchases.length > 0 && (
@@ -407,6 +417,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             </Card>
           )}
 
+          {!viewOnly && (
           <Card padded={false}>
             <div className="p-5 pb-0">
               <CardHeader
@@ -417,8 +428,9 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             </div>
             <div className="px-2 pb-2"><PurchaseOrderTable db={db} user={user} rows={orderPos} /></div>
           </Card>
+          )}
 
-          <FaxHistoryCard db={db} user={user} faxes={orderFaxes} title="この案件の FAX (発注書の送信・仕入先の返信)" />
+          {!viewOnly && <FaxHistoryCard db={db} user={user} faxes={orderFaxes} title="この案件の FAX (発注書の送信・仕入先の返信)" />}
 
           {active && (
             <Card>
@@ -460,7 +472,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
 
         <div className="space-y-4">
           <Card>
-            <CardHeader title="案件情報" description="件名・種別・現場住所を変更できます。担当店舗の変更は本部スタッフ・管理者" />
+            <CardHeader title="案件情報" description={lock.locked ? "入金完了・全処理完了の案件のため変更できません (管理者が変更できます)" : "件名・種別・現場住所を変更できます。担当店舗の変更は本部スタッフ・管理者"} />
+            <ReadOnlyArea readOnly={lock.locked}>
             <form action={updateOrderInfo.bind(null, o.id)} className="space-y-2">
               <Field label="件名" required><Input name="title" defaultValue={o.title} required /></Field>
               <div className="grid grid-cols-2 gap-2">
@@ -480,6 +493,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               <Field label="施工内容"><Textarea name="workDetails" defaultValue={o.workDetails} rows={3} /></Field>
               <Button type="submit" size="sm" variant="secondary">変更する</Button>
             </form>
+            </ReadOnlyArea>
           </Card>
           <Card>
             <CardHeader title="お客様" />
@@ -496,7 +510,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             </ul>
           </Card>
 
-          {o.status !== "cancelled" && !pendingChange && (
+          {o.status !== "cancelled" && !pendingChange && !lock.locked && (
             <Card>
               <CardHeader title={own ? "契約内容の変更 (管理者は承認不要)" : "契約内容の変更 (承認が必要)"} description={chain.quote ? "契約日を変更できます。金額は見積の画面の「変更を申請」で直します (版として残ります)" : "契約日・契約金額の変更を申請します。承認されると反映し、変更前後を履歴に残します"} />
               <form action={requestOrderChange.bind(null, o.id)} className="space-y-2">
@@ -522,6 +536,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           <ApprovalHistoryCard approvals={chain.approvals} />
         </div>
       </div>
+      </ReadOnlyArea>
     </div>
   );
 }

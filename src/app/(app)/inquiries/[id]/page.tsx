@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { CaseViewBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
+import { inquiryAccess } from "@/lib/case-access";
 import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
@@ -29,7 +31,10 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const db = getDb();
   const inq = db.inquiries.find((x) => x.id === id);
   if (!inq) notFound();
-  if (!canAccessStore(user, inq.storeId)) redirect("/inquiries?err=" + encodeURIComponent("この問い合わせを閲覧する権限がありません。"));
+  // 進行中の案件は、ほかの店舗の社員も閲覧のみで開ける (src/lib/case-access.ts)
+  const access = inquiryAccess(db, user, inq);
+  if (access === "none") redirect("/inquiries?err=" + encodeURIComponent("この問い合わせを閲覧する権限がありません (ほかの店舗の案件は、入金が完了するまでの間だけ閲覧できます)。"));
+  const viewOnly = access === "view";
   const customer = db.customers.find((c) => c.id === inq.customerId);
   const quote = db.quotes.find((q) => q.id === inq.quoteId);
   const order = quote ? db.orders.find((o) => o.quoteId === quote.id) : undefined;
@@ -90,12 +95,14 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
         description={<span className="inline-flex flex-wrap items-center gap-2">{inq.number} · 受付 {fmtDateTime(inq.receivedAt)} · <ChannelTag channel={inq.channel} /> · 媒体 <MediaTag {...media} /> · {CATEGORY_LABEL[inq.category]} · <StoreTag store={store} /></span>}
         back={{ href: "/inquiries", label: "問い合わせ一覧" }}
         actions={
-          <>
+          viewOnly ? undefined : <>
             {!quote && customer && <LinkButton href={`/quotes/new?customerId=${customer.id}&inquiryId=${inq.id}&category=${inq.category}`} size="sm">見積を作成</LinkButton>}
             {quote && <LinkButton href={`/quotes/${quote.id}`} size="sm" variant="secondary">見積 {quote.number} を開く</LinkButton>}
           </>
         }
       />
+      {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what="問い合わせ" />}
+      <ReadOnlyArea readOnly={viewOnly}>
 
       {fromAi && (
         <Note tone="accent">この問い合わせは{CHANNEL_LABEL[inq.channel]}から自動登録されました。内容を確認し、担当者の割当と{inq.channel === "ai_chat" ? "お客様への連絡" : "折返し対応"}を行ってください。顧客として登録すると、その後の見積・施工・請求まで情報が引き継がれます。</Note>
@@ -326,6 +333,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
           </Card>
         </div>
       </div>
+      </ReadOnlyArea>
     </div>
   );
 }

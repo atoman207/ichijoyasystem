@@ -15,6 +15,7 @@ import { findConflicts, isDateKey, normTime, shortDate, timeLabel, toMinutes } f
 import { orderEditable, removeUpcomingOrderEvents, syncHandoverMemo, syncOrderEvent } from "@/lib/db/schedule";
 import { assertStore, choice, fail, requireActionUser, str, withMsg } from "./guards";
 import { propagateOrderSite } from "@/lib/maps/store";
+import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
 
 /** 施工予定 (施工期間・時間帯・施工担当・現場住所) を設定し、予定表の「施工」の予定と連動させる */
 export async function updateOrderSchedule(id: string, formData: FormData) {
@@ -36,6 +37,8 @@ export async function updateOrderSchedule(id: string, formData: FormData) {
   if (!o0) fail("/orders", "受注が見つかりません。");
   assertStore(user, o0.storeId, back);
   if (!orderEditable(o0)) fail(back, "完了済みの案件は変更できません。");
+  const lock0 = completedCaseLock(db0, user, o0);
+  if (lock0.locked) fail(back, completedLockMessage(lock0.reason));
   if (start) {
     const quote = db0.quotes.find((q) => q.id === o0.quoteId);
     const hits = findConflicts(
@@ -179,6 +182,8 @@ export async function cancelOrder(id: string, formData: FormData) {
     if (!o) fail("/orders", "受注が見つかりません。");
     assertStore(user, o.storeId, back);
     if (["invoiced", "paid", "cancelled"].includes(o.status)) fail(back, "請求済み・入金済みの案件はキャンセルできません。");
+    const lock = completedCaseLock(db, user, o);
+    if (lock.locked) fail(back, completedLockMessage(lock.reason));
     o.status = "cancelled";
     o.updatedAt = nowIso();
     o.progressNotes.push({ id: newId("pn"), at: nowIso(), userId: user.id, kind: "change", body: `キャンセル: ${str(formData, "reason") || "理由未記入"}` });
@@ -238,6 +243,8 @@ export async function requestOrderChange(id: string, formData: FormData) {
     if (!o) fail("/orders", "受注が見つかりません。");
     assertStore(user, o.storeId, back);
     if (o.status === "cancelled") fail(back, "キャンセルした受注は変更できません。");
+    const lock = completedCaseLock(db, user, o);
+    if (lock.locked) fail(back, completedLockMessage(lock.reason));
     if (db.approvals.some((a) => a.targetId === o.id && a.type === "order_change" && a.status === "pending")) fail(back, "承認待ちの契約内容の変更があります。承認・差戻しの後にもう一度申請してください。");
     const changes: { field: string; before: unknown; after: unknown }[] = [];
     const contractDate = str(formData, "contractDate");
@@ -288,6 +295,8 @@ export async function updateOrderInfo(id: string, formData: FormData) {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
     assertStore(user, o.storeId, back);
+    const lock = completedCaseLock(db, user, o);
+    if (lock.locked) fail(back, completedLockMessage(lock.reason));
     const before = { ...o };
     o.title = title;
     o.category = choice(formData, "category", CATEGORY_LABEL, o.category);

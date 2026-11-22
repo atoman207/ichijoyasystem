@@ -1,8 +1,10 @@
 import Link from "@/components/ui/Link";
+import { CaseViewBanner, CompletedLockBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
+import { quoteAccess, quoteCompletedLock } from "@/lib/case-access";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canApprove, skipsApproval } from "@/lib/auth/permissions";
+import { canApprove, skipsApproval } from "@/lib/auth/permissions";
 import { quoteChain, userName } from "@/lib/db/queries";
 import { convertQuoteToOrder, deleteQuote, markQuoteLost, sendQuote, submitQuote } from "@/lib/actions/quotes";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
@@ -35,7 +37,11 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
   const db = getDb();
   const q = db.quotes.find((x) => x.id === id);
   if (!q) notFound();
-  if (!canAccessStore(user, q.storeId)) redirect("/quotes?err=" + encodeURIComponent("この見積を閲覧する権限がありません。"));
+  // 進行中の案件は、ほかの店舗の社員も閲覧のみで開ける (src/lib/case-access.ts)
+  const access = quoteAccess(db, user, q);
+  if (access === "none") redirect("/quotes?err=" + encodeURIComponent("この見積を閲覧する権限がありません (ほかの店舗の案件は、入金が完了するまでの間だけ閲覧できます)。"));
+  const viewOnly = access === "view";
+  const lock = quoteCompletedLock(db, user, q);
   const customer = db.customers.find((c) => c.id === q.customerId);
   const store = db.stores.find((s) => s.id === q.storeId);
   const chain = quoteChain(db, q);
@@ -54,13 +60,16 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
         description={<span className="inline-flex flex-wrap items-center gap-2">{customer?.name} 様 · {CATEGORY_LABEL[q.category]} · <StoreTag store={store} /> · 見積担当 {userName(q.estimatorId ?? q.createdBy)} · 作成 {userName(q.createdBy)} {fmtDate(q.createdAt)}{q.paperNo ? ` · 手書き見積書 No.${q.paperNo}` : ""}{q.handedOver ? " · 現場で手渡し済み" : ""}</span>}
         back={{ href: "/quotes", label: "見積一覧" }}
         actions={
-          <>
+          viewOnly ? undefined : <>
             <LinkButton href={`/api/pdf/quotes/${q.id}`} variant="secondary" size="sm" target="_blank">見積書 PDF</LinkButton>
             <LinkButton href={`/print/quotes/${q.id}`} variant="ghost" size="sm">画面で表示・印刷</LinkButton>
-            {["draft", "approved", "sent", "accepted"].includes(q.status) && !q.pendingChange && <LinkButton href={`/quotes/${q.id}/edit`} variant="secondary" size="sm">{q.status === "draft" ? "編集" : "変更を申請 (金額・数量・施工内容)"}</LinkButton>}
+            {["draft", "approved", "sent", "accepted"].includes(q.status) && !q.pendingChange && !lock.locked && <LinkButton href={`/quotes/${q.id}/edit`} variant="secondary" size="sm">{q.status === "draft" ? "編集" : "変更を申請 (金額・数量・施工内容)"}</LinkButton>}
           </>
         }
       />
+      {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what="見積" />}
+      {!viewOnly && lock.reason && <CompletedLockBanner reason={lock.reason} admin={!lock.locked} />}
+      <ReadOnlyArea readOnly={viewOnly || lock.locked}>
 
       {q.status === "pending_approval" && pending && (
         <Card className="mb-4 border-warn/40 bg-warn-soft/40">
@@ -284,6 +293,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
           <HistoryCard db={db} user={user} targets={[{ entity: "quote", id: q.id }]} />
         </div>
       </div>
+      </ReadOnlyArea>
     </div>
   );
 }

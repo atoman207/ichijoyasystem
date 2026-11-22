@@ -4,7 +4,8 @@ import type { Approval, Attachment, AuditLog, CashEntry, DocDraft, Expense, FaxM
  * 権限ルール
  * ------------------------------------------------------------
  * - 管理者 / 本部スタッフ: 全店舗の情報を閲覧
- * - 店長 / 店舗スタッフ: 自店舗の情報のみ
+ * - 店長 / 店舗スタッフ: 自店舗の情報のみ。ただし進行中の案件 (問い合わせ → 入金完了まで) は、ほかの店舗の案件も閲覧のみ (canViewOpenCases)
+ * - 入金完了・全処理完了の案件の内容の変更: 管理者のみ (canEditCompletedCase)
  * - 承認: 店長は自店舗の「店長承認」案件、管理者は全案件
  * - 設定 (商品・承認ルール): 管理者のみ
  * - アカウント: 管理者は全員、店長は自店舗の店舗スタッフ (追加・変更・削除・新規登録の承認)。自分のログイン ID・パスワード・顔写真は本人
@@ -48,6 +49,19 @@ export function canManageAssistantScope(user: User): boolean {
 
 export function canAccessStore(user: User, storeId: StoreId): boolean {
   return canSeeAllStores(user) || user.storeId === storeId;
+}
+
+/**
+ * 進行中の案件 (問い合わせ → 入金完了まで) は、ほかの店舗の案件も閲覧できる: 全社員 (お客様のご要望)。
+ * 閲覧だけで、登録・変更はその店舗の社員 (canAccessStore)。入金完了・全処理完了・失注のあとは通常の権限に戻る (src/lib/case-access.ts)
+ */
+export function canViewOpenCases(user: User): boolean {
+  return Boolean(user.active);
+}
+
+/** 入金完了・全処理完了の案件の内容 (案件情報・契約内容・現場の情報・見積) を変更する: 管理者だけ (src/lib/case-access.ts) */
+export function canEditCompletedCase(user: User): boolean {
+  return user.role === "admin";
 }
 
 /** ユーザーが閲覧できる範囲に絞り込む */

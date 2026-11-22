@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
-import type { Order, PaymentMethod, SiteInfo } from "@/lib/db/types";
+import type { Order, PaymentMethod, Quote, SiteInfo } from "@/lib/db/types";
 import { syncHandoverMemo } from "@/lib/db/schedule";
 import { canManageFinance, isManagerOrAbove } from "@/lib/auth/permissions";
 import { PAYMENT_METHOD_LABEL } from "@/lib/constants";
@@ -12,6 +12,7 @@ import { netAmount } from "@/lib/quote-calc";
 import { siteInfoFromForm, siteInfoLines } from "@/lib/site-info";
 import { PLANNED_PAYMENT_LABEL, caseIndex, orderCase } from "@/lib/case-status";
 import { postCash } from "@/lib/cashbook";
+import { completedCaseLock, completedLockMessage, quoteCompletedLock } from "@/lib/case-access";
 import { assertStore, choice, fail, numField, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 /* ------------------------------------------------------------------ */
@@ -26,6 +27,8 @@ export async function updateSiteInfo(target: "quote" | "order", id: string, form
     const rec = target === "quote" ? db.quotes.find((x) => x.id === id) : db.orders.find((x) => x.id === id);
     if (!rec) fail(back, "記録が見つかりません。");
     assertStore(user, rec.storeId, back);
+    const lock = target === "quote" ? quoteCompletedLock(db, user, rec as Quote) : completedCaseLock(db, user, rec as Order);
+    if (lock.locked) fail(back, completedLockMessage(lock.reason));
     const before = new Map(siteInfoLines(rec.siteInfo));
     const after = new Map(siteInfoLines(next));
     const labels = [...new Set([...before.keys(), ...after.keys()])].filter((k) => before.get(k) !== after.get(k));
@@ -66,6 +69,8 @@ export async function updateCaseStatus(orderId: string, formData: FormData) {
     const o = db.orders.find((x) => x.id === orderId);
     if (!o) fail("/orders", "案件が見つかりません。");
     assertStore(user, o.storeId, back);
+    const lock = completedCaseLock(db, user, o);
+    if (lock.locked) fail(back, completedLockMessage(lock.reason));
     const before = { spec: o.specStatus ?? "fixed", specNote: o.specNote ?? "", schedule: o.scheduleStatus ?? "", billing: o.billing ?? "auto", planned: o.plannedPayment ?? "" };
     const spec = str(formData, "specStatus") === "pending" ? "pending" : "fixed";
     o.specStatus = spec;

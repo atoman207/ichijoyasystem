@@ -19,6 +19,7 @@ import { plannedFromSiteInfo } from "@/lib/case-status";
 import { syncHandoverMemo } from "@/lib/db/schedule";
 import { assertStore, choice, fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 import { propagateOrderSite } from "@/lib/maps/store";
+import { quoteCompletedLock, completedLockMessage } from "@/lib/case-access";
 
 function parseItems(formData: FormData, back: string): QuoteItem[] {
   let raw: unknown;
@@ -218,6 +219,8 @@ export async function updateQuote(id: string, formData: FormData) {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
     assertStore(user, q.storeId, back);
+    const lock = quoteCompletedLock(db, user, q);
+    if (lock.locked) fail(`/quotes/${id}`, completedLockMessage(lock.reason));
     const taxIncluded = str(formData, "taxIncluded") === "1";
     const t = calc(items, Number(str(formData, "discount")) || 0, taxIncluded);
     if (t.total <= 0) fail(back, "合計が 0 円以下です。明細を確認してください。");

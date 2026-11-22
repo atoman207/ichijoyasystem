@@ -1,8 +1,10 @@
 import Link from "@/components/ui/Link";
+import { CaseViewBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
+import { invoiceAccess } from "@/lib/case-access";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canManageFinance, isManagerOrAbove } from "@/lib/auth/permissions";
+import { canManageFinance, isManagerOrAbove } from "@/lib/auth/permissions";
 import { customerName, userName } from "@/lib/db/queries";
 import { logInvoiceContact, recordPayment, updateExpectedPayment, updateInvoiceInfo, voidInvoice } from "@/lib/actions/invoices";
 import { settlePayment } from "@/lib/actions/cases";
@@ -24,7 +26,10 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
   const db = getDb();
   const inv = db.invoices.find((x) => x.id === id);
   if (!inv) notFound();
-  if (!canAccessStore(user, inv.storeId)) redirect("/invoices?err=" + encodeURIComponent("この請求書を閲覧する権限がありません。"));
+  // 進行中の案件は、ほかの店舗の社員も閲覧のみで開ける (src/lib/case-access.ts)
+  const access = invoiceAccess(db, user, inv);
+  if (access === "none") redirect("/invoices?err=" + encodeURIComponent("この請求書を閲覧する権限がありません (ほかの店舗の案件は、入金が完了するまでの間だけ閲覧できます)。"));
+  const viewOnly = access === "view";
   const today = toDateKey(new Date());
   const status = (inv.status === "issued" || inv.status === "partially_paid") && inv.dueDate < today ? "overdue" : inv.status;
   const customer = db.customers.find((c) => c.id === inv.customerId);
@@ -45,13 +50,15 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
         description={<span className="inline-flex flex-wrap items-center gap-2"><StoreTag store={db.stores.find((s) => s.id === inv.storeId)} /> · 発行 {fmtDate(inv.issueDate)} · 支払期限 {fmtDate(inv.dueDate)} · 発行者 {userName(inv.createdBy)}</span>}
         back={{ href: "/invoices", label: "請求・入金一覧" }}
         actions={
-          <>
+          viewOnly ? undefined : <>
             <LinkButton href={`/api/pdf/invoices/${inv.id}`} variant="secondary" size="sm" target="_blank">請求書 PDF</LinkButton>
             {inv.paidAmount > 0 && inv.status !== "void" && <LinkButton href={`/api/pdf/receipts/${inv.id}`} variant="secondary" size="sm" target="_blank">領収書 PDF</LinkButton>}
             <LinkButton href={`/print/invoices/${inv.id}`} variant="ghost" size="sm">画面で表示・印刷</LinkButton>
           </>
         }
       />
+      {viewOnly && <CaseViewBanner storeName={db.stores.find((x) => x.id === inv.storeId)?.name ?? "ほかの店舗"} what="案件の請求書" />}
+      <ReadOnlyArea readOnly={viewOnly}>
       {status === "overdue" && <Note tone="warn">支払期限を {Math.round((new Date(today).getTime() - new Date(inv.dueDate).getTime()) / 86400000)} 日超過しています。督促の記録を残し、入金の予定を確認したら「入金予定」に登録してください。</Note>}
 
       <div className="mt-4 grid grid-cols-1 gap-4 @3xl:grid-cols-3">
@@ -191,6 +198,7 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
           <HistoryCard db={db} user={user} targets={[{ entity: "invoice", id: inv.id }, { entity: "payment", id: inv.id }]} />
         </div>
       </div>
+      </ReadOnlyArea>
     </div>
   );
 }
