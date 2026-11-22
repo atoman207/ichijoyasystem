@@ -67,6 +67,8 @@ export interface SalesImportReport {
   staffUnmatched: string[];
   /** 新規・更新した受注のうち、売上明細の金額が税抜だったもの (税込に換算した) */
   taxExcluded: number;
+  /** 売上台帳の受注と二重になっていたため、まとめた伝票の受注 (src/lib/sales-reconcile.ts。画面の取込で数える) */
+  duplicatesMerged?: number;
 }
 
 const KUBUN = new Set(["個人", "建設", "不動産", "その他", "", "個人オーナー", "賃貸", "LINE@会員", "団地退去", "旅館・ホテル", "医療施設", "営業店", "その他施設", "寺・神社", "官公庁", "保育施設", "外注", "マンション", "業者紹介", "官公庁(子)"]);

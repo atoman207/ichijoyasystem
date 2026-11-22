@@ -11,6 +11,7 @@ import { Badge, Card, CardHeader, Note, PageHeader, Select } from "@/components/
 import { ImportWizard } from "@/components/features/ImportWizard";
 import { googleSheetsStatus } from "@/lib/google/sheets";
 import { SalesLedgerImport } from "@/components/features/SalesLedgerImport";
+import { SalesReconcile } from "@/components/features/SalesReconcile";
 
 export const metadata: Metadata = { title: "データ入出力" };
 
@@ -59,6 +60,11 @@ export default async function DataIoPage({ searchParams }: { searchParams: Promi
               description="顧客は得意先コード、売上は伝票№で登録・更新し、売上台帳から移行した受注・顧客とひも付けます。最新の CSV を取り込むたびに、追加・変更された伝票だけを反映します"
             />
             {canImportData(user) ? <SalesLedgerImport /> : <Note>取込は管理者・本部スタッフが行います。</Note>}
+          </Card>
+
+          <Card>
+            <CardHeader title="売上台帳と売上明細の二重計上をまとめる" icon={<Receipt />} description="移行した売上のうち、同じ売上が売上台帳の受注と伝票の受注の 2 件になっているものを 1 件にします" />
+            {canImportData(user) ? <SalesReconcile /> : <Note>管理者・本部スタッフが行います。</Note>}
           </Card>
 
           {(Object.keys(IMPORT_SPEC) as ImportTarget[]).map((t) => (

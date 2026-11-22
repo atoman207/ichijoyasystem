@@ -10,7 +10,7 @@ const CHUNK_BYTES = 3_000_000;
 
 type Preview = { fileName: string; encoding: string; rows: number; repaired: number; skipped: { line: number; reason: string }[]; total: number; added: SalesSlip[]; changed: SalesSlip[]; latest: string };
 
-const SUM_KEYS = ["customersCreated", "customersUpdated", "customersMerged", "ordersCreated", "ordersUpdated", "ordersLinked", "storeByDefault", "taxExcluded"] as const;
+const SUM_KEYS = ["customersCreated", "customersUpdated", "customersMerged", "ordersCreated", "ordersUpdated", "ordersLinked", "storeByDefault", "taxExcluded", "duplicatesMerged"] as const;
 
 /** 得意先ごとのまとまりを崩さずに、送る量で分ける (同じ得意先・同じ日の伝票は一緒に照合するため) */
 function chunks(slips: SalesSlip[]): SalesSlip[][] {
@@ -72,7 +72,7 @@ export function SalesLedgerImport() {
     const parts = chunks([...preview.added, ...preview.changed]);
     setError("");
     start(async () => {
-      const sum: SalesImportReport = { slips: 0, unchanged: 0, customersCreated: 0, customersUpdated: 0, customersMerged: 0, ordersCreated: 0, ordersUpdated: 0, ordersLinked: 0, storeByDefault: 0, staffMatched: [], staffUnmatched: [], taxExcluded: 0 };
+      const sum: SalesImportReport = { slips: 0, unchanged: 0, customersCreated: 0, customersUpdated: 0, customersMerged: 0, ordersCreated: 0, ordersUpdated: 0, ordersLinked: 0, storeByDefault: 0, staffMatched: [], staffUnmatched: [], taxExcluded: 0, duplicatesMerged: 0 };
       for (let i = 0; i < parts.length; i++) {
         setProgress(`取り込んでいます… (${i + 1}/${parts.length})`);
         const r = await importSalesSlips(parts[i], { fileName: preview.fileName, part: i + 1, parts: parts.length });
@@ -82,7 +82,7 @@ export function SalesLedgerImport() {
           return;
         }
         sum.slips += r.data.slips;
-        for (const k of SUM_KEYS) sum[k] += r.data[k];
+        for (const k of SUM_KEYS) sum[k] = (sum[k] ?? 0) + (r.data[k] ?? 0);
         sum.staffUnmatched = [...new Set([...sum.staffUnmatched, ...r.data.staffUnmatched])];
       }
       setProgress("");
@@ -135,6 +135,7 @@ export function SalesLedgerImport() {
           <div className="text-xs">
             顧客: 新規 {result.customersCreated}・更新 {result.customersUpdated}・売上台帳の顧客を統合 {result.customersMerged} / 受注: 新規 {result.ordersCreated}・更新 {result.ordersUpdated}・売上台帳の受注にひも付け {result.ordersLinked}
             {result.taxExcluded > 0 && ` / 税抜の伝票を税込に換算 ${result.taxExcluded}`}
+            {(result.duplicatesMerged ?? 0) > 0 && ` / 売上台帳と二重になっていた受注をまとめた ${result.duplicatesMerged}`}
             {result.storeByDefault > 0 && ` / 店舗を判定できず本社扱い ${result.storeByDefault}`}
           </div>
           {result.staffUnmatched.length > 0 && <div className="mt-1 text-xs">社員に登録のない担当者 (経過メモに氏名を残しました): {result.staffUnmatched.join("、")}</div>}

@@ -34,6 +34,7 @@
     "test:kpi-import": "node scripts/tests/kpi-import/workbook.test.mjs",
     "kpi:import-workbook": "node scripts/ops/import-survey-workbook.mjs",
     "test:capture": "node scripts/tests/capture/quote-calc.test.mjs",
+    "test:sales": "node scripts/tests/sales/reconcile.test.mjs",
     "test:assistant": "npm run test:chatbot && npm run test:acceptance && npm run test:knowledge && npm run test:drafts && npm run test:assistant-actions && npm run test:registry",
     "registry:scan": "node scripts/registry/scan-materials.mjs",
     "registry:promote": "node scripts/registry/promote-knowledge.mjs",

@@ -19,6 +19,7 @@ import path from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import { META_TABLE, TABLES, isTimestamp, loadOrder, snake } from "../../src/lib/db/schema.ts";
 import { applySalesSlips, parseSalesCsv } from "../../src/lib/sales-ledger.ts";
+import { applyReconcile, planReconcile } from "../../src/lib/sales-reconcile.ts";
 import { loadEnv } from "./env.mjs";
 
 loadEnv();
@@ -114,6 +115,8 @@ if (YES && !BASE_FILE && !JSON_FILE) {
 const admin = db.users.find((u) => u.role === "admin" && u.active && !String(u.email).includes("@"))?.id ?? db.users.find((u) => u.role === "admin")?.id;
 const now = new Date().toISOString();
 const report = applySalesSlips(db, parsed.slips, { now, userId: admin });
+// 売上台帳の受注と、照合から漏れた伝票の受注 (同じ売上の二重計上) をまとめる (src/lib/sales-reconcile.ts)
+const rec = applyReconcile(db, planReconcile(db), { now });
 
 const changes = [];
 for (const def of TABLES) {
@@ -130,6 +133,7 @@ console.log(`
 顧客: 新規 ${report.customersCreated} / 更新 ${report.customersUpdated} / 売上台帳の顧客を統合 ${report.customersMerged}
 受注: 新規 ${report.ordersCreated} / 更新 ${report.ordersUpdated} / 売上台帳の受注にひも付け ${report.ordersLinked} / 店舗を判定できず本社扱い ${report.storeByDefault}
 金額が税抜の伝票 (税込に換算): ${report.taxExcluded}
+売上台帳と二重になっていた伝票の受注をまとめた: ${rec.ordersRemoved} 件 (${rec.pairs.length} 組・お客様の統合 ${rec.customersMerged})
 担当者コード → 社員: ${report.staffMatched.join("、") || "-"}
 社員にいない担当者コード (経過メモに氏名を残す): ${report.staffUnmatched.join("、") || "-"}
 書き込む行: ${changes.map((c) => `${c.def.table} +${c.upserts.length}${c.deletes.length ? ` -${c.deletes.length}` : ""}`).join(" / ") || "なし"}`);
@@ -145,7 +149,7 @@ if (!changes.length) {
 
 /* ---------------- 書き込み ---------------- */
 
-const summary = `売上明細 (${path.basename(FILE)}) を取込: 伝票 ${report.slips} 枚 / 顧客 新規 ${report.customersCreated}・更新 ${report.customersUpdated}・統合 ${report.customersMerged} / 受注 新規 ${report.ordersCreated}・更新 ${report.ordersUpdated}・ひも付け ${report.ordersLinked}`;
+const summary = `売上明細 (${path.basename(FILE)}) を取込: 伝票 ${report.slips} 枚 / 顧客 新規 ${report.customersCreated}・更新 ${report.customersUpdated}・統合 ${report.customersMerged + rec.customersMerged} / 受注 新規 ${report.ordersCreated}・更新 ${report.ordersUpdated}・ひも付け ${report.ordersLinked}・二重計上をまとめた ${rec.ordersRemoved}`;
 const audit = { id: `log_sales_${Date.now().toString(36)}`, at: now, userId: admin, action: "import", entity: "data", entityId: "sales-ledger", entityLabel: "売上明細", summary };
 const auditDef = TABLES.find((t) => t.collection === "auditLogs");
 const auditChange = changes.find((c) => c.def === auditDef);
