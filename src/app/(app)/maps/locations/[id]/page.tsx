@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "@/components/ui/Link";
+import { MAP_USE_PURPOSES, MAP_USE_PURPOSE_LABEL, MAP_USE_PURPOSE_NOTE } from "@/lib/maps/purpose";
 import { notFound, redirect } from "next/navigation";
 import { ExternalLink, FileText, MapPin, Navigation } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
@@ -120,6 +121,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
                   <div className="font-medium text-ink">{d.title}</div>
                   <div className="text-ink-3">{d.provider === "zenrin" ? "ゼンリン 住宅地図" : "その他の地図"}{d.edition ? ` · ${d.edition}` : ""} · {d.pageCount ?? "-"} ページ · 登録 {users.get(d.uploadedBy) ?? "-"} {fmtDateTime(d.uploadedAt)}{d.source === "bulk_import" ? " (一括取込)" : ""}{shared > 0 ? ` · ほか ${shared} か所で共用` : ""}</div>
                   <div className="text-ink-2">{d.copyrightNotice}</div>
+                  {d.usePurpose && <div className="rounded-lg bg-subtle/70 px-2 py-1 text-ink-2"><span className="font-medium">用途: {MAP_USE_PURPOSE_LABEL[d.usePurpose]}{d.nameplate ? " · 表札の情報あり" : ""}</span> — {MAP_USE_PURPOSE_NOTE[d.usePurpose]}</div>}
                   <div className="text-ink-3">許諾の確認: {users.get(d.licenseConfirmedBy) ?? "-"} {fmtDateTime(d.licenseConfirmedAt)}{d.licenseRef ? ` · ${d.licenseRef}` : ""}</div>
                   <div className="flex flex-wrap items-start gap-2">
                     <MapPdfPreview src={`/api/maps/documents/${d.id}`} title={d.title} />
@@ -138,6 +140,13 @@ export default async function LocationPage({ params, searchParams }: { params: P
                       <Field label="著作権表示"><Input name="copyrightNotice" defaultValue={d.copyrightNotice} maxLength={200} /></Field>
                       <Field label="契約・許諾の番号"><Input name="licenseRef" defaultValue={d.licenseRef ?? ""} maxLength={100} /></Field>
                       <Field label="許諾のメモ" className="@xl:col-span-2"><Input name="licenseNote" defaultValue={d.licenseNote ?? ""} maxLength={500} /></Field>
+                      <Field label="出力したときの用途">
+                        <select name="usePurpose" defaultValue={d.usePurpose ?? ""} className="field">
+                          <option value="">(未設定)</option>
+                          {MAP_USE_PURPOSES.map((p) => <option key={p} value={p}>{MAP_USE_PURPOSE_LABEL[p]}</option>)}
+                        </select>
+                      </Field>
+                      <label className="flex items-end gap-2 pb-2"><input type="checkbox" name="nameplate" value="1" defaultChecked={d.nameplate} /> 表札 (居住者名) の情報を含む</label>
                       <label className="flex items-center gap-2 @xl:col-span-2"><input type="checkbox" name="shareable" value="1" defaultChecked={d.shareable} /> 複数の場所で共用してよい</label>
                       <div><Button type="submit" size="sm" variant="secondary">修正する</Button></div>
                     </form>

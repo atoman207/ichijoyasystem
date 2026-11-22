@@ -1038,6 +1038,8 @@ export const TABLES: TableDef[] = [
       ["licenseConfirmedBy", "text not null"],
       ["licenseConfirmedAt", `${ts} not null`],
       ["shareable", "boolean"],
+      ["usePurpose", "text"],
+      ["nameplate", "boolean"],
       ["storeId", "text not null references stores(id)"],
       ["uploadedBy", "text not null"],
       ["uploadedAt", `${ts} not null`],

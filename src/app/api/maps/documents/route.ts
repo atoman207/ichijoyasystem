@@ -7,6 +7,7 @@ import type { MapRefType } from "@/lib/db/types";
 import { canEditRecordMap, canViewLocation } from "@/lib/maps/access";
 import { registerMapDocument, type DocTarget } from "@/lib/maps/documents";
 import { mapTablesMissing } from "@/lib/maps/store";
+import { isMapUsePurpose } from "@/lib/maps/purpose";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -14,9 +15,10 @@ export const maxDuration = 60;
 const TYPES = ["customer", "quote", "order", "event", "location"] as const;
 
 /**
- * 住宅地図の PDF の登録・差し替え (1 回の送信で 1 ファイル)
+ * 住宅地図の登録・差し替え (1 回の送信で 1 ファイル。PDF か、ゼンリン GIS の画像出力の画像 (PNG・JPEG。PDF にして保存))
  * multipart/form-data: targetType (customer|quote|order|event|location), targetId, file, replaceId (差し替えのとき),
- * provider (zenrin|other), kind (residential|other), title, edition, copyrightNotice, licenseRef, licenseNote, shareable=1, licenseConfirmed=1
+ * provider (zenrin|other), kind (residential|other), title, edition, copyrightNotice, licenseRef, licenseNote, shareable=1, licenseConfirmed=1,
+ * usePurpose (internal|official|contractor|neighbors), nameplate=1
  */
 export async function POST(req: Request) {
   const origin = req.headers.get("origin");
@@ -46,8 +48,9 @@ export async function POST(req: Request) {
     return exists ? json(403, "この記録に住宅地図を登録する権限がありません。") : json(404, "登録先の記録が見つかりません。");
   }
   const f = form.get("file");
-  if (!(f instanceof File) || f.size === 0) return json(400, "PDF ファイルを選んでください。");
+  if (!(f instanceof File) || f.size === 0) return json(400, "PDF か画像のファイルを選んでください。");
   const provider = s("provider") === "other" ? "other" : "zenrin";
+  const purpose = s("usePurpose");
   try {
     const r = await registerMapDocument({
       user,
@@ -62,6 +65,8 @@ export async function POST(req: Request) {
         licenseRef: s("licenseRef"),
         licenseNote: s("licenseNote"),
         shareable: s("shareable") === "1",
+        usePurpose: isMapUsePurpose(purpose) ? purpose : undefined,
+        nameplate: s("nameplate") === "1",
         licenseConfirmed: s("licenseConfirmed") === "1",
       },
       replaceId: s("replaceId") || undefined,

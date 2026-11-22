@@ -10,6 +10,8 @@ import { applyCustomerAddressToSite, followCaseLocation, linkRecordToLocation, o
 import { fmtDateTime } from "@/lib/format";
 import { Badge, Button, Card, CardHeader, buttonClass } from "@/components/ui";
 import { MapDocUploader, MapPdfPreview } from "./MapDocUploader";
+import { CopyAddress } from "./CopyAddress";
+import { MAP_USE_PURPOSE_LABEL, MAP_USE_PURPOSE_NOTE, ZENRIN_GIS } from "@/lib/maps/purpose";
 
 /**
  * 地図・住宅地図のカード (顧客・見積・受注・予定の画面で共通)
@@ -61,14 +63,25 @@ export function MapInfoCard({ db, user, target, returnTo, title = "地図・住�
         <section className="min-w-0 space-y-2" aria-label="住宅地図">
           <h3 className="flex items-center gap-1.5 text-xs font-semibold text-ink-2">
             <FileText className="h-3.5 w-3.5" aria-hidden />
-            住宅地図 (PDF)
+            住宅地図
           </h3>
           {place.documents.length === 0 ? (
             <div className="space-y-2">
               <Badge tone="warn">住宅地図 未登録{place.role === "site" && !place.sameAsCustomer ? " (施工場所)" : ""}</Badge>
               {place.missingNote && <p className="text-xs leading-relaxed text-ink-2">{place.missingNote}</p>}
               {canEdit && place.addressText ? (
-                <MapDocUploader targetType={target.type} targetId={target.id} compact />
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    <a href={ZENRIN_GIS.url} target="_blank" rel="noreferrer" className={buttonClass("secondary", "sm")}>
+                      <MapPin />
+                      {ZENRIN_GIS.label} で探す
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                    <CopyAddress text={place.addressText} />
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-ink-3">ゼンリン GIS にご自身の ID でログイン → 住所を貼り付けて地点検索 →「印刷」で PDF、または「画像出力」で地図の画像をコピー → 下の欄で登録 (画像は Ctrl+V で貼り付け)。</p>
+                  <MapDocUploader targetType={target.type} targetId={target.id} compact />
+                </>
               ) : !place.addressText ? (
                 <p className="text-xs text-ink-3">住所が登録されていないため、住宅地図を登録できません。</p>
               ) : null}
@@ -77,7 +90,7 @@ export function MapInfoCard({ db, user, target, returnTo, title = "地図・住�
             place.documents.map((d) => <DocumentRow key={d.id} doc={d} place={place} target={target} returnTo={returnTo} canEdit={canEdit} canRemove={canRemoveMapDocument(user, d)} sharedWith={(idx.locationsByDoc.get(d.id) ?? []).length - 1} uploader={users.get(d.uploadedBy) ?? "-"} />)
           )}
           <p className="text-[11px] leading-relaxed text-ink-3">
-            ゼンリンからの自動取得: {zenrin.enabled ? "接続済み" : "使えません (公式 API と契約の確認待ち)"}。許諾を確認した PDF を登録してください。
+            ゼンリンからの自動取得: {zenrin.enabled ? "接続済み" : "なし (ゼンリン GIS は画面で操作するサービスで、自動取得の API がないため)"}。ゼンリン GIS で出力した地図 (PDF・画像) を登録してください。
           </p>
         </section>
       </div>
@@ -192,6 +205,11 @@ function DocumentRow({ doc, place, target, returnTo, canEdit, canRemove, sharedW
         {place.sameAsCustomer && place.role !== "customer" ? " · お客様の住所と同じ場所の地図" : ""}
       </p>
       <p className="text-[11px] text-ink-2">{doc.copyrightNotice}</p>
+      {doc.usePurpose && (
+        <p className="rounded-lg bg-subtle/70 px-2 py-1 text-[11px] leading-relaxed text-ink-2">
+          <span className="font-medium">用途: {MAP_USE_PURPOSE_LABEL[doc.usePurpose]}{doc.nameplate ? " · 表札の情報あり" : ""}</span> — {MAP_USE_PURPOSE_NOTE[doc.usePurpose]}
+        </p>
+      )}
       {doc.licenseRef && <p className="text-[11px] text-ink-3">許諾: {doc.licenseRef}</p>}
       <div className="flex flex-wrap items-start gap-2">
         <MapPdfPreview src={src} title={doc.title} />

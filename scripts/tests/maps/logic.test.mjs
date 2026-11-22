@@ -67,7 +67,7 @@ try { await D.registerMapDocument({ user: admin, target: { type: "customer", id:
 ok(/利用許諾/.test(threw), "upload without license confirmation rejected");
 threw = "";
 try { await D.registerMapDocument({ user: admin, target: { type: "customer", id: C1.id }, file: { name: "a.txt", bytes: good }, meta: { provider: "zenrin", kind: "residential", licenseConfirmed: true }, source: "upload" }); } catch (e) { threw = e.message; }
-ok(/PDF ではありません/.test(threw), "non-.pdf filename rejected");
+ok(/登録できない種類/.test(threw), "non-PDF, non-image file rejected");
 eq(files().length, 0, "nothing stored after rejected uploads");
 
 section("2. Upload authorized PDF to customer");
@@ -246,5 +246,46 @@ const another = { ...mkOrder("ord_area2", "O-2099-0008", C2.id, "須屋") };
 await store.mutate((d) => d.orders.push(another));
 db = store.getDb();
 ok(!R.placeOf(db, "order", "ord_area2").location, "another record with the same area text does NOT share it");
+
+section("ゼンリン GIS の画像出力 (PNG・JPEG) → PDF にして登録・用途");
+{
+  const sharp = (await import("sharp")).default;
+  const png = await sharp({ create: { width: 640, height: 480, channels: 3, background: "#d04040" } }).png().toBuffer();
+  const jpg = await sharp({ create: { width: 300, height: 900, channels: 3, background: "#40a040" } }).jpeg().toBuffer();
+  const IMG = await imp("lib/maps/image.ts");
+  eq(IMG.detectMapImage(png), "png", "PNG を先頭のバイトで見分ける");
+  eq(IMG.detectMapImage(jpg), "jpeg", "JPEG を先頭のバイトで見分ける");
+  eq(IMG.detectMapImage(good), null, "PDF は画像として扱わない");
+  const a1 = await IMG.imageToPdf(png, "png");
+  const a2 = await IMG.imageToPdf(png, "png");
+  ok(a1.pdf.equals(a2.pdf), "同じ画像からは同じ PDF (二重登録の確認が使える)");
+  const insp = await P.inspectPdf(a1.pdf);
+  ok(insp.ok && insp.pages === 1, "画像から作った PDF は 1 ページで、確認を通る");
+  const big = await sharp({ create: { width: 4000, height: 2000, channels: 3, background: "#fff" } }).png().toBuffer();
+  const bigPdf = await (await import("pdf-lib")).PDFDocument.load((await IMG.imageToPdf(big, "png")).pdf);
+  const sz = bigPdf.getPage(0).getSize();
+  ok(sz.width <= 1190.6 && sz.height <= 841.9 && Math.abs(sz.width / sz.height - 2) < 0.01, "大きい横長の画像は縦横の比のまま A3 横に収める");
+
+  const before = files().length;
+  const rImg = await D.registerMapDocument({ user: koshiStaff, target: { type: "customer", id: C2.id }, file: { name: "image.png", bytes: png }, meta: { provider: "zenrin", kind: "residential", licenseConfirmed: true }, source: "upload" });
+  eq(rImg.status, "created", "貼り付けた画像 (image.png) を登録できる");
+  eq([rImg.document.fileName, rImg.document.contentType, rImg.document.pageCount], ["image.pdf", "application/pdf", 1], "PDF にして保存 (名前・種類・ページ数)");
+  eq(rImg.document.usePurpose, "internal", "ゼンリンの地図の用途の既定は「社内の資料」");
+  eq(files().length, before + 1, "保存するのは PDF 1 つ");
+  ok(/画像を PDF にして保存/.test(rImg.message), "登録の知らせに画像を PDF にしたことを書く");
+  let t2 = "";
+  try { await D.registerMapDocument({ user: koshiStaff, target: { type: "customer", id: C2.id }, file: { name: "image.png", bytes: png }, meta: { provider: "zenrin", kind: "residential", licenseConfirmed: true }, source: "upload" }); } catch (e) { t2 = e.message; }
+  ok(/登録済み/.test(t2), "同じ画像の二重登録は断る");
+  const rJpg = await D.registerMapDocument({ user: koshiStaff, target: { type: "order", id: "ord_diff2" }, file: { name: "案内図.jpg", bytes: jpg }, meta: { provider: "zenrin", kind: "residential", licenseConfirmed: true, usePurpose: "contractor", nameplate: true }, source: "upload" });
+  eq([rJpg.status, rJpg.document.fileName, rJpg.document.usePurpose, rJpg.document.nameplate], ["created", "案内図.pdf", "contractor", true], "JPEG も登録でき、用途 (工事関係者への配布)・表札の情報を残す");
+  let t3 = "";
+  try { await D.registerMapDocument({ user: koshiStaff, target: { type: "customer", id: C2.id }, file: { name: "broken.png", bytes: Buffer.concat([png.subarray(0, 40)]) }, meta: { provider: "zenrin", kind: "residential", licenseConfirmed: true }, source: "upload" }); } catch (e) { t3 = e.message; }
+  ok(/画像を読み込めません/.test(t3), "壊れた画像は断る");
+  let t4 = "";
+  try { await D.registerMapDocument({ user: koshiStaff, target: { type: "customer", id: C2.id }, file: { name: "x.pdf", bytes: good }, meta: { provider: "zenrin", kind: "residential", licenseConfirmed: true, usePurpose: "sales" }, source: "upload" }); } catch (e) { t4 = e.message; }
+  ok(/用途が正しくありません/.test(t4), "決まっていない用途は断る");
+  const PU = await imp("lib/maps/purpose.ts");
+  ok(/お客様 \(施主様\)・取引先には渡せません/.test(PU.MAP_USE_PURPOSE_NOTE.internal), "社内の資料の地図は、お客様・取引先に渡せないことを画面に出す");
+}
 
 summary();

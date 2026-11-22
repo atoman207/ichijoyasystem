@@ -1484,6 +1484,9 @@ export interface MapLocationRef {
 }
 
 /** 住宅地図などの地図の PDF (本体は VPS のディスク。ここには台帳とライセンスの情報だけ) */
+/** 住宅地図を出力したときの用途 (ゼンリンの利用条件。src/lib/maps/purpose.ts) */
+export type MapUsePurpose = "internal" | "official" | "contractor" | "neighbors";
+
 export interface MapDocument {
   id: string;
   /** residential = 住宅地図 / other = その他の地図・案内図 */
@@ -1521,6 +1524,13 @@ export interface MapDocument {
   licenseConfirmedAt: string;
   /** 複数の場所 (同じ地図の範囲の近所の場所) から参照してよい */
   shareable?: boolean;
+  /**
+   * 地図を出力したときの用途 (ゼンリン GIS の「印刷」「画像出力」で選ぶもの。src/lib/maps/purpose.ts)。
+   * internal = 社内の資料 (契約部署の中だけ) / official = 官公署への届出 / contractor = 工事関係者への配布 / neighbors = 近隣住民への説明
+   */
+  usePurpose?: MapUsePurpose;
+  /** 表札 (居住者名) の情報を含む地図 */
+  nameplate?: boolean;
   /** 閲覧範囲の目安の店舗 (登録した記録の店舗) */
   storeId: StoreId;
   uploadedBy: string;

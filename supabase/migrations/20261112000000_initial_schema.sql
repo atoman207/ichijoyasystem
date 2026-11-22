@@ -871,6 +871,8 @@ create table if not exists map_documents (
   license_confirmed_by text not null,
   license_confirmed_at timestamptz not null,
   shareable boolean,
+  use_purpose text,
+  nameplate boolean,
   store_id text not null references stores(id),
   uploaded_by text not null,
   uploaded_at timestamptz not null,
@@ -2147,6 +2149,8 @@ alter table map_documents add column if not exists license_note text;
 alter table map_documents add column if not exists license_confirmed_by text not null;
 alter table map_documents add column if not exists license_confirmed_at timestamptz not null;
 alter table map_documents add column if not exists shareable boolean;
+alter table map_documents add column if not exists use_purpose text;
+alter table map_documents add column if not exists nameplate boolean;
 alter table map_documents add column if not exists store_id text not null references stores(id);
 alter table map_documents add column if not exists uploaded_by text not null;
 alter table map_documents add column if not exists uploaded_at timestamptz not null;

@@ -53,7 +53,7 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   fax_number: { kind: "種類", label: "名前" },
   store: { phone: "電話", address: "住所", managerUserId: "責任者" },
   map_location: { lat: "緯度", lng: "経度", placeId: "Google の場所 ID", coordStatus: "位置の確認", coordSource: "位置の出どころ", note: "現地のメモ", locationId: "場所", mergedInto: "まとめ先", document: "住宅地図", mode: "場所の指定" },
-  map_document: { title: "表示名", edition: "版・発行年", copyrightNotice: "著作権表示", licenseRef: "契約・許諾の番号", licenseNote: "許諾のメモ", shareable: "複数の場所で共用", status: "状態", location: "場所", file: "ファイル" },
+  map_document: { title: "表示名", edition: "版・発行年", copyrightNotice: "著作権表示", licenseRef: "契約・許諾の番号", licenseNote: "許諾のメモ", shareable: "複数の場所で共用", usePurpose: "出力したときの用途", nameplate: "表札の情報", status: "状態", location: "場所", file: "ファイル" },
   leave: { leaveType: "種類", slot: "区分", days: "日数", dates: "日付", endDate: "終了日", reason: "理由", status: "状態", holidayWorkId: "充てる休日出勤" },
   holiday_work: { slot: "区分", days: "日数", kind: "種類" },
   leave_grant: { grantDate: "付与日", baseDate: "もとの付与日", expiresOn: "有効期限", days: "日数" },
@@ -87,6 +87,7 @@ const VALUE_LABEL: Record<string, Record<string, string>> = {
   leaveType: { paid: "有給休暇", comp: "振休", special: "特別休暇" },
   slot: { day: "終日", am: "午前", pm: "午後" },
   media: MEDIA_LABEL,
+  usePurpose: { internal: "社内の資料 (内部利用)", official: "官公署への届出", contractor: "工事関係者への配布", neighbors: "近隣住民への説明" },
 };
 
 /** 値の表示 (空・配列・金額・真偽値・選択肢のラベル) */

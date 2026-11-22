@@ -4,6 +4,8 @@ import { addAudit, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import { putObject, removeObjects } from "@/lib/storage";
 import { UserError } from "@/lib/attachments";
 import { inspectPdf, MAP_PDF_MAX_BYTES } from "./pdf";
+import { detectMapImage, imageToPdf } from "./image";
+import { isMapUsePurpose, MAP_USE_PURPOSE_LABEL } from "./purpose";
 import { mapIndex, placeOf, touchMapIndex, type ResolvedPlace } from "./resolve";
 import { docLabel, ensureLocation, linkDocument } from "./store";
 
@@ -14,6 +16,8 @@ import { docLabel, ensureLocation, linkDocument } from "./store";
  *    (共用してよい PDF のときだけ。共用しない PDF は断る) → 3. ファイルを保存してから台帳に入れる (失敗したらファイルを消す)
  * - 差し替え: 新しい PDF を古い PDF と同じ場所すべてに結び付け、古い PDF は「差し替え済み」として台帳と本体を残す
  * - 許諾の確認 (社内サーバーへの保存・社内の複数人での閲覧) がないものは登録しない
+ * - 画像 (ゼンリン GIS の「画像出力」でコピー・保存した PNG・JPEG) は 1 ページの PDF にしてから登録する (image.ts)
+ * - 用途 (社内の資料・官公署・工事関係者・近隣住民) と表札の情報の有無を残し、画面にその地図でしてよいことを出す (purpose.ts)
  */
 
 export const DEFAULT_COPYRIGHT: Record<MapDocument["provider"], string> = {
@@ -30,6 +34,10 @@ export interface DocMeta {
   licenseRef?: string;
   licenseNote?: string;
   shareable?: boolean;
+  /** 地図を出力したときの用途 (ゼンリン GIS で選んだもの) */
+  usePurpose?: MapDocument["usePurpose"];
+  /** 表札の情報を含む */
+  nameplate?: boolean;
   /** 利用者が許諾の確認にチェックした */
   licenseConfirmed: boolean;
 }
@@ -47,6 +55,7 @@ export function validateMeta(meta: DocMeta): string | null {
   if (!meta.licenseConfirmed) return "住宅地図の利用許諾 (契約で社内サーバーへの保存と社内の複数人での閲覧が認められていること) を確認してから登録してください。";
   const copyright = (meta.copyrightNotice?.trim() || DEFAULT_COPYRIGHT[meta.provider]).trim();
   if (meta.provider === "zenrin" && !copyright) return "ゼンリンの地図には著作権表示 (例: © ZENRIN CO., LTD.) を入力してください。";
+  if (meta.usePurpose !== undefined && !isMapUsePurpose(meta.usePurpose)) return "地図の用途が正しくありません。";
   return null;
 }
 
@@ -78,9 +87,22 @@ export async function registerMapDocument(opts: {
   const { user, meta } = opts;
   const metaError = validateMeta(meta);
   if (metaError) throw new UserError(metaError);
-  const fileName = opts.file.name.slice(0, 200) || "map.pdf";
-  if (!/\.pdf$/i.test(fileName)) throw new UserError(`「${fileName}」は PDF ではありません (拡張子 .pdf のファイルだけを登録できます)。`);
-  const check = await inspectPdf(opts.file.bytes, MAP_PDF_MAX_BYTES);
+  let fileName = opts.file.name.slice(0, 200) || "map.pdf";
+  let bytes = opts.file.bytes;
+  // 画像 (ゼンリン GIS の「画像出力」) は 1 ページの PDF にする。中身の先頭のバイトで見分ける
+  const image = /\.(png|jpe?g)$/i.test(fileName) || !/\.pdf$/i.test(fileName) ? detectMapImage(bytes) : null;
+  if (image) {
+    if (bytes.length > MAP_PDF_MAX_BYTES) throw new UserError(`「${fileName}」は ${(bytes.length / 1048576).toFixed(1)} MB あります。1 ファイル ${Math.floor(MAP_PDF_MAX_BYTES / 1048576)} MB までにしてください。`);
+    try {
+      bytes = (await imageToPdf(bytes, image)).pdf;
+    } catch (err) {
+      throw new UserError(`「${fileName}」の画像を読み込めません。画像が壊れている可能性があります (${(err as Error).message.slice(0, 60)})。`);
+    }
+    fileName = `${fileName.replace(/\.[^.]+$/, "") || "map"}.pdf`;
+  } else if (!/\.pdf$/i.test(fileName)) {
+    throw new UserError(`「${fileName}」は登録できない種類のファイルです (PDF か、ゼンリン GIS の画像出力の画像 (PNG・JPEG) を登録できます)。`);
+  }
+  const check = await inspectPdf(bytes, MAP_PDF_MAX_BYTES);
   if (!check.ok) throw new UserError(`「${fileName}」: ${check.error}`);
 
   const id = newId("mdoc");
@@ -89,7 +111,7 @@ export async function registerMapDocument(opts: {
   // 同じファイルが登録済みか (先に確かめて、保存しなくてよいときは保存しない。mutate の中でもう一度確かめる)
   const dupBefore = getDb().mapDocuments.find((d) => d.sha256 === check.sha256 && d.status === "active");
   if (!dupBefore) {
-    await putObject(key, opts.file.bytes);
+    await putObject(key, bytes);
     stored = true;
   }
   try {
@@ -143,6 +165,8 @@ export async function registerMapDocument(opts: {
         licenseConfirmedBy: user.id,
         licenseConfirmedAt: now,
         shareable: meta.shareable || (replaced?.shareable ?? undefined) || undefined,
+        usePurpose: meta.usePurpose ?? (meta.provider === "zenrin" ? "internal" : undefined),
+        nameplate: meta.nameplate || undefined,
         storeId: t.place?.record.storeId ?? location.storeId,
         uploadedBy: user.id,
         uploadedAt: now,
@@ -161,8 +185,8 @@ export async function registerMapDocument(opts: {
         return { status: "replaced", document: doc, location, message: `住宅地図を差し替えました${locs.length > 1 ? ` (この PDF を使っている ${locs.length} か所すべてに反映)` : ""}。前の版は履歴に残しています。` };
       }
       linkDocument(db, user, doc.id, location.id);
-      audit(`住宅地図を登録 (「${docLabel(doc)}」${check.pages} ページ / ${where})`, [{ field: "document", before: null, after: docLabel(doc) }]);
-      return { status: "created", document: doc, location, message: `住宅地図「${docLabel(doc)}」(${check.pages} ページ) を登録しました。` };
+      audit(`住宅地図を登録 (「${docLabel(doc)}」${check.pages} ページ${image ? "・画像から PDF に変換" : ""}${doc.usePurpose ? ` / 用途: ${MAP_USE_PURPOSE_LABEL[doc.usePurpose]}` : ""} / ${where})`, [{ field: "document", before: null, after: docLabel(doc) }]);
+      return { status: "created", document: doc, location, message: `住宅地図「${docLabel(doc)}」(${check.pages} ページ${image ? "・画像を PDF にして保存" : ""}) を登録しました。` };
     });
   } catch (err) {
     if (stored) await removeObjects([key]).catch(() => undefined);

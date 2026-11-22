@@ -13,6 +13,7 @@ import { geocode, requestResidentialMap } from "@/lib/maps/providers";
 import { basePlaceOfEvent, mapIndex, placeOf, touchMapIndex } from "@/lib/maps/resolve";
 import { docLabel, ensureLocation, linkDocument, mapTablesMissing, propagateOrderSite, setRef, unlinkDocument } from "@/lib/maps/store";
 import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
+import { isMapUsePurpose } from "@/lib/maps/purpose";
 
 /**
  * 地図・住宅地図の操作 (場所の位置の修正・PDF の結び付けと取り消し・予定の場所の指定・重複した場所のまとめ)
@@ -237,7 +238,7 @@ export async function updateMapDocumentInfo(documentId: string, formData: FormDa
     const doc = db.mapDocuments.find((d) => d.id === documentId);
     if (!doc) fail(back, "住宅地図が見つかりません。");
     if (!canViewMapDocument(user, db, doc)) fail(back, "この住宅地図を扱う権限がありません。");
-    const before = { title: doc.title, edition: doc.edition, copyrightNotice: doc.copyrightNotice, licenseRef: doc.licenseRef, licenseNote: doc.licenseNote, shareable: doc.shareable };
+    const before = { title: doc.title, edition: doc.edition, copyrightNotice: doc.copyrightNotice, licenseRef: doc.licenseRef, licenseNote: doc.licenseNote, shareable: doc.shareable, usePurpose: doc.usePurpose, nameplate: doc.nameplate };
     const shareable = str(formData, "shareable") === "1" || undefined;
     if (!shareable && (mapIndex(db).locationsByDoc.get(doc.id) ?? []).length > 1) fail(back, "この住宅地図は複数の場所で使われているため「共用しない」にできません。先にほかの場所から外してください。");
     const copyright = str(formData, "copyrightNotice").slice(0, 200);
@@ -248,7 +249,12 @@ export async function updateMapDocumentInfo(documentId: string, formData: FormDa
     doc.licenseRef = str(formData, "licenseRef").slice(0, 100) || undefined;
     doc.licenseNote = str(formData, "licenseNote").slice(0, 500) || undefined;
     doc.shareable = shareable;
-    const after = { title: doc.title, edition: doc.edition, copyrightNotice: doc.copyrightNotice, licenseRef: doc.licenseRef, licenseNote: doc.licenseNote, shareable: doc.shareable };
+    if (formData.has("usePurpose")) {
+      const purpose = str(formData, "usePurpose");
+      doc.usePurpose = isMapUsePurpose(purpose) ? purpose : undefined;
+      doc.nameplate = str(formData, "nameplate") === "1" || undefined;
+    }
+    const after = { title: doc.title, edition: doc.edition, copyrightNotice: doc.copyrightNotice, licenseRef: doc.licenseRef, licenseNote: doc.licenseNote, shareable: doc.shareable, usePurpose: doc.usePurpose, nameplate: doc.nameplate };
     const changes = (Object.keys(before) as (keyof typeof before)[]).filter((k) => before[k] !== after[k]).map((k) => ({ field: k, before: before[k], after: after[k] }));
     if (!changes.length) fail(back, "変更はありませんでした。");
     doc.updatedAt = nowIso();
