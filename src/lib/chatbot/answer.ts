@@ -228,8 +228,16 @@ async function answerQuestion(db: Database, user: User | null, history: ChatTurn
   const top = matches[0];
   const howTo = HOW_TO.test(q);
   // データ・集計の質問 (蓄えた回答では答えない)
-  const t = extractTerms(q);
-  const dataish = Boolean(user) && (DATA.test(q) || ANALYSIS_WORDS.test(q) || t.names.length > 0 || t.numbers.length > 0 || t.phones.length > 0) && !(howTo && !ANALYSIS_WORDS.test(q) && !t.names.length && !t.numbers.length);
+  const isDataish = (s: string) => {
+    const t = extractTerms(s);
+    return (DATA.test(s) || ANALYSIS_WORDS.test(s) || t.names.length > 0 || t.numbers.length > 0 || t.phones.length > 0) && !(HOW_TO.test(s) && !ANALYSIS_WORDS.test(s) && !t.names.length && !t.numbers.length);
+  };
+  // データの回答の続き (「それを店舗別にして」「その中で一番は？」) もデータの質問 (使い方の資料を先に添えず、道具で調べ直させる。
+  // 調べずに数字を答えたら guard.ts が確かめ直させる)
+  const prevTurn = history.at(-1);
+  const prevAsked = [...history].reverse().find((h) => h.role === "user")?.content ?? "";
+  const followsData = followUp && !howTo && ((prevTurn?.role === "assistant" && Boolean(prevTurn.specs?.length)) || isDataish(prevAsked));
+  const dataish = Boolean(user) && (isDataish(q) || followsData);
 
   if (!followUp && !dataish && top && top.score >= (howTo ? REUSE : REUSE_STRICT) && !opts.evaluation) {
     countHit(top.qa.id);

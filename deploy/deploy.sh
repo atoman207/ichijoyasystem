@@ -136,10 +136,14 @@ ls -1d "$APP_DIR"/releases/*/ | sed 's#/$##' | sort | head -n -"$KEEP" | while r
   [[ "$old" == "$(readlink -f "$APP_DIR/current")" ]] || rm -rf "$old"
 done
 # AI アシスタントが変わったら、本番の AI で精度の評価を始める (裏で実行。結果と代表シナリオの承認は AI アシスタント →「品質・費用」)
-# AI の費用がかかる (1 回 100 円前後)。止めるときは EVAL_AFTER_DEPLOY=off
+# AI の費用がかかる (1 回 100〜200 円)。止めるときは EVAL_AFTER_DEPLOY=off
+# 試験期間は、利用者が使っているテスト用のサーバー (本番の版 + テスト用のデータベース) で評価する: 利用者が見る「品質・費用」の画面に
+# 新しい版の結果が出る (1 回分の費用で済ませ、本番では重ねて評価しない)。refresh-app が起動を待ってから戻る
+EVAL_BASE=http://127.0.0.1:3000
+if [[ -f /etc/nginx/snippets/ichijoya-host-testweek.conf && "$TESTWEEK_FAILED" == 0 ]]; then EVAL_BASE=http://127.0.0.1:3300; fi
 if [[ "$ASSISTANT_CHANGED" == 1 && "${EVAL_AFTER_DEPLOY:-on}" != "off" && -n "${CRON_SECRET:-}" ]]; then
-  log "AI アシスタントの精度の評価を始めます (結果は AI アシスタント →「品質・費用」)"
-  curl -sS -m 30 -X POST -H "Authorization: Bearer $CRON_SECRET" "http://127.0.0.1:3000/api/cron/chatbot-eval?trigger=deploy&rev=$COMMIT" || echo "  評価を始められませんでした (画面の「評価を実行」から実行してください)"
+  log "AI アシスタントの精度の評価を始めます ($([[ "$EVAL_BASE" == *3300 ]] && echo "試験期間のためテスト用のサーバーで" || echo "本番で")。結果は AI アシスタント →「品質・費用」)"
+  curl -sS -m 30 -X POST -H "Authorization: Bearer $CRON_SECRET" "$EVAL_BASE/api/cron/chatbot-eval?trigger=deploy&rev=$COMMIT" || echo "  評価を始められませんでした (画面の「評価を実行」から実行してください)"
   echo
 fi
 log "完了: $COMMIT"

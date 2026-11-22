@@ -18,7 +18,7 @@ import { forecast, type ForecastSubject } from "./forecast";
 import { parseStoreSplitQuestion, simulateStoreSplit } from "./store-split";
 import { permissionHints } from "@/lib/chatbot/permission-hints";
 import { describeTables, runSql, sqlTable, tableList } from "@/lib/datastore/sql";
-import { METRICS, VIEWS } from "@/lib/datastore/model";
+import { METRICS, VIEWS, dataModelText } from "@/lib/datastore/model";
 import { businessOverview } from "./overview";
 import { managementAccounting } from "./mgmt-tool";
 import { canViewMgmt } from "@/lib/mgmt/access";
@@ -438,7 +438,7 @@ function systemPrompt(db: Database, user: User, now: Date): string {
           "## 正確に答える手順",
           "- 件数・一覧・合計・「前回の〜」「〜のお客様は何人」のようなデータの質問は、推測せず query_database (統合ビュー) か analyze で数えてから答える。顧客・案件の詳しい中身は get_record。",
           "- 質問の条件 (状態・期間・店舗・人・種類など) は 1 つも落とさない。analyze の引数で表せない条件があるときは query_database で SQL に書く。",
-          "- SQL を書く前に describe_database で、使うビューの列と指標の定義を確かめる (1 回の会話で 1 度でよい)。",
+          "- SQL を書く前に、使うビューの列と指標の定義を確かめる。質問に「データモデルの要点」が付いていればそれを使う (describe_database を呼ばない)。付いていないとき・要点にない表・列・コードを使うときだけ describe_database (1 回の会話で 1 度でよい)。",
           "- 結果が 0 件・思ったより少ないときは、名前の表記 (like '%…%')・期間・状態の条件を見直して、もう 1 回だけ調べ直す。それでも無ければ「記録がありません」と答える。",
           "- 数字は結果の表の値をそのまま書く (丸めるときは「約」を付ける)。どの定義・期間で数えたかを一言添える。",
           "- SQL の誤りが返ってきたら、誤りの内容を読んで直して呼び直す。",
@@ -718,7 +718,13 @@ function toMessages(history: AgentTurn[], question: string): { role: "user" | "a
 // 「どうすれば」は操作の質問 (「請求書を発行するにはどうすれば」) にも使うので、業績の言葉と組になったときだけ。
 // 「予測」「見通し」は forecast の道具で直接計算できるので、全体像の先読みをしない (速く答える)
 const ANALYTICAL = /なぜ|原因|分析|傾向|課題|改善|対策|比較|比べ|総合|振り返|レポート|強み|弱み|どうだった|(売上|業績|利益|粗利|成約|集客|問い合わせ|受注|客単価|リピート|評価|クレーム|口コミ|未入金|回収|経営)[^。？?]{0,20}(どうすれば|どうしたら)|(どうすれば|どうしたら)[^。？?]{0,12}(伸び|増え|上が|改善|減ら|良く|よく)|(会社|全社|店舗|経営|業績|全体|今年|今月|今期|先月|去年|昨年)[^。？?]{0,15}(状況|どう|まとめ|評価)/;
-const isAnalytical = (q: string) => ANALYTICAL.test(q) && !/(?<!お客)様/.test(q);
+/**
+ * 数字・名前を 1 つ聞く質問 (「昨年と比べて何%増減した？」「一番多い店舗はどこ？」) は、比べる言葉があっても総合的な分析にしない
+ * (全体像を先に用意せず、道具 1〜2 回で短く答える。理由・課題・改善などを聞いたときだけ総合的な分析)
+ */
+const SPECIFIC_ASK = /何\s*[%％]|何パーセント|何割|いくら|何円|何件|何人|何台|何枚|何倍|何日|何か月|どこ(で|が|か|です)|どの店|誰|どなた|どれ|どちら|一番|最も|もっとも/;
+const DEEP_ONLY = /なぜ|原因|理由|分析|傾向|課題|改善|対策|総合|振り返|レポート|強み|弱み|どうすれば|どうしたら|状況|まとめ/;
+const isAnalytical = (q: string) => ANALYTICAL.test(q) && !/(?<!お客)様/.test(q) && !(SPECIFIC_ASK.test(q) && !DEEP_ONLY.test(q));
 
 /** 管理会計で答える質問 (管理会計を見られる人だけ) */
 const MGMT_QUESTION = /粗利|損益|利益|原価率|材料費|外注費|内部受注|案分|按分|共通経費|独立採算|管理会計|管理売上|仕入請求書|仕入明細/;
@@ -810,6 +816,12 @@ ${r}` };
     const overview = await execute({ id: "overview", name: "business_overview", args: {} });
     const last = messages[messages.length - 1];
     messages[messages.length - 1] = { role: "user", content: `${last.content}\n\n---\n会社の全体像 (business_overview の結果。今年の 1 月 1 日〜今日。期間が違う質問なら business_overview を呼び直す)\n${overview}` };
+  }
+  // データの質問は、データモデルの要点 (ビューの列・指標の定義) を先に添える: SQL の前の describe_database の往復 (1 回分の待ち時間と
+  // 大きな結果のトークン) を省く。コードの一覧・ここにない表は、必要なときだけ AI が describe_database で見る
+  if (opts.dataQuestion && !split && !writeRequest && canUseSql(readUser) && mirrorReady()) {
+    const last = messages[messages.length - 1];
+    messages[messages.length - 1] = { role: "user", content: `${last.content}\n\n---\nデータモデルの要点 (システムが先に用意。query_database の SQL はこのビュー・列・定義で書く。describe_database は、ここにない表・列・コードを使うときだけ)\n${dataModelText(readUser, [], { brief: true })}` };
   }
   const loop = (msgs: { role: "user" | "assistant"; content: string }[]) =>
     runToolLoop({

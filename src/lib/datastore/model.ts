@@ -770,10 +770,28 @@ function codeLines(): string[] {
 }
 
 /** AI に渡すデータ辞書 (describe_database で返す。topic で表・ビューを絞れる) */
-export function dataModelText(user: Pick<User, "role">, topics: string[] = []): string {
+export function dataModelText(user: Pick<User, "role">, topics: string[] = [], opts: { brief?: boolean } = {}): string {
   const scoped = !canSeeAllStores(user as User);
   const want = topics.map((t) => t.toLowerCase());
   const views = want.length ? VIEWS.filter((v) => want.some((t) => v.name.includes(t) || v.label.includes(t))) : VIEWS;
+  // brief: データの質問に先に添える版 (ビューの列・指標の定義・名前の比べ方)。言葉と表・コードの一覧は describe_database で見る
+  if (opts.brief) {
+    return [
+      "# 一畳屋 統合データモデル (要点)",
+      "業務の流れ: 問い合わせ → 見積 → 受注・施工 → 請求 → 入金。顧客と予定がすべてにつながる。",
+      "## 統合ビュー (名前・日本語の状態つき。結合を組み立てなくてよい)",
+      ...views.map((v) => `- ${v.name}: ${v.label}\n  ${v.description}`),
+      "## 分析用の表",
+      "- sales_orders: 受注 1 件 = 1 行 (キャンセルを除く)。sales_date・contract_date・store_id・store_name・customer_name・total・amt_*・tatami_cost・purchase_cost・staff_names・worker_names・area",
+      "- sales_items: 明細 1 行 = 1 行。product・category・qty・unit_price・amount・sales_date・store_id",
+      "## 指標の定義 (必ずこの定義で数える)",
+      ...METRICS.map((m) => `- ${m.name}: ${m.definition}`),
+      "## 注意",
+      "- 状態などの列はコード、_label の列が日本語。条件はコードで書く (例: 承認待ちは approvals.status = 'pending'、経費の承認待ちは pending_approval)。コードが分からない・ここにない表や列を使うときだけ describe_database",
+      "- 日付は 'YYYY-MM-DD' の文字列、今日は date('now','localtime')。金額は税込。真偽は 0/1",
+      "- 人の名前で絞るときは空白を除いて比べる: replace(replace(列, ' ', ''), '　', '') like '%中村花子%'",
+    ].join("\n");
+  }
   return [
     "# 一畳屋 統合データモデル",
     "業務の流れ: 問い合わせ (inquiries) → 見積 (quotes) → 受注・施工 (orders) → 請求 (invoices) → 入金 (payments)。顧客 (customers) と予定 (schedule_events) がすべてにつながる。",
