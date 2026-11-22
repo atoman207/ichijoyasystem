@@ -355,6 +355,33 @@ section("会話の続き: 前の集計の条件を AI に渡す");
   const sent = msgs(requests[0]);
   ok(sent.some((m) => m.role === "user" && m.content === "今年の売上合計は？") && sent.some((m) => m.role === "assistant" && String(m.content).includes("[分析条件:")), "前の質問と集計の条件を渡す");
   ok(r.tables?.length === 1 && r.tables[0].rows.length >= 2, "店舗別の表を出す");
+  // データの回答の続きはデータの質問: 使い方の資料を先に添えない (操作の案内と取り違えない)・データモデルの要点を添える
+  const lastQ = String(sent.at(-1)?.content ?? "");
+  ok(!lastQ.includes("参考資料 (システムが自動で探した使い方") && lastQ.includes("データモデルの要点 (システムが先に用意"),"続きの質問には使い方の資料ではなくデータモデルの要点を添える");
+  // 調べずに数字を答えたら、確かめ直させる (データの質問として扱う)
+  requests.length = 0;
+  let n = 0;
+  handler = (e) => (lastRole(e) === "tool" ? oaText("店舗別の売上を表にしました。") : n++ === 0 ? oaText("合志店は 4,287,000 円、中央店は 4,292,450 円です。") : oaTools([{ name: "analyze", args: { ...analyzeArgs, group_by: ["store"] } }]));
+  const r2 = await askChatbot(db, admin, [{ role: "user", content: "今年の売上合計は？" }, { role: "assistant", content: `今年の売上合計は ${ytdText} です。`, specs: [spec] }], "それを店舗別にして");
+  ok(r2.checks?.retried && !r2.answer.includes("4,287,000") && r2.tables?.length === 1, "続きの質問で調べずに作った数字は確かめ直させ、集計した結果で答える");
+}
+
+section("総合的な分析にする質問 (全体像を先に用意する) と、数字を 1 つ聞く質問");
+{
+  resetBreaker();
+  requests.length = 0;
+  handler = () => oaText("今年は昨年の同じ期間より 5.0% 増えました。");
+  await askChatbot(db, admin, [], "今年 (1月1日〜今日) の売上は、昨年の同じ期間と比べて何%増減しましたか？");
+  ok(!allText(requests[0]).includes("会社の全体像 (business_overview の結果"), "「比べて何%」は数字を 1 つ聞く質問: 全体像を先に用意しない (速く短く答える)");
+  requests.length = 0;
+  handler = () => oaText("合志店が一番です。");
+  await askChatbot(db, admin, [], "店舗を比べて、今年の課題を教えて");
+  ok(allText(requests[0]).includes("会社の全体像 (business_overview の結果"), "課題を聞く質問は総合的な分析 (全体像を先に用意する)");
+  requests.length = 0;
+  handler = () => oaText("使い方の資料に書かれた手順です。");
+  const h = await askChatbot(db, admin, [], "見積書はどの画面で作りますか？手順を教えて");
+  const sentH = requests[0] ? allText(requests[0]) : "";
+  ok(h.source === "database" || (!sentH.includes("データモデルの要点 (システムが先に用意") && sentH.includes("見積を作成")), `操作の質問には使い方の資料を添え、データモデルは添えない (${h.source})`);
 }
 
 /* ================================================================== */

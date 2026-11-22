@@ -238,7 +238,8 @@ section("社内の活動: 変更履歴の閲覧範囲で数える");
   const now = new Date();
   const today = A.jstParts(now.toISOString()).date;
   const base = { entityLabel: "テスト", summary: "テストの操作", changes: [] };
-  const add = (id, userId, action, entity, storeId, hoursAgo = 1) => db.auditLogs.push({ id, at: new Date(now.getTime() - hoursAgo * 3600_000).toISOString(), userId, action, entity, entityId: id, storeId, ...base });
+  // 操作の時刻は今 (1 時間前にすると、0 時台に実行したとき前の日になり「今日」に入らない)
+  const add = (id, userId, action, entity, storeId, hoursAgo = 0) => db.auditLogs.push({ id, at: new Date(now.getTime() - hoursAgo * 3600_000).toISOString(), userId, action, entity, entityId: id, storeId, ...base });
   add("t_a1", koshiMgr.id, "create", "customer", "koshi");
   add("t_a2", chuoMgr.id, "delete", "order", "chuo");
   add("t_a3", hq.id, "update", "settings", undefined);

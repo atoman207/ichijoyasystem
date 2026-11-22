@@ -710,7 +710,8 @@ export function runAnalysis(db: Database, user: User, raw: AnalysisSpec, now = n
     if (compare) {
       columns.push({ key: `${primary}_prev`, label: `${pdef.label} (${compare === "previous_year" ? "前年同期" : "前の期間"})`, kind: pdef.kind });
       if (pdef.kind !== "percent") columns.push({ key: `${primary}_diff`, label: "増減", kind: pdef.kind });
-      columns.push({ key: `${primary}_ratio`, label: pdef.kind === "percent" ? "増減 (ポイント)" : "前年比", kind: pdef.kind === "percent" ? "number" : "percent" });
+      // 増減率 = (今の期間 − 比べる期間) ÷ 比べる期間 (全体像 overview.ts の「前年比 +x%」と同じ意味。「前年の何 %」の比ではない)
+      columns.push({ key: `${primary}_ratio`, label: pdef.kind === "percent" ? "増減 (ポイント)" : "増減率", kind: pdef.kind === "percent" ? "number" : "percent" });
     }
     const list = dims.length ? rows : [{ keys: [], acc: total, prev: prevTotal }];
     for (const r of list.slice(0, limit)) {
@@ -722,7 +723,7 @@ export function runAnalysis(db: Database, user: User, raw: AnalysisSpec, now = n
         const prev = r.prev ? pdef.calc(r.prev) : null;
         row[`${primary}_prev`] = prev;
         if (pdef.kind !== "percent") row[`${primary}_diff`] = cur !== null && prev !== null ? cur - prev : null;
-        row[`${primary}_ratio`] = pdef.kind === "percent" ? (cur !== null && prev !== null ? Math.round((cur - prev) * 1000) / 10 : null) : prev ? (cur ?? 0) / prev : null;
+        row[`${primary}_ratio`] = pdef.kind === "percent" ? (cur !== null && prev !== null ? Math.round((cur - prev) * 1000) / 10 : null) : prev ? ((cur ?? 0) - prev) / prev : null;
       }
       outRows.push(row);
     }
@@ -735,7 +736,7 @@ export function runAnalysis(db: Database, user: User, raw: AnalysisSpec, now = n
         const prev = pdef.calc(prevTotal);
         totalRow[`${primary}_prev`] = prev;
         if (pdef.kind !== "percent") totalRow[`${primary}_diff`] = cur !== null && prev !== null ? cur - prev : null;
-        totalRow[`${primary}_ratio`] = pdef.kind === "percent" ? (cur !== null && prev !== null ? Math.round((cur - prev) * 1000) / 10 : null) : prev ? (cur ?? 0) / prev : null;
+        totalRow[`${primary}_ratio`] = pdef.kind === "percent" ? (cur !== null && prev !== null ? Math.round((cur - prev) * 1000) / 10 : null) : prev ? ((cur ?? 0) - prev) / prev : null;
       }
     }
     if (dims.length === 1 && outRows.length > 1) chart = { kind: firstTime ? "time" : "bars", x: "k0", series: [{ key: primary, label: pdef.label }], unit, pointColors: dims[0] === "store" ? Object.fromEntries(db.stores.map((st) => [st.name, st.color])) : undefined };

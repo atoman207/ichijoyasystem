@@ -14,7 +14,7 @@ import { DRAFT_FORMAT_LABEL, DRAFT_TEMPLATES, draftDocument, type DraftFormat, t
 
 export const evalAsk: AskFn = async (db, user, history, question) => {
   const r = await askChatbot(db, user, history.map((h) => ({ role: h.role, content: h.content, specs: h.specs as never })), question, { evaluation: true });
-  return { answer: r.answer, tools: r.tools, sources: r.sources, source: r.source, checks: r.checks, tables: r.tables };
+  return { answer: r.answer, tools: r.tools, sources: r.sources, source: r.source, checks: r.checks, tables: r.tables, actions: r.actions };
 };
 
 export const evalRunners: EvalRunners = {

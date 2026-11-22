@@ -819,7 +819,8 @@ ${r}` };
   }
   // データの質問は、データモデルの要点 (ビューの列・指標の定義) を先に添える: SQL の前の describe_database の往復 (1 回分の待ち時間と
   // 大きな結果のトークン) を省く。コードの一覧・ここにない表は、必要なときだけ AI が describe_database で見る
-  if (opts.dataQuestion && !split && !writeRequest && canUseSql(readUser) && mirrorReady()) {
+  // (操作の質問として使い方の資料を先に添えたときは添えない: 操作の質問にはデータモデルが要らず、トークンが増えるだけ)
+  if (opts.dataQuestion && !opts.prefetchGuides && !split && !writeRequest && canUseSql(readUser) && mirrorReady()) {
     const last = messages[messages.length - 1];
     messages[messages.length - 1] = { role: "user", content: `${last.content}\n\n---\nデータモデルの要点 (システムが先に用意。query_database の SQL はこのビュー・列・定義で書く。describe_database は、ここにない表・列・コードを使うときだけ)\n${dataModelText(readUser, [], { brief: true })}` };
   }
