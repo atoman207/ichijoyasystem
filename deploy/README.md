@@ -272,3 +272,16 @@ OS のセキュリティ更新は自動 (unattended-upgrades) です。カーネ
 | `/api/health` が `db:error` | Supabase の状態 (status.supabase.com)・設定ファイルの値を確認 |
 | 証明書の期限切れ | `sudo certbot renew` → `sudo systemctl reload nginx` |
 | ディスクがいっぱい | `sudo du -sh /var/backups/ichijoya/* /srv/ichijoya/releases/*`。古い版・バックアップを整理 |
+
+## 試験期間 (2026-11-23 0:00 〜 12-01 0:00)
+
+試験期間は、https://ichijoya-system.jp の画面を「テスト用のデータベース」のサーバーに向けます (`deploy/testweek.sh`)。
+
+- テスト用のデータベース: 切り替えた時点の本番のデータの控え (`/srv/ichijoya/data/cache/db-production.ndjson.gz`) の写し (JSON。`/srv/ichijoya/testweek/app/data`)。添付ファイル・チャットボット・資料庫も写しを使う。期間中の登録・変更・削除はすべて写しに入り、本番のデータベース (Supabase) は変わらない
+- テスト用のサーバー: systemd の `ichijoya-testweek` (127.0.0.1:3300・メモリ 2 GB まで)。アプリは本番の版のコピー (`cp -al`)、設定は `/srv/ichijoya/testweek/testweek.env` (本番のデータベースの鍵・メール・LINE・Chatwork・FAX の設定なし = 何も送らない。ログインの鍵は本番と同じなので、切り替えの前後でログインしたまま)
+- nginx: 本番の server が読み込む `/etc/nginx/snippets/ichijoya-host-testweek.conf` を置くだけ (本番の設定ファイルは変えない)。外部からの受信 (`/api/integrations/`) とお客様に送った書類のリンク (`/api/doc/`) は本番のまま。定期処理 (cron) も本番のまま
+- 予約: `sudo bash deploy/testweek.sh schedule` で、11-23 0:00 に `start`、12-01 0:00 に `end` (画面を本番に戻し、テスト用のサーバーを止め、テスト用のデータベースを削除) を cron (`/etc/cron.d/ichijoya-testweek`) で実行する。手動は `sudo ichijoya-testweek start|end|status`。ログは `/var/log/ichijoya/testweek.log`
+- 期間中に本番の版を新しくしたとき: `sudo ichijoya-testweek refresh-app` (データは残す)
+- 期間中は 3001 番の開発サーバー・ビルドを動かさない (本番とテスト用のサーバーでメモリを使うため)
+
+練習用の架空のデータの環境 (`/srv/ichijoya/training`・ユーザーのサービス `ichijoya-training`・127.0.0.1:3200) も作ってあるが、試験期間の方式にしたため止めている (`systemctl --user start ichijoya-training` で起動。初期化は `bash /srv/ichijoya/training/reset.sh`)。
