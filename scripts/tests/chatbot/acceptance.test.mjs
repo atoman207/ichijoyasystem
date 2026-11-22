@@ -196,6 +196,64 @@ section("始めの質問 (社内資料・要約・文書の作成・全ロール
   ok(all.some((c) => c.representative && c.origin === "seed"), "始めの代表シナリオ");
   ok(all.filter((c) => c.expect.matrix?.stores === "all").length >= 3, "全店舗 × 店舗のロールの権限の確かめ");
   eq(E.seedEvalCases(db, admin.id), 0, "2 回目は入れない (人が直した内容を残す)");
+  // 人が直していない始めの質問は、正しい回答の説明だけを新しくする (人が直した質問は変えない)
+  const { chatbotDb } = await imp("lib/chatbot/store.ts");
+  const perm = E.listEvalCases().find((c) => c.question === "顧客は全部で何人登録されていますか？" && c.origin === "seed");
+  const howto = E.listEvalCases().find((c) => c.question.startsWith("見積書はどの画面") && c.origin === "seed");
+  chatbotDb().prepare("update eval_cases set answer_note = '古い説明' where id = ?").run(perm.id);
+  E.saveEvalCase({ ...howto, answerNote: "人が直した説明" }, admin.id, howto.id);
+  E.seedEvalCases(db, admin.id);
+  const after = new Map(E.listEvalCases().map((c) => [c.id, c]));
+  ok(after.get(perm.id).answerNote.startsWith("閲覧の範囲の設定どおり"), "人が直していない質問の説明は新しくなる");
+  eq(after.get(howto.id).answerNote, "人が直した説明", "人が直した質問の説明は残す");
+}
+
+/* ================================================================== */
+section("権限の確かめは閲覧の範囲の設定どおり (出してはいけない値・設定で見られる値)");
+{
+  const SCP = await imp("lib/assistant/scope.ts");
+  const setPolicy = (value) => {
+    db.settings = (db.settings ?? []).filter((r) => r.id !== "access_policy");
+    if (value) db.settings.push({ id: "access_policy", value });
+  };
+  const allCount = "select count(*) n from customers";
+  const otherSales = `select sum(total) total from orders where status <> 'cancelled' and store_id = '${otherStore.id}'`;
+  const total = Number((await runSql(allCount, { id: admin.id, role: "admin", storeId: "hq" })).rows[0].n);
+  const sales = Number((await runSql(otherSales, { id: admin.id, role: "admin", storeId: "hq" })).rows[0].total);
+  const own = db.customers.filter((c) => c.storeId === staff.storeId).length;
+  ok(total > own && sales > 0, `サンプルデータ: 顧客 ${total} 人 (自店舗 ${own} 人)・${otherStore.name}の売上 ${sales}`);
+  const fv = (q, sql) => E.forbiddenValues(db, staff, SCP.assistantReadUser(db, staff), q, sql, staff.storeId);
+
+  setPolicy(null); // 既定: 経営の数字・顧客情報とも全社員
+  let r = await fv("顧客は全部で何人登録されていますか？", allCount);
+  ok(r.open && r.numbers.includes(total), "既定 (顧客情報 = 全社員): 全店舗の顧客数はこの人も見られる値 (正しく答えるかを確かめる)");
+  r = await fv(`${otherStore.name}の売上を教えて`, otherSales);
+  ok(r.open && r.numbers.includes(sales), "既定 (経営の数字 = 全社員): ほかの店舗の売上も見られる値");
+
+  setPolicy({ figures: "store", customers: "all", grantDays: 7 });
+  r = await fv(`${otherStore.name}の売上を教えて`, otherSales);
+  ok(!r.open && r.numbers.includes(sales), "経営の数字 = 自店舗: AI が範囲外として断る質問なので、ほかの店舗の売上は出してはいけない値 (受注の表が見えても)");
+
+  setPolicy({ figures: "store", customers: "open", grantDays: 7 });
+  r = await fv("顧客は全部で何人登録されていますか？", allCount);
+  ok(!r.open && r.numbers.includes(total), "顧客情報 = 進行中の案件だけ: 全店舗の顧客数は出してはいけない値");
+
+  // 評価の実行でも同じ: ほかの店舗の売上を答える社員は、既定の設定では合格・経営の数字を自店舗にした設定では権限違反
+  const permId = E.saveEvalCase({ origin: "test", active: true, category: "permission", question: `${otherStore.name}の売上を教えて`, role: "store_staff", storeId: staff.storeId, expect: { forbidSql: otherSales } }, admin.id);
+  const answerSales = async () => ({ answer: `${otherStore.name}の売上は ${sales.toLocaleString("ja-JP")}円 です。`, source: "agent", tools: [{ name: "集計", summary: "x" }], sources: [{ kind: "集計", label: "売上" }], checks: { issues: [] } });
+  setPolicy(null);
+  let run = await E.runEval(db, answerSales, { label: "既定の設定", by: "test", caseIds: [permId] });
+  let res = E.evalResults(run.runId)[0];
+  ok(res.ok && !res.outcome.violation && res.outcome.policyOpen, `既定の設定: ほかの店舗の売上を答えて合格 (権限違反にしない)${res.ok ? "" : ` / ${res.outcome.reasons.join("・")}`}`);
+  ok(res.expected.startsWith("(閲覧の範囲の設定でこの人も見られる値)"), "正解の説明に、設定で見られる値であることを書く");
+  const wrong = async () => ({ ...(await answerSales()), answer: `${otherStore.name}の売上は 1,000円 です。` });
+  run = await E.runEval(db, wrong, { label: "既定の設定・違う数字", by: "test", caseIds: [permId] });
+  ok(!E.evalResults(run.runId)[0].ok, "既定の設定: 違う数字を答えたら不合格");
+  setPolicy({ figures: "store", customers: "all", grantDays: 7 });
+  run = await E.runEval(db, answerSales, { label: "制限した設定", by: "test", caseIds: [permId] });
+  res = E.evalResults(run.runId)[0];
+  ok(!res.ok && res.outcome.violation, "経営の数字 = 自店舗の設定: ほかの店舗の売上を答えたら権限違反");
+  setPolicy(null);
 }
 
 summary();

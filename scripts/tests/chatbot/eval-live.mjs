@@ -18,7 +18,6 @@ const arg = (k) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.le
 
 const store = await imp("lib/db/store.ts");
 const { aiStatus } = await imp("lib/ai/provider.ts");
-const { askChatbot } = await imp("lib/chatbot/answer.ts");
 const { ensureChatbotData } = await imp("lib/chatbot/build.ts");
 const E = await imp("lib/chatbot/eval.ts");
 const M = await imp("lib/chatbot/monitor.ts");
@@ -38,16 +37,19 @@ E.seedEvalCases(db, "eval-live");
 const only = arg("only");
 const match = arg("match");
 const ids = E.listEvalCases({ activeOnly: true }).filter((c) => (!only || c.category === only) && (!match || c.question.includes(match))).map((c) => c.id);
-const ask = async (d, user, history, question) => {
-  const r = await askChatbot(d, user, history, question, { evaluation: true });
-  return { answer: r.answer, tools: r.tools, sources: r.sources, source: r.source, checks: r.checks, tables: r.tables };
-};
+// 本番の評価 (画面の「評価を実行」・デプロイのあと) と同じ処理: 質問する・要約・文書の作成 (eval-runners.ts)
+const RUN = await imp("lib/chatbot/eval-runners.ts");
+const ask = RUN.evalAsk;
 const t0 = Date.now();
-const { runId, metrics: m } = await E.runEval(db, ask, { caseIds: ids, label: "eval-live", provider: `${status.label} ${status.model ?? ""}`, onProgress: (d, n) => process.stdout.write(`\r${d}/${n}`) });
+const { runId, metrics: m } = await E.runEval(db, ask, { caseIds: ids, label: "eval-live", provider: `${status.label} ${status.model ?? ""}`, runners: RUN.evalRunners, onProgress: (d, n) => process.stdout.write(`\r${d}/${n}`) });
 console.log("\n");
 const cases = new Map(E.listEvalCases().map((c) => [c.id, c]));
 for (const r of E.evalResults(runId)) {
   const c = cases.get(r.caseId);
+  if (r.outcome.skipped) {
+    console.log(`SKIP [${E.categoryLabel(c.category)}・${c.role}${c.storeId ? `・${c.storeId}` : ""}] ${r.question} (対象の記録なし)`);
+    continue;
+  }
   console.log(`${r.ok ? "PASS" : "FAIL"} [${E.categoryLabel(c.category)}・${c.role}${c.storeId ? `・${c.storeId}` : ""}] ${c.history.length ? `(${c.history.join(" → ")}) → ` : ""}${r.question}  ${(r.ms / 1000).toFixed(1)}s`);
   if (!r.ok) console.log(`     理由: ${r.outcome.reasons.join(" / ")}`);
   if (r.outcome.issueDetails?.length) console.log(`     確かめ: ${r.outcome.issueDetails.join(" / ")}`);

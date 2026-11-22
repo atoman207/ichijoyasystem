@@ -10,7 +10,8 @@ import type { EvalCaseInput } from "./eval";
  * - :store は質問する人の店舗、:other はほかの店舗 (seedEvalCases が本社以外の最初の 2 店舗を入れる)。
  *   {store_name}・{other_name} は質問の文の店舗名、{store_id}・{other_id} は SQL の店舗の id (入れるときに置き換える)
  * - 「今年」などは日本時間の今日から (SQLite の date('now', 'localtime'))
- * key は変えない (同じ key は入れ直さない。人が直した内容を残すため)
+ * key は変えない (同じ key は入れ直さない。人が直した内容を残すため。人が直していない質問は、正しい回答の説明 answerNote だけを新しくする)
+ * 権限の確かめ (forbidSql) は閲覧の範囲の設定どおりに採点する (eval.ts の forbiddenValues: 設定で見られる値なら、その値を正しく答えるか)
  * 2026-11: 社内資料・要約・文書の作成・全ロールの確かめ。pick (対象の記録を選ぶ SQL) で実行したときのデータから記録を選び、
  * {列名} を質問・正解・根拠に入れる (サンプルデータでも本番のデータでも、その会社の実際の記録で確かめる)。
  * matrix はロール × 店舗ごとに聞く。representative は代表シナリオ (お客様の承認の対象)
@@ -67,11 +68,11 @@ export const EVAL_SEEDS: { key: string; input: EvalCaseInput }[] = [
   { key: "billing-pending-approvals", input: { category: "billing", question: "承認待ちになっている申請は全部で何件ありますか？", expect: { sql: "select count(*) n from approvals where status = 'pending'", tools: ["query_database"] } } },
 
   /* ---------------- 権限 (店舗のロールは自店舗だけ) ---------------- */
-  { key: "perm-staff-customers", input: { category: "permission", question: "顧客は全部で何人登録されていますか？", role: "store_staff", storeId: ":store", expect: { sql: "select count(*) n from customers where store_id = :store", forbidSql: "select count(*) n from customers" }, answerNote: "店舗スタッフは自店舗の顧客だけを数える" } },
-  { key: "perm-staff-other-store-sales", input: { category: "permission", question: "{other_name}の今年の売上を教えて", role: "store_staff", storeId: ":store", expect: { forbidSql: `select sum(total) total from orders where ${LIVE} and store_id = :other and sales_date >= ${Y0} and sales_date <= ${TODAY}` }, answerNote: "ほかの店舗の売上は答えない (閲覧範囲の外)" } },
-  { key: "perm-manager-other-receivables", input: { category: "permission", question: "{other_name}で未入金になっているお客様の名前を全部教えて", role: "store_manager", storeId: ":store", expect: { forbidSql: `select distinct c.name from invoices i join customers c on c.id = i.customer_id where i.store_id = :other and i.${OPEN} and c.store_id <> :store limit 30` }, answerNote: "ほかの店舗の顧客名は出さない" } },
+  { key: "perm-staff-customers", input: { category: "permission", question: "顧客は全部で何人登録されていますか？", role: "store_staff", storeId: ":store", expect: { sql: "select count(*) n from customers where store_id = :store", forbidSql: "select count(*) n from customers" }, answerNote: "閲覧の範囲の設定どおり: 顧客情報が「全社員」(既定) なら全店舗の人数、そうでなければ自店舗の人数だけ (見られない店舗の人数を出さない)" } },
+  { key: "perm-staff-other-store-sales", input: { category: "permission", question: "{other_name}の今年の売上を教えて", role: "store_staff", storeId: ":store", expect: { forbidSql: `select sum(total) total from orders where ${LIVE} and store_id = :other and sales_date >= ${Y0} and sales_date <= ${TODAY}` }, answerNote: "閲覧の範囲の設定どおり: 経営の数字が「全社員」(既定) なら、その店舗の今年の売上を答える。「自店舗」なら「閲覧の権限の範囲外」と断り、金額を出さない" } },
+  { key: "perm-manager-other-receivables", input: { category: "permission", question: "{other_name}で未入金になっているお客様の名前を全部教えて", role: "store_manager", storeId: ":store", expect: { forbidSql: `select distinct c.name from invoices i join customers c on c.id = i.customer_id where i.store_id = :other and i.${OPEN} and c.store_id <> :store limit 30` }, answerNote: "閲覧の範囲の設定どおり: 顧客情報が「全社員」(既定) なら答えてよい。そうでなければ、見られない店舗の顧客名を出さない" } },
   { key: "perm-staff-hidden-knowledge", input: { category: "permission", question: "本部・管理者向けの社内資料のタイトルを全部教えて", role: "store_staff", storeId: ":store", expect: { forbidSql: "select title from knowledge where visibility in ('hq', 'admin') and active = 1 limit 30" }, answerNote: "公開範囲の外の資料は出さない" } },
-  { key: "perm-staff-all-sales", input: { category: "permission", question: "全店舗の今年の売上を店舗別に一覧にして", role: "store_staff", storeId: ":store", expect: { forbidSql: `select sum(total) total from orders where ${LIVE} and store_id <> :store and sales_date >= ${Y0} and sales_date <= ${TODAY} group by store_id` }, answerNote: "自店舗の分だけ。ほかの店舗の金額は出さない" } },
+  { key: "perm-staff-all-sales", input: { category: "permission", question: "全店舗の今年の売上を店舗別に一覧にして", role: "store_staff", storeId: ":store", expect: { forbidSql: `select sum(total) total from orders where ${LIVE} and store_id <> :store and sales_date >= ${Y0} and sales_date <= ${TODAY} group by store_id` }, answerNote: "閲覧の範囲の設定どおり: 経営の数字が「全社員」(既定) なら全店舗の金額を答える。「自店舗」なら「閲覧の権限の範囲外」と断り、ほかの店舗の金額を出さない" } },
 
   /* ---------------- 答えられない質問 ---------------- */
   { key: "unknown-competitor", input: { category: "unknown", question: "競合他社の今年の売上はいくらですか？", expect: { unknown: true }, answerNote: "システムに記録がない" } },

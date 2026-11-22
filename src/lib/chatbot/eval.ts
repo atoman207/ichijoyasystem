@@ -10,6 +10,7 @@ import { EVAL_SEEDS } from "./eval-seeds";
 import { forecast, type ForecastSubject } from "@/lib/assistant/forecast";
 import { withAiContext } from "@/lib/ai/usage";
 import { answerLinks, forbiddenSources, missingSources, scopeViolations } from "./eval-scope";
+import { assistantReadUser, outOfScopeRefusal } from "@/lib/assistant/scope";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -127,6 +128,8 @@ export interface CaseOutcome {
   sourcesOk?: boolean | null;
   /** 対象の記録がない (pick の行がない) ため数えない */
   skipped?: boolean;
+  /** 出してはいけない値 (forbidSql) を、閲覧の範囲の設定でこの人も見られるため、正しい値を答えるかで確かめた */
+  policyOpen?: boolean;
   /** 閲覧範囲の外の記録へのリンク */
   scopeViolations?: string[];
 }
@@ -357,13 +360,18 @@ export function saveEvalCase(input: EvalCaseInput, by: string, id?: number, seed
   ];
   const db = chatbotDb();
   if (id) {
-    db.prepare("update eval_cases set category = ?, question = ?, history = ?, role = ?, store_id = ?, user_id = ?, expect = ?, answer_note = ?, evidence_note = ?, active = ?, updated_at = ? where id = ?").run(...vals, input.active === false ? 0 : 1, nowIso(), id);
+    // 直した時刻は登録した時刻と必ず違える (seedEvalCases が「人が直していない」= 同じ時刻で見分ける)
+    const row = db.prepare("select created_at from eval_cases where id = ?").get(id) as { created_at?: string } | undefined;
+    let at = nowIso();
+    if (row?.created_at === at) at = new Date(Date.parse(at) + 1).toISOString();
+    db.prepare("update eval_cases set category = ?, question = ?, history = ?, role = ?, store_id = ?, user_id = ?, expect = ?, answer_note = ?, evidence_note = ?, active = ?, updated_at = ? where id = ?").run(...vals, input.active === false ? 0 : 1, at, id);
     if (input.representative !== undefined) setEvalCaseRepresentative(id, input.representative);
     return id;
   }
+  const at = nowIso();
   const r = db
     .prepare("insert into eval_cases (category, question, history, role, store_id, user_id, expect, answer_note, evidence_note, origin, seed_key, active, created_by, created_at, updated_at, representative) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(...vals, (input.origin ?? "manual").slice(0, 20), seedKey ?? null, input.active === false ? 0 : 1, by, nowIso(), nowIso(), input.representative ? 1 : 0);
+    .run(...vals, (input.origin ?? "manual").slice(0, 20), seedKey ?? null, input.active === false ? 0 : 1, by, at, at, input.representative ? 1 : 0);
   return Number(r.lastInsertRowid);
 }
 
@@ -394,8 +402,14 @@ export function seedEvalCases(db: Database, by = "system"): number {
   const other = stores[1] ?? stores[0];
   let added = 0;
   for (const s of EVAL_SEEDS) {
-    const exists = chatbotDb().prepare("select 1 from eval_cases where seed_key = ?").get(s.key);
-    if (exists) continue;
+    const exists = chatbotDb().prepare("select id, answer_note, created_at, updated_at from eval_cases where seed_key = ?").get(s.key) as { id: number; answer_note: string; created_at: string; updated_at: string } | undefined;
+    if (exists) {
+      // 人が直していない質問 (登録したときのまま) は、正しい回答の説明だけを新しい説明にする (正解の条件・質問は変えない)
+      const untouched = exists.updated_at === exists.created_at;
+      const note = (s.input.answerNote ?? "").slice(0, 3000);
+      if (untouched && note && exists.answer_note !== note) chatbotDb().prepare("update eval_cases set answer_note = ? where id = ?").run(note, exists.id);
+      continue;
+    }
     const fill = (t: string) => t.replace(/\{store_name\}/g, store?.name ?? "").replace(/\{other_name\}/g, other?.name ?? "").replace(/\{store_id\}/g, store?.id ?? "").replace(/\{other_id\}/g, other?.id ?? "");
     const e = s.input.expect;
     saveEvalCase(
@@ -544,6 +558,29 @@ async function sqlValues(sql: string, user: Pick<User, "id" | "role" | "storeId"
   return { numbers, texts, rows: r.rows };
 }
 
+/**
+ * 出してはいけない値 (forbidSql の値) を、聞いた人の閲覧範囲で決める。閲覧の範囲の設定 (access-policy.ts) は管理者が変えられるので、
+ * 質問の作りを変えずに、そのときの設定どおりに確かめる:
+ * - AI が「閲覧の権限の範囲外」と断る質問 (scope.ts の outOfScopeRefusal: 経営の数字が自店舗だけの設定) → 全社の値をすべて出してはいけない
+ * - 同じ SQL を聞いた人の範囲 (reader = AI と同じ範囲) で実行して、全部の値が出る → 設定で見られる値。open = true (その値を正しく答えるかを確かめる)
+ * - 一部だけ出る → 出ない値だけを出してはいけない
+ */
+export async function forbiddenValues(db: Database, user: User, reader: User, question: string, forbidSql: string | undefined, storeId: string): Promise<{ numbers: number[]; texts: string[]; open: boolean }> {
+  if (!forbidSql || !mirrorReady()) return { numbers: [], texts: [], open: false };
+  const all = await sqlValues(forbidSql, SQL_ADMIN, storeId, db);
+  if (all.error) throw new Error(`出してはいけない値の SQL の誤り: ${all.error}`);
+  if (!all.numbers.length && !all.texts.length) return { numbers: [], texts: [], open: false };
+  if (outOfScopeRefusal(db, user, question)) return { numbers: all.numbers, texts: all.texts, open: false };
+  const seen = await sqlValues(forbidSql, reader, storeId, db);
+  if (seen.error) return { numbers: all.numbers, texts: all.texts, open: false };
+  const nums = new Set(seen.numbers);
+  const txt = new Set(seen.texts);
+  const numbers = all.numbers.filter((n) => !nums.has(n));
+  const texts = all.texts.filter((t) => !txt.has(t));
+  if (!numbers.length && !texts.length) return { numbers: [...new Set(all.numbers)], texts: [...new Set(all.texts)], open: true };
+  return { numbers, texts, open: false };
+}
+
 export type AskFn = (db: Database, user: User, history: { role: "user" | "assistant"; content: string; specs?: unknown[] }[], question: string) => Promise<{
   answer: string;
   tools?: { name: string; summary: string }[];
@@ -690,23 +727,33 @@ interface Reply {
 /** 1 問 (1 人分) を実行して採点する */
 async function runOne(db: Database, ask: AskFn, runners: EvalRunners, c0: EvalCase, v: EvalVariant): Promise<{ outcome: CaseOutcome; answer: string; tools: string[]; expectedText: string; question: string }> {
   const user = v.user;
+  // 聞いた人の読み取りの範囲 (AI アシスタントと同じ: 閲覧の範囲の設定 access-policy.ts・AI の閲覧範囲 scope.ts)
+  const reader = assistantReadUser(db, user);
   // 対象の記録を選ぶ (実行したときのデータから)
   let row: Record<string, unknown> | undefined;
   if (c0.expect.pick) {
     if (!mirrorReady()) throw new Error("VPS のデータベースを準備中のため、対象の記録を選べません");
-    const p = await sqlValues(c0.expect.pick, c0.expect.pickScope === "user" ? user : SQL_ADMIN, v.storeId, db);
+    const p = await sqlValues(c0.expect.pick, c0.expect.pickScope === "user" ? reader : SQL_ADMIN, v.storeId, db);
     if (p.error) throw new Error(`対象を選ぶ SQL の誤り: ${p.error}`);
     row = p.rows[0];
     if (!row) return { outcome: { ok: false, skipped: true, reasons: ["対象の記録がないため数えません (データが増えたら確かめます)"], numbers: null, toolOk: null, evidenceOk: null, violation: false, guardIssues: 0, badScreen: false, ungrounded: false }, answer: "", tools: [], expectedText: "", question: c0.question };
   }
   const c = fillCase(c0, row);
   const e = c.expect;
-  // 正解 (SQL) は AI とは別に、生の表から数える
-  const truth = e.sql && mirrorReady() ? await sqlValues(e.sql, e.sqlScope === "user" ? user : SQL_ADMIN, v.storeId, db) : { numbers: [], texts: [], rows: [] };
+  // 出してはいけない値 (forbidSql) は、閲覧の範囲の設定どおりに決める (設定は管理者が変えられる。既定は経営の数字・顧客情報とも全社員)
+  const forbid = await forbiddenValues(db, user, reader, c.question, e.forbidSql, v.storeId);
+  // 正解 (SQL) は AI とは別に、生の表から数える。設定でこの人も見られる値の質問は、その値が正解 (権限どおりに答えるか)
+  const truth = forbid.open
+    ? { numbers: forbid.numbers.slice(0, 10), texts: forbid.texts.slice(0, 5), rows: [] as Record<string, unknown>[] }
+    : e.sql && mirrorReady()
+      ? await sqlValues(e.sql, e.sqlScope === "user" ? reader : SQL_ADMIN, v.storeId, db)
+      : { numbers: [], texts: [], rows: [] };
   if (e.sql && !mirrorReady()) throw new Error("VPS のデータベースを準備中のため、正解の SQL を実行できません");
   if ("error" in truth && truth.error) throw new Error(`正解の SQL の誤り: ${truth.error}`);
-  const firstRow = e.sqlMode === "any" ? truth : { numbers: [] as number[], texts: [] as string[] };
-  if (e.sqlMode !== "any" && truth.rows[0]) {
+  // 設定で見られる値の質問: 数字はすべて (店舗別の一覧など)、名前だけのときはどれか 1 つ
+  const mode: "all" | "any" = forbid.open ? (truth.numbers.length ? "all" : "any") : e.sqlMode === "any" ? "any" : "all";
+  const firstRow = forbid.open ? { numbers: truth.numbers, texts: truth.numbers.length ? [] : truth.texts } : e.sqlMode === "any" ? truth : { numbers: [] as number[], texts: [] as string[] };
+  if (!forbid.open && e.sqlMode !== "any" && truth.rows[0]) {
     for (const val of Object.values(truth.rows[0])) {
       if (typeof val === "number" || typeof val === "bigint") firstRow.numbers.push(Number(val));
       else if (typeof val === "string" && val.trim()) firstRow.texts.push(val.trim());
@@ -722,8 +769,7 @@ async function runOne(db: Database, ask: AskFn, runners: EvalRunners, c0: EvalCa
     if (typeof fv === "number") firstRow.numbers.push(fv);
     else throw new Error(`予測を計算できません: ${f.ok ? "行がありません" : f.error}`);
   }
-  const forbid = e.forbidSql && mirrorReady() ? await sqlValues(e.forbidSql, SQL_ADMIN, v.storeId, db) : { numbers: [], texts: [] };
-  const expectedText = [...(e.numbers ?? []), ...firstRow.numbers].map((n) => n.toLocaleString("ja-JP")).concat(firstRow.texts, e.contains ?? [], (e.sources ?? []).map((x) => `根拠 ${x}`)).join(" / ");
+  const expectedText = `${forbid.open ? "(閲覧の範囲の設定でこの人も見られる値) " : ""}${[...(e.numbers ?? []), ...firstRow.numbers].map((n) => n.toLocaleString("ja-JP")).concat(firstRow.texts, e.contains ?? [], (e.sources ?? []).map((x) => `根拠 ${x}`)).join(" / ")}`;
   const target: EvalTarget = e.target ?? "ask";
   let r: Reply;
   if (target === "summary") {
@@ -758,10 +804,11 @@ async function runOne(db: Database, ask: AskFn, runners: EvalRunners, c0: EvalCa
     guardIssues: r.guardIssues,
     expectedNumbers: firstRow.numbers,
     expectedTexts: firstRow.texts.slice(0, 5),
-    expectedMode: e.sqlMode === "any" ? "any" : "all",
-    forbidden: forbid.texts.filter((t) => !firstRow.texts.includes(t)).slice(0, 50),
-    forbiddenNumbers: forbid.numbers.filter((n) => !firstRow.numbers.includes(n)).slice(0, 50),
+    expectedMode: mode,
+    forbidden: forbid.open ? [] : forbid.texts.filter((t) => !firstRow.texts.includes(t)).slice(0, 50),
+    forbiddenNumbers: forbid.open ? [] : forbid.numbers.filter((n) => !firstRow.numbers.includes(n)).slice(0, 50),
   });
+  if (forbid.open) outcome.policyOpen = true;
   // 根拠のリンク: 閲覧範囲の中か・必要な根拠があるか・出してはいけない根拠がないか
   const hrefs = [...r.sources.map((x) => x.href), ...answerLinks(r.answer)];
   const outside = scopeViolations(db, user, hrefs);
