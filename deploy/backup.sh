@@ -10,6 +10,8 @@
 #      (rsync。ファイルの中身は変わらないため増えた分だけ。アプリで削除したファイルもバックアップには残す)
 #   3. チャットボットのデータベース (SQLite): VACUUM INTO → chatbot/chatbot-<日時>.sqlite
 #      データ台帳の資料庫 (SQLite。人が変えた資料の扱い・画面から追加した資料の中身): VACUUM INTO → chatbot/materials-<日時>.sqlite
+#   3c. 試験期間 (deploy/testweek.sh) のあいだだけ: テスト用のデータベース (期間中の操作はすべてここに入る) の控え
+#      → testweek/testweek-<日時>.tar.gz (JSON・チャットボット・期間中に増えた添付ファイル)
 #   4. 古いバックアップを削除 (自動: BACKUP_KEEP_DAYS 日・既定 14 日 / 手動: BACKUP_KEEP_MANUAL_DAYS 日・既定 30 日)
 #   5. 結果を BACKUP_STATUS_FILE に書き、履歴 (backup-history.jsonl) に 1 行足す (設定 → データ管理・本番運用の準備 に表示)
 #   同時には 1 つだけ実行する (2 つ目は「実行中」で終わる)。復元の手順は deploy/README.md の「バックアップと復元」
@@ -120,7 +122,31 @@ if [[ -f "$MATERIALS_DB" ]]; then
   fi
 fi
 
+# 3c. 試験期間のテスト用のデータベース (期間中のデータを本番に引き継ぐと決めたときのため、毎日控える)
+#    JSON はアプリが一時ファイル → 名前の変更で書くので、使用中に読んでも壊れない。チャットボットは VACUUM INTO の写し
+TESTWEEK_DATA=/srv/ichijoya/testweek/data
+if [[ -f /etc/nginx/snippets/ichijoya-host-testweek.conf && -f "$TESTWEEK_DATA/testweek-db.json" ]]; then
+  mkdir -p "$DEST/testweek"
+  tw_file="$DEST/testweek/testweek-$STAMP$suffix.tar.gz"
+  tw_tmp=$(mktemp -d)
+  tw_since=$(cat /srv/ichijoya/testweek/started-at 2>/dev/null || echo "1970-01-01 00:00:00")
+  if [[ -f "$TESTWEEK_DATA/chatbot.sqlite" ]]; then
+    node -e 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(process.argv[1]); db.exec("pragma busy_timeout = 10000"); db.prepare("vacuum into ?").run(process.argv[2]); db.close();' "$TESTWEEK_DATA/chatbot.sqlite" "$tw_tmp/chatbot.sqlite" 2>/dev/null || messages+=("テスト用のチャットボットの写しを作れませんでした")
+  fi
+  ( cd "$TESTWEEK_DATA" && find uploads -type f ! -name '*.tmp' -newermt "$tw_since" -print 2>/dev/null ) > "$tw_tmp/uploads.list"
+  if tar -czf "$tw_file.part" -C "$TESTWEEK_DATA" testweek-db.json -T "$tw_tmp/uploads.list" -C "$tw_tmp" --exclude=uploads.list . \
+    && gzip -t "$tw_file.part" && mv "$tw_file.part" "$tw_file"; then
+    messages+=("テスト用のデータベース: $(( $(stat -c %s "$tw_file") / 1024 )) KB・期間中の添付ファイル $(wc -l < "$tw_tmp/uploads.list") 件")
+  else
+    status=failed
+    messages+=("テスト用のデータベースのバックアップに失敗しました")
+    rm -f "$tw_file.part"
+  fi
+  rm -rf "$tw_tmp"
+fi
+
 # 4. 古いバックアップを削除 (手動で取ったものは長めに残す)
+[[ -d "$DEST/testweek" ]] && find "$DEST/testweek" -name 'testweek-*.tar.gz' -mtime +"$KEEP" -delete
 find "$DEST/db" -name 'ichijoya-*.dump' ! -name '*-manual.dump' -mtime +"$KEEP" -delete
 find "$DEST/db" -name 'ichijoya-*-manual.dump' -mtime +"$KEEP_MANUAL" -delete
 find "$DEST/db" -name '*.part' -mmin +120 -delete

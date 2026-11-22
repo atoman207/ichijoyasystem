@@ -282,6 +282,7 @@ OS のセキュリティ更新は自動 (unattended-upgrades) です。カーネ
 - nginx: 本番の server が読み込む `/etc/nginx/snippets/ichijoya-host-testweek.conf` で、https://ichijoya-system.jp のすべての要求をテスト用のサーバーへ (本番の設定ファイルは変えない)
 - デプロイ: `npm run deploy` は本番を公開したあと、試験期間ならテスト用のサーバーも同じ版にそろえる (`sudo -n /usr/local/sbin/ichijoya-testweek refresh-app`。データはそのまま、新しい表は空で足す。止まるのは起動し直す十数秒)。そろえられなかったときはデプロイが失敗の終了コードで知らせる
 - 定期処理: データを扱うもの (knowledge-sync・fax・survey-workbook) は期間中テスト用のサーバーへ (`run-task.sh`)。バックアップと本番の死活監視は本番。テスト用のサーバーの死活監視 (`health-testweek`、5 分ごと) は期間中だけ
+- バックアップ: 毎日 3:30 の `backup.sh` は、期間中だけテスト用のデータベースも控える (`/var/backups/ichijoya/testweek/testweek-<日時>.tar.gz`: データベースの JSON・チャットボット・期間中に増えた添付ファイル。14 日で削除)。テスト用のサーバーの画面の「今すぐバックアップ」は何もしない (アプリのコピーの `backup.sh` を置き換えている)
 - 予約: `sudo bash deploy/testweek.sh schedule` で、11-23 0:00 に `start`、12-01 0:00 に `end` を cron (`/etc/cron.d/ichijoya-testweek`) で実行し、デプロイからの `refresh-app` を許可する (`/etc/sudoers.d/ichijoya-testweek`)。`end` は、期間中に外部 (LINE・Web フォーム・AI 受付・電話のシステム) から届いた記録を `/var/backups/ichijoya/testweek-inbound-<日付>.csv` に控えてから、画面を本番に戻し、テスト用のデータベースの控え (データベースの JSON と期間中に増えた・変わったファイル。`/var/backups/ichijoya/testweek-final-<日付>.tar.gz`・root だけが読める・60 日で削除。お客様が期間中のデータを本番に引き継ぐと決めたときに使う) を作ってから削除する (控えを作れなければ削除しない)。手動は `sudo ichijoya-testweek start|end|status|refresh-app|reset-data` (`reset-data` は期間中のデータベースをいまの本番の写しで作り直す。練習で入れたデータを消してから本番さながらに使い、12/1 にそのデータを本番に引き継ぐときに使う。作り直す前の控えを残す)。ログは `/var/log/ichijoya/testweek.log`
 - 期間中は 3001 番の開発サーバーで動作を確かめない (3001 番は本番のデータベースを使うため)。Supabase に直接書くスクリプトも使わない
 
