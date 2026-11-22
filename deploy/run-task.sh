@@ -8,6 +8,11 @@
 set -uo pipefail
 ENV_FILE=/etc/ichijoya/ichijoya.env
 BASE=http://127.0.0.1:3000
+# 試験期間 (deploy/testweek.sh) は、データを扱う定期処理をテスト用のサーバー (テスト用のデータベース) に送る。死活監視は両方
+TESTWEEK_SNIPPET=/etc/nginx/snippets/ichijoya-host-testweek.conf
+TEST_BASE=http://127.0.0.1:3300
+DATA_BASE=$BASE
+[[ -f "$TESTWEEK_SNIPPET" ]] && DATA_BASE=$TEST_BASE
 
 case "${1:-}" in
   knowledge-sync)
@@ -15,7 +20,7 @@ case "${1:-}" in
     . "$(dirname "$(readlink -f "$0")")/lib.sh"
     load_env "$ENV_FILE" || exit 1
     [[ -n "${CRON_SECRET:-}" ]] || { echo "[$(date '+%F %T')] CRON_SECRET が未設定"; exit 1; }
-    out=$(curl -sS -m 60 -X POST -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/knowledge-sync")
+    out=$(curl -sS -m 60 -X POST -H "Authorization: Bearer $CRON_SECRET" "$DATA_BASE/api/cron/knowledge-sync")
     echo "[$(date '+%F %T')] knowledge-sync: $out"
     ;;
   fax)
@@ -24,7 +29,7 @@ case "${1:-}" in
     load_env "$ENV_FILE" || exit 1
     [[ -n "${FAX_PROVIDER:-}" ]] || exit 0
     [[ -n "${CRON_SECRET:-}" ]] || { echo "[$(date '+%F %T')] CRON_SECRET が未設定"; exit 1; }
-    out=$(curl -sS -m 60 -X POST -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/fax")
+    out=$(curl -sS -m 60 -X POST -H "Authorization: Bearer $CRON_SECRET" "$DATA_BASE/api/cron/fax")
     echo "[$(date '+%F %T')] fax: $out"
     ;;
   chatbot-eval)
@@ -40,7 +45,7 @@ case "${1:-}" in
     . "$(dirname "$(readlink -f "$0")")/lib.sh"
     load_env "$ENV_FILE" || exit 1
     [[ -n "${CRON_SECRET:-}" ]] || { echo "[$(date '+%F %T')] CRON_SECRET が未設定"; exit 1; }
-    out=$(curl -sS -m 60 -X POST -H "Authorization: Bearer $CRON_SECRET" "$BASE/api/cron/survey-workbook")
+    out=$(curl -sS -m 60 -X POST -H "Authorization: Bearer $CRON_SECRET" "$DATA_BASE/api/cron/survey-workbook")
     echo "[$(date '+%F %T')] survey-workbook: $out"
     ;;
   health)
@@ -51,8 +56,17 @@ case "${1:-}" in
     systemctl restart ichijoya
     logger -t ichijoya "health check failed twice; restarted ichijoya"
     ;;
+  health-testweek)
+    [[ -f "$TESTWEEK_SNIPPET" ]] || exit 0
+    if curl -fsS -m 20 "$TEST_BASE/api/health" >/dev/null 2>&1; then exit 0; fi
+    sleep 20
+    if curl -fsS -m 20 "$TEST_BASE/api/health" >/dev/null 2>&1; then exit 0; fi
+    echo "[$(date '+%F %T')] テスト用のサーバーの応答がないため再起動します"
+    systemctl restart ichijoya-testweek
+    logger -t ichijoya "test-week health check failed twice; restarted ichijoya-testweek"
+    ;;
   *)
-    echo "使い方: $0 knowledge-sync|fax|chatbot-eval|survey-workbook|health"
+    echo "使い方: $0 knowledge-sync|fax|chatbot-eval|survey-workbook|health|health-testweek"
     exit 1
     ;;
 esac

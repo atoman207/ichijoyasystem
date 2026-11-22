@@ -275,13 +275,14 @@ OS のセキュリティ更新は自動 (unattended-upgrades) です。カーネ
 
 ## 試験期間 (2026-11-23 0:00 〜 12-01 0:00)
 
-試験期間は、https://ichijoya-system.jp の画面を「テスト用のデータベース」のサーバーに向けます (`deploy/testweek.sh`)。
+試験期間は「データベースだけ」をテスト用にします (`deploy/testweek.sh`・`deploy/testweek-data.py`)。アプリの版・設定・メール・LINE・Chatwork・FAX・AI・外部からの受信・定期処理は本番と同じです。
 
-- テスト用のデータベース: 切り替えた時点の本番のデータの控え (`/srv/ichijoya/data/cache/db-production.ndjson.gz`) の写し (JSON。`/srv/ichijoya/testweek/app/data`)。添付ファイル・チャットボット・資料庫も写しを使う。期間中の登録・変更・削除はすべて写しに入り、本番のデータベース (Supabase) は変わらない
-- テスト用のサーバー: systemd の `ichijoya-testweek` (127.0.0.1:3300・メモリ 2 GB まで)。アプリは本番の版のコピー (`cp -al`)、設定は `/srv/ichijoya/testweek/testweek.env` (本番のデータベースの鍵・メール・LINE・Chatwork・FAX の設定なし = 何も送らない。ログインの鍵は本番と同じなので、切り替えの前後でログインしたまま)
-- nginx: 本番の server が読み込む `/etc/nginx/snippets/ichijoya-host-testweek.conf` を置くだけ (本番の設定ファイルは変えない)。外部からの受信 (`/api/integrations/`) とお客様に送った書類のリンク (`/api/doc/`) は本番のまま。定期処理 (cron) も本番のまま
-- 予約: `sudo bash deploy/testweek.sh schedule` で、11-23 0:00 に `start`、12-01 0:00 に `end` (画面を本番に戻し、テスト用のサーバーを止め、テスト用のデータベースを削除) を cron (`/etc/cron.d/ichijoya-testweek`) で実行する。手動は `sudo ichijoya-testweek start|end|status`。ログは `/var/log/ichijoya/testweek.log`
-- 期間中に本番の版を新しくしたとき: `sudo ichijoya-testweek refresh-app` (データは残す)
-- 期間中は 3001 番の開発サーバー・ビルドを動かさない (本番とテスト用のサーバーでメモリを使うため)
+- テスト用のデータベース: 切り替えた時点の本番のデータの控え (`/srv/ichijoya/data/cache/db-production.ndjson.gz`) の写し (JSON。`/srv/ichijoya/testweek/data`)。添付ファイル・チャットボット・資料庫も写し。期間中の操作 (画面・外部からの受信・定期処理) はすべて写しに入り、本番のデータベース (Supabase) は変わらない
+- テスト用のサーバー: systemd の `ichijoya-testweek` (127.0.0.1:3300・メモリ 2 GB まで)。アプリは本番の版のコピー (`cp -al`。`data` は `/srv/ichijoya/testweek/data` へのリンク)、設定 `/srv/ichijoya/testweek/testweek.env` は本番の設定 (`/etc/ichijoya/ichijoya.env`) からデータベースの接続 (`SUPABASE_*`) とデータの置き場所だけを除いたもの (メール・LINE などは本当に送られる)
+- nginx: 本番の server が読み込む `/etc/nginx/snippets/ichijoya-host-testweek.conf` で、https://ichijoya-system.jp のすべての要求をテスト用のサーバーへ (本番の設定ファイルは変えない)
+- デプロイ: `npm run deploy` は本番を公開したあと、試験期間ならテスト用のサーバーも同じ版にそろえる (`sudo -n /usr/local/sbin/ichijoya-testweek refresh-app`。データはそのまま、新しい表は空で足す。止まるのは起動し直す十数秒)。そろえられなかったときはデプロイが失敗の終了コードで知らせる
+- 定期処理: データを扱うもの (knowledge-sync・fax・survey-workbook) は期間中テスト用のサーバーへ (`run-task.sh`)。バックアップと本番の死活監視は本番。テスト用のサーバーの死活監視 (`health-testweek`、5 分ごと) は期間中だけ
+- 予約: `sudo bash deploy/testweek.sh schedule` で、11-23 0:00 に `start`、12-01 0:00 に `end` を cron (`/etc/cron.d/ichijoya-testweek`) で実行し、デプロイからの `refresh-app` を許可する (`/etc/sudoers.d/ichijoya-testweek`)。`end` は、期間中に外部 (LINE・Web フォーム・AI 受付・電話のシステム) から届いた記録を `/var/backups/ichijoya/testweek-inbound-<日付>.csv` に控えてから、画面を本番に戻し、テスト用のデータベースを削除する。手動は `sudo ichijoya-testweek start|end|status|refresh-app`。ログは `/var/log/ichijoya/testweek.log`
+- 期間中は 3001 番の開発サーバーで動作を確かめない (3001 番は本番のデータベースを使うため)。Supabase に直接書くスクリプトも使わない
 
 練習用の架空のデータの環境 (`/srv/ichijoya/training`・ユーザーのサービス `ichijoya-training`・127.0.0.1:3200) も作ってあるが、試験期間の方式にしたため止めている (`systemctl --user start ichijoya-training` で起動。初期化は `bash /srv/ichijoya/training/reset.sh`)。

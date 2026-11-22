@@ -121,6 +121,16 @@ if ! wait_healthy; then
   die "デプロイに失敗しました (版 $STAMP は残してあります)"
 fi
 
+# 試験期間 (deploy/testweek.sh。データベースだけがテスト用) は、利用者が使うテスト用のサーバーも同じ版にそろえる (データはそのまま)
+TESTWEEK_FAILED=0
+if [[ -f /etc/nginx/snippets/ichijoya-host-testweek.conf ]]; then
+  log "試験期間: テスト用のサーバーも同じ版にそろえます (データはテスト用のデータベースのまま)"
+  if ! sudo -n /usr/local/sbin/ichijoya-testweek refresh-app; then
+    TESTWEEK_FAILED=1
+    printf '\n\033[1;31m!! 本番は公開しましたが、テスト用のサーバーを同じ版にできませんでした。sudo /usr/local/sbin/ichijoya-testweek refresh-app を実行してください\033[0m\n'
+  fi
+fi
+
 log "古い版を削除します (新しい $KEEP 版を残す)"
 ls -1d "$APP_DIR"/releases/*/ | sed 's#/$##' | sort | head -n -"$KEEP" | while read -r old; do
   [[ "$old" == "$(readlink -f "$APP_DIR/current")" ]] || rm -rf "$old"
@@ -133,3 +143,4 @@ if [[ "$ASSISTANT_CHANGED" == 1 && "${EVAL_AFTER_DEPLOY:-on}" != "off" && -n "${
   echo
 fi
 log "完了: $COMMIT"
+[[ "$TESTWEEK_FAILED" == 0 ]] || exit 1

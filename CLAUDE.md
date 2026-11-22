@@ -28,6 +28,7 @@ AI コーディング支援 (Claude Code 等) がこのリポジトリで作業�
 - `npm run db:sql` — `supabase/ichijoya.sql` (テーブル定義 + 移行データ + デモ用アカウント) を作り直す。`npm run db:setup` は作り直して Supabase で実行 (既存データの置き換えは `-- --yes`)
 
 ## 注意
+- **試験期間 (2026-11-23 0:00 〜 11-30 24:00) の決まり (ユーザーの指示)**: 修正はすべて本番に反映する (コミット → `npm run deploy`。デプロイがテスト用のサーバーも同じ版にそろえる)。お客様のデータ・操作はすべてテスト用のデータベースに入れる (https://ichijoya-system.jp は期間中テスト用のサーバー 3300 番 = 本番の版 + テスト用のデータベース。データベースだけがテスト用で、送信・外部からの受信も本番と同じ)。期間中は 3001 番 (本番のデータベース) で動作を確かめない・Supabase に直接書かない。確かめるときは試しのサーバー (本番の版のコピー + JSON の写し) で。12-01 0:00 に自動で本番のデータベースに戻り、テスト用のデータベースは削除される (`deploy/testweek.sh`・deploy/README.md)
 - Next.js 16 (App Router)。`params` / `searchParams` / `cookies()` は Promise。`middleware` ではなく `src/proxy.ts`
 - オブジェクトのキーに日本語を書くとき、「・」「(」「 」などの記号を含むものは必ず引用符で囲む (`{ "退職・未登録": … }`)。tsc は通るが、next build の SWC は読めずにビルドが失敗する。`npm run test:chatbot` が src の全ファイルを SWC で読んで確かめる
 - Route Handler (`route.ts`) の転送先を `req.url` から作らない。本番は nginx の内側 (`next start -H 0.0.0.0 / 127.0.0.1`) なので `req.url` のホストは `0.0.0.0:3000` などになる。同じサイト内への転送は相対パスの `Location` (例: `src/app/review/route.ts` の `seeOther("/login")`)、外に出すリンクは `APP_BASE_URL` (`appBaseUrl()`)。`req.url` は検索パラメーターを読むだけに使う
