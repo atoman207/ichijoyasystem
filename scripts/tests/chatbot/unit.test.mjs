@@ -66,6 +66,8 @@ section("回答の確かめ: 道具の結果との突き合わせ");
   ok(fake.some((i) => i.kind === "link" && i.detail === "/secret-admin" && i.severity === "medium"), "存在しない画面のリンクは medium");
   const fixed = G.applyFixes("[受注](/orders/o_999) と [謎の画面](/secret-admin)", fake);
   eq(fixed.text, "受注 と 謎の画面", "根拠のないリンクは外して文字を残す");
+  const more = G.applyFixes("合計は 201,509,716円です。[詳細を見る](/analyze?s=売上_店舗_2026)", [{ kind: "link", detail: "/analyze?s=売上_店舗_2026", severity: "medium" }]);
+  eq(more.text, "合計は 201,509,716円です。", "「詳細を見る」のようなリンクだけの言葉は、リンクを外すときに言葉ごと消す");
 }
 
 section("回答の確かめ: 実行の依頼と、実行したような書き方");

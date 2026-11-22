@@ -391,7 +391,11 @@ export function applyFixes(answer: string, issues: AnswerIssue[]): { text: strin
   }
   const badLinks = new Set(issues.filter((i) => i.kind === "link").map((i) => i.detail));
   if (badLinks.size) {
-    text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (all, label: string, href: string) => (badLinks.has(href) ? label : all));
+    // 「詳細を見る」「こちら」のようなリンクだけの言葉は、リンクを外すと意味がないので言葉ごと消す
+    text = text
+      .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (all, label: string, href: string) => (!badLinks.has(href) ? all : /^(詳細|詳しく|くわしく|こちら|ここ|リンク|開く|見る|表示|画面|一覧)[^\n]{0,8}$/.test(label.trim()) && label.trim().length <= 12 ? "" : label))
+      .replace(/[ \t]+\n/g, "\n")
+      .trim();
     fixed.push(`根拠のないリンク ${badLinks.size} 件を外しました`);
   }
   const screens = issues.filter((i) => i.kind === "screen").map((i) => `「${i.detail}」`);
