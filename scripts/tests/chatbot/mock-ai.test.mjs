@@ -357,7 +357,9 @@ section("会話の続き: 前の集計の条件を AI に渡す");
   ok(r.tables?.length === 1 && r.tables[0].rows.length >= 2, "店舗別の表を出す");
   // データの回答の続きはデータの質問: 使い方の資料を先に添えない (操作の案内と取り違えない)・データモデルの要点を添える
   const lastQ = String(sent.at(-1)?.content ?? "");
-  ok(!lastQ.includes("参考資料 (システムが自動で探した使い方") && lastQ.includes("データモデルの要点 (システムが先に用意"),"続きの質問には使い方の資料ではなくデータモデルの要点を添える");
+  const sys0 = String(sent.find((m) => m.role === "system")?.content ?? "");
+  ok(!lastQ.includes("参考資料 (システムが自動で探した使い方") && sys0.includes("## データモデルの要点 (システムが先に用意") && !lastQ.includes("データモデルの要点"), "続きの質問には使い方の資料ではなくデータモデルの要点を添える (AI への指示の最後: キャッシュに乗る)");
+  ok(lastQ.includes("前の集計の続きです") && lastQ.startsWith("それを店舗別にして"), "集計の続きの質問には、前の条件を引き継いで調べ直すよう添える");
   // 調べずに数字を答えたら、確かめ直させる (データの質問として扱う)
   requests.length = 0;
   let n = 0;

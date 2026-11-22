@@ -48,7 +48,8 @@ const COUNT_UNITS = /^(件|人|名|社|個|枚|台|本|回|店|か所|箇所|ヶ
 /** 数字の後ろがこれなら日付・時刻・順位・コードなので比べない */
 const SKIP_AFTER = /^(年|月|日|時|分|秒|位|つ|か月|ヶ月|カ月|ケ月|週|歳|番|号|丁目|期|代|階|割|次|段|部|章|点満点|月度|年度|-|\/|:|：|\.\d|[A-Za-z])/;
 /** 数字の前がこれならコード・番号・電話・日付の一部 */
-const SKIP_BEFORE = /([A-Za-z\-/:：#＃〒第]|上位|下位|ベスト|トップ|直近|過去|最新の?|先頭の?)$/;
+// コロンは時刻 (10:30) の続きだけ: 「合志店：4,637,600円」のような一覧の金額は確かめる (以前はコロンの後をすべて飛ばし、作った金額を見逃した)
+const SKIP_BEFORE = /([A-Za-z\-/#＃〒第]|\d[:：]|上位|下位|ベスト|トップ|直近|過去|最新の?|先頭の?)$/;
 
 /**
  * 文から金額・件数・割合を取り出す。日付・時刻・順位・番号・電話番号・郵便番号は除く。
@@ -57,7 +58,16 @@ const SKIP_BEFORE = /([A-Za-z\-/:：#＃〒第]|上位|下位|ベスト|トッ�
 export function extractNumbers(text: string): FoundNumber[] {
   const out: FoundNumber[] = [];
   const re = /(約|およそ|ほぼ|概算で?|おおよそ)?\s*([¥￥])?\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s*(億|万|千)?\s*(円|%|％|ポイント|pt)?/g;
-  const t = text.normalize("NFKC");
+  let t = text.normalize("NFKC");
+  // 「156万4,800円」「2億3000万5000円」のような書き方は 1 つの金額 (分けて読むと「156万」が丸めの幅で根拠に当たり、違う金額を見逃す)
+  const composite = /(約|およそ|ほぼ|概算で?|おおよそ)?\s*(?:(\d+)\s*億\s*(?:(\d{1,4})\s*万\s*)?|(\d{1,4})\s*万\s*)(\d,\d{3}|\d{1,4})\s*円/g;
+  for (let m: RegExpExecArray | null; (m = composite.exec(t)); ) {
+    const [whole, approx, oku, manAfterOku, man, rest] = m;
+    const value = Number(oku ?? 0) * 1e8 + Number(manAfterOku ?? man ?? 0) * 1e4 + Number(rest.replace(/,/g, ""));
+    out.push({ raw: whole.trim(), value, unit: "yen", tolerance: approx ? 1000 : 0.5 });
+    // 同じ所を下でもう一度読まない (位置はそのまま: 前後の文字で判断するため)
+    t = t.slice(0, m.index) + " ".repeat(whole.length) + t.slice(m.index + whole.length);
+  }
   for (let m: RegExpExecArray | null; (m = re.exec(t)); ) {
     const [whole, approx, yenMark, intPart, dec, mult, unitWord] = m;
     const start = m.index + (approx ? approx.length : 0);

@@ -438,7 +438,7 @@ function systemPrompt(db: Database, user: User, now: Date): string {
           "## 正確に答える手順",
           "- 件数・一覧・合計・「前回の〜」「〜のお客様は何人」のようなデータの質問は、推測せず query_database (統合ビュー) か analyze で数えてから答える。顧客・案件の詳しい中身は get_record。",
           "- 質問の条件 (状態・期間・店舗・人・種類など) は 1 つも落とさない。analyze の引数で表せない条件があるときは query_database で SQL に書く。",
-          "- SQL を書く前に、使うビューの列と指標の定義を確かめる。質問に「データモデルの要点」が付いていればそれを使う (describe_database を呼ばない)。付いていないとき・要点にない表・列・コードを使うときだけ describe_database (1 回の会話で 1 度でよい)。",
+          "- SQL を書く前に、使うビューの列と指標の定義を確かめる。この指示の最後に「データモデルの要点」があればそれを使う (describe_database を呼ばない)。ないとき・要点にない表・列・コードを使うときだけ describe_database (1 回の会話で 1 度でよい)。",
           "- 結果が 0 件・思ったより少ないときは、名前の表記 (like '%…%')・期間・状態の条件を見直して、もう 1 回だけ調べ直す。それでも無ければ「記録がありません」と答える。",
           "- 数字は結果の表の値をそのまま書く (丸めるときは「約」を付ける)。どの定義・期間で数えたかを一言添える。",
           "- SQL の誤りが返ってきたら、誤りの内容を読んで直して呼び直す。",
@@ -785,6 +785,12 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   if (writeRequest) {
     messages[messages.length - 1] = { role: "user", content: `${question}\n\n---\n(システムの注意: これはデータを変える依頼です。${Object.values(ACTION_LABEL).join("・")} なら、必要な記録 (予定の ID・案件の番号・社員の名前など) を調べてから propose_action で実行の確認のカードを出し、「内容を確かめて『実行する』を押してください」と伝えてください。AI は実行しないので「実行しました」とは書かない。足りない情報 (日付・担当者など) があれば聞き返す。それ以外の操作は実行できないことを伝え、search_guides で調べた画面・ボタンの名前で手順を案内してください)` };
   }
+  // 集計の回答の続き (「それを店舗別にして」「月別では？」): 前の回答の数字から推測させず、前の条件を引き継いで調べ直させる
+  // (道具を呼ばずに店舗別の金額を作る回答があった。確かめ (guard.ts) で直すと往復が 1 回増えるので、先に伝える)
+  const prevTurn = history.at(-1);
+  if (!writeRequest && opts.dataQuestion && prevTurn?.role === "assistant" && prevTurn.specs?.length) {
+    messages[messages.length - 1] = { role: "user", content: `${question}\n\n---\n(システムの注意: 前の集計の続きです。前の回答の [分析条件] を引き継ぎ、質問に合わせて変えて analyze (または query_database) を呼び直してから答えてください。前の回答にない数字を推測で書かない)` };
+  }
   // 操作の質問は、使い方の資料を先に探して質問に添える (AI が資料を見ずに一般的な手順を答えないように)
   let prefetched: AgentSource[] = [];
   // 「A 店から B 店に X 円の工事を依頼したら、それぞれいくら？」は、先に計算しておく (AI の往復を 1 回減らし、計算させない)
@@ -820,13 +826,14 @@ ${r}` };
   // データの質問は、データモデルの要点 (ビューの列・指標の定義) を先に添える: SQL の前の describe_database の往復 (1 回分の待ち時間と
   // 大きな結果のトークン) を省く。コードの一覧・ここにない表は、必要なときだけ AI が describe_database で見る
   // (操作の質問として使い方の資料を先に添えたときは添えない: 操作の質問にはデータモデルが要らず、トークンが増えるだけ)
-  if (opts.dataQuestion && !opts.prefetchGuides && !split && !writeRequest && canUseSql(readUser) && mirrorReady()) {
-    const last = messages[messages.length - 1];
-    messages[messages.length - 1] = { role: "user", content: `${last.content}\n\n---\nデータモデルの要点 (システムが先に用意。query_database の SQL はこのビュー・列・定義で書く。describe_database は、ここにない表・列・コードを使うときだけ)\n${dataModelText(readUser, [], { brief: true })}` };
-  }
+  // 質問の文ではなく AI への指示 (system) の最後に置く: 同じ人の続けてのデータの質問で、指示ごと AI のキャッシュから読まれる (費用が 4 分の 1)
+  const modelBrief =
+    opts.dataQuestion && !opts.prefetchGuides && !split && !writeRequest && canUseSql(readUser) && mirrorReady()
+      ? `\n\n## データモデルの要点 (システムが先に用意。query_database の SQL はこのビュー・列・定義で書く。describe_database は、ここにない表・列・コードを使うときだけ)\n${dataModelText(readUser, [], { brief: true })}`
+      : "";
   const loop = (msgs: { role: "user" | "assistant"; content: string }[]) =>
     runToolLoop({
-      system: opts.voice ? `${systemPrompt(db, readUser, now)}\n\n${VOICE_NOTE}` : systemPrompt(db, readUser, now),
+      system: `${systemPrompt(db, readUser, now)}${modelBrief}${opts.voice ? `\n\n${VOICE_NOTE}` : ""}`,
       messages: msgs,
       tools: tools(readUser),
       execute,
