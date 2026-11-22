@@ -1,7 +1,9 @@
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canEditPromotion, canManageOpsReportSettings, canSeeAllStores, canViewPromoAnalysis } from "@/lib/auth/permissions";
+import { canEditPromotion, canManageOpsReportSettings, canSeeAllStoreFigures, canSeeAllStores, canViewPromoAnalysis } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
+
 import { kpiSettings } from "@/lib/kpi-settings";
 import { resolvePeriod } from "@/lib/kpi-period";
 import { toDateKey } from "@/lib/format";
@@ -23,9 +25,11 @@ export const maxDuration = 60;
  */
 export default async function PromotionsPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
-  const user = await requireUser();
-  if (!canViewPromoAnalysis(user)) redirect("/?err=" + encodeURIComponent("販促と媒体の分析を閲覧する権限がありません (店長・本部スタッフ・管理者)。"));
+  const realUser = await requireUser();
   const db = getDb();
+  // 分析は経営の数字 (閲覧の範囲の設定で全社員が全店舗を見られる。src/lib/access-policy.ts)。登録・変更は本物の利用者 (realUser) の権限
+  const user = policyReader(db, realUser);
+  if (!canViewPromoAnalysis(user)) redirect("/?err=" + encodeURIComponent("販促と媒体の分析を閲覧する権限がありません (店長・本部スタッフ・管理者)。"));
   const tab = sp.tab === "list" || sp.tab === "mapping" ? sp.tab : "analysis";
   const today = toDateKey(new Date());
   const startMonth = kpiSettings(db).fiscalStartMonth;
@@ -33,9 +37,9 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
   const period = rp.period ?? { from: "2000-01-01", to: today };
   const storeIds = scopeStores(db, user, sp.store);
   // 店舗の絞り込み (全店舗ロールだけ。店長は自店舗に固定)
-  const store = canSeeAllStores(user) && sp.store && storeIds.length === 1 ? storeIds[0] : "";
+  const store = canSeeAllStoreFigures(user) && sp.store && storeIds.length === 1 ? storeIds[0] : "";
   const ready = opsTablesReady(["promotions"]);
-  const canCreate = canSeeAllStores(user) || canEditPromotion(user, user.storeId);
+  const canCreate = canSeeAllStores(realUser) || canEditPromotion(realUser, realUser.storeId);
   const base = (t: string) => {
     const p = new URLSearchParams();
     if (t !== "analysis") p.set("tab", t);
@@ -44,7 +48,7 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
       p.set("from", sp.from);
       p.set("to", sp.to);
     }
-    if (store && canSeeAllStores(user)) p.set("store", store);
+    if (store && canSeeAllStoreFigures(user)) p.set("store", store);
     const s = p.toString();
     return s ? `/promotions?${s}` : "/promotions";
   };

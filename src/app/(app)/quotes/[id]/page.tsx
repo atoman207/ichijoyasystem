@@ -1,6 +1,7 @@
 import Link from "@/components/ui/Link";
 import { CaseViewBanner, CompletedLockBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
-import { quoteAccess, quoteCompletedLock } from "@/lib/case-access";
+import { quoteAccessInfo, quoteCompletedLock, deniedHref } from "@/lib/case-access";
+import { logRecordView } from "@/lib/record-views";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
@@ -37,10 +38,11 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
   const db = getDb();
   const q = db.quotes.find((x) => x.id === id);
   if (!q) notFound();
-  // 進行中の案件は、ほかの店舗の社員も閲覧のみで開ける (src/lib/case-access.ts)
-  const access = quoteAccess(db, user, q);
-  if (access === "none") redirect("/quotes?err=" + encodeURIComponent("この見積を閲覧する権限がありません (ほかの店舗の案件は、入金が完了するまでの間だけ閲覧できます)。"));
-  const viewOnly = access === "view";
+  // ほかの店舗の記録は閲覧のみ (見られる範囲は閲覧の範囲の設定と案件の進み具合。承認制で申請できるときはお客様の画面の「閲覧の申請」へ。src/lib/case-access.ts)
+  const info = quoteAccessInfo(db, user, q);
+  if (info.access === "none") redirect(deniedHref(info, "/quotes", "見積"));
+  const viewOnly = info.access === "view";
+  if (viewOnly) logRecordView(user, info, { entity: "quote", id: q.id, label: q.number, storeId: q.storeId }, db.auditLogs);
   const lock = quoteCompletedLock(db, user, q);
   const customer = db.customers.find((c) => c.id === q.customerId);
   const store = db.stores.find((s) => s.id === q.storeId);
@@ -67,7 +69,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
           </>
         }
       />
-      {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what="見積" />}
+      {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what="見積" basis={info.basis} grantUntil={info.grantUntil} />}
       {!viewOnly && lock.reason && <CompletedLockBanner reason={lock.reason} admin={!lock.locked} />}
       <ReadOnlyArea readOnly={viewOnly || lock.locked}>
 

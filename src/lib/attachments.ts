@@ -1,7 +1,7 @@
 import "server-only";
 import type { Attachment, AttachmentParent, Database, StoreId, User } from "@/lib/db/types";
 import { canAccessStore, canDeleteAttachment, canManageFinance, canViewExpense } from "@/lib/auth/permissions";
-import { hasOpenCase, isOpenInquiry, isOpenOrder, isOpenQuote } from "@/lib/case-access";
+import { customerAccess, inquiryAccess, orderAccess, quoteAccess } from "@/lib/case-access";
 import { newId, nowIso } from "@/lib/db/store";
 import { putObject, removeObjects } from "@/lib/storage";
 import { fmtDateTime } from "@/lib/format";
@@ -114,27 +114,27 @@ export function canViewParent(user: User, db: Database, p: ParentInfo): boolean 
   }
   if (p.type === "purchase") return canManageFinance(user);
   if (canAccessStore(user, p.storeId)) return true;
-  // ほかの店舗の進行中の案件 (問い合わせ → 入金完了まで) の写真・資料は閲覧できる (src/lib/case-access.ts)
-  return openCaseParent(db, p);
+  // ほかの店舗の記録 (閲覧の範囲の設定・進行中の案件・閲覧の申請の承認) の写真・資料は、その記録を見られる人が閲覧できる (src/lib/case-access.ts)
+  return viewableParent(user, db, p);
 }
 
-function openCaseParent(db: Database, p: ParentInfo): boolean {
+function viewableParent(user: User, db: Database, p: ParentInfo): boolean {
   switch (p.type) {
     case "customer": {
       const c = db.customers.find((x) => x.id === p.id);
-      return Boolean(c && hasOpenCase(db, c));
+      return Boolean(c && customerAccess(db, user, c) !== "none");
     }
     case "inquiry": {
       const i = db.inquiries.find((x) => x.id === p.id);
-      return Boolean(i && isOpenInquiry(db, i));
+      return Boolean(i && inquiryAccess(db, user, i) !== "none");
     }
     case "quote": {
       const q = db.quotes.find((x) => x.id === p.id);
-      return Boolean(q && isOpenQuote(db, q));
+      return Boolean(q && quoteAccess(db, user, q) !== "none");
     }
     case "order": {
       const o = db.orders.find((x) => x.id === p.id);
-      return Boolean(o && isOpenOrder(db, o));
+      return Boolean(o && orderAccess(db, user, o) !== "none");
     }
     default:
       return false;

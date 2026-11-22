@@ -1,6 +1,7 @@
 import Link from "@/components/ui/Link";
 import { CaseViewBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
-import { invoiceAccess } from "@/lib/case-access";
+import { invoiceAccessInfo, deniedHref } from "@/lib/case-access";
+import { logRecordView } from "@/lib/record-views";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
@@ -26,10 +27,11 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
   const db = getDb();
   const inv = db.invoices.find((x) => x.id === id);
   if (!inv) notFound();
-  // 進行中の案件は、ほかの店舗の社員も閲覧のみで開ける (src/lib/case-access.ts)
-  const access = invoiceAccess(db, user, inv);
-  if (access === "none") redirect("/invoices?err=" + encodeURIComponent("この請求書を閲覧する権限がありません (ほかの店舗の案件は、入金が完了するまでの間だけ閲覧できます)。"));
-  const viewOnly = access === "view";
+  // ほかの店舗の記録は閲覧のみ (見られる範囲は閲覧の範囲の設定と案件の進み具合。承認制で申請できるときはお客様の画面の「閲覧の申請」へ。src/lib/case-access.ts)
+  const info = invoiceAccessInfo(db, user, inv);
+  if (info.access === "none") redirect(deniedHref(info, "/invoices", "請求書"));
+  const viewOnly = info.access === "view";
+  if (viewOnly) logRecordView(user, info, { entity: "invoice", id: inv.id, label: inv.number, storeId: inv.storeId }, db.auditLogs);
   const today = toDateKey(new Date());
   const status = (inv.status === "issued" || inv.status === "partially_paid") && inv.dueDate < today ? "overdue" : inv.status;
   const customer = db.customers.find((c) => c.id === inv.customerId);
@@ -57,7 +59,7 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
           </>
         }
       />
-      {viewOnly && <CaseViewBanner storeName={db.stores.find((x) => x.id === inv.storeId)?.name ?? "ほかの店舗"} what="案件の請求書" />}
+      {viewOnly && <CaseViewBanner storeName={db.stores.find((x) => x.id === inv.storeId)?.name ?? "ほかの店舗"} what="案件の請求書" basis={info.basis} grantUntil={info.grantUntil} />}
       <ReadOnlyArea readOnly={viewOnly}>
       {status === "overdue" && <Note tone="warn">支払期限を {Math.round((new Date(today).getTime() - new Date(inv.dueDate).getTime()) / 86400000)} 日超過しています。督促の記録を残し、入金の予定を確認したら「入金予定」に登録してください。</Note>}
 

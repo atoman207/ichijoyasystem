@@ -1,5 +1,6 @@
-import type { Customer, Database, Inquiry, Invoice, Order, Quote, User } from "@/lib/db/types";
-import { scopeByStore } from "@/lib/auth/permissions";
+import type { Customer, Database, Inquiry, Invoice, Order, Quote, StoreId, User } from "@/lib/db/types";
+import { canReadStoreRecords } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
 import { fmtDate, yen } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
 
@@ -62,11 +63,14 @@ export interface RecordSearch {
 
 export function searchRecords(db: Database, user: User, question: string): RecordSearch {
   const terms = extractTerms(question);
-  const customersAll = scopeByStore(user, db.customers);
-  const orders = scopeByStore(user, db.orders);
-  const quotes = scopeByStore(user, db.quotes);
-  const inquiries = scopeByStore(user, db.inquiries);
-  const invoices = scopeByStore(user, db.invoices);
+  // 顧客情報の閲覧の範囲 (閲覧の範囲の設定で全店舗に広げられる。src/lib/access-policy.ts)
+  const reader = policyReader(db, user);
+  const visible = <T extends { storeId: StoreId }>(rows: T[]) => rows.filter((r) => canReadStoreRecords(reader, r.storeId));
+  const customersAll = visible(db.customers);
+  const orders = visible(db.orders);
+  const quotes = visible(db.quotes);
+  const inquiries = visible(db.inquiries);
+  const invoices = visible(db.invoices);
   const found = new Map<string, Customer>();
   const tooMany: { name: string; count: number }[] = [];
   // 名前 (姓だけでも探す。候補が 6 件以上なら、絞り込みを促す)

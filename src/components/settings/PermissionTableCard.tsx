@@ -1,5 +1,6 @@
 import { ShieldCheck } from "lucide-react";
-import { PERMISSION_TABLE, type Cell } from "@/lib/auth/permission-table";
+import { permissionTable, type Cell } from "@/lib/auth/permission-table";
+import { DEFAULT_ACCESS_POLICY, type AccessPolicy } from "@/lib/access-policy";
 import { Badge, Card, CardHeader } from "@/components/ui";
 
 const CELL_CLASS: Record<Cell, string> = {
@@ -16,14 +17,15 @@ function C({ v }: { v: Cell }) {
 }
 
 /** ロールごとの権限 (閲覧・登録・編集と、店舗の範囲) の一覧 */
-export function PermissionTableCard() {
+export function PermissionTableCard({ policy = DEFAULT_ACCESS_POLICY }: { policy?: AccessPolicy }) {
+  const PERMISSION_TABLE = permissionTable(policy);
   return (
     <Card padded={false}>
       <div className="px-5 pt-5">
         <CardHeader
           title="権限一覧 (ロール × 操作)"
           icon={<ShieldCheck />}
-          description="○ = 全店舗 · 自店 = 所属店舗の情報のみ · 本人 = 自分が登録・申請したもののみ · 閲覧 = 見るだけ · − = できない。ロールと所属は上の一覧のユーザーごとに設定します"
+          description="○ = 全店舗 · 自店 = 所属店舗の情報のみ · 本人 = 自分が登録・申請したもののみ · 閲覧 = 見るだけ · − = できない。ロールと所属は上の一覧のユーザーごとに設定します。閲覧の行は、上の「閲覧の範囲」の設定どおりに表示しています"
         />
       </div>
       <div className="overflow-x-auto">

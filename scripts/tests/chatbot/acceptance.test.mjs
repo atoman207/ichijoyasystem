@@ -51,9 +51,25 @@ section("ロール × 店舗の組み合わせ・{列名} の置き換え");
 /* ================================================================== */
 section("根拠のリンク: 閲覧範囲・必要な根拠・出してはいけない根拠");
 {
-  const otherCust = db.customers.find((c) => c.storeId === otherStore.id);
+  const CA = await imp("lib/case-access.ts");
+  const setPolicy = (value) => {
+    db.settings = (db.settings ?? []).filter((r) => r.id !== "access_policy");
+    if (value) db.settings.push({ id: "access_policy", value });
+  };
+  // 閲覧の範囲 = 進行中の案件だけ: 進行中の案件のないほかの店舗のお客様は範囲の外
+  setPolicy({ figures: "store", customers: "open", grantDays: 7 });
+  // 進行中の案件のないほかの店舗のお客様 (サンプルデータになければテスト用に 1 人足す)
+  let otherCust = db.customers.find((c) => c.storeId === otherStore.id && !CA.hasOpenCase(db, c));
+  if (!otherCust) {
+    otherCust = { ...db.customers.find((c) => c.storeId === otherStore.id), id: "c_acc_closed_other", code: "C-ACC", name: "閉じた 案件" };
+    db.customers.push(otherCust);
+  }
   const ownCust = db.customers.find((c) => c.storeId === staff.storeId);
-  eq(SC.scopeViolations(db, staff, [`/customers/${otherCust.id}`, `/customers/${ownCust.id}`]), [`/customers/${otherCust.id}`], "ほかの店舗のお客様へのリンクは閲覧範囲の外");
+  eq(SC.scopeViolations(db, staff, [`/customers/${otherCust.id}`, `/customers/${ownCust.id}`]), [`/customers/${otherCust.id}`], "ほかの店舗のお客様へのリンクは閲覧範囲の外 (閲覧の範囲 = 進行中の案件だけ)");
+  // 閲覧の範囲 = 全社員 (初期設定): 画面で閲覧のみで開けるので範囲の内
+  setPolicy(null);
+  eq(SC.scopeViolations(db, staff, [`/customers/${otherCust.id}`]), [], "初期設定 (顧客情報は全社員) では、ほかの店舗のお客様へのリンクも範囲の内");
+  setPolicy({ figures: "store", customers: "open", grantDays: 7 });
   eq(SC.scopeViolations(db, staff, ["/knowledge/kn_acc_hq", "/knowledge/kn_acc_all", "/knowledge/sources/ks_x"]), ["/knowledge/kn_acc_hq"], "本部以上の資料へのリンクは店舗スタッフの範囲の外 (取込元の画面は数えない)");
   eq(SC.scopeViolations(db, admin, ["/knowledge/kn_acc_hq", `/customers/${otherCust.id}`]), [], "管理者はすべて見られる");
   eq(SC.scopeViolations(db, staff, ["/customers/c_not_exist", "/help"]), [], "見つからない記録・画面は数えない");

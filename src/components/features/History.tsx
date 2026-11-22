@@ -66,7 +66,7 @@ export function HistoryCard({ db, user, targets, title = "変更履歴", descrip
   const shown = logs.slice(-limit).reverse();
   return (
     <Card>
-      <CardHeader title={title} description={description ?? "登録・変更・承認・送付の記録 (変更した項目は変更前と変更後の値を残しています)"} />
+      <CardHeader title={title} description={description ?? "登録・変更・承認・送付と、ほかの店舗からの閲覧の記録 (変更した項目は変更前と変更後の値を残しています)"} />
       {shown.length === 0 ? (
         <p className="text-xs text-ink-3">記録はありません (移行データ)</p>
       ) : (

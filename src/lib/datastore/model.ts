@@ -1,6 +1,6 @@
 import "server-only";
 import type { Role, StoreId, User } from "@/lib/db/types";
-import { STAFF_AUDIT_ENTITIES, canSeeAllStores } from "@/lib/auth/permissions";
+import { STAFF_AUDIT_ENTITIES, canSeeAllCustomerRecords, canSeeAllStoreFigures, canSeeAllStores } from "@/lib/auth/permissions";
 import {
   APPROVAL_STATUS,
   APPROVAL_TYPE_LABEL,
@@ -584,28 +584,55 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
   const store = sq(user.storeId as StoreId);
   const me = sq(user.id);
   const manager = user.role === "store_manager";
+  // 閲覧の範囲の設定 (src/lib/access-policy.ts。AI の読み取りの写し = assistantReadUser): 経営の数字 (figures)・顧客情報 (records) を全店舗に広げる
+  const figures = canSeeAllStoreFigures(user as User);
+  const records = canSeeAllCustomerRecords(user as User);
   const v = (name: string, sql: string) => `create temp view ${name} as ${sql};`;
   const none = (name: string) => v(name, `select * from main.${name} where 0`);
   const byStore = (name: string) => v(name, `select * from main.${name} where store_id = ${store}`);
+  /** 全店舗に広げるときは覆わない (生の表のまま) */
+  const unless = (open: boolean, stmt: string) => (open ? [] : [stmt]);
   const knowledgeVis: Record<Role, string> = { admin: "", hq_staff: "", store_manager: "('all', 'manager')", store_staff: "('all')" };
+  const mgmtTables = ["sales_adjustments", "material_usages", "mgmt_entries", "stock_moves", "order_attributions", "expense_classes", "allocation_runs", "period_closes", "purchase_line_allocs", "mgmt_rules", "materials", "material_costs", "boms"];
+  // 分析用の表 (sales_orders など): 経営の数字だけ全店舗のとき、顧客情報を見られない店舗の行はお客様の名前・ID・地区・件名を空にする
+  const salesCols = `order_id, number, sales_date, contract_date, status, store_id, store_name, null as customer_id, null as customer_code, null as customer_name, customer_type, null as area, null as title, total, ${AMOUNT_KEYS.map((k) => `amt_${k}`).join(", ")}, tatami_cost, purchase_cost, staff_names, worker_names, item_source`;
   return [
-    // 店舗の表
-    ...["customers", "inquiries", "quotes", "orders", "invoices", "cash_entries", "quality_issues", "survey_responses", "google_reviews", "attachments", "approvals", "documents", "purchase_orders", "photo_albums", "sales_orders", "sales_items"].map(byStore),
-    // アンケートの過去の集計: 自店舗の表だけ (全社の表 = store_id が空は見せない)
-    byStore("survey_history"),
+    // 顧客情報の表 (顧客・問い合わせ・見積・受注・請求書・クレーム・アンケート・写真・取込書類)
+    ...(records ? [] : ["customers", "inquiries", "quotes", "orders", "invoices", "quality_issues", "survey_responses", "photo_albums"].map(byStore)),
+    // 写真・資料: 顧客情報を全店舗に広げたときも、ほかの店舗の分はお客様・案件の写真だけ (経費のレシートなどは自店舗)
+    records ? v("attachments", `select * from main.attachments where store_id = ${store} or parent_type in ('customer', 'inquiry', 'quote', 'order')`) : byStore("attachments"),
+    // 店舗の表 (現金出納・承認・発注書・取込書類 (レシート・仕入の請求書を含む) は従来どおり自店舗)
+    ...["cash_entries", "approvals", "purchase_orders", "documents"].map(byStore),
+    // Google 口コミ・アンケートの過去の集計 (自店舗の表だけ。全社の表 = store_id が空は見せない): 経営の数字
+    ...unless(figures, byStore("google_reviews")),
+    ...unless(figures, byStore("survey_history")),
+    // 売上の分析用の表: 経営の数字
+    ...(figures
+      ? records
+        ? []
+        : [
+            v("sales_orders", `select * from main.sales_orders where store_id = ${store} union all select ${salesCols} from main.sales_orders where store_id is null or store_id != ${store}`),
+            v("sales_items", `select order_id, line_no, sales_date, store_id, case when store_id = ${store} then customer_id end as customer_id, category, product, qty, unit_price, amount from main.sales_items`),
+          ]
+      : ["sales_orders", "sales_items"].map(byStore)),
+    ...(figures ? [] : [v("order_staff", `select * from main.order_staff where order_id in (select order_id from main.sales_orders where store_id = ${store})`)]),
     // 予定の計画 (作業の内容・製造の予定・車両の予約・仮押さえ。src/lib/scheduling/access.ts と同じ: 自店舗)
     ...["job_specs", "production_jobs", "resource_bookings", "schedule_holds"].map(byStore),
-    // 作業日報の手入力 (permissions.ts の canViewWorkReport: 自店舗)・販促の記録 (canViewPromoAnalysis: 店長は自店舗、店舗スタッフは見ない)
+    // 作業日報の手入力 (permissions.ts の canViewWorkReport: 自店舗)・販促の記録 (canViewPromoAnalysis: 経営の数字。全社員でなければ店長は自店舗、店舗スタッフは見ない)
     byStore("work_report_days"),
-    manager ? byStore("promotions") : none("promotions"),
-    v("payments", "select * from main.payments where invoice_id in (select id from main.invoices where store_id = " + store + ")"),
-    v("order_staff", `select * from main.order_staff where order_id in (select order_id from main.sales_orders where store_id = ${store})`),
+    ...(figures ? [] : [manager ? byStore("promotions") : none("promotions")]),
+    ...unless(records, v("payments", "select * from main.payments where invoice_id in (select id from main.invoices where store_id = " + store + ")")),
     // 経費: 店長は自店舗、店舗スタッフは自分の申請 / 仕入: 店長は自店舗 / 仕入先: 店長のみ
     v("expenses", `select * from main.expenses where ${manager ? `store_id = ${store}` : `submitted_by = ${me}`}`),
     manager ? byStore("purchases") : none("purchases"),
     manager ? v("suppliers", "select * from main.suppliers") : none("suppliers"),
-    // 連絡履歴: 見える顧客のもの・店舗のもの (仕入先とのやりとりは店長)
-    v("comm_logs", `select * from main.comm_logs where customer_id in (select id from main.customers where store_id = ${store}) or (customer_id is null and supplier_id is null and store_id = ${store})${manager ? ` or (customer_id is null and supplier_id is not null)` : ""}`),
+    // 連絡履歴: 見える顧客のもの・店舗のもの (仕入先とのやりとりは店長)。顧客情報を全店舗に広げたときは、お客様とのやりとりは全店舗
+    v(
+      "comm_logs",
+      records
+        ? `select * from main.comm_logs where customer_id is not null or (supplier_id is null and store_id = ${store})${manager ? ` or (customer_id is null and supplier_id is not null)` : ""}`
+        : `select * from main.comm_logs where customer_id in (select id from main.customers where store_id = ${store}) or (customer_id is null and supplier_id is null and store_id = ${store})${manager ? ` or (customer_id is null and supplier_id is not null)` : ""}`,
+    ),
     // 社内連絡: 自店舗・全社・参加/作成したもの
     v("threads", `select * from main.threads where store_id is null or store_id = ${store} or created_by = ${me} or participants like ${sq(`%"${user.id}"%`)}`),
     v("messages", `select * from main.messages where thread_id in (select id from main.threads where store_id is null or store_id = ${store} or created_by = ${me} or participants like ${sq(`%"${user.id}"%`)})`),
@@ -626,18 +653,20 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
     ...["deliveries", "settings", "source_files", "fax_numbers", "map_locations", "map_location_refs", "map_documents", "map_document_links", "search_docs", "_rowhash"].map(none),
     // 慶弔リスト (ご家族の情報。permissions.ts の canViewCondolences。事務担当の店舗ロールも SQL では見せない)
     none("condolences"),
-    // 管理会計 (src/lib/mgmt/access.ts と同じ範囲): 店長は自店舗の行と設定・マスタ、店舗スタッフは品目・営業エリアだけ
-    ...(manager
-      ? [
-          v("sales_adjustments", `select * from main.sales_adjustments where from_store_id = ${store} or to_store_id = ${store}`),
-          ...["material_usages", "mgmt_entries"].map(byStore),
-          v("stock_moves", `select * from main.stock_moves where store_id = ${store} or from_loc = ${sq(`store:${user.storeId}`)} or to_loc = ${sq(`store:${user.storeId}`)}`),
-          v("order_attributions", `select * from main.order_attributions where order_id in (select id from main.orders where store_id = ${store}) or received_store_id = ${store} or work_store_id = ${store}`),
-          v("expense_classes", `select * from main.expense_classes where expense_id in (select id from main.expenses where store_id = ${store})`),
-          // 案分・月次確定の写し・仕入明細の振り分けは全店舗の数字を含むため見せない
-          ...["allocation_runs", "period_closes", "purchase_line_allocs"].map(none),
-        ]
-      : ["sales_adjustments", "material_usages", "mgmt_entries", "stock_moves", "order_attributions", "expense_classes", "allocation_runs", "period_closes", "purchase_line_allocs", "mgmt_rules", "materials", "material_costs", "boms"].map(none)),
+    // 管理会計 (src/lib/mgmt/access.ts と同じ範囲): 経営の数字を全社員に公開しているときは全店舗。そうでなければ店長は自店舗の行と設定・マスタ、店舗スタッフは品目・営業エリアだけ
+    ...(figures
+      ? []
+      : manager
+        ? [
+            v("sales_adjustments", `select * from main.sales_adjustments where from_store_id = ${store} or to_store_id = ${store}`),
+            ...["material_usages", "mgmt_entries"].map(byStore),
+            v("stock_moves", `select * from main.stock_moves where store_id = ${store} or from_loc = ${sq(`store:${user.storeId}`)} or to_loc = ${sq(`store:${user.storeId}`)}`),
+            v("order_attributions", `select * from main.order_attributions where order_id in (select id from main.orders where store_id = ${store}) or received_store_id = ${store} or work_store_id = ${store}`),
+            v("expense_classes", `select * from main.expense_classes where expense_id in (select id from main.expenses where store_id = ${store})`),
+            // 案分・月次確定の写し・仕入明細の振り分けは全店舗の数字を含むため見せない
+            ...["allocation_runs", "period_closes", "purchase_line_allocs"].map(none),
+          ]
+        : mgmtTables.map(none)),
     // 有給・休日出勤 (permissions.ts の canViewLeaveOf と同じ): 店長は自店舗の社員、店舗スタッフは本人
     ...["leave_requests", "leave_grants", "holiday_works"].map((t) => v(t, `select * from main.${t} where ${manager ? `user_id in (select id from main.users where store_id = ${store})` : `user_id = ${me}`}`)),
   ];

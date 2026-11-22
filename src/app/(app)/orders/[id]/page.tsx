@@ -31,9 +31,11 @@ import { linkLineGroup, unlinkLineGroup } from "@/lib/actions/line-groups";
 import { FaxHistoryCard, PurchaseOrderTable } from "@/components/fax/FaxParts";
 import { MapInfoCard } from "@/components/maps/MapInfoCard";
 import { canViewMgmtStore } from "@/lib/mgmt/access";
+import { policyReader } from "@/lib/access-policy";
 import { MgmtOrderCard } from "@/components/features/MgmtOrderCard";
 import { CaseViewBanner, CompletedLockBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
-import { completedCaseLock, completedCaseReason, orderAccess } from "@/lib/case-access";
+import { completedCaseLock, completedCaseReason, orderAccessInfo, deniedHref } from "@/lib/case-access";
+import { logRecordView } from "@/lib/record-views";
 
 const STEPS = ["pending_approval", "confirmed", "scheduled", "in_progress", "completed", "invoiced", "paid"] as const;
 
@@ -46,10 +48,11 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const db = getDb();
   const o = db.orders.find((x) => x.id === id);
   if (!o) notFound();
-  // 進行中の案件は、ほかの店舗の社員も閲覧のみで開ける (src/lib/case-access.ts)
-  const access = orderAccess(db, user, o);
-  if (access === "none") redirect("/orders?err=" + encodeURIComponent("この案件を閲覧する権限がありません (ほかの店舗の案件は、入金が完了するまでの間だけ閲覧できます)。"));
-  const viewOnly = access === "view";
+  // ほかの店舗の記録は閲覧のみ (見られる範囲は閲覧の範囲の設定と案件の進み具合。承認制で申請できるときはお客様の画面の「閲覧の申請」へ。src/lib/case-access.ts)
+  const info = orderAccessInfo(db, user, o);
+  if (info.access === "none") redirect(deniedHref(info, "/orders", "案件"));
+  const viewOnly = info.access === "view";
+  if (viewOnly) logRecordView(user, info, { entity: "order", id: o.id, label: o.number, storeId: o.storeId }, db.auditLogs);
   const lock = completedCaseLock(db, user, o);
   const customer = db.customers.find((c) => c.id === o.customerId);
   const store = db.stores.find((s) => s.id === o.storeId);
@@ -109,7 +112,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
         </ol>
       )}
 
-      {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} />}
+      {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} basis={info.basis} grantUntil={info.grantUntil} />}
       {!viewOnly && completedCaseReason(db, o) && <CompletedLockBanner reason={completedCaseReason(db, o)} admin={!lock.locked} />}
 
       <ReadOnlyArea readOnly={viewOnly}>
@@ -186,7 +189,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             )}
           </Card>
 
-          {canViewMgmtStore(user, o.storeId) && <MgmtOrderCard db={db} order={o} />}
+          {canViewMgmtStore(policyReader(db, user), o.storeId) && <MgmtOrderCard db={db} order={o} />}
 
           {o.amounts && (
             <Card>

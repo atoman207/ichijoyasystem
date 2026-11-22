@@ -1,7 +1,9 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canManageKpi, scopeByStore } from "@/lib/auth/permissions";
+import { canManageKpi, canReadStoreRecords } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
+
 import { analyzeCustomerVoices, retagSurveyComments } from "@/lib/actions/kpi";
 import { inPeriod, surveyDate } from "@/lib/kpi";
 import { kpiSettings } from "@/lib/kpi-settings";
@@ -24,8 +26,10 @@ export default async function VoicePage({ searchParams }: { searchParams: Promis
   const settings = kpiSettings(db);
   const today = toDateKey(new Date());
   const rp = resolvePeriod(sp, settings.fiscalStartMonth, today);
-  const store = sp.store && db.stores.some((s) => s.id === sp.store && canAccessStore(user, s.id)) ? sp.store : "";
-  const all = scopeByStore(user, db.surveys).filter((s) => s.comment && inPeriod(surveyDate(s), rp.period) && (!store || s.storeId === store));
+  // お客様の声 (アンケートのコメント) は顧客情報の閲覧の範囲 (src/lib/access-policy.ts)
+  const reader = policyReader(db, user);
+  const store = sp.store && db.stores.some((s) => s.id === sp.store && canReadStoreRecords(reader, s.id)) ? sp.store : "";
+  const all = db.surveys.filter((s) => canReadStoreRecords(reader, s.storeId)).filter((s) => s.comment && inPeriod(surveyDate(s), rp.period) && (!store || s.storeId === store));
   const tagged = all.map((s) => {
     const auto = tagComment(s.comment);
     return { s, tags: s.commentTags?.length ? s.commentTags : auto.tags, tone: s.commentTone ?? auto.tone };
@@ -54,7 +58,7 @@ export default async function VoicePage({ searchParams }: { searchParams: Promis
         today={today}
         extra={
           <>
-            <label className="block"><span className="label">店舗</span><Select name="store" defaultValue={store} className="h-9 py-1 text-sm"><option value="">すべて</option>{db.stores.filter((s) => canAccessStore(user, s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></label>
+            <label className="block"><span className="label">店舗</span><Select name="store" defaultValue={store} className="h-9 py-1 text-sm"><option value="">すべて</option>{db.stores.filter((s) => canReadStoreRecords(reader, s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></label>
             <label className="block"><span className="label">分類</span><Select name="tag" defaultValue={sp.tag ?? ""} className="h-9 py-1 text-sm"><option value="">すべて</option>{COMMENT_TAGS.map((t) => <option key={t} value={t}>{t}</option>)}</Select></label>
             <label className="block"><span className="label">種類</span><Select name="tone" defaultValue={sp.tone ?? ""} className="h-9 py-1 text-sm"><option value="">すべて</option>{Object.entries(COMMENT_TONE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select></label>
           </>

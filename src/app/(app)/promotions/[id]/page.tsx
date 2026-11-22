@@ -2,7 +2,9 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canEditPromotion, canSeeAllStores, canViewPromoAnalysis } from "@/lib/auth/permissions";
+import { canEditPromotion, canSeeAllStores, canViewPromoAnalysis, canViewStoreFigures } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
+
 import { userName } from "@/lib/db/queries";
 import { fmtDateTime, toDateKey, yen } from "@/lib/format";
 import { CATEGORY_LABEL, INQUIRY_STATUS } from "@/lib/constants";
@@ -17,11 +19,13 @@ export default async function PromotionDetailPage({ params, searchParams }: { pa
   const { id } = await params;
   const { msg, err } = await searchParams;
   const user = await requireUser();
-  if (!canViewPromoAnalysis(user)) redirect("/?err=" + encodeURIComponent("販促の記録を閲覧する権限がありません。"));
   const db = getDb();
+  // 見る範囲は経営の数字の閲覧の範囲 (src/lib/access-policy.ts)。変更は canEditPromotion (本物の利用者)
+  const reader = policyReader(db, user);
+  if (!canViewPromoAnalysis(reader)) redirect("/?err=" + encodeURIComponent("販促の記録を閲覧する権限がありません。"));
   const p = (db.promotions ?? []).find((x) => x.id === id);
   if (!p) notFound();
-  if (!canAccessStore(user, p.storeId)) redirect("/promotions?tab=list&err=" + encodeURIComponent("この販促を閲覧する権限がありません。"));
+  if (!canViewStoreFigures(reader, p.storeId)) redirect("/promotions?tab=list&err=" + encodeURIComponent("この販促を閲覧する権限がありません。"));
   const canEdit = canEditPromotion(user, p.storeId);
   const ready = opsTablesReady(["promotions"]);
   const store = db.stores.find((s) => s.id === p.storeId);

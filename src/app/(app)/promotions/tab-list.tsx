@@ -1,6 +1,6 @@
 import Link from "@/components/ui/Link";
 import type { Database, PromotionKind, StoreId, User } from "@/lib/db/types";
-import { canSeeAllStores } from "@/lib/auth/permissions";
+import { canSeeAllStoreFigures } from "@/lib/auth/permissions";
 import { yen } from "@/lib/format";
 import { fiscalRange, fiscalYearOf } from "@/lib/kpi-settings";
 import { PROMOTION_KIND, PROMOTION_KINDS, PROMOTION_STATUS } from "@/lib/ops-reports/promo-analysis";
@@ -40,7 +40,7 @@ export function ListTab({ db, user, storeIds, from, to, periodValue, periodLabel
         keep={{ tab: "list" }}
         extra={
           <>
-            {canSeeAllStores(user) && (
+            {canSeeAllStoreFigures(user) && (
               <label className="block">
                 <span className="label">店舗</span>
                 <select name="store" defaultValue={store} className="field h-9 py-1 text-sm">

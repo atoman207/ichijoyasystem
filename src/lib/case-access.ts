@@ -1,5 +1,6 @@
-import type { Customer, Database, Inquiry, Invoice, Order, Quote, User } from "@/lib/db/types";
-import { canAccessStore, canEditCompletedCase, canViewOpenCases } from "@/lib/auth/permissions";
+import type { Approval, Customer, Database, Inquiry, Invoice, Order, Quote, User } from "@/lib/db/types";
+import { canAccessStore, canEditCompletedCase, canReadStoreRecords, canRequestRecordView, canViewOpenCases } from "@/lib/auth/permissions";
+import { accessPolicy, policyReader, type AccessPolicy } from "@/lib/access-policy";
 import { caseIndex, inquiryCase, orderCase, quoteCase, type CaseIndex, type CaseRow } from "@/lib/case-status";
 import { toDateKey } from "@/lib/format";
 
@@ -13,6 +14,9 @@ import { toDateKey } from "@/lib/format";
  *    進行中かどうかは「案件の進捗」(src/lib/case-status.ts) と同じ判定: 失注・キャンセル・全処理完了・移行データの完了ではなく、入金が済んでいない
  * 2. 入金が完了した案件・全処理完了の案件は、内容 (案件情報・契約内容・現場の情報・状態・見積) を変更できない。変更できるのは管理者だけ
  *    (canEditCompletedCase。変更は変更履歴に残る)。進捗・やりとりの記録・写真の追加は続けられる
+ * 3. 閲覧の範囲の設定 (src/lib/access-policy.ts) で、ほかの店舗の完了した案件も見られるようにできる:
+ *    all = 全社員 (既定) / approval = 店長以上は全店舗、店舗スタッフは上司が承認した顧客 (承認の type = record_view、承認から grantDays 日) / open = 1. だけ。
+ *    どの場合も、ほかの店舗の記録は閲覧のみ (edit にはならない)。閲覧は変更履歴に記録する (src/lib/record-views.ts)
  */
 
 export type RecordAccess = "edit" | "view" | "none";
@@ -95,7 +99,7 @@ export function openCaseCustomerIds(db: Database): Set<string> {
 /**
  * 記録を見られるか・変えられるか
  * - edit: 記録の店舗を扱える (従来の権限)
- * - view: ほかの店舗の進行中の案件 (閲覧のみ)
+ * - view: ほかの店舗の記録 (閲覧のみ)。理由は basis
  * - none: 見られない
  */
 export function recordAccess(user: User, storeId: Parameters<typeof canAccessStore>[1], isOpen: () => boolean): RecordAccess {
@@ -103,11 +107,76 @@ export function recordAccess(user: User, storeId: Parameters<typeof canAccessSto
   return canViewOpenCases(user) && isOpen() ? "view" : "none";
 }
 
-export const orderAccess = (db: Database, user: User, o: Order) => recordAccess(user, o.storeId, () => isOpenOrder(db, o));
-export const quoteAccess = (db: Database, user: User, q: Quote) => recordAccess(user, q.storeId, () => isOpenQuote(db, q));
-export const inquiryAccess = (db: Database, user: User, i: Inquiry) => recordAccess(user, i.storeId, () => isOpenInquiry(db, i));
-export const invoiceAccess = (db: Database, user: User, inv: Invoice) => recordAccess(user, inv.storeId, () => isOpenInvoice(db, inv));
-export const customerAccess = (db: Database, user: User, c: Customer) => recordAccess(user, c.storeId, () => hasOpenCase(db, c));
+/** ほかの店舗の記録を見られる理由: open = 進行中の案件 / all = 閲覧の範囲 = 全社員 (承認制の店長を含む) / grant = 閲覧の申請が承認された */
+export type ViewBasis = "open" | "all" | "grant";
+
+export interface AccessInfo {
+  access: RecordAccess;
+  basis?: ViewBasis;
+  /** basis = grant のとき、見られる最後の日時 */
+  grantUntil?: string;
+  /** access = none のとき、閲覧を申請できる (承認制) */
+  canRequest?: boolean;
+  /** 申請中の閲覧の申請 */
+  pending?: Approval;
+  /** その記録のお客様 (閲覧の申請の対象) */
+  customerId?: string;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** 閲覧の申請 (承認の type = record_view) が承認され、まだ期限内か。期限の日時を返す */
+export function viewGrantUntil(db: Pick<Database, "approvals">, user: Pick<User, "id">, customerId: string | undefined, policy: AccessPolicy, now = new Date()): string | undefined {
+  if (!customerId) return undefined;
+  let best: string | undefined;
+  for (const a of db.approvals ?? []) {
+    if (a.type !== "record_view" || a.targetId !== customerId || a.requestedBy !== user.id || a.status !== "approved" || !a.decidedAt) continue;
+    const until = new Date(new Date(a.decidedAt).getTime() + policy.grantDays * DAY_MS).toISOString();
+    if (until > now.toISOString() && (!best || until > best)) best = until;
+  }
+  return best;
+}
+
+/** 申請中の閲覧の申請 */
+export function pendingViewRequest(db: Pick<Database, "approvals">, user: Pick<User, "id">, customerId: string | undefined): Approval | undefined {
+  return customerId ? (db.approvals ?? []).find((a) => a.type === "record_view" && a.targetId === customerId && a.requestedBy === user.id && a.status === "pending") : undefined;
+}
+
+/**
+ * 閲覧の範囲の設定 (access_policy) を含めて、記録を見られるか・その理由
+ * 自店舗 (canAccessStore) → edit / 全社員に公開 (canReadStoreRecords) → view (all) / 進行中の案件 → view (open) /
+ * 承認制で閲覧の申請が承認済み → view (grant) / それ以外 → none (承認制なら申請できる)
+ */
+export function accessInfo(db: Database, user: User, storeId: Parameters<typeof canAccessStore>[1], isOpen: () => boolean, customerId: string | undefined, now = new Date()): AccessInfo {
+  if (canAccessStore(user, storeId)) return { access: "edit", customerId };
+  const policy = accessPolicy(db);
+  if (canReadStoreRecords(policyReader(db, user), storeId)) return { access: "view", basis: "all", customerId };
+  if (canViewOpenCases(user) && isOpen()) return { access: "view", basis: "open", customerId };
+  if (policy.customers === "approval") {
+    const until = viewGrantUntil(db, user, customerId, policy, now);
+    if (until) return { access: "view", basis: "grant", grantUntil: until, customerId };
+    if (customerId && canRequestRecordView(user, policy)) return { access: "none", canRequest: true, pending: pendingViewRequest(db, user, customerId), customerId };
+  }
+  return { access: "none", customerId };
+}
+
+export const orderAccessInfo = (db: Database, user: User, o: Order, now = new Date()) => accessInfo(db, user, o.storeId, () => isOpenOrder(db, o), o.customerId, now);
+export const quoteAccessInfo = (db: Database, user: User, q: Quote, now = new Date()) => accessInfo(db, user, q.storeId, () => isOpenQuote(db, q), q.customerId, now);
+export const inquiryAccessInfo = (db: Database, user: User, i: Inquiry, now = new Date()) => accessInfo(db, user, i.storeId, () => isOpenInquiry(db, i), i.customerId, now);
+export const invoiceAccessInfo = (db: Database, user: User, inv: Invoice, now = new Date()) => accessInfo(db, user, inv.storeId, () => isOpenInvoice(db, inv), inv.customerId, now);
+export const customerAccessInfo = (db: Database, user: User, c: Customer, now = new Date()) => accessInfo(db, user, c.storeId, () => hasOpenCase(db, c), c.id, now);
+
+export const orderAccess = (db: Database, user: User, o: Order) => orderAccessInfo(db, user, o).access;
+export const quoteAccess = (db: Database, user: User, q: Quote) => quoteAccessInfo(db, user, q).access;
+export const inquiryAccess = (db: Database, user: User, i: Inquiry) => inquiryAccessInfo(db, user, i).access;
+export const invoiceAccess = (db: Database, user: User, inv: Invoice) => invoiceAccessInfo(db, user, inv).access;
+export const customerAccess = (db: Database, user: User, c: Customer) => customerAccessInfo(db, user, c).access;
+
+/** 見られない記録を開いたときの案内 (承認制で申請できるときは、お客様の画面の「閲覧の申請」へ) */
+export function deniedHref(info: AccessInfo, fallback: string, what: string): string {
+  if (info.canRequest && info.customerId) return `/customers/${info.customerId}`;
+  return `${fallback}?err=${encodeURIComponent(`この${what}を閲覧する権限がありません (ほかの店舗の案件は、入金が完了するまでの間だけ閲覧できます)。`)}`;
+}
 
 /* ---------------- 完了した案件の変更の制限 ---------------- */
 

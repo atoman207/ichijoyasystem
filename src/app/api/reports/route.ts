@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/session";
 import { addAudit, mutate, syncDb } from "@/lib/db/store";
 import { canViewReports } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
 import { toCsv } from "@/lib/csv";
 import { MGMT_CSV_SECTIONS, managementReport, mgmtCsvRows, resolvePeriod, staffOptions, type MgmtCsvSection } from "@/lib/management";
 import type { StoreId } from "@/lib/db/types";
@@ -16,12 +17,15 @@ export const maxDuration = 60;
  */
 export async function GET(req: Request) {
   if (req.headers.get("next-router-prefetch") || req.headers.get("rsc")) return new NextResponse(null, { status: 204 });
-  const user = await getSessionUser();
-  if (!user || !canViewReports(user)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const db = await syncDb();
+  // 閲覧の範囲 = 経営の数字は全社員 (既定) なら全員が全店舗 (src/lib/access-policy.ts)
+  const user = policyReader(db, sessionUser);
+  if (!canViewReports(user)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const sp = Object.fromEntries(new URL(req.url).searchParams.entries());
   const section = (sp.section ?? "summary") as MgmtCsvSection;
   if (!(section in MGMT_CSV_SECTIONS)) return NextResponse.json({ error: "unknown section" }, { status: 400 });
-  const db = await syncDb();
   const period = resolvePeriod(sp);
   const store = db.stores.some((s) => s.id === sp.store) ? (sp.store as StoreId) : undefined;
   const staffOption = sp.staff ? staffOptions(db, user).find((o) => o.key === sp.staff) : undefined;

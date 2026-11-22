@@ -1,6 +1,6 @@
 import "server-only";
 import type { Database, StoreId, User } from "@/lib/db/types";
-import { canAccessStore, canSeeAllStores, canViewExpense, canViewFax, canViewKnowledge, canViewPurchase, canViewPurchaseOrder, canViewSourceFiles, canViewSuppliers, canViewThread } from "@/lib/auth/permissions";
+import { canReadStoreRecords, canSeeAllCustomerRecords, canSeeAllStoreFigures, canSeeAllStores, canViewExpense, canViewFax, canViewKnowledge, canViewPurchase, canViewPurchaseOrder, canViewSourceFiles, canViewStoreFigures, canViewSuppliers, canViewThread } from "@/lib/auth/permissions";
 import { CATEGORY_LABEL, CHANNEL_LABEL, EXPENSE_STATUS, INQUIRY_STATUS, INVOICE_STATUS, ORDER_STATUS, PROGRESS_KIND_LABEL, PURCHASE_ORDER_STATUS, PURCHASE_STATUS, QUOTE_STATUS, SCHEDULE_KIND } from "@/lib/constants";
 import { fmtDate, yen } from "@/lib/format";
 import { contactLine, customerPhoneDigits } from "@/lib/customer-contacts";
@@ -201,10 +201,14 @@ function canSee(db: Database, user: User, e: Entry): boolean {
     case "comm": {
       const x = db.commLogs.find((r) => r.id === e.id);
       if (x?.supplierId && !x.customerId) return canViewSuppliers(user);
-      return !e.storeId || canAccessStore(user, e.storeId);
+      return !e.storeId || canReadStoreRecords(user, e.storeId);
     }
+    case "review":
+      // Google の口コミ (担当者のポイント) は経営の数字の閲覧の範囲
+      return !e.storeId || canViewStoreFigures(user, e.storeId);
     default:
-      return !e.storeId || canAccessStore(user, e.storeId);
+      // 顧客・問い合わせ・見積・受注・請求書・クレーム・アンケート・写真: 顧客情報の閲覧の範囲 (閲覧の範囲の設定で全店舗。src/lib/access-policy.ts)
+      return !e.storeId || canReadStoreRecords(user, e.storeId);
   }
 }
 
@@ -648,5 +652,13 @@ export function listSchedule(db: Database, opts: { from: string; to: string; sto
 }
 
 export function storeScopeNote(db: Database, user: User): string {
-  return canSeeAllStores(user) ? "全店舗" : `${db.stores.find((s) => s.id === user.storeId)?.name ?? "自店舗"} (顧客・案件・売上は自店舗のみ。予定は全社共有)`;
+  if (canSeeAllStores(user)) return "全店舗";
+  const own = db.stores.find((s) => s.id === user.storeId)?.name ?? "自店舗";
+  const figures = canSeeAllStoreFigures(user);
+  const records = canSeeAllCustomerRecords(user);
+  // 閲覧の範囲の設定 (src/lib/access-policy.ts) で、経営の数字・顧客情報を全社員に公開しているとき
+  if (figures && records) return `顧客・案件・売上・KPI は全店舗 (ほかの店舗は閲覧のみ)。経費・仕入・有給などは ${own} / 本人の分。予定は全社共有`;
+  if (figures) return `売上などの数字は全店舗、顧客・案件は ${own} (と進行中の案件)。予定は全社共有`;
+  if (records) return `顧客・案件は全店舗、売上などの数字は ${own} のみ。予定は全社共有`;
+  return `${own} (顧客・案件・売上は自店舗のみ。予定は全社共有)`;
 }

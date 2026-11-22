@@ -2,7 +2,9 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canManageKpi } from "@/lib/auth/permissions";
+import { canAccessStore, canManageKpi, canReadStoreRecords } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
+
 import { deleteQualityIssue, updateQualityIssue } from "@/lib/actions/kpi";
 import { QUALITY_CATEGORIES, QUALITY_KIND_HELP, QUALITY_KIND_LABEL, kpiSettings } from "@/lib/kpi-settings";
 import { fmtDate, fmtDateTime } from "@/lib/format";
@@ -17,11 +19,13 @@ export default async function QualityDetailPage({ params, searchParams }: { para
   const db = getDb();
   const q = db.qualityIssues.find((x) => x.id === id);
   if (!q) notFound();
-  if (!canAccessStore(user, q.storeId)) redirect("/kpi/quality?err=" + encodeURIComponent("この記録を閲覧する権限がありません。"));
+  // ほかの店舗の記録は、閲覧の範囲の設定 (顧客情報 = 全社員。src/lib/access-policy.ts) のとき閲覧のみ
+  if (!canReadStoreRecords(policyReader(db, user), q.storeId)) redirect("/kpi/quality?err=" + encodeURIComponent("この記録を閲覧する権限がありません。"));
+  const own = canAccessStore(user, q.storeId);
   const order = q.orderId ? db.orders.find((o) => o.id === q.orderId) : undefined;
   const customer = order ? db.customers.find((c) => c.id === order.customerId) : undefined;
-  const manage = canManageKpi(user);
-  const canEdit = manage || q.reportedBy === user.id || q.responsibleUserIds.includes(user.id);
+  const manage = own && canManageKpi(user);
+  const canEdit = own && (manage || q.reportedBy === user.id || q.responsibleUserIds.includes(user.id));
   const qp = kpiSettings(db).qualityPoints;
   const staff = db.users.filter((u) => u.active && (u.storeId === q.storeId || q.responsibleUserIds.includes(u.id) || order?.workerIds.includes(u.id) || u.storeId === "hq"));
   const logs = db.auditLogs.filter((l) => l.entity === "quality" && l.entityId === q.id).reverse();

@@ -157,9 +157,19 @@ ok(db.auditLogs.some((l) => l.summary.includes("差し替え")), "replacement au
 ok(AC.canViewMapDocument(admin, db, old), "old version still viewable by admin (history)");
 
 section("12. Access control");
+// 閲覧の範囲の設定 (src/lib/access-policy.ts): まず「進行中の案件だけ」で確かめる (地図は記録を見られる人が見る。登録・差し替えはその店舗だけ)
+const setPolicy = async (value) => {
+  await store.mutate((d) => {
+    d.settings = (d.settings ?? []).filter((x) => x.id !== "access_policy");
+    if (value) d.settings.push({ id: "access_policy", value, updatedAt: now });
+  });
+  db = store.getDb();
+};
+await setPolicy({ figures: "store", customers: "open", grantDays: 7 });
 ok(AC.canViewRecordMap(koshiStaff, db, "customer", C1.id), "own-store staff can view customer map");
-ok(!AC.canViewRecordMap(chuoStaff, db, "customer", C1.id), "other-store staff cannot view customer map");
-ok(!AC.canViewRecordMap(chuoStaff, db, "order", "ord_same"), "other-store staff cannot view order map");
+ok(AC.canViewRecordMap(chuoStaff, db, "customer", C1.id) && AC.canViewRecordMap(chuoStaff, db, "order", "ord_same"), "other-store staff can view the map of an open case (same as the record page: view only)");
+ok(!AC.canEditRecordMap(chuoStaff, db, "customer", C1.id) && !AC.canEditRecordMap(chuoStaff, db, "order", "ord_same"), "other-store staff cannot register / replace maps (view only)");
+ok(AC.canEditRecordMap(koshiStaff, db, "order", "ord_same"), "own-store staff can still register maps");
 const nishiStaff = db.users.find((u) => u.role === "store_staff" && u.storeId === "nishi" && u.active);
 ok(!AC.canViewMapDocument(nishiStaff, db, db.mapDocuments.find((d) => d.id === r2.document.id)), "other-store staff (no assignment) cannot open customer PDF by id");
 ok(AC.canViewRecordMap(chuoStaff, db, "event", "ev_chuo"), "assigned staff of another store can view the event map");
@@ -177,6 +187,10 @@ db = store.getDb();
 ok(!AC.canViewMapDocument(chuoStaff, db, db.mapDocuments.find((d) => d.id === r2.document.id)), "assignment-based access ends after the appointment date");
 await store.mutate((d) => { d.schedule.find((e) => e.id === "ev_chuo").date = future; });
 db = store.getDb();
+// 閲覧の範囲 = 全社員 (初期設定): 全店舗の地図を閲覧のみで見られる
+await setPolicy(null);
+ok(AC.canViewMapDocument(nishiStaff, db, db.mapDocuments.find((d) => d.id === r2.document.id)), "policy all (default): other-store staff can open the customer PDF (view only)");
+ok(!AC.canEditRecordMap(nishiStaff, db, "customer", C1.id), "policy all: still cannot register / replace maps of another store");
 
 section("8. Linked location updated → all non-overridden views reflect it");
 await store.mutate((d) => { const l = d.mapLocations.find((x) => x.id === pc.location.id); Object.assign(l, { lat: 32.8899, lng: 130.7461, coordStatus: "verified", coordSource: "manual" }); R.touchMapIndex(); });

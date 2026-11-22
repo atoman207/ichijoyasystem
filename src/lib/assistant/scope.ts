@@ -1,6 +1,7 @@
 import "server-only";
 import type { Database, User } from "@/lib/db/types";
-import { canSeeAllStores, withAllStoresReadScope } from "@/lib/auth/permissions";
+import { canSeeAllStoreFigures, withAllStoresReadScope } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
 import { toDateKey } from "@/lib/format";
 
 /**
@@ -33,9 +34,14 @@ export function assistantAllStores(db: Pick<Database, "settings">, now = new Dat
   return s.mode === "all_stores" && (!s.until || s.until >= toDateKey(now));
 }
 
-/** AI アシスタントの読み取りに使う利用者 (全店舗の設定なら、全店舗を見られる写し) */
+/**
+ * AI アシスタントの読み取りに使う利用者
+ * - AI の閲覧範囲 = 全店舗 (assistant_scope) なら、全店舗を見られる写し
+ * - それ以外は閲覧の範囲の設定 (src/lib/access-policy.ts) どおり: 経営の数字・顧客情報を全社員に公開しているときは、
+ *   その分だけ全店舗を読む写し (経費・有給・社内連絡・社員別の評価などの個人の情報は従来どおり)
+ */
 export function assistantReadUser(db: Pick<Database, "settings">, user: User, now = new Date()): User {
-  return assistantAllStores(db, now) ? withAllStoresReadScope(user) : user;
+  return assistantAllStores(db, now) ? withAllStoresReadScope(user) : policyReader(db, user);
 }
 
 /* ================================================================== */
@@ -59,7 +65,8 @@ const OTHER_SCOPE = /全社|全店|会社全体|会社の|全体の|他店|他�
  */
 export function outOfScopeRefusal(db: Pick<Database, "settings" | "stores">, user: User, question: string, now = new Date()): string | null {
   const reader = assistantReadUser(db, user, now);
-  if (canSeeAllStores(reader)) return null;
+  // 経営の数字を全店舗見られる人 (管理者・本部・閲覧の範囲 = 経営の数字は全社員) には断らない
+  if (canSeeAllStoreFigures(reader)) return null;
   const q = question.normalize("NFKC");
   if (!SCOPED_FIGURES.test(q) || HOW_TO.test(q)) return null;
   if (SHARED.test(q) && !MONEY.test(q)) return null;

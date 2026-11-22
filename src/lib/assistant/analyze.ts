@@ -1,6 +1,6 @@
 import "server-only";
 import type { Database, StoreId, User } from "@/lib/db/types";
-import { canSeeAllStores, canViewExpense, canViewPurchase } from "@/lib/auth/permissions";
+import { canReadStoreRecords, canSeeAllCustomerRecords, canSeeAllStoreFigures, canViewExpense, canViewPurchase } from "@/lib/auth/permissions";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, QUOTE_STATUS, SCHEDULE_KIND } from "@/lib/constants";
 import { addDays, toDateKey } from "@/lib/format";
 import { AMOUNT_KEYS, AMOUNT_LABEL, salesFacts, type AmountKey, type ItemFact, type OrderFact } from "./facts";
@@ -268,15 +268,17 @@ function matchAny(value: string | undefined, keywords: string[]): boolean {
   return keywords.some((k) => v.includes(norm(k)));
 }
 
+/** 集計できる店舗: 経営の数字の閲覧の範囲 (閲覧の範囲の設定で全社員が全店舗。src/lib/access-policy.ts。経費・仕入は記録ごとに本人の権限で絞る) */
 function resolveStores(db: Database, user: User, wanted: string[] | undefined): { ids: Set<StoreId>; scoped: boolean; denied: StoreId[] } {
-  const visible = canSeeAllStores(user) ? db.stores.map((s) => s.id) : [user.storeId];
-  if (!wanted?.length) return { ids: new Set(visible), scoped: !canSeeAllStores(user), denied: [] };
+  const all = canSeeAllStoreFigures(user);
+  const visible = all ? db.stores.map((s) => s.id) : [user.storeId];
+  if (!wanted?.length) return { ids: new Set(visible), scoped: !all, denied: [] };
   const ids = new Set<StoreId>();
   for (const w of wanted) {
     const n = norm(w);
     for (const s of db.stores) if (s.id === w || norm(s.name).includes(n) || norm(s.shortName) === n || n.includes(norm(s.shortName))) ids.add(s.id);
   }
-  return { ids: new Set([...ids].filter((id) => visible.includes(id))), scoped: !canSeeAllStores(user), denied: [...ids].filter((id) => !visible.includes(id)) };
+  return { ids: new Set([...ids].filter((id) => visible.includes(id))), scoped: !all, denied: [...ids].filter((id) => !visible.includes(id)) };
 }
 
 function categoryKeys(wanted: string[] | undefined): Set<AmountKey> | null {
@@ -488,6 +490,8 @@ function otherAtoms(ctx: Ctx, subject: Subject, spec: AnalysisSpec, from: string
 
 function dimValues(a: Atom, dim: string, ctx: Ctx): string[] {
   if ((TIME_DIMS as readonly string[]).includes(dim)) return [timeKey(dim, a.date)];
+  // 顧客情報を見られない店舗のお客様の名前は出さない (経営の数字だけ全店舗に公開しているとき)
+  if (dim === "customer" && !canReadStoreRecords(ctx.user, a.store)) return ["(ほかの店舗のお客様)"];
   if (dim === "store") return [`${String(storeOrder(ctx, a.store)).padStart(2, "0")}:${ctx.storeName(a.store)}`];
   const v = a.dims[dim];
   if (v === undefined) return ["(なし)"];
@@ -552,10 +556,12 @@ export function runAnalysis(db: Database, user: User, raw: AnalysisSpec, now = n
     };
   }
   const notes = new Set<string>();
-  const { ids: stores, scoped, denied } = resolveStores(db, user, raw.stores);
+  const { ids: figureStores, scoped, denied } = resolveStores(db, user, raw.stores);
+  // お客様の名前で絞る集計は、顧客情報を見られる店舗のお客様だけ (経営の数字だけ全店舗に公開しているとき)
+  const stores = raw.customers?.length && !canSeeAllCustomerRecords(user) ? new Set([...figureStores].filter((id) => canReadStoreRecords(user, id))) : figureStores;
   // 閲覧できない店舗を指定した: 自店舗だけに黙って絞らず、権限の範囲外と返す (お客様の決定 2026-11-20)
   if (denied.length) return { ok: false, error: `${denied.map((id) => db.stores.find((s) => s.id === id)?.name ?? id).join("・")}のデータは、この人の閲覧の権限の範囲外です (見られるのは ${db.stores.find((s) => s.id === user.storeId)?.name ?? "自店舗"} だけ)。`, hint: "回答では「その情報は閲覧の権限の範囲外のため、お答えできません」と伝える。自店舗の数字をほかの店舗・全社の数字として書かない。" };
-  if (!stores.size) return { ok: false, error: "指定の店舗が見つからないか、閲覧できない店舗です。", hint: canSeeAllStores(user) ? undefined : "店舗のロールは自店舗のデータだけを集計できます。" };
+  if (!stores.size) return { ok: false, error: "指定の店舗が見つからないか、閲覧できない店舗です。", hint: canSeeAllStoreFigures(user) ? undefined : "店舗のロールは自店舗のデータだけを集計できます。" };
   if (scoped) notes.add(`閲覧範囲: ${db.stores.find((s) => s.id === user.storeId)?.name ?? "自店舗"} のデータだけを集計しています`);
 
   const userNameMap = new Map(db.users.map((u) => [u.id, u.name]));

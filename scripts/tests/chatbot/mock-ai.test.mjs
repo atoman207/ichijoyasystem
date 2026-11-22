@@ -72,6 +72,13 @@ await startMirror();
 M.installAiMonitor();
 
 const db = store.getDb();
+// 閲覧の範囲の設定 (src/lib/access-policy.ts)。初期設定は経営の数字・顧客情報とも全社員。権限で断る・渡さないテストは「自店舗 / 進行中だけ」にして確かめる
+const setPolicy = (value) => {
+  for (const x of new Set([db, store.getDb()])) {
+    x.settings = (x.settings ?? []).filter((r) => r.id !== "access_policy");
+    if (value) x.settings.push({ id: "access_policy", value, updatedAt: new Date().toISOString() });
+  }
+};
 const admin = db.users.find((u) => u.role === "admin" && u.active);
 const staff = db.users.find((u) => u.role === "store_staff" && u.active && u.storeId === "koshi");
 const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Tokyo" });
@@ -159,8 +166,9 @@ section("実行の依頼: 確認のカードを出す (AI は実行しない。�
   ok(!r.answer.startsWith("この依頼は AI アシスタントからは実行できません"), "カードを出したときは「実行できない」と書かない");
 }
 
-section("閲覧の権限: 店舗のロールがほかの店舗・全社の売上を聞いたら、AI を呼ばずに断る");
+section("閲覧の権限: 店舗のロールがほかの店舗・全社の売上を聞いたら、AI を呼ばずに断る (閲覧の範囲 = 自店舗)");
 {
+  setPolicy({ figures: "store", customers: "open", grantDays: 7 });
   requests.length = 0;
   handler = () => oaText("合志店の今月の売上は 1,234,567円 です。");
   const chuoStaff = db.users.find((u) => u.active && u.role === "store_staff" && u.storeId === "chuo");
@@ -169,6 +177,21 @@ section("閲覧の権限: 店舗のロールがほかの店舗・全社の売上
   const r2 = await askChatbot(db, chuoStaff, [], "全社の今年の粗利は？");
   ok(/権限の範囲外/.test(r2.answer), "全社の数字も断る");
   ok(requests.length === 0, "断るときは AI を呼ばない (数字を AI に渡さない)");
+}
+
+section("閲覧の範囲 = 経営の数字は全社員 (初期設定): 店舗のロールにもほかの店舗の売上を答える");
+{
+  setPolicy(null);
+  resetBreaker();
+  requests.length = 0;
+  handler = (e) => (lastRole(e) === "tool" ? oaText("合志店の今月の売上をまとめました。") : oaTools([{ name: "analyze", args: { subject: "sales", metrics: ["sales"], stores: ["koshi"], from: `${today.slice(0, 7)}-01`, to: today } }]));
+  const chuoStaff = db.users.find((u) => u.active && u.role === "store_staff" && u.storeId === "chuo");
+  const r = await askChatbot(db, chuoStaff, [], "合志店の今月の売上は？");
+  ok(!/権限の範囲外/.test(r.answer) && requests.length > 0, "断らずに AI がデータを調べる");
+  const toolOut = requests.flatMap((x) => msgs(x).filter((m) => m.role === "tool").map((m) => String(m.content))).join("\n");
+  const koshiMonth = db.orders.filter((o) => o.storeId === "koshi" && o.status !== "cancelled" && o.salesDate && o.salesDate >= `${today.slice(0, 7)}-01` && o.salesDate <= today).reduce((a, o) => a + o.total, 0);
+  ok(!/範囲外/.test(toolOut) && toolOut.includes(`¥${koshiMonth.toLocaleString("ja-JP")}`), `集計の道具が合志店の売上 (¥${koshiMonth.toLocaleString("ja-JP")}) を集計する (範囲外のエラーにしない)`);
+  setPolicy({ figures: "store", customers: "open", grantDays: 7 });
 }
 
 section("回答の確かめ: 存在しない画面・道具の結果にない記録へのリンクを外す");
@@ -375,6 +398,7 @@ section("閲覧範囲: 店舗スタッフの質問で、ほかの店舗のデー
   ok(!sentAll.includes("ミネルヴァ計画"), "公開範囲の外の社内資料の本文を AI に渡さない");
   ok(toolMsgs.some((t) => [...ownNames].some((n) => t.includes(n))), "自店舗の顧客は渡す (確かめが空振りでないこと)");
 }
+setPolicy(null);
 
 /* ================================================================== */
 section("ログイン前: データ・社内資料を答えない");

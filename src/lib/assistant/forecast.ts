@@ -1,6 +1,6 @@
 import "server-only";
 import type { Database, User } from "@/lib/db/types";
-import { scopeByStore } from "@/lib/auth/permissions";
+import { canViewStoreFigures } from "@/lib/auth/permissions";
 import { toDateKey } from "@/lib/format";
 import { runAnalysis, type AnalysisColumn, type AnalysisError, type AnalysisResult, type Cell } from "./analyze";
 
@@ -105,7 +105,8 @@ export function forecast(db: Database, user: User, opts: ForecastOpts, now = new
   const backlog = new Map<string, { amount: number; count: number }>();
   if (subject === "sales" && (!opts.metric || opts.metric === "sales")) {
     const storeIds = opts.stores?.length ? new Set(db.stores.filter((s) => opts.stores!.some((x) => x === s.id || s.name.includes(x) || (s.shortName ?? "").includes(x))).map((s) => s.id)) : undefined;
-    for (const o of scopeByStore(user, db.orders)) {
+    // 受注残の金額は経営の数字 (閲覧の範囲の設定で全社員が全店舗。src/lib/access-policy.ts)
+    for (const o of db.orders.filter((x) => canViewStoreFigures(user, x.storeId))) {
       if (!BACKLOG_STATUSES.has(o.status) || o.salesDate) continue;
       if (storeIds && !storeIds.has(o.storeId)) continue;
       if (opts.categories?.length && !opts.categories.some((c) => o.category === c || String(o.category).includes(c))) continue;

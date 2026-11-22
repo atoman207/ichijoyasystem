@@ -96,7 +96,7 @@ export function approvalRequestNotices(db: Database, a: Approval): Outgoing[] {
     "approval_request",
     approversFor(db, a),
     `承認依頼: ${APPROVAL_TYPE_LABEL[a.type]} ${a.title}`,
-    `${nameOf(db, a.requestedBy)} さんから承認の依頼があります。\n種類: ${APPROVAL_TYPE_LABEL[a.type]}\n件名: ${a.title}\n金額: ${yen(a.amount)}${a.requestComment ? `\n申請コメント: ${a.requestComment}` : ""}${changes}`,
+    `${nameOf(db, a.requestedBy)} さんから承認の依頼があります。\n種類: ${APPROVAL_TYPE_LABEL[a.type]}\n件名: ${a.title}${a.type === "record_view" ? "" : `\n金額: ${yen(a.amount)}`}${a.requestComment ? `\n${a.type === "record_view" ? "閲覧の理由" : "申請コメント"}: ${a.requestComment}` : ""}${changes}`,
     "/approvals?tab=mine",
     { relatedType: "approval", relatedId: a.id },
   );

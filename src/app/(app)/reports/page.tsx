@@ -3,7 +3,8 @@ import { Download } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canSeeAllStores, canViewReports } from "@/lib/auth/permissions";
+import { canSeeAllStoreFigures, canViewReports } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
 import { fmtShortMonth, fmtMonth, pct, toDateKey, yen } from "@/lib/format";
 import { PERIOD_LABEL, growth, managementReport, resolvePeriod, staffOptions, type MgmtCsvSection, type PeriodPreset } from "@/lib/management";
 import { SCORE_QUESTIONS } from "@/lib/survey";
@@ -41,11 +42,12 @@ const line = (s: string) => <span className="block">{s}</span>;
 
 export default async function ReportsPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
-  const user = await requireUser();
-  if (!canViewReports(user)) redirect("/?err=" + encodeURIComponent("経営ダッシュボードは店長・本部・管理者が閲覧できます。"));
   const db = getDb();
+  // 閲覧の範囲 = 経営の数字は全社員 (既定) なら、全社員が全店舗の数字を見られる (src/lib/access-policy.ts)
+  const user = policyReader(db, await requireUser());
+  if (!canViewReports(user)) redirect("/?err=" + encodeURIComponent("経営ダッシュボードは店長・本部・管理者が閲覧できます。"));
   const now = new Date();
-  const allStores = canSeeAllStores(user);
+  const allStores = canSeeAllStoreFigures(user);
   const period = resolvePeriod(sp, now);
   const storeFilter = allStores && db.stores.some((s) => s.id === sp.store) ? (sp.store as StoreId) : undefined;
   const people = staffOptions(db, user);

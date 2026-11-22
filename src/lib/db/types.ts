@@ -683,7 +683,9 @@ export type ApprovalType =
   /** 受注 (契約) の重要な情報 (契約金額・契約日) の変更 */
   | "order_change"
   /** 顧客の重要な情報 (氏名・住所・電話など) の変更 */
-  | "customer_change";
+  | "customer_change"
+  /** ほかの店舗の完了した案件のお客様の閲覧の申請 (閲覧の範囲 = 承認制のとき。承認から決まった日数だけ閲覧のみで見られる。src/lib/case-access.ts) */
+  | "record_view";
 
 /** returned = 差戻し (修正して再申請) / rejected = 却下 / cancelled = 取下げ */
 export type ApprovalStatus = "pending" | "approved" | "returned" | "rejected" | "cancelled";

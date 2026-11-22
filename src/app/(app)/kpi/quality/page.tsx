@@ -1,7 +1,9 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canManageKpi, scopeByStore } from "@/lib/auth/permissions";
+import { canAccessStore, canManageKpi, canReadStoreRecords, canViewStoreFigures } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
+
 import { countedIssue, filterIssues, fmtRate } from "@/lib/kpi";
 import { computeIncentives } from "@/lib/incentive";
 import { QUALITY_KIND_LABEL, kpiSettings } from "@/lib/kpi-settings";
@@ -21,13 +23,15 @@ export default async function QualityPage({ searchParams }: { searchParams: Prom
   const settings = kpiSettings(db);
   const today = toDateKey(new Date());
   const rp = resolvePeriod(sp, settings.fiscalStartMonth, today);
-  const store = sp.store && db.stores.some((s) => s.id === sp.store && canAccessStore(user, s.id)) ? sp.store : "";
+  // 一覧 (個々の記録) は顧客情報、店舗・事務の集計は経営の数字の閲覧の範囲 (src/lib/access-policy.ts)
+  const reader = policyReader(db, user);
+  const store = sp.store && db.stores.some((s) => s.id === sp.store && canReadStoreRecords(reader, s.id)) ? sp.store : "";
   const orders = new Map(db.orders.map((o) => [o.id, o]));
   const customers = new Map(db.customers.map((c) => [c.id, c.name]));
-  const rows = filterIssues(scopeByStore(user, db.qualityIssues), { storeId: store || undefined, userId: sp.user || undefined, kind: sp.kind || undefined, status: sp.status || undefined, p: rp.period, q: sp.q }, (id) => orders.get(id)?.number ?? "");
+  const rows = filterIssues(db.qualityIssues.filter((x) => canReadStoreRecords(reader, x.storeId)), { storeId: store || undefined, userId: sp.user || undefined, kind: sp.kind || undefined, status: sp.status || undefined, p: rp.period, q: sp.q }, (id) => orders.get(id)?.number ?? "");
   const paged = paginate(rows, sp.page, 50);
   const result = computeIncentives(db, rp.period, settings);
-  const units = [...result.units.filter((u) => canAccessStore(user, u.unit as never)), result.office];
+  const units = [...result.units.filter((u) => canViewStoreFigures(reader, u.unit as never)), result.office];
   const staff = db.users.filter((u) => u.active && (canAccessStore(user, u.storeId) || u.storeId === "hq"));
   // LINE の「クレーム・手直し報告」グループに届いた報告 (まだ記録にしていないもの。店舗のグループは見られる店舗だけ)
   const reports = pendingLineReports(db, (storeId) => (storeId ? canAccessStore(user, storeId) : canManageKpi(user))).slice(0, 30);
@@ -48,7 +52,7 @@ export default async function QualityPage({ searchParams }: { searchParams: Prom
         today={today}
         extra={
           <>
-            <label className="block"><span className="label">店舗</span><Select name="store" defaultValue={store} className="h-9 py-1 text-sm"><option value="">すべて</option>{db.stores.filter((s) => canAccessStore(user, s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></label>
+            <label className="block"><span className="label">店舗</span><Select name="store" defaultValue={store} className="h-9 py-1 text-sm"><option value="">すべて</option>{db.stores.filter((s) => canReadStoreRecords(reader, s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></label>
             <label className="block"><span className="label">担当者</span><Select name="user" defaultValue={sp.user ?? ""} className="h-9 py-1 text-sm"><option value="">すべて</option>{staff.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></label>
             <label className="block"><span className="label">区分</span><Select name="kind" defaultValue={sp.kind ?? ""} className="h-9 py-1 text-sm"><option value="">すべて</option>{Object.entries(QUALITY_KIND_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select></label>
             <label className="block"><span className="label">状態</span><Select name="status" defaultValue={sp.status ?? ""} className="h-9 py-1 text-sm"><option value="">すべて</option><option value="open">対応中</option><option value="resolved">解決済み</option></Select></label>

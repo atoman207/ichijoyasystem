@@ -7,6 +7,8 @@ import { fmtDateTime } from "@/lib/format";
 import { Avatar, Badge, Button, buttonClass, Card, CardHeader, Field, Input, Note, Select, StoreTag } from "@/components/ui";
 import Link from "@/components/ui/Link";
 import { PermissionTableCard } from "./PermissionTableCard";
+import { AccessPolicyCard } from "./AccessPolicyCard";
+import { accessPolicy } from "@/lib/access-policy";
 import { AccountLockButton } from "./AccountLockButton";
 
 /**
@@ -229,7 +231,8 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
           {!manager && <Note>アカウントの追加・変更は管理者と店長が行います。自分のログイン ID・パスワード・顔写真は <Link href="/profile" className="text-accent hover:underline">プロフィール</Link> で変更できます。</Note>}
         </div>
       </div>
-      <PermissionTableCard />
+      {view === "settings" && <AccessPolicyCard db={db} user={user} />}
+      <PermissionTableCard policy={accessPolicy(db)} />
     </div>
   );
 }

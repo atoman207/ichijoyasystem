@@ -66,6 +66,10 @@ function sampleDb() {
     expenses: [],
     purchases: [],
     documents: [],
+    approvals: [],
+    auditLogs: [],
+    // 閲覧の範囲 = 進行中の案件だけ (11/22 の仕組み)。全社員・承認制は下の「閲覧の範囲の設定」で確かめる
+    settings: [{ id: "access_policy", value: { figures: "all", customers: "open", grantDays: 7 } }],
   };
 }
 
@@ -181,6 +185,105 @@ section("写真・資料 (添付ファイル)");
 section("権限の関数");
 ok(P.canViewOpenCases(nishiStaff) && P.canViewOpenCases(nishiManager), "店舗のロールも進行中の案件を見られる");
 ok(P.canEditCompletedCase(admin) && !P.canEditCompletedCase(hq) && !P.canEditCompletedCase(nishiManager), "完了した案件の変更は管理者だけ");
+
+/* ------------------------------------------------------------------ */
+// 閲覧の範囲の設定 (src/lib/access-policy.ts): 経営の数字・顧客情報 (全社員 / 承認制 / 進行中だけ)
+const AP = await jiti.import(path.join(root, "src/lib/access-policy.ts"));
+const PT = await jiti.import(path.join(root, "src/lib/auth/permission-table.ts"));
+const withPolicy = (value) => {
+  const db = sampleDb();
+  db.settings = value === undefined ? [] : [{ id: "access_policy", value }];
+  return db;
+};
+
+section("閲覧の範囲の設定: 読み込み");
+{
+  eq(AP.accessPolicy({ settings: [] }), { ...AP.DEFAULT_ACCESS_POLICY, updatedBy: undefined, updatedAt: undefined }, "設定がなければ初期設定 (経営の数字・顧客情報とも全社員、承認のあと 7 日)");
+  eq(AP.DEFAULT_ACCESS_POLICY.figures + "/" + AP.DEFAULT_ACCESS_POLICY.customers, "all/all", "初期設定は おすすめ (全社員に公開 + 閲覧の記録)");
+  const bad = AP.normalizeAccessPolicy({ figures: "x", customers: "y", grantDays: 999 });
+  eq([bad.figures, bad.customers, bad.grantDays], ["all", "all", 7], "おかしな値は初期設定に戻す");
+  eq(AP.normalizeAccessPolicy({ figures: "store", customers: "approval", grantDays: 3 }).grantDays, 3, "日数は 1〜90 日");
+}
+
+section("閲覧の範囲 = 全社員 (初期設定)");
+{
+  const db = withPolicy(undefined);
+  const o = (id) => db.orders.find((x) => x.id === id);
+  const c = (id) => db.customers.find((x) => x.id === id);
+  eq(A.orderAccessInfo(db, nishiStaff, o("o_paid")), { access: "view", basis: "all", customerId: "c_paid" }, "ほかの店舗の入金済みの受注も閲覧のみで見られる (理由 = 全社員)");
+  eq(A.customerAccess(db, nishiStaff, c("c_none")), "view", "進行中の案件のないお客様も見られる");
+  eq(A.orderAccess(db, koshiStaff, o("o_paid")), "edit", "自店舗は今までどおり変更できる");
+  eq(A.quoteAccess(db, nishiStaff, db.quotes.find((x) => x.id === "q_lost")), "view", "失注の見積も見られる");
+  eq(A.invoiceAccess(db, nishiStaff, db.invoices.find((x) => x.id === "inv_full")), "view", "入金済みの請求書も見られる");
+  eq(A.orderAccess(db, { ...nishiStaff, active: false }, o("o_open")), "none", "無効のアカウントは見られない");
+  ok(!P.canAccessStore(nishiStaff, "koshi"), "変更の権限 (canAccessStore) は広がらない");
+  ok(ATT.canViewParent(nishiStaff, db, { type: "order", id: "o_paid", storeId: "koshi" }), "ほかの店舗の完了した案件の写真も見られる");
+  ok(!ATT.canAddToParent(nishiStaff, db, { type: "order", id: "o_paid", storeId: "koshi" }), "写真の追加はできない (閲覧のみ)");
+  const lock = A.completedCaseLock(db, nishiManager, o("o_paid"));
+  ok(lock.locked, "入金済みの案件の変更の制限は変わらない");
+}
+
+section("閲覧の範囲 = 承認制");
+{
+  const db = withPolicy({ figures: "all", customers: "approval", grantDays: 7 });
+  const o = (id) => db.orders.find((x) => x.id === id);
+  const c = (id) => db.customers.find((x) => x.id === id);
+  eq(A.customerAccessInfo(db, nishiManager, c("c_paid")).access, "view", "店長はほかの店舗の完了した案件のお客様も見られる");
+  eq(A.orderAccess(db, nishiStaff, o("o_open")), "view", "店舗スタッフも進行中の案件は見られる");
+  const info = A.customerAccessInfo(db, nishiStaff, c("c_paid"));
+  eq([info.access, info.canRequest, Boolean(info.pending)], ["none", true, false], "店舗スタッフは完了した案件のお客様は見られず、閲覧の申請ができる");
+  eq(A.deniedHref(A.orderAccessInfo(db, nishiStaff, o("o_paid")), "/orders", "案件"), "/customers/c_paid", "見られない受注を開くと、お客様の画面の閲覧の申請へ");
+  ok(P.canRequestRecordView(nishiStaff, AP.accessPolicy(db)) && !P.canRequestRecordView(nishiManager, AP.accessPolicy(db)) && !P.canRequestRecordView(hq, AP.accessPolicy(db)), "申請できるのは店舗スタッフだけ (店長・本部・管理者はもともと見られる)");
+  const now = new Date("2030-07-01T09:00:00+09:00");
+  db.approvals.push({ id: "ap_p", type: "record_view", targetId: "c_paid", title: "顧客", amount: 0, storeId: "nishi", requestedBy: "u_n", requiredRole: "store_manager", status: "pending", createdAt: "2030-07-01T00:00:00.000Z" });
+  eq(A.customerAccessInfo(db, nishiStaff, c("c_paid"), now).pending?.id, "ap_p", "申請中は「承認待ち」");
+  ok(P.canApprove(nishiManager, db.approvals[0]) && !P.canApprove(user("u_km", "store_manager", "koshi"), db.approvals[0]), "承認できるのは申請者の所属店舗の店長 (お客様の店舗の店長ではない)");
+  Object.assign(db.approvals[0], { status: "approved", decidedBy: "u_nm", decidedAt: "2030-07-01T00:00:00.000Z" });
+  const g = A.customerAccessInfo(db, nishiStaff, c("c_paid"), now);
+  eq([g.access, g.basis], ["view", "grant"], "承認されると閲覧のみで見られる (理由 = 承認)");
+  eq(g.grantUntil, "2030-07-08T00:00:00.000Z", "見られるのは承認から 7 日");
+  eq(A.orderAccessInfo(db, nishiStaff, o("o_paid"), now).access, "view", "同じお客様の受注も見られる");
+  eq(A.customerAccessInfo(db, nishiStaff, c("c_paid"), new Date("2030-07-08T09:00:01+09:00")).access, "none", "期限を過ぎると見られない");
+  eq(A.customerAccessInfo(db, koshiStaff, c("c_paid"), now).access, "edit", "自店舗は今までどおり");
+  eq(A.customerAccessInfo(db, user("u_x", "store_staff", "chuo"), c("c_paid"), now).access, "none", "ほかの人の承認では見られない");
+  Object.assign(db.approvals[0], { status: "rejected" });
+  eq(A.customerAccessInfo(db, nishiStaff, c("c_paid"), now).access, "none", "却下されたら見られない");
+}
+
+section("閲覧の範囲 = 進行中の案件だけ");
+{
+  const db = withPolicy({ figures: "store", customers: "open", grantDays: 7 });
+  const c = (id) => db.customers.find((x) => x.id === id);
+  eq(A.customerAccessInfo(db, nishiManager, c("c_paid")), { access: "none", customerId: "c_paid" }, "店長もほかの店舗の完了した案件は見られない (申請もない)");
+  eq(A.customerAccessInfo(db, nishiStaff, c("c_open")).basis, "open", "進行中の案件は見られる (理由 = 進行中)");
+}
+
+section("経営の数字の閲覧の範囲");
+{
+  const all = withPolicy({ figures: "all", customers: "open" });
+  const store = withPolicy({ figures: "store", customers: "all" });
+  const ra = AP.policyReader(all, nishiStaff);
+  const rs = AP.policyReader(store, nishiStaff);
+  ok(P.canSeeAllStoreFigures(ra) && P.canViewReports(ra), "経営の数字 = 全社員: 店舗スタッフも全店舗の数字・経営ダッシュボードを見られる");
+  ok(!P.canSeeAllStoreFigures(rs) && !P.canViewReports(rs), "経営の数字 = 自店舗: 今までどおり");
+  ok(P.canSeeAllCustomerRecords(rs) && !P.canSeeAllCustomerRecords(ra), "顧客情報と経営の数字は別々に決まる");
+  ok(!P.canSeeAllStores(ra) && !P.canAccessStore(ra, "koshi"), "写しでも全店舗ロール・変更の権限にはならない");
+  ok(!P.canViewStaffKpi(ra, { id: "u_k", storeId: "koshi" }), "社員別の評価・インセンティブは今までどおり (本人・店長・本部)");
+  ok(!P.canViewExpense(ra, { storeId: "koshi", submittedBy: "u_k" }), "経費は今までどおり");
+  ok(!P.canSeeAllStoreFigures(nishiStaff), "本物の利用者は変わらない (写しだけが広がる)");
+  const inactive = AP.policyReader(all, { ...nishiStaff, active: false });
+  ok(!P.canSeeAllStoreFigures(inactive), "無効のアカウントは広がらない");
+}
+
+section("権限一覧 (設定どおりの表)");
+{
+  const row = (p, key) => PT.permissionTable(p).find((r) => r.key === key);
+  eq([row(AP.DEFAULT_ACCESS_POLICY, "customers").staff, row(AP.DEFAULT_ACCESS_POLICY, "reports").staff], ["○", "○"], "初期設定: 店舗スタッフも顧客情報・経営の数字は全店舗");
+  eq(row({ figures: "store", customers: "approval", grantDays: 5 }, "closedCases").staff, "本人", "承認制: 店舗スタッフは閲覧の申請");
+  ok(row({ figures: "store", customers: "approval", grantDays: 5 }, "closedCases").action.includes("5 日"), "承認のあとの日数を表に書く");
+  eq(row({ figures: "store", customers: "open", grantDays: 7 }, "reports").staff, "−", "経営の数字 = 自店舗: 店舗スタッフは経営ダッシュボードを見ない");
+  eq(PT.PERMISSION_TABLE.length, PT.permissionTable(AP.DEFAULT_ACCESS_POLICY).length, "チャットボットの資料の表 = 初期設定の表");
+}
 
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {

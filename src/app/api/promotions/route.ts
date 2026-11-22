@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/session";
 import { addAudit, mutate, syncDb } from "@/lib/db/store";
 import { canViewPromoAnalysis } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
+
 import { toCsv } from "@/lib/csv";
 import { kpiSettings } from "@/lib/kpi-settings";
 import { resolvePeriod } from "@/lib/kpi-period";
@@ -17,12 +19,15 @@ export const maxDuration = 60;
  */
 export async function GET(req: Request) {
   if (req.headers.get("next-router-prefetch") || req.headers.get("rsc")) return new NextResponse(null, { status: 204 });
-  const user = await getSessionUser();
-  if (!user || !canViewPromoAnalysis(user)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const db = await syncDb();
+  // 閲覧の範囲 = 経営の数字は全社員 (既定) なら全員が全店舗 (src/lib/access-policy.ts)
+  const user = policyReader(db, sessionUser);
+  if (!canViewPromoAnalysis(user)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const sp = Object.fromEntries(new URL(req.url).searchParams.entries());
   const section = (sp.section ?? "media") as PromoCsvSection;
   if (!(section in PROMO_CSV_SECTIONS)) return NextResponse.json({ error: "unknown section" }, { status: 400 });
-  const db = await syncDb();
   const rp = resolvePeriod(sp, kpiSettings(db).fiscalStartMonth, toDateKey(new Date()));
   const period = rp.period ?? { from: "2000-01-01", to: toDateKey(new Date()) };
   const report = promoReport(db, user, { from: period.from, to: period.to, store: sp.store });

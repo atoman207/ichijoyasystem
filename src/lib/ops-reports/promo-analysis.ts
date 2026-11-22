@@ -1,5 +1,5 @@
 import type { Database, Inquiry, MediaKey, Promotion, PromotionKind, PromotionStatus, StoreId, User } from "@/lib/db/types";
-import { canAccessStore } from "@/lib/auth/permissions";
+import { canViewStoreFigures } from "@/lib/auth/permissions";
 import { cleanAddressText, normalizeAddress } from "@/lib/maps/address";
 import { MEDIA_KEYS, MEDIA_LABEL, MEDIA_NONE, MEDIA_SOURCE_LABEL, UNCLASSIFIED, inquiryMedia, matchesMediaFilter, mediaIndex, orderMedia, surveyMediaKeys, type MediaIndex, type MediaSource } from "@/lib/media";
 import { toDateKey } from "@/lib/format";
@@ -60,9 +60,9 @@ export interface PromoScope {
   storeIds: StoreId[];
 }
 
-/** 利用者が見られる店舗 (絞り込みがあればその店舗だけ。見られない店舗の指定は無視) */
+/** 利用者が見られる店舗 (絞り込みがあればその店舗だけ。見られない店舗の指定は無視)。経営の数字の閲覧の範囲 (policyReader の写しなら設定どおり全店舗) */
 export function scopeStores(db: Pick<Database, "stores">, user: User, store?: string): StoreId[] {
-  const visible = db.stores.filter((s) => canAccessStore(user, s.id)).map((s) => s.id);
+  const visible = db.stores.filter((s) => canViewStoreFigures(user, s.id)).map((s) => s.id);
   return store && visible.includes(store as StoreId) ? [store as StoreId] : visible;
 }
 

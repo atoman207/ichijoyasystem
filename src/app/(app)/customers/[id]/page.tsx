@@ -1,10 +1,13 @@
 import Link from "@/components/ui/Link";
 import { CaseViewBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
-import { customerAccess, openCaseTimeline } from "@/lib/case-access";
+import { customerAccessInfo, openCaseTimeline } from "@/lib/case-access";
+import { accessPolicy, policyReader } from "@/lib/access-policy";
+import { logRecordView } from "@/lib/record-views";
+import { RecordViewRequest } from "@/components/features/RecordViewRequest";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore } from "@/lib/auth/permissions";
+import { canReadStoreRecords } from "@/lib/auth/permissions";
 import { customerTimeline, userName } from "@/lib/db/queries";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { CHANNEL_LABEL, INQUIRY_STATUS, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
@@ -29,13 +32,24 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
   const db = getDb();
   const c = db.customers.find((x) => x.id === id);
   if (!c) notFound();
-  // 進行中の案件は、ほかの店舗の社員も閲覧のみで開ける (src/lib/case-access.ts)
-  const access = customerAccess(db, user, c);
-  if (access === "none") redirect("/customers?err=" + encodeURIComponent("この顧客を閲覧する権限がありません (ほかの店舗の案件は、入金が完了するまでの間だけ閲覧できます)。"));
-  const viewOnly = access === "view";
-  // ほかの店舗の社員には、進行中の案件だけを見せる (入金が完了した過去の案件は通常の権限のまま)
-  const t = viewOnly ? openCaseTimeline(db, customerTimeline(db, id)) : customerTimeline(db, id);
+  // ほかの店舗の顧客は閲覧のみ。見られる範囲は閲覧の範囲の設定 (src/lib/access-policy.ts) と案件の進み具合で決まる (src/lib/case-access.ts)
+  const info = customerAccessInfo(db, user, c);
   const store = db.stores.find((s) => s.id === c.storeId);
+  if (info.access === "none") {
+    if (!info.canRequest) redirect("/customers?err=" + encodeURIComponent("この顧客を閲覧する権限がありません (ほかの店舗の案件は、入金が完了するまでの間だけ閲覧できます)。"));
+    // 承認制: ほかの店舗の完了した案件のお客様は、上司の承認を受けてから見る
+    return (
+      <div>
+        <Flash msg={msg} err={err} />
+        <PageHeader title="閲覧の申請" back={{ href: "/customers", label: "顧客一覧" }} />
+        <RecordViewRequest customerId={c.id} storeName={store?.name ?? "ほかの店舗"} pending={info.pending} grantDays={accessPolicy(db).grantDays} />
+      </div>
+    );
+  }
+  const viewOnly = info.access === "view";
+  if (viewOnly) logRecordView(user, info, { entity: "customer", id: c.id, label: `${c.code} ${c.name}`, storeId: c.storeId }, db.auditLogs);
+  // 進行中の案件だけで見ている人 (basis = open) には、進行中の案件だけを見せる。全社員に公開・閲覧の申請の承認のときは施工の履歴もすべて
+  const t = viewOnly && info.basis === "open" ? openCaseTimeline(db, customerTimeline(db, id)) : customerTimeline(db, id);
   const openItems = t.inquiries.filter((i) => ["new", "in_progress", "quoted"].includes(i.status)).length + t.orders.filter((o) => ["pending_approval", "returned", "confirmed", "scheduled", "in_progress"].includes(o.status)).length;
   // 重複の可能性がある既存顧客 (電話・メール・氏名と住所の一致、同じ姓と地区)
   const dup = findDuplicateCustomers(db, { ...c, otherPhones: (c.contacts ?? []).map((x) => x.phone) }, c.id);
@@ -64,7 +78,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
           </>
         }
       />
-      {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what="お客様の案件" />}
+      {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what={info.basis === "open" ? "お客様の案件" : "お客様"} basis={info.basis} grantUntil={info.grantUntil} />}
       <ReadOnlyArea readOnly={viewOnly}>
 
       {c.tradeStopped && (
@@ -80,7 +94,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
       )}
 
       <div className="mb-6 grid grid-cols-2 gap-3 @3xl:grid-cols-4">
-        <Stat label="累計売上 (税込)" value={viewOnly ? "-" : yen(t.lifetime)} />
+        <Stat label="累計売上 (税込)" value={viewOnly && info.basis === "open" ? "-" : yen(t.lifetime)} />
         <Stat label="案件数 (受注)" value={`${t.orders.length} 件`} sub={`見積 ${t.quotes.length} 件 · 問い合わせ ${t.inquiries.length} 件`} />
         <Stat label="進行中" value={`${openItems} 件`} />
         <Stat label="未入金" value={yen(receivable)} tone={receivable > 0 ? "warn" : undefined} />
@@ -126,7 +140,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
               <ul className="space-y-2 text-xs">
                 {dupRows.map((m) => (
                   <li key={m.id}>
-                    {canAccessStore(user, m.storeId) ? <Link href={`/customers/${m.id}`} className="font-medium text-accent hover:underline">{m.code} {m.name}</Link> : <span className="font-medium text-ink">{m.code} {m.name}</span>}
+                    {canReadStoreRecords(policyReader(db, user), m.storeId) ? <Link href={`/customers/${m.id}`} className="font-medium text-accent hover:underline">{m.code} {m.name}</Link> : <span className="font-medium text-ink">{m.code} {m.name}</span>}
                     <span className="text-ink-3"> · {db.stores.find((s) => s.id === m.storeId)?.name}{m.area ? ` · 地区 ${m.area}` : ""}</span>
                     <div className="text-ink-3">{m.label}: {m.reasons.join("・")}</div>
                   </li>

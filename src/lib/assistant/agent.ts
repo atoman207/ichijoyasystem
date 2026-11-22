@@ -2,7 +2,7 @@ import "server-only";
 import type { Database, User } from "@/lib/db/types";
 import { ROLE_LABEL } from "@/lib/constants";
 import { toDateKey } from "@/lib/format";
-import { canSeeAllStores, canViewChatLog, canViewKnowledge } from "@/lib/auth/permissions";
+import { canSeeAllCustomerRecords, canSeeAllStoreFigures, canSeeAllStores, canViewChatLog, canViewKnowledge } from "@/lib/auth/permissions";
 import { runToolLoop, type ToolCall, type ToolDef } from "@/lib/ai/provider";
 import { knowledgeExcerpt, searchKnowledge } from "@/lib/knowledge";
 import { isStale, staleNote, todayKey } from "@/lib/knowledge-review";
@@ -372,7 +372,7 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     "",
     `## 今日\n${today} (${wd})`,
     `## 質問している人\n${user.name} (${ROLE_LABEL[user.role]}・${db.stores.find((s) => s.id === user.storeId)?.name ?? user.storeId})。閲覧範囲: ${storeScopeNote(db, user)}`,
-    ...(canSeeAllStores(user) ? [] : [`## 閲覧の権限 (必ず守る)\nこの人が見られる売上・粗利・入金・経費・仕入・受注などの数字は ${db.stores.find((s) => s.id === user.storeId)?.name ?? "自店舗"} の分だけ。ほかの店舗・本部・全社の数字を聞かれたら、調べずに「その情報は閲覧の権限の範囲外のため、お答えできません」と答える。道具の結果は自店舗の分だけなので、それを全社・ほかの店舗の数字として書かない (予定表は全社共有なので答えてよい)。`]),
+    ...(canSeeAllStoreFigures(user) ? [] : [`## 閲覧の権限 (必ず守る)\nこの人が見られる売上・粗利・入金・経費・仕入・受注などの数字は ${db.stores.find((s) => s.id === user.storeId)?.name ?? "自店舗"} の分だけ。ほかの店舗・本部・全社の数字を聞かれたら、調べずに「その情報は閲覧の権限の範囲外のため、お答えできません」と答える。道具の結果は自店舗の分だけなので、それを全社・ほかの店舗の数字として書かない (予定表は全社共有なので答えてよい)。`]),
     `## 店舗\n${db.stores.map((s) => `${s.id}=${s.name}`).join(" / ")}`,
     `## 社員 (いま有効なアカウント)\n${staff.join("、")}\n(移行した過去の売上の担当者には、退職した社員の名前もあります)`,
     "",
@@ -428,7 +428,13 @@ function systemPrompt(db: Database, user: User, now: Date): string {
           "## 統合データモデル (VPS のデータベース。query_database で SQL を書いて読む)",
           `統合ビュー: ${VIEWS.map((v) => `${v.name} = ${v.label}`).join(" / ")}`,
           `指標の定義: ${METRICS.map((m) => m.name).join("・")} (詳しくは describe_database)`,
-          canSeeAllStores(user) ? "" : "この人の閲覧範囲 (自店舗) のデータだけが入っている。",
+          canSeeAllStores(user)
+            ? ""
+            : canSeeAllStoreFigures(user) && canSeeAllCustomerRecords(user)
+              ? "顧客・案件・売上・KPI などは全店舗のデータが入っている (閲覧の範囲の設定)。経費・仕入・有給・社内連絡などは、この人の権限の範囲だけ。"
+              : canSeeAllStoreFigures(user)
+                ? "売上などの数字の表 (sales_orders・sales_items など) は全店舗、顧客・案件の表はこの人の閲覧範囲 (自店舗など) だけ。ほかの店舗の行の お客様の名前・ID は空。"
+                : "この人の閲覧範囲 (自店舗) のデータだけが入っている。",
           "## 正確に答える手順",
           "- 件数・一覧・合計・「前回の〜」「〜のお客様は何人」のようなデータの質問は、推測せず query_database (統合ビュー) か analyze で数えてから答える。顧客・案件の詳しい中身は get_record。",
           "- 質問の条件 (状態・期間・店舗・人・種類など) は 1 つも落とさない。analyze の引数で表せない条件があるときは query_database で SQL に書く。",
@@ -777,7 +783,7 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   let prefetched: AgentSource[] = [];
   // 「A 店から B 店に X 円の工事を依頼したら、それぞれいくら？」は、先に計算しておく (AI の往復を 1 回減らし、計算させない)
   const split = parseStoreSplitQuestion(db, question);
-  if (split || opts.prefetchGuides || deep || (canViewMgmt(user) && MGMT_QUESTION.test(question))) progress({ type: "phase", phase: "prepare", label: "関係する資料・データを用意しています" });
+  if (split || opts.prefetchGuides || deep || (canViewMgmt(readUser) && MGMT_QUESTION.test(question))) progress({ type: "phase", phase: "prepare", label: "関係する資料・データを用意しています" });
   if (opts.prefetchGuides && !split) {
     const before = out.sources.length;
     const guides = await execute({ id: "prefetch", name: "search_guides", args: { query: question } });
@@ -787,7 +793,7 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   }
   // 総合的な分析は、全体像を先に用意する (1 回分の往復を省き、必ず全体から考える)
   // 管理会計の質問 (店舗別の粗利益・損益・原価率・内部受注・案分): 管理会計の店舗別損益を先に渡す (経営ダッシュボードの簡易粗利と混ぜない)
-  const mgmtQ = canViewMgmt(user) && MGMT_QUESTION.test(question);
+  const mgmtQ = canViewMgmt(readUser) && MGMT_QUESTION.test(question);
   if (split) {
     const r = await execute({ id: "split", name: "store_split", args: { from_store: split.fromStore, to_store: split.toStore, amount: split.amount, work_kind: split.workKind, tax_included: split.taxIncluded } });
     const last = messages[messages.length - 1];

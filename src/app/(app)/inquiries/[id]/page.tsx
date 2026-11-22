@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { CaseViewBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
-import { inquiryAccess } from "@/lib/case-access";
+import { inquiryAccessInfo, deniedHref } from "@/lib/case-access";
+import { logRecordView } from "@/lib/record-views";
 import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
@@ -31,10 +32,11 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const db = getDb();
   const inq = db.inquiries.find((x) => x.id === id);
   if (!inq) notFound();
-  // 進行中の案件は、ほかの店舗の社員も閲覧のみで開ける (src/lib/case-access.ts)
-  const access = inquiryAccess(db, user, inq);
-  if (access === "none") redirect("/inquiries?err=" + encodeURIComponent("この問い合わせを閲覧する権限がありません (ほかの店舗の案件は、入金が完了するまでの間だけ閲覧できます)。"));
-  const viewOnly = access === "view";
+  // ほかの店舗の記録は閲覧のみ (見られる範囲は閲覧の範囲の設定と案件の進み具合。承認制で申請できるときはお客様の画面の「閲覧の申請」へ。src/lib/case-access.ts)
+  const info = inquiryAccessInfo(db, user, inq);
+  if (info.access === "none") redirect(deniedHref(info, "/inquiries", "問い合わせ"));
+  const viewOnly = info.access === "view";
+  if (viewOnly) logRecordView(user, info, { entity: "inquiry", id: inq.id, label: inq.number, storeId: inq.storeId }, db.auditLogs);
   const customer = db.customers.find((c) => c.id === inq.customerId);
   const quote = db.quotes.find((q) => q.id === inq.quoteId);
   const order = quote ? db.orders.find((o) => o.quoteId === quote.id) : undefined;
@@ -101,7 +103,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
           </>
         }
       />
-      {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what="問い合わせ" />}
+      {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what="問い合わせ" basis={info.basis} grantUntil={info.grantUntil} />}
       <ReadOnlyArea readOnly={viewOnly}>
 
       {fromAi && (

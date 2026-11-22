@@ -14,6 +14,7 @@ export function approvalHref(a: Pick<Approval, "type" | "targetId">): string {
     case "purchase":
       return `/purchases/${a.targetId}`;
     case "customer_change":
+    case "record_view":
       return `/customers/${a.targetId}`;
     default:
       return "/approvals";

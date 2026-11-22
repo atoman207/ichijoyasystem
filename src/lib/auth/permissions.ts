@@ -5,6 +5,8 @@ import type { Approval, Attachment, AuditLog, CashEntry, DocDraft, Expense, FaxM
  * ------------------------------------------------------------
  * - 管理者 / 本部スタッフ: 全店舗の情報を閲覧
  * - 店長 / 店舗スタッフ: 自店舗の情報のみ。ただし進行中の案件 (問い合わせ → 入金完了まで) は、ほかの店舗の案件も閲覧のみ (canViewOpenCases)
+ * - 閲覧の範囲の設定 (src/lib/access-policy.ts。既定 = 経営の数字・顧客情報とも全社員): 経営の数字 (canSeeAllStoreFigures) と
+ *   顧客情報 (canSeeAllCustomerRecords) の閲覧だけを全店舗に広げる。policyReader が作る写しで判定し、登録・変更は本物の利用者 (canAccessStore)
  * - 入金完了・全処理完了の案件の内容の変更: 管理者のみ (canEditCompletedCase)
  * - 承認: 店長は自店舗の「店長承認」案件、管理者は全案件
  * - 設定 (商品・承認ルール): 管理者のみ
@@ -40,6 +42,65 @@ export function withAllStoresReadScope(user: User): User {
 
 export function canSeeAllStores(user: User): boolean {
   return user.role === "admin" || user.role === "hq_staff" || ALL_STORES_READ.has(user);
+}
+
+/* ---------------- 閲覧の範囲の設定 (src/lib/access-policy.ts) ---------------- */
+
+/** 閲覧の範囲の設定で広げた読み取り (経営の数字 / 顧客情報)。本物の利用者は変えず、写しに印を付ける */
+export interface ReadWidening {
+  figures?: boolean;
+  customers?: boolean;
+}
+const READ_WIDENING = new WeakMap<User, ReadWidening>();
+
+/** 閲覧の範囲の設定 (access_policy) から、その人の読み取りをどこまで広げるか */
+export function readWideningFor(user: Pick<User, "role" | "active">, policy: { figures: string; customers: string }): ReadWidening {
+  if (!user.active) return {};
+  return {
+    figures: policy.figures === "all",
+    // 承認制 (approval) のとき、店長は全店舗の顧客情報を見られる (本部スタッフ・管理者はもともと全店舗)
+    customers: policy.customers === "all" || (policy.customers === "approval" && user.role === "store_manager"),
+  };
+}
+
+/** 読み取りを広げた利用者の写し (広げるものがなければそのまま返す)。画面の表示・集計・AI の読み取りにだけ使う */
+export function withReadWidening(user: User, w: ReadWidening): User {
+  if (!w.figures && !w.customers) return user;
+  const copy = { ...user };
+  const prev = READ_WIDENING.get(user);
+  READ_WIDENING.set(copy, { figures: Boolean(w.figures || prev?.figures), customers: Boolean(w.customers || prev?.customers) });
+  if (ALL_STORES_READ.has(user)) ALL_STORES_READ.add(copy);
+  return copy;
+}
+
+/** 全店舗の経営の数字 (売上・原価・粗利・KPI の店舗の集計・管理会計・販促の分析) を見られる */
+export function canSeeAllStoreFigures(user: User): boolean {
+  return canSeeAllStores(user) || Boolean(user.active && READ_WIDENING.get(user)?.figures);
+}
+
+/** その店舗の経営の数字を見られる */
+export function canViewStoreFigures(user: User, storeId: StoreId): boolean {
+  return canSeeAllStoreFigures(user) || canAccessStore(user, storeId);
+}
+
+/** 全店舗の顧客情報 (顧客・問い合わせ・見積・受注・請求書・写真・施工の履歴) を閲覧できる (ほかの店舗は閲覧のみ) */
+export function canSeeAllCustomerRecords(user: User): boolean {
+  return canSeeAllStores(user) || Boolean(user.active && READ_WIDENING.get(user)?.customers);
+}
+
+/** その店舗の顧客情報を閲覧できる (進行中の案件・閲覧の申請の承認は src/lib/case-access.ts で別に判定する) */
+export function canReadStoreRecords(user: User, storeId: StoreId): boolean {
+  return canSeeAllCustomerRecords(user) || canAccessStore(user, storeId);
+}
+
+/** 閲覧の範囲の設定の変更: 管理者 */
+export function canManageAccessPolicy(user: User): boolean {
+  return user.active && user.role === "admin";
+}
+
+/** 完了した案件のお客様の閲覧を申請できる (閲覧の範囲 = 承認制のとき、全店舗を見られない人) */
+export function canRequestRecordView(user: User, policy: { customers: string }): boolean {
+  return user.active && policy.customers === "approval" && !canSeeAllStores(user) && user.role !== "store_manager";
 }
 
 /** AI アシスタントの閲覧範囲 (権限どおり / 全店舗) を切り替える: 管理者 */
@@ -255,9 +316,9 @@ export function canViewSourceFiles(user: User): boolean {
   return canSeeAllStores(user);
 }
 
-/** レポート・分析を閲覧できる: 店長・本部スタッフ・管理者 */
+/** レポート・分析 (経営ダッシュボード) を閲覧できる: 店長・本部スタッフ・管理者。閲覧の範囲 = 経営の数字は全社員 のときは全員 (policyReader の写しで判定) */
 export function canViewReports(user: User): boolean {
-  return isManagerOrAbove(user) || canSeeAllStores(user);
+  return isManagerOrAbove(user) || canSeeAllStoreFigures(user);
 }
 
 /** 全データのエクスポート (JSON / CSV): 管理者・本部スタッフ */

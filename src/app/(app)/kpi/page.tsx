@@ -1,6 +1,8 @@
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canViewStaffKpi } from "@/lib/auth/permissions";
+import { canViewStaffKpi, canViewStoreFigures } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
+
 import { fmtRate, fmtScore, staffKpis, storeKpi, type StoreKpi } from "@/lib/kpi";
 import { kpiSettings } from "@/lib/kpi-settings";
 import { resolvePeriod } from "@/lib/kpi-period";
@@ -18,7 +20,9 @@ export default async function KpiPage({ searchParams }: { searchParams: Promise<
   const today = toDateKey(new Date());
   const rp = resolvePeriod(sp, settings.fiscalStartMonth, today);
   const customers = new Map(db.customers.map((c) => [c.id, c]));
-  const stores = db.stores.filter((s) => canAccessStore(user, s.id));
+  // 店舗の集計は経営の数字 (閲覧の範囲の設定で全社員が全店舗を見られる。src/lib/access-policy.ts)。社員別は従来どおり
+  const reader = policyReader(db, user);
+  const stores = db.stores.filter((s) => canViewStoreFigures(reader, s.id));
   const rows: { label: React.ReactNode; k: StoreKpi; total?: boolean }[] = [
     ...stores.map((s) => ({ label: <StoreTag store={s} short />, k: storeKpi(db, rp.period, s.id, customers) })),
     { label: "全社", k: storeKpi(db, rp.period, undefined, customers), total: true },

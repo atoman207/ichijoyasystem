@@ -1,7 +1,9 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
+import { canReadStoreRecords, canSeeAllStoreFigures } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
+
 import { answerCounts, deliveryOf, fmtRate, inPeriod, isCard, storeKpi, surveyDate } from "@/lib/kpi";
 import { kpiSettings } from "@/lib/kpi-settings";
 import { resolvePeriod } from "@/lib/kpi-period";
@@ -36,23 +38,25 @@ export default async function SurveysPage({ searchParams }: { searchParams: Prom
   const settings = kpiSettings(db);
   const today = toDateKey(new Date());
   const rp = resolvePeriod(sp, settings.fiscalStartMonth, today);
-  const store = sp.store && canAccessStore(user, sp.store as never) ? sp.store : "";
+  // はがきの一覧は顧客情報、年度ごとの比較は経営の数字の閲覧の範囲 (src/lib/access-policy.ts)
+  const reader = policyReader(db, user);
+  const store = sp.store && canReadStoreRecords(reader, sp.store as never) ? sp.store : "";
   const q = sp.q?.trim() ?? "";
   const users = new Map(db.users.map((u) => [u.id, u.name]));
   const orders = new Map(db.orders.map((o) => [o.id, o]));
   const customers = new Map(db.customers.map((c) => [c.id, c]));
-  let rows = scopeByStore(user, db.surveys).filter((s) => isCard(s) && inPeriod(surveyDate(s), rp.period) && (!store || s.storeId === store));
+  let rows = db.surveys.filter((s) => canReadStoreRecords(reader, s.storeId)).filter((s) => isCard(s) && inPeriod(surveyDate(s), rp.period) && (!store || s.storeId === store));
   if (sp.link === "linked") rows = rows.filter((s) => s.orderId);
   if (sp.link === "unlinked") rows = rows.filter((s) => !s.orderId);
   if (q) rows = rows.filter((s) => [s.postcardNo, s.comment, s.salesName, s.craftsmanName, users.get(s.salesUserId ?? ""), ...deliveryOf(s).map((id) => users.get(id))].some((t) => t?.includes(q)));
   rows.sort((a, b) => surveyDate(b).localeCompare(surveyDate(a)));
   const paged = paginate(rows, sp.page, 50);
   const counts = answerCounts(rows);
-  const stores = db.stores.filter((s) => s.kind === "store" && canAccessStore(user, s.id));
+  const stores = db.stores.filter((s) => s.kind === "store" && canReadStoreRecords(reader, s.id));
   const cmap = customers;
   const SOURCE: Record<string, string> = { import: "移行", capture: "写真", manual: "手入力" };
-  // 年度ごとの比較: 店舗のロールは自店舗だけ (全社・ほかの店舗の数字を見せない)
-  const compareStore = canSeeAllStores(user) ? ((store || undefined) as typeof user.storeId | undefined) : user.storeId;
+  // 年度ごとの比較: 経営の数字を全店舗見られない人は自店舗だけ (全社・ほかの店舗の数字を見せない)
+  const compareStore = canSeeAllStoreFigures(reader) ? ((store || undefined) as typeof user.storeId | undefined) : user.storeId;
   const compareCols = surveyYearComparison(db, { storeId: compareStore, fiscalStartMonth: settings.fiscalStartMonth });
   const compareLabel = compareStore ? (db.stores.find((s) => s.id === compareStore)?.name ?? compareStore) : "全社";
 
@@ -76,7 +80,7 @@ export default async function SurveysPage({ searchParams }: { searchParams: Prom
         today={today}
         extra={
           <>
-            <label className="block"><span className="label">店舗</span><Select name="store" defaultValue={store} className="h-9 py-1 text-sm"><option value="">すべて</option>{db.stores.filter((s) => canAccessStore(user, s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></label>
+            <label className="block"><span className="label">店舗</span><Select name="store" defaultValue={store} className="h-9 py-1 text-sm"><option value="">すべて</option>{db.stores.filter((s) => canReadStoreRecords(reader, s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></label>
             <label className="block"><span className="label">案件の紐づけ</span><Select name="link" defaultValue={sp.link ?? ""} className="h-9 py-1 text-sm"><option value="">すべて</option><option value="linked">紐づけ済み</option><option value="unlinked">未設定</option></Select></label>
             <label className="block"><span className="label">キーワード</span><input name="q" defaultValue={q} className="field h-9 py-1 text-sm" placeholder="No.・担当者・記述" /></label>
           </>

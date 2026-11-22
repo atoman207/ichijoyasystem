@@ -204,6 +204,14 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
       }
       break;
     }
+    case "record_view": {
+      // 閲覧の申請: 承認すると、申請者が決まった日数だけお客様の情報を閲覧のみで見られる (判定は src/lib/case-access.ts の viewGrantUntil)。記録は変えない
+      const c = db.customers.find((x) => x.id === a.targetId);
+      if (!c) return;
+      const requester = db.users.find((u) => u.id === a.requestedBy)?.name ?? "-";
+      addAudit(db, { userId, action, entity: "customer", entityId: c.id, entityLabel: c.name, summary: decision === "approved" ? `${requester} さんの顧客情報の閲覧の申請を承認` : `${requester} さんの顧客情報の閲覧の申請を${word}${note}`, storeId: c.storeId });
+      break;
+    }
   }
 }
 

@@ -14,13 +14,23 @@ export function ReadOnlyArea({ readOnly, children }: { readOnly: boolean; childr
   );
 }
 
-/** ほかの店舗の進行中の案件を見ているときの案内 */
-export function CaseViewBanner({ storeName, what = "案件" }: { storeName: string; what?: string }) {
+/**
+ * ほかの店舗の記録を見ているときの案内 (見られる理由 basis ごと。src/lib/case-access.ts)
+ * open = 進行中の案件 / all = 閲覧の範囲の設定で全社員に公開 / grant = 閲覧の申請が承認された (grantUntil まで)
+ */
+export function CaseViewBanner({ storeName, what = "案件", basis = "open", grantUntil }: { storeName: string; what?: string; basis?: "open" | "all" | "grant"; grantUntil?: string }) {
+  const until = grantUntil ? new Date(grantUntil).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
   return (
-    <div className="mb-4 flex items-start gap-2 rounded-xl border border-accent/30 bg-accent-soft/50 px-3 py-2 text-xs leading-relaxed text-ink-2" role="note">
+    <div className="mb-4 flex items-start gap-2 rounded-xl border border-accent/30 bg-accent-soft/50 px-3 py-2 text-xs leading-relaxed text-ink-2" role="note" data-testid="case-view-banner">
       <Eye className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
       <span>
-        {storeName}の進行中の{what}です (問い合わせから入金完了までは、全社員がほかの店舗の案件も見られます)。<b>閲覧のみ</b>で、登録・変更は{storeName}の担当者が行います。入金が完了すると、ほかの店舗からは見られなくなります。
+        {basis === "all" ? (
+          <>{storeName}の{what}です。<b>閲覧のみ</b>で、登録・変更は{storeName}の担当者が行います。ほかの店舗の記録の閲覧は、変更履歴に記録されます。</>
+        ) : basis === "grant" ? (
+          <>{storeName}の{what}です。閲覧の申請が承認されたため、{until ? `${until} まで` : "期限まで"}<b>閲覧のみ</b>で見られます。閲覧は変更履歴に記録されます。</>
+        ) : (
+          <>{storeName}の進行中の{what}です (問い合わせから入金完了までは、全社員がほかの店舗の案件も見られます)。<b>閲覧のみ</b>で、登録・変更は{storeName}の担当者が行います。入金が完了すると、ほかの店舗からは見られなくなります。</>
+        )}
       </span>
     </div>
   );

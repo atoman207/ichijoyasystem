@@ -1,5 +1,5 @@
 import type { Channel, Database, Order, Quote, ServiceCategory, StoreId, User } from "@/lib/db/types";
-import { canSeeAllStores } from "@/lib/auth/permissions";
+import { canSeeAllStoreFigures } from "@/lib/auth/permissions";
 import { addDays, fmtMonth, toDateKey, toMonthKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, ROLE_LABEL } from "@/lib/constants";
 import { NAME_KEY_PREFIX, orderStaffIndex } from "@/lib/order-staff";
@@ -329,9 +329,9 @@ const inRange = (d: string | undefined, f: Range) => Boolean(d) && d!.slice(0, 1
 /** 見積の担当 (営業担当)。order-staff.ts と同じ */
 const quoteStaff = (q: Pick<Quote, "estimatorId" | "createdBy">): string | undefined => q.estimatorId ?? q.createdBy;
 
-/** 閲覧できる店舗 (店舗のロールは自店舗だけ) */
+/** 閲覧できる店舗 (店舗のロールは自店舗だけ。閲覧の範囲 = 経営の数字は全社員 のときは全店舗 = policyReader の写しで判定) */
 export function visibleStores(db: Database, user: User): StoreId[] {
-  return canSeeAllStores(user) ? db.stores.map((s) => s.id) : [user.storeId];
+  return canSeeAllStoreFigures(user) ? db.stores.map((s) => s.id) : [user.storeId];
 }
 
 /**

@@ -180,6 +180,21 @@ const SC = await imp("lib/assistant/scope.ts");
 const P = await imp("lib/auth/permissions.ts");
 const AN = await imp("lib/assistant/analyze.ts");
 db.settings = db.settings.filter((x) => x.id !== SC.ASSISTANT_SCOPE_ID);
+// 閲覧の範囲の設定 (src/lib/access-policy.ts)。初期設定 = 経営の数字・顧客情報とも全社員
+const setPolicy = (value) => {
+  db.settings = db.settings.filter((x) => x.id !== "access_policy");
+  if (value) db.settings.push({ id: "access_policy", value, updatedAt: nowIso });
+};
+setPolicy(null);
+{
+  const r0 = SC.assistantReadUser(db, chuo, now);
+  ok(r0 !== chuo && P.canSeeAllStoreFigures(r0) && P.canSeeAllCustomerRecords(r0) && !P.canSeeAllStores(r0), "閲覧の範囲の初期設定 (全社員): AI の読み取りは経営の数字・顧客情報だけ全店舗 (全店舗ロールにはしない)");
+  ok(SC.outOfScopeRefusal(db, chuo, "合志店の今月の売上は？", now) === null, "閲覧の範囲の初期設定: ほかの店舗の売上も断らない");
+  const w0 = AN.runAnalysis(db, r0, { subject: "sales", metrics: ["sales"], group_by: ["store"], from: "2020-01-01", to: "2031-12-31" });
+  ok(w0.ok && w0.rows.length > 1, "閲覧の範囲の初期設定: 店舗スタッフの集計も全店舗");
+}
+// ここからは 閲覧の範囲 = 自店舗 / 進行中の案件だけ (11/22 までの仕組み) で、AI の閲覧範囲の切り替えと断る仕組みを確かめる
+setPolicy({ figures: "store", customers: "open", grantDays: 7 });
 ok(SC.assistantReadUser(db, chuo, now) === chuo && !P.canSeeAllStores(chuo), "既定は権限どおり (店舗スタッフは自店舗)");
 const scoped = AN.runAnalysis(db, SC.assistantReadUser(db, chuo, now), { subject: "sales", metrics: ["sales"], group_by: ["store"], from: "2020-01-01", to: "2031-12-31" });
 ok(scoped.ok && scoped.rows.length <= 1, "権限どおりのとき、店舗スタッフの集計は自店舗だけ");
@@ -221,6 +236,7 @@ section("権限の範囲外の質問 (店舗のロールは自店舗の数字だ
   const an = AN.runAnalysis(db, chuo, { subject: "sales", metrics: ["sales"], stores: ["合志店"], from: "2020-01-01", to: "2031-12-31" });
   ok(!an.ok && /権限の範囲外/.test(an.error), "集計の道具も、閲覧できない店舗の指定は権限の範囲外と返す (黙って自店舗に絞らない)");
 }
+setPolicy(null);
 
 section("商品別の原価・粗利 (案件の原価を明細の金額で按分)");
 const cust2 = { ...cust, id: "cust_a2", code: "C-A2", name: "按分 次郎" };

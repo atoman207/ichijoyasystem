@@ -1,7 +1,7 @@
 import Link from "@/components/ui/Link";
 import { Download } from "lucide-react";
 import type { Database, User } from "@/lib/db/types";
-import { canSeeAllStores } from "@/lib/auth/permissions";
+import { canSeeAllStoreFigures } from "@/lib/auth/permissions";
 import { yen } from "@/lib/format";
 import { MEDIA_KEYS, MEDIA_LABEL, MEDIA_NONE, UNCLASSIFIED } from "@/lib/media";
 import { PROMOTION_KIND, PROMOTION_STATUS, type PromoCsvSection, type PromoReport } from "@/lib/ops-reports/promo-analysis";
@@ -49,7 +49,7 @@ export function AnalysisTab({ db, user, report: r, periodValue, periodLabel, sta
         startMonth={startMonth}
         today={today}
         extra={
-          canSeeAllStores(user) ? (
+          canSeeAllStoreFigures(user) ? (
             <label className="block">
               <span className="label">店舗</span>
               <select name="store" defaultValue={store} className="field h-9 py-1 text-sm">

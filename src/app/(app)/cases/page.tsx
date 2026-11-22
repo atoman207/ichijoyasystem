@@ -1,7 +1,8 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canSeeAllStores, canViewOpenCases } from "@/lib/auth/permissions";
+import { canAccessStore, canSeeAllCustomerRecords, canSeeAllStores, canViewOpenCases } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
 import { isOpenCaseRow } from "@/lib/case-access";
 import type { StoreId } from "@/lib/db/types";
 import { BILLING_LABEL, CASE_PRESETS, PAYMENT_STATE_LABEL, SCHEDULE_LABEL, SPEC_LABEL, STAGE_LABEL, STAGE_TONE, buildCases, type BillingState, type PaymentState, type ScheduleState, type SpecState, type Stage } from "@/lib/case-status";
@@ -19,7 +20,9 @@ export default async function CasesPage({ searchParams }: { searchParams: Promis
   // ほかの店舗の進行中の案件 (入金完了まで) も見られる (src/lib/case-access.ts)。店舗のロールは「全店舗」を選んだときと、検索したときに含める
   const wide = !canSeeAllStores(user) && canViewOpenCases(user) && (sp.store === "all" || Boolean(q0) || (Boolean(sp.store) && !canAccessStore(user, sp.store as StoreId)));
   const store = sp.store && sp.store !== "all" && db.stores.some((s) => s.id === sp.store) && (wide || canAccessStore(user, sp.store as StoreId)) ? sp.store : "";
-  const all = buildCases(db, (s) => (wide || canAccessStore(user, s)) && (!store || s === store), today).filter((r) => canAccessStore(user, r.storeId) || isOpenCaseRow(r));
+  // 閲覧の範囲 = 全社員 (既定) なら、ほかの店舗の完了した案件も含める (閲覧のみ。src/lib/access-policy.ts)
+  const readsAll = canSeeAllCustomerRecords(policyReader(db, user));
+  const all = buildCases(db, (s) => (wide || canAccessStore(user, s)) && (!store || s === store), today).filter((r) => canAccessStore(user, r.storeId) || readsAll || isOpenCaseRow(r));
   const closed = sp.closed ?? "open";
   const preset = CASE_PRESETS.find((p) => p.key === sp.preset);
   const q = q0;
@@ -55,7 +58,7 @@ export default async function CasesPage({ searchParams }: { searchParams: Promis
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title="案件の進捗" description={`問い合わせ → 見積 → 受注・施工 → 請求 → 入金 → 全処理完了 までを 1 つの一覧で。状態は進捗・見積と仕様・工事日程・請求・入金に分けて絞り込めます${canSeeAllStores(user) ? "" : "。ほかの店舗の案件も、入金が完了するまでは「全店舗」または検索で表示します (閲覧のみ)"}`} />
+      <PageHeader title="案件の進捗" description={`問い合わせ → 見積 → 受注・施工 → 請求 → 入金 → 全処理完了 までを 1 つの一覧で。状態は進捗・見積と仕様・工事日程・請求・入金に分けて絞り込めます${canSeeAllStores(user) ? "" : readsAll ? "。ほかの店舗の案件は「全店舗」または検索で表示します (閲覧のみ)" : "。ほかの店舗の案件も、入金が完了するまでは「全店舗」または検索で表示します (閲覧のみ)"}`} />
 
       <div className="mb-4 flex flex-wrap gap-1.5">
         {CASE_PRESETS.map((p) => {
@@ -76,8 +79,8 @@ export default async function CasesPage({ searchParams }: { searchParams: Promis
             <span className="label">店舗</span>
             <Select name="store" defaultValue={sp.store === "all" && wide ? "all" : store} className="h-9 py-1 text-sm">
               <option value="">{canSeeAllStores(user) ? "すべて" : "自店舗"}</option>
-              {!canSeeAllStores(user) && canViewOpenCases(user) && <option value="all">全店舗 (ほかの店舗は進行中のみ)</option>}
-              {db.stores.filter((s) => canSeeAllStores(user) || canViewOpenCases(user) || canAccessStore(user, s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}{canAccessStore(user, s.id) ? "" : " (進行中のみ)"}</option>)}
+              {!canSeeAllStores(user) && canViewOpenCases(user) && <option value="all">{readsAll ? "全店舗 (ほかの店舗は閲覧のみ)" : "全店舗 (ほかの店舗は進行中のみ)"}</option>}
+              {db.stores.filter((s) => canSeeAllStores(user) || canViewOpenCases(user) || canAccessStore(user, s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}{canAccessStore(user, s.id) ? "" : readsAll ? " (閲覧のみ)" : " (進行中のみ)"}</option>)}
             </Select>
           </label>
           {sel("stage", sp.stage, STAGE_LABEL, "案件進捗")}

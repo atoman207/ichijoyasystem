@@ -10,6 +10,7 @@ import { logout } from "@/lib/actions/auth";
 import { canViewMgmt } from "@/lib/mgmt/access";
 import { canViewPromoAnalysis } from "@/lib/auth/permissions";
 import { yen } from "@/lib/format";
+import { policyReader } from "@/lib/access-policy";
 import { canApproveLeave } from "@/lib/auth/permissions";
 import { canManageHeriStock } from "@/lib/auth/permissions";
 import { officeCtx } from "@/lib/office";
@@ -79,13 +80,15 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   nav.push({ href: "/office", label: "事務 (事務改善シート・慶弔リスト)", short: "事務", icon: "office", group: "業務支援" });
   nav.push({ href: "/heri", label: "縁在庫 (品番 × 場所の数量・入庫・振り分け・使用・棚卸)", short: "縁在庫", icon: "heri", group: "業務支援", badge: heriBadge || undefined });
   nav.push({ href: "/kpi", label: "KPI (アンケート・クレーム・口コミ・インセンティブ)", short: "KPI", icon: "kpi", group: "管理" });
-  if (canViewReports(user)) {
+  // 経営の数字の画面は、閲覧の範囲の設定で全社員に広げられる (src/lib/access-policy.ts)
+  const figureReader = policyReader(getDb(), user);
+  if (canViewReports(figureReader)) {
     nav.push({ href: "/reports", label: "経営ダッシュボード (売上・受注・施工・請求・経費)", short: "経営", icon: "reports", group: "管理" });
   }
-  if (canViewPromoAnalysis(user)) {
+  if (canViewPromoAnalysis(figureReader)) {
     nav.push({ href: "/promotions", label: "販促と媒体の分析 (チラシ・イベント・DM の反応)", short: "販促分析", icon: "promotions", group: "管理" });
   }
-  if (canViewMgmt(user)) {
+  if (canViewMgmt(figureReader)) {
     nav.push({ href: "/management", label: "管理会計 (店舗別損益・内部受注・材料原価・在庫・共通経費の案分)", short: "管理会計", icon: "management", group: "管理" });
   }
   if (canExportData(user)) {
@@ -105,7 +108,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     ...n.pendingApprovals.map<NotificationItem>((a) => ({
       kind: "approval",
       title: `承認依頼: ${APPROVAL_TYPE_LABEL[a.type]}`,
-      detail: `${a.title} (${yen(a.amount)})`,
+      detail: a.type === "record_view" ? a.title : `${a.title} (${yen(a.amount)})`,
       href: "/approvals?tab=mine",
     })),
     ...n.mentions.map<NotificationItem>((m) => ({

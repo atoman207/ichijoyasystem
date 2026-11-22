@@ -1,6 +1,6 @@
 import "server-only";
 import type { Database, StoreId, User } from "@/lib/db/types";
-import { canApprove, canSeeAllStores, canViewExpense } from "@/lib/auth/permissions";
+import { canApprove, canSeeAllStoreFigures, canViewExpense } from "@/lib/auth/permissions";
 import { growth, managementReport, visibleStores } from "@/lib/management";
 import { storeKpi } from "@/lib/kpi";
 import { SCORE_QUESTIONS } from "@/lib/survey";
@@ -27,7 +27,7 @@ export function businessOverview(db: Database, user: User, opts: { from?: string
   const store = opts.store ? db.stores.find((s) => allowed.includes(s.id) && (s.id === opts.store || s.name.includes(opts.store!) || opts.store!.includes(s.shortName))) : undefined;
   const r = managementReport(db, user, { from, to, storeId: store?.id }, now);
   const t = r.totals;
-  const scope = store ? store.name : canSeeAllStores(user) ? "全社" : (db.stores.find((s) => s.id === user.storeId)?.name ?? "自店舗");
+  const scope = store ? store.name : canSeeAllStoreFigures(user) ? "全社" : (db.stores.find((s) => s.id === user.storeId)?.name ?? "自店舗");
   const L: string[] = [];
   L.push(`# ${scope} の全体像 (期間 ${from}〜${to}。今日 ${today})`);
   L.push("※ 数字は経営ダッシュボード・KPI の画面と同じ集計。売上 = 売上計上日 (施工完了) ベース・税込");
@@ -75,7 +75,7 @@ export function businessOverview(db: Database, user: User, opts: { from?: string
     for (const s of [...r.staffRows].sort((a, b) => b.sales - a.sales).slice(0, 8)) L.push(`- ${s.name} (${s.storeName}): 売上 ${yen(s.sales)} / 受注 ${s.orderCount} 件 / 問い合わせ ${s.inquiries} 件 / 見積 ${s.quotes} 件 / 施工完了 ${s.jobsCompleted} 件`);
   }
   // KPI (アンケート・クレーム・口コミ)
-  const k = storeKpi(db, { from, to }, store?.id ?? (canSeeAllStores(user) ? undefined : user.storeId));
+  const k = storeKpi(db, { from, to }, store?.id ?? (canSeeAllStoreFigures(user) ? undefined : user.storeId));
   L.push("");
   L.push("## お客様の評価・品質 (KPI と同じ集計)");
   L.push(`- アンケート ${k.surveys} 枚 (返信率 ${pct(k.replyRate)}) / 平均: ${SCORE_QUESTIONS.map((q) => `${q.no}${q.label} ${num(k.scores[q.key])}`).join("・")} / また利用したい ${k.againAnswered ? pct(k.againYes / k.againAnswered) : "-"}`);

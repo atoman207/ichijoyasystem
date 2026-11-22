@@ -2,7 +2,9 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canManageKpi } from "@/lib/auth/permissions";
+import { canAccessStore, canManageKpi, canReadStoreRecords } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
+
 import { deleteSurvey, updateSurvey } from "@/lib/actions/kpi";
 import { deliveryOf, surveyDate } from "@/lib/kpi";
 import { recentOrderOptions, staffOptions, surveyPhoto } from "@/lib/kpi-options";
@@ -19,11 +21,12 @@ export default async function SurveyDetailPage({ params, searchParams }: { param
   const db = getDb();
   const s = db.surveys.find((x) => x.id === id);
   if (!s) notFound();
-  if (!canAccessStore(user, s.storeId)) redirect("/kpi/surveys?err=" + encodeURIComponent("このアンケートを閲覧する権限がありません。"));
+  // ほかの店舗のアンケートは、閲覧の範囲の設定 (顧客情報 = 全社員。src/lib/access-policy.ts) のとき閲覧のみ
+  if (!canReadStoreRecords(policyReader(db, user), s.storeId)) redirect("/kpi/surveys?err=" + encodeURIComponent("このアンケートを閲覧する権限がありません。"));
   const order = s.orderId ? db.orders.find((o) => o.id === s.orderId) : undefined;
   const customer = order ? db.customers.find((c) => c.id === order.customerId) : undefined;
   const photo = surveyPhoto(db, s.documentId, s.orderId);
-  const canEdit = canManageKpi(user) || s.createdBy === user.id;
+  const canEdit = canAccessStore(user, s.storeId) && (canManageKpi(user) || s.createdBy === user.id);
   const logs = db.auditLogs.filter((l) => l.entity === "survey" && l.entityId === s.id).reverse();
 
   return (
