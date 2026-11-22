@@ -163,6 +163,7 @@ cmd_start() {
     make_env "$ENVF"
     log "2. テスト用のデータベースを作る (いまの本番のデータの写し)"
     as_app python3 "$LIB" build "$W/app"
+    date '+%Y-%m-%d %H:%M:%S' > "$W/started-at"
     rm -f "$W/build-data.py" "$W/collections.json"
   fi
   log "3. テスト用のサーバーを起動する (127.0.0.1:$PORT)"
@@ -233,8 +234,25 @@ cmd_end() {
   systemctl disable --now "$UNIT" >/dev/null 2>&1 || true
   rm -f "/etc/systemd/system/$UNIT.service"
   systemctl daemon-reload
-  log "4. テスト用のデータベースを削除する"
-  rm -rf "$DATA" "$W/app" "$W/app.new" "$W/app.old" "$W/app.failed" "$ENVF" "$ENVF.new" "$ENVF.old"
+  log "4. テスト用のデータベースの控えを残す (期間中のデータを本番に引き継ぐと決めたときに使う。root だけが読める・60 日で削除)"
+  if [[ -f "$DATA/testweek-db.json" ]]; then
+    mkdir -p "$EXPORT_DIR"
+    local since final
+    since=$(cat "$W/started-at" 2>/dev/null || echo "$(date +%Y)-11-23 00:00:00")
+    final="$EXPORT_DIR/testweek-final-$(date +%Y%m%d).tar.gz"
+    # データベース (JSON) と、期間中に増えた・変わったファイル (添付・写真・チャットボットなど) だけ
+    if ( umask 077 && cd "$DATA" && { echo testweek-db.json; find . -type f -newermt "$since" ! -name testweek-db.json -printf '%P\n'; } | sort -u | tar -czf "$final" -T - ); then
+      chmod 600 "$final"
+      log "  控え: $final (期間の始まり $since 以降のファイル)"
+    else
+      rm -f "$final"
+      log "注意: 控えを作れませんでした"
+    fi
+    find "$EXPORT_DIR" -maxdepth 1 -name 'testweek-final-*.tar.gz' -mtime +60 -delete 2>/dev/null || true
+    [[ -f "$final" ]] || { log "控えがないため、テスト用のデータベースは残します"; rm -f "$CRON" "$SUDOERS"; return 0; }
+  fi
+  log "5. テスト用のデータベースを削除する"
+  rm -rf "$DATA" "$W/app" "$W/app.new" "$W/app.old" "$W/app.failed" "$ENVF" "$ENVF.new" "$ENVF.old" "$W/started-at"
   rm -f "$CRON" "$SUDOERS"
   log "試験期間を終えました: 画面・データは本番のデータベース (試験期間の前と同じ内容) です"
 }
