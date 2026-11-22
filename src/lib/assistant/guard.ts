@@ -60,10 +60,11 @@ export function extractNumbers(text: string): FoundNumber[] {
   const re = /(約|およそ|ほぼ|概算で?|おおよそ)?\s*([¥￥])?\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?\s*(億|万|千)?\s*(円|%|％|ポイント|pt)?/g;
   let t = text.normalize("NFKC");
   // 「156万4,800円」「2億3000万5000円」のような書き方は 1 つの金額 (分けて読むと「156万」が丸めの幅で根拠に当たり、違う金額を見逃す)
-  const composite = /(約|およそ|ほぼ|概算で?|おおよそ)?\s*(?:(\d+)\s*億\s*(?:(\d{1,4})\s*万\s*)?|(\d{1,4})\s*万\s*)(\d,\d{3}|\d{1,4})\s*円/g;
+  // 万の位はカンマ付き (「2億1,150万9,716円」) も読む。数字の途中 (「1,150万」の「150万」) からは読み始めない
+  const composite = /(約|およそ|ほぼ|概算で?|おおよそ)?\s*(?<![\d,.])(?:(\d+)\s*億\s*(?:(\d,\d{3}|\d{1,4})\s*万\s*)?|(\d,\d{3}|\d{1,4})\s*万\s*)(\d,\d{3}|\d{1,4})\s*円/g;
   for (let m: RegExpExecArray | null; (m = composite.exec(t)); ) {
     const [whole, approx, oku, manAfterOku, man, rest] = m;
-    const value = Number(oku ?? 0) * 1e8 + Number(manAfterOku ?? man ?? 0) * 1e4 + Number(rest.replace(/,/g, ""));
+    const value = Number(oku ?? 0) * 1e8 + Number((manAfterOku ?? man ?? "0").replace(/,/g, "")) * 1e4 + Number(rest.replace(/,/g, ""));
     out.push({ raw: whole.trim(), value, unit: "yen", tolerance: approx ? 1000 : 0.5 });
     // 同じ所を下でもう一度読まない (位置はそのまま: 前後の文字で判断するため)
     t = t.slice(0, m.index) + " ".repeat(whole.length) + t.slice(m.index + whole.length);
@@ -88,6 +89,8 @@ export function extractNumbers(text: string): FoundNumber[] {
     // 単位のない小さな数字は比べない (箇条書きの番号・「3 つ」など)
     if (unit === "plain" && !mult && !/,/.test(intPart) && value < 1000) continue;
     if (unit === "count" && value < 1000 && !approx && !mult && /^\d$/.test(intPart) && /^(つ|人目)/.test(after.trimStart())) continue;
+    // 「1 件ずつ」「1 人ずつ」は操作の説明 (データの数字ではない)
+    if (unit === "count" && /^\s*(件|人|名|個|枚|台|本|回|店)ずつ/.test(after)) continue;
     const decimals = dec ? dec.length : 0;
     let tolerance = unit === "percent" ? 0.15 : 0.5;
     if (mult) tolerance = Math.max(tolerance, UNIT_MULT[mult] * Math.pow(10, -decimals));
