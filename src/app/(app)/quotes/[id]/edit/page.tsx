@@ -70,8 +70,8 @@ export default async function EditQuotePage({ params, searchParams }: { params: 
           </div>
 
           {amend && (
-            <Field label="変更理由" required hint="承認者と変更履歴に記録されます">
-              <Textarea name="reason" required placeholder="例: お客様より網戸2枚の追加依頼" />
+            <Field label="変更理由" hint="金額・明細の内容を変えるときは必須です (承認者と変更履歴に記録されます)。施工場所・領収書の宛名・明細の品目だけの変更は承認なしで反映されるため不要です">
+              <Textarea name="reason" placeholder="例: お客様より網戸2枚の追加依頼" />
             </Field>
           )}
           <FormActions>
