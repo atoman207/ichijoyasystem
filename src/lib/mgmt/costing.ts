@@ -52,8 +52,22 @@ export function setMaterialCost(db: Database, input: { materialId: string; unitC
 
 const activeBom = (b: Bom, date: string) => b.validFrom <= date && (!b.validTo || date <= b.validTo);
 
-/** 商品 (商品マスタの ID) または品名に合う材料構成。品名は matchName を含むもののうち一番長く一致したもの */
-export function bomFor(db: Pick<Database, "boms">, productId: string | undefined, label: string, date: string): Bom | undefined {
+const TATAMI_KINDS: MaterialKind[] = ["omote", "chem_omote", "heri", "doko"];
+
+/** 材料構成の品目 (材料の品目。材料が決まっていない畳の材料だけなら畳。分からなければ undefined) */
+export function bomCategory(db: Pick<Database, "materials">, bom: Pick<Bom, "lines">): string | undefined {
+  for (const l of bom.lines) {
+    const m = l.materialId ? (db.materials ?? []).find((x) => x.id === l.materialId) : undefined;
+    if (m?.itemCategory) return m.itemCategory;
+  }
+  return bom.lines.some((l) => TATAMI_KINDS.includes(l.materialKind)) ? "tatami" : undefined;
+}
+
+/**
+ * 商品 (商品マスタの ID) または品名に合う材料構成。品名は matchName を含むもののうち一番長く一致したもの。
+ * 品名で探すときは、明細の品目と材料構成の品目が同じものだけ (例: 「畳」の材料構成を自社商品の「畳キーケース」に使わない)
+ */
+export function bomFor(db: Pick<Database, "boms" | "materials">, productId: string | undefined, label: string, date: string, itemCategory?: string): Bom | undefined {
   const boms = (db.boms ?? []).filter((b) => activeBom(b, date));
   if (productId) {
     const b = boms.find((x) => x.productId === productId);
@@ -62,6 +76,11 @@ export function bomFor(db: Pick<Database, "boms">, productId: string | undefined
   const t = label.replace(/[\s　]/g, "");
   return boms
     .filter((b) => b.matchName && t.includes(b.matchName.replace(/[\s　]/g, "")))
+    .filter((b) => {
+      if (!itemCategory) return true;
+      const cat = bomCategory(db, b);
+      return !cat || cat === itemCategory;
+    })
     .sort((a, b) => (b.matchName?.length ?? 0) - (a.matchName?.length ?? 0))[0];
 }
 
@@ -111,7 +130,7 @@ export function planUsage(db: Database, lines: CostingLine[], date: string, spec
   const unmatched: CostingLine[] = [];
   const sub = ruleAt(db, "sub_material.unit_cost", date);
   for (const line of lines) {
-    const bom = bomFor(db, line.productId, line.label, date);
+    const bom = bomFor(db, line.productId, line.label, date, line.itemCategory);
     if (!bom) {
       if (line.itemCategory === "tatami") unmatched.push(line);
       continue;

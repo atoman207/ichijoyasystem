@@ -427,6 +427,8 @@ await store.mutate((d) => {
   const dk = pl.usages.find((u) => u.materialKind === "doko");
   eq([dk.materialId, dk.amount, Boolean(dk.spec?.inferred)], [mDokoW.id, 12000, true], "製造の予定の「床 わら」でわら床 6,000 × 2 = 12,000");
   eq(pl.usages.find((u) => u.materialKind === "sub").amount, 200, "副資材 100 × 2 枚");
+  const own = C.planUsage(d, [{ key: "k", label: "テスト畳新調キーケース", qty: 100, itemCategory: "own" }], day(5));
+  eq([own.usages.length, own.unmatched.length], [0, 0], "品名が合っても品目の違う明細 (自社商品の畳キーケース) には畳の材料構成を使わない");
 }
 
 /* ------------------------------------------------------------------ */
