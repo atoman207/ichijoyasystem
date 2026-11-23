@@ -89,7 +89,7 @@ export default async function KpiCheckPage({ searchParams }: { searchParams: Pro
                 {y.label}
               </Link>
             ))}
-            <span className="text-xs text-ink-3">比べた期間 {year.period.from.replace(/-/g, "/")}〜{year.period.to.replace(/-/g, "/")} (シートに値のある月まで)</span>
+            <span className="text-xs text-ink-3">比べた期間 {year.compared.from.replace(/-/g, "/")}〜{year.compared.to.replace(/-/g, "/")}{year.compared.to !== year.period.to ? " (年度の途中のため、シートに月ごとの値のある月まで)" : ""}</span>
             <Badge tone="good" dot={false}>一致 {year.matched}</Badge>
             <Badge tone={year.differ ? "warn" : "neutral"} dot={false}>差あり {year.differ}</Badge>
           </div>

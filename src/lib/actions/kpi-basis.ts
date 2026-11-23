@@ -151,6 +151,8 @@ export async function previewKpiBasisImport(fd: FormData) {
   if (!read.individual.length && !read.cardMonths.length) fail(BACK, problems.slice(0, 3).join(" / ") || "読み取れるシートがありません。");
   const preview: BasisPreview = { ...read, problems, label: labels.join("・").slice(0, 120), by: user.id, at: nowIso() };
   const hash = basisHash(preview);
+  // 同じ内容をもう一度読んだときは前の確認を置き換える (ストレージは同じキーへの上書きを断る)
+  await removeObjects([previewKey(hash)]).catch(() => undefined);
   await putObject(previewKey(hash), Buffer.from(JSON.stringify(preview)));
   let old: string | undefined;
   await mutate((db) => {

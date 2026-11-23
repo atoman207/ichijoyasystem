@@ -26,8 +26,9 @@ async function guard(): Promise<User> {
 function save(db: Database, user: User, next: CarryoverReview, summary: string, changes: { field: string; before: unknown; after: unknown }[]) {
   const now = new Date().toISOString();
   const row = db.settings.find((s) => s.id === CARRYOVER_REVIEW_ID);
-  if (row) Object.assign(row, { value: next, updatedBy: user.id, updatedAt: now });
-  else db.settings.push({ id: CARRYOVER_REVIEW_ID, value: next, updatedBy: user.id, updatedAt: now });
+  const value = { ...next } as unknown as Record<string, unknown>;
+  if (row) Object.assign(row, { value, updatedBy: user.id, updatedAt: now });
+  else db.settings.push({ id: CARRYOVER_REVIEW_ID, value, updatedBy: user.id, updatedAt: now });
   addAudit(db, { userId: user.id, action: "update", entity: "settings", entityId: CARRYOVER_REVIEW_ID, entityLabel: "本番への引き継ぎ", summary, changes });
 }
 

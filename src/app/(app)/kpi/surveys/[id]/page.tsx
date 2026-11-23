@@ -6,7 +6,7 @@ import { canAccessStore, canManageKpi, canReadStoreRecords } from "@/lib/auth/pe
 import { policyReader } from "@/lib/access-policy";
 
 import { deleteSurvey, updateSurvey } from "@/lib/actions/kpi";
-import { deliveryOf, surveyDate } from "@/lib/kpi";
+import { deliveryOf, surveyDate, surveyKpiDate } from "@/lib/kpi";
 import { recentOrderOptions, staffOptions, surveyPhoto } from "@/lib/kpi-options";
 import { fmtDate, fmtDateTime } from "@/lib/format";
 import { COMMENT_TONE_LABEL, SCORE_LABEL, SCORE_QUESTIONS } from "@/lib/survey";
@@ -34,7 +34,7 @@ export default async function SurveyDetailPage({ params, searchParams }: { param
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader
         title={`お客様アンケート はがき No.${s.postcardNo ?? "-"}`}
-        description={<span className="inline-flex flex-wrap items-center gap-2"><StoreTag store={db.stores.find((x) => x.id === s.storeId)} /> · 回答 {fmtDate(surveyDate(s))} · 登録 {s.createdBy ? `${userName(s.createdBy)} ` : ""}{fmtDateTime(s.createdAt ?? s.receivedAt)}</span>}
+        description={<span className="inline-flex flex-wrap items-center gap-2"><StoreTag store={db.stores.find((x) => x.id === s.storeId)} /> · 回答 {fmtDate(surveyDate(s))} · 集計月 {surveyKpiDate(s).slice(0, 7)}{s.countMonth ? "" : " (回答日の月)"} · 登録 {s.createdBy ? `${userName(s.createdBy)} ` : ""}{fmtDateTime(s.createdAt ?? s.receivedAt)}</span>}
         back={{ href: "/kpi/surveys", label: "アンケート一覧" }}
       />
       <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-3">

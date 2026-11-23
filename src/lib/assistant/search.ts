@@ -567,7 +567,7 @@ export function getRecord(db: Database, user: User, type: string | undefined, re
       if (o.progressNotes.length) lines.push(`## 経過 (新しい順)\n${[...o.progressNotes].reverse().slice(0, 10).map((n) => `- ${fmtDate(n.at)} [${PROGRESS_KIND_LABEL[n.kind] ?? n.kind}] ${un(n.userId)}: ${n.body.replace(/\n/g, " ").slice(0, 200)}`).join("\n")}`);
       const ev = db.schedule.filter((e) => e.orderId === o.id);
       if (ev.length) lines.push(`## 予定\n${ev.map((e) => `- ${fmtDate(e.date)} [${SCHEDULE_KIND[e.kind]?.label}] ${e.title} 担当 ${e.assigneeIds.map(un).join("・") || "-"}`).join("\n")}`);
-      const inv = db.invoices.filter((i) => i.orderId === o.id);
+      const inv = db.invoices.filter((i) => i.orderId === o.id || (i.orderIds ?? []).includes(o.id));
       if (inv.length) lines.push(`## 請求\n${inv.map((i) => `- ${link("invoice", i.id, i.number)} ${yen(i.total)} 入金 ${yen(i.paidAmount)} ${INVOICE_STATUS[i.status].label}`).join("\n")}`);
       const pos = db.purchaseOrders.filter((p) => p.orderIds.includes(o.id));
       if (pos.length && canViewSuppliers(user)) lines.push(`## 発注書\n${pos.map((p) => `- ${link("purchase_order", p.id, p.number)} ${db.suppliers.find((s) => s.id === p.supplierId)?.name ?? ""} ${fmtDate(p.issuedOn)} ${PURCHASE_ORDER_STATUS[p.status].label}`).join("\n")}`);

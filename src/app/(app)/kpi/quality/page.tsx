@@ -62,10 +62,10 @@ export default async function QualityPage({ searchParams }: { searchParams: Prom
       />
 
       <Card padded={false}>
-        <div className="px-5 pt-5"><CardHeader title={`店舗・事務の集計 (${rp.label})`} description="ポイント率 = 合計ポイント ÷ 期間内の総案件数 × 100 / 発生率 = 発生した件数 ÷ 総案件数 × 100。事務の分母は 4 店舗の合計" /></div>
+        <div className="px-5 pt-5"><CardHeader title={`店舗・事務の集計 (${rp.label})`} description={result.basis.denominator === "sheet" ? "ポイント率 = 合計ポイント ÷ 施工件数 (売上台帳の現場名の下の数字。値のない月はシステムの案件数) × 100 / 発生率 = 発生した件数 ÷ 施工件数 × 100。事務の分母は 4 店舗の合計" : "ポイント率 = 合計ポイント ÷ 期間内の総案件数 × 100 / 発生率 = 発生した件数 ÷ 総案件数 × 100。事務の分母は 4 店舗の合計"} /></div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-sm">
-            <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-4 py-2 text-left font-medium">単位</th><th className="px-2 py-2 text-right font-medium">総案件数</th><th className="px-2 py-2 text-right font-medium">件数</th><th className="px-2 py-2 text-right font-medium">ポイント</th><th className="px-2 py-2 text-right font-medium">ポイント率</th><th className="px-4 py-2 text-right font-medium">発生率 (件数)</th></tr></thead>
+            <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-4 py-2 text-left font-medium">単位</th><th className="px-2 py-2 text-right font-medium">施工件数</th><th className="px-2 py-2 text-right font-medium">件数</th><th className="px-2 py-2 text-right font-medium">ポイント</th><th className="px-2 py-2 text-right font-medium">ポイント率</th><th className="px-4 py-2 text-right font-medium">発生率 (件数)</th></tr></thead>
             <tbody>
               {units.map((u) => (
                 <tr key={u.unit} className="border-t border-line">

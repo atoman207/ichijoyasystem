@@ -1,6 +1,8 @@
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canManageSettings, canViewStaffKpi } from "@/lib/auth/permissions";
+import { canImportData, canManageSettings, canViewStaffKpi } from "@/lib/auth/permissions";
+import Link from "@/components/ui/Link";
+import { basisNotes, denomSummary } from "@/lib/kpi-basis";
 import { saveIncentiveAdjustments } from "@/lib/actions/kpi";
 import { computeIncentives, type Adjustments } from "@/lib/incentive";
 import { fmtRate, fmtScore, inPeriod, reviewMonths } from "@/lib/kpi";
@@ -59,16 +61,20 @@ export default async function IncentivesPage({ searchParams }: { searchParams: P
 
       <Card padded={false}>
         <div className="px-5 pt-5"><CardHeader title="店舗・事務の評価値" description={`はがき返信率が ${settings.incentive.replyGate}% 未満の店舗は、はがきの項目 (返信率・②③④・関連の MVP) を支給しません`} /></div>
+        <ul className="space-y-0.5 px-5 pb-3 text-[11px] text-ink-3">
+          {basisNotes(result.basis).map((t, i) => <li key={i}>・{t}</li>)}
+          {canImportData(user) && <li>・分母 (店舗 × 月の個人件数・施工件数) の登録と、スプレッドシートの KPI シートとの照合は <Link href={`/kpi/basis?fy=${fy}`} className="text-accent hover:underline">分母・照合</Link> / <Link href="/kpi/basis/check" className="text-accent hover:underline">支給前の照合</Link></li>}
+        </ul>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-sm">
-            <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-4 py-2 text-left font-medium">単位</th><th className="px-2 py-2 text-right font-medium">返信率</th><th className="px-2 py-2 text-right font-medium">④ 仕上り</th><th className="px-2 py-2 text-right font-medium">施工件数</th><th className="px-2 py-2 text-right font-medium">クレーム・手直し</th><th className="px-4 py-2 text-right font-medium">ポイント率</th></tr></thead>
+            <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-4 py-2 text-left font-medium">単位</th><th className="px-2 py-2 text-right font-medium">返信率 (枚 / 個人件数)</th><th className="px-2 py-2 text-right font-medium">④ 仕上り</th><th className="px-2 py-2 text-right font-medium">施工件数</th><th className="px-2 py-2 text-right font-medium">クレーム・手直し</th><th className="px-4 py-2 text-right font-medium">ポイント率</th></tr></thead>
             <tbody>
               {result.units.map((u) => (
                 <tr key={u.unit} className="border-t border-line">
                   <td className="px-4 py-2"><StoreTag store={db.stores.find((s) => s.id === u.unit)} short />{u.gated && <span className="ml-2 text-[11px] text-warn-ink">はがきの項目なし</span>}</td>
-                  <td className="px-2 py-2 text-right tnum">{fmtRate(u.replyRate)} <span className="text-[10px] text-ink-3">({u.cards}/{u.individual})</span></td>
-                  <td className="px-2 py-2 text-right tnum">{fmtScore(u.finishAvg)}</td>
-                  <td className="px-2 py-2 text-right tnum">{u.orders.toLocaleString("ja-JP")}</td>
+                  <td className="px-2 py-2 text-right tnum" title={u.denominators ? `個人件数: ${denomSummary(u.denominators.individual)}` : undefined}>{fmtRate(u.replyRate)} <span className="text-[10px] text-ink-3">({u.cards}/{u.individual})</span></td>
+                  <td className="px-2 py-2 text-right tnum">{fmtScore(u.finishAvg)} <span className="text-[10px] text-ink-3">({u.finishCount})</span></td>
+                  <td className="px-2 py-2 text-right tnum" title={u.denominators ? `施工件数: ${denomSummary(u.denominators.sites)}` : undefined}>{u.orders.toLocaleString("ja-JP")}</td>
                   <td className="px-2 py-2 text-right tnum">{u.qualityCount} 件 / {u.qualityPoints} 点</td>
                   <td className="px-4 py-2 text-right tnum">{fmtRate(u.qualityRate, 2)}</td>
                 </tr>

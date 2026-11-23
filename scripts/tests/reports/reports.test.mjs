@@ -76,7 +76,7 @@ db.expenses = [
   { id: "e1", storeId: "koshi", date: "2031-05-13", amount: 5000, status: "approved", submittedBy: "u_staff_k", account: "消耗品費", vendor: "テスト", paymentMethod: "cash", createdAt: at, updatedAt: at },
   { id: "e2", storeId: "koshi", date: "2031-05-14", amount: 2000, status: "pending_approval", submittedBy: "u_staff_k", account: "消耗品費", vendor: "テスト", paymentMethod: "cash", createdAt: at, updatedAt: at },
 ];
-db.surveys = [{ id: "s1", storeId: "koshi", orderId: "o1", postcardNo: "1", source: "manual", phoneScore: 5, salesScore: 4, craftsmanScore: 5, finishScore: 4, wouldUseAgain: "はい", answeredOn: "2031-05-15", receivedAt: "2031-05-16T00:00:00.000Z", createdAt: at, updatedAt: at }];
+db.surveys = [{ id: "s1", storeId: "koshi", orderId: "o1", postcardNo: "1", source: "manual", salesUserId: "u_mgr_k", deliveryUserIds: ["u_staff_k"], phoneScore: 5, salesScore: 4, craftsmanScore: 5, finishScore: 4, wouldUseAgain: "はい", answeredOn: "2031-05-15", receivedAt: "2031-05-16T00:00:00.000Z", createdAt: at, updatedAt: at }];
 
 const admin = db.users.find((u) => u.id === "u_admin");
 const mgrK = db.users.find((u) => u.id === "u_mgr_k");

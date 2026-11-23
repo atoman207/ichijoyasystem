@@ -151,7 +151,10 @@ export interface ReconRow {
 
 export interface ReconYear {
   label: string;
+  /** 年度の期間 (シートの表の 12 か月) */
   period: Period;
+  /** 累計 (返信率・平均・ポイント率) を比べた期間 = シートの月ごとの値が入っている最後の月まで (年度の途中のシート) */
+  compared: Period;
   rows: ReconRow[];
   matched: number;
   differ: number;
@@ -165,7 +168,7 @@ type ReconDb = Pick<Database, "orders" | "customers" | "surveys" | "qualityIssue
  */
 export function reconcileKpi(db: ReconDb, years: KpiYear[], match: (name: string) => StaffMatch, basisIn?: KpiBasis): ReconYear[] {
   const basis = basisIn ?? kpiBasis(db);
-  const settings = kpiSettings(db);
+  const settings = kpiSettings({ settings: db.settings ?? [], users: db.users });
   return years.map((y) => {
     const rows: ReconRow[] = [];
     const push = (metric: Metric, target: string, sheet: number | undefined, system: number | null, month?: string, digits = 0, detail?: string) => {
@@ -226,7 +229,7 @@ export function reconcileKpi(db: ReconDb, years: KpiYear[], match: (name: string
         push("sites", t.target, t.value, ur.orders, undefined, 0, ur.denominators ? denomSummary(ur.denominators.sites) : "4 店舗の合計");
       }
     }
-    return { label: y.label, period, rows, matched: rows.filter((r) => r.ok).length, differ: rows.filter((r) => !r.ok).length };
+    return { label: y.label, period: y.period, compared: period, rows, matched: rows.filter((r) => r.ok).length, differ: rows.filter((r) => !r.ok).length };
   });
 }
 

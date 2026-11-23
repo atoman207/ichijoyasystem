@@ -14,6 +14,7 @@ import { findLineGroup, markLineMessageHandled, parseLineMessageRef } from "@/li
 import { assertStore, choice, fail, numField, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 const isDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+const isMonth = (v: string) => /^\d{4}-(0[1-9]|1[0-2])$/.test(v);
 
 /** 新しい表 (反映前の本番) に書き込む前の確認 */
 async function assertTable(table: string, back: string) {
@@ -346,6 +347,7 @@ function surveyFields(formData: FormData) {
   return {
     postcardNo: str(formData, "postcardNo"),
     answeredOn: str(formData, "answeredOn"),
+    countMonth: str(formData, "countMonth"),
     phoneScore: score("phoneScore"),
     salesScore: score("salesScore"),
     craftsmanScore: score("craftsmanScore"),
@@ -377,6 +379,7 @@ export async function createSurvey(formData: FormData) {
   await assertTable("survey_responses", back);
   const f = surveyFields(formData);
   if (f.answeredOn && !isDate(f.answeredOn)) fail(back, "回答日の形式が正しくありません。");
+  if (f.countMonth && !isMonth(f.countMonth)) fail(back, "集計月の形式が正しくありません (例: 2026-11)。");
   let id = "";
   await mutate((db) => {
     const ref = str(formData, "orderRef").normalize("NFKC").trim().split(/\s+/)[0]?.toUpperCase() ?? "";
@@ -387,6 +390,7 @@ export async function createSurvey(formData: FormData) {
     const links = staffLinks(formData, new Set(db.users.map((u) => u.id)));
     const r = surveyFromExtracted(db, { extracted: f, order, storeId, ...links, userId: user.id, source: "manual" });
     if ("error" in r) fail(back, r.error);
+    if (f.countMonth) r.survey.countMonth = f.countMonth;
     db.surveys.push(r.survey);
     id = r.survey.id;
     if (order) {
@@ -405,6 +409,7 @@ export async function updateSurvey(id: string, formData: FormData) {
   const back = `/kpi/surveys/${id}`;
   const f = surveyFields(formData);
   if (f.answeredOn && !isDate(f.answeredOn)) fail(back, "回答日の形式が正しくありません。");
+  if (f.countMonth && !isMonth(f.countMonth)) fail(back, "集計月の形式が正しくありません (例: 2026-11)。");
   await mutate((db) => {
     const sv = db.surveys.find((x) => x.id === id);
     if (!sv) fail("/kpi/surveys", "アンケートが見つかりません。");
@@ -419,12 +424,14 @@ export async function updateSurvey(id: string, formData: FormData) {
     const links = staffLinks(formData, new Set(db.users.map((u) => u.id)));
     const r = surveyFromExtracted({ surveys: [] }, { extracted: { ...f, postcardNo }, order: order ?? db.orders.find((o) => o.id === sv.orderId), storeId: order?.storeId ?? sv.storeId, ...links, userId: user.id, source: sv.source });
     if ("error" in r) fail(back, r.error);
-    const next: SurveyResponse = { ...r.survey, id: sv.id, receivedAt: sv.receivedAt, documentId: sv.documentId, sourceRef: sv.sourceRef, createdBy: sv.createdBy, createdAt: sv.createdAt, updatedAt: nowIso(), orderId: ref ? order?.id : sv.orderId, customerId: ref ? order?.customerId : sv.customerId };
+    // 集計月の欄がないフォーム (古い画面) からの修正では、いまの集計月を残す
+    const countMonth = formData.has("countMonth") ? f.countMonth || undefined : sv.countMonth;
+    const next: SurveyResponse = { ...r.survey, id: sv.id, receivedAt: sv.receivedAt, countMonth, documentId: sv.documentId, sourceRef: sv.sourceRef, createdBy: sv.createdBy, createdAt: sv.createdAt, updatedAt: nowIso(), orderId: ref ? order?.id : sv.orderId, customerId: ref ? order?.customerId : sv.customerId };
     if (!ref && formData.get("unlinkOrder") === "on") {
       next.orderId = undefined;
       next.customerId = undefined;
     }
-    const fields: (keyof SurveyResponse)[] = ["postcardNo", "answeredOn", "phoneScore", "salesScore", "craftsmanScore", "finishScore", "priorities", "media", "wouldUseAgain", "comment", "clerkUserId", "salesUserId", "orderId", "storeId"];
+    const fields: (keyof SurveyResponse)[] = ["postcardNo", "answeredOn", "countMonth", "phoneScore", "salesScore", "craftsmanScore", "finishScore", "priorities", "media", "wouldUseAgain", "comment", "clerkUserId", "salesUserId", "orderId", "storeId"];
     const changes = fields.filter((k) => JSON.stringify(sv[k] ?? null) !== JSON.stringify(next[k] ?? null)).map((k) => ({ field: k, before: sv[k] ?? null, after: next[k] ?? null }));
     const deliveryChanged = JSON.stringify(sv.deliveryUserIds ?? []) !== JSON.stringify(next.deliveryUserIds ?? []);
     if (!changes.length && !deliveryChanged) fail(back, "変更はありませんでした。");

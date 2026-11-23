@@ -231,7 +231,7 @@ export const VIEWS: ViewDef[] = [
       from orders o
       left join quotes q on q.id = o.quote_id
       left join inquiries i on i.id = q.inquiry_id
-      left join invoices inv on inv.id = (select x.id from invoices x where x.order_id = o.id and x.status <> 'void' order by x.issue_date desc limit 1)
+      left join invoices inv on inv.id = (select x.id from invoices x where (x.order_id = o.id or x.id = o.invoice_id) and x.status <> 'void' order by x.issue_date desc limit 1)
       left join sales_orders so on so.order_id = o.id
       left join stores s on s.id = o.store_id
       left join customers c on c.id = o.customer_id
@@ -800,7 +800,7 @@ export function dataModelText(user: Pick<User, "role">, topics: string[] = [], o
   return [
     "# 一畳屋 統合データモデル",
     "業務の流れ: 問い合わせ (inquiries) → 見積 (quotes) → 受注・施工 (orders) → 請求 (invoices) → 入金 (payments)。顧客 (customers) と予定 (schedule_events) がすべてにつながる。",
-    "つながり: quotes.inquiry_id → inquiries.id / orders.quote_id → quotes.id / invoices.order_id → orders.id / payments.invoice_id → invoices.id / *.customer_id → customers.id / *.store_id → stores.id / schedule_events.order_id → orders.id / purchases.order_id → orders.id / 社員は users.id (JSON の配列 assignee_ids・worker_ids は json_each で展開)",
+    "つながり: quotes.inquiry_id → inquiries.id / orders.quote_id → quotes.id / invoices.order_id → orders.id (法人のまとめ請求は 1 枚に複数の受注: invoices.order_ids と orders.invoice_id) / payments.invoice_id → invoices.id / *.customer_id → customers.id / *.store_id → stores.id / schedule_events.order_id → orders.id / purchases.order_id → orders.id / 社員は users.id (JSON の配列 assignee_ids・worker_ids は json_each で展開)",
     scoped ? "※ あなたの閲覧範囲 (自店舗) のデータだけが入っています。ほかの店舗の数字は出せません。" : "",
     "",
     "## まず使う統合ビュー (名前・日本語の状態つき。結合を組み立てなくてよい)",

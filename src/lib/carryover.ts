@@ -276,15 +276,15 @@ export function groupPlan(tables: CarryTableDef[], diff: CarryDiff, test: Record
     const practice = idxs.some((i) => nodes[i].kind === "add" && PRACTICE.test([nodes[i].row.name, nodes[i].row.contactName, nodes[i].row.title, nodes[i].row.summary].filter(Boolean).join(" ")));
     const decision = rvExclude.has(id) ? "exclude" : rvInclude.has(id) ? "include" : undefined;
     let selected = true, reason = "";
-    if (idxs.every((i) => nodes[i].coll === "auditLogs")) (selected = false), (reason = "変更履歴だけ (ログイン・閲覧など)");
-    else if (decision === "exclude") (selected = false), (reason = "画面で「引き継がない」にした");
-    else if (only.length && !matches(idxs, only)) (selected = false), (reason = "--only の指定にない");
-    else if (exclude.length && matches(idxs, exclude)) (selected = false), (reason = "--exclude で除外");
+    if (idxs.every((i) => nodes[i].coll === "auditLogs")) { selected = false; reason = "変更履歴だけ (ログイン・閲覧など)"; }
+    else if (decision === "exclude") { selected = false; reason = "画面で「引き継がない」にした"; }
+    else if (only.length && !matches(idxs, only)) { selected = false; reason = "--only の指定にない"; }
+    else if (exclude.length && matches(idxs, exclude)) { selected = false; reason = "--exclude で除外"; }
     else if (decision === "include" || matches(idxs, only)) reason = decision === "include" ? "画面で「引き継ぐ」にした" : "";
-    else if (!opts.keepPractice && practice) (selected = false), (reason = "名前・件名に「練習」「テスト」(練習の記録)");
-    else if (!first && (since || until)) (selected = false), (reason = "操作の日時が分からない");
-    else if (since && first! < since) (selected = false), (reason = `期間より前 (${jst(first)})`);
-    else if (until && first! > until) (selected = false), (reason = `期間より後 (${jst(first)})`);
+    else if (!opts.keepPractice && practice) { selected = false; reason = "名前・件名に「練習」「テスト」(練習の記録)"; }
+    else if (!first && (since || until)) { selected = false; reason = "操作の日時が分からない"; }
+    else if (since && first! < since) { selected = false; reason = `期間より前 (${jst(first)})`; }
+    else if (until && first! > until) { selected = false; reason = `期間より後 (${jst(first)})`; }
     groups.push({ id, label: rowLabel(defs, customers, nodes[root]), rootColl: nodes[root].coll, store, first, last, actors: [...actors], counts, idxs, selected, reason, decision, practice, pulled: [] });
   }
   groups.sort((a, b) => String(a.first ?? "~").localeCompare(String(b.first ?? "~")) || a.label.localeCompare(b.label));

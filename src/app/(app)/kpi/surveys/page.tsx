@@ -4,7 +4,9 @@ import { getDb } from "@/lib/db/store";
 import { canReadStoreRecords, canSeeAllStoreFigures } from "@/lib/auth/permissions";
 import { policyReader } from "@/lib/access-policy";
 
-import { answerCounts, deliveryOf, fmtRate, inPeriod, isCard, storeKpi, surveyDate } from "@/lib/kpi";
+import { answerCounts, deliveryOf, fmtRate, inPeriod, isCard, storeKpi, surveyDate, surveyKpiDate } from "@/lib/kpi";
+import { countsCard, kpiBasis, periodMonths, unnamedCard } from "@/lib/kpi-basis";
+import { surveyTally } from "@/lib/survey-tally";
 import { kpiSettings } from "@/lib/kpi-settings";
 import { resolvePeriod } from "@/lib/kpi-period";
 import { fmtDate, toDateKey } from "@/lib/format";
@@ -13,6 +15,7 @@ import { KpiTabs } from "@/components/kpi/KpiTabs";
 import { PeriodSelect } from "@/components/kpi/PeriodSelect";
 import { Card, CardHeader, Flash, LinkButton, PageHeader, Pager, Select, StoreTag, paginate } from "@/components/ui";
 import { SurveyYearCompare } from "@/components/kpi/SurveyYearCompare";
+import { SurveyTally } from "@/components/kpi/SurveyTally";
 import { surveyYearComparison } from "@/lib/survey-workbook/compare";
 
 function Bars({ rows, total }: { rows: [string, number][]; total: number }) {
@@ -45,13 +48,21 @@ export default async function SurveysPage({ searchParams }: { searchParams: Prom
   const users = new Map(db.users.map((u) => [u.id, u.name]));
   const orders = new Map(db.orders.map((o) => [o.id, o]));
   const customers = new Map(db.customers.map((c) => [c.id, c]));
-  let rows = db.surveys.filter((s) => canReadStoreRecords(reader, s.storeId)).filter((s) => isCard(s) && inPeriod(surveyDate(s), rp.period) && (!store || s.storeId === store));
+  const basis = kpiBasis(db);
+  // はがきは集計月 (スプレッドシートの「月」) で期間を判定する (src/lib/kpi-core.ts の surveyKpiDate)
+  let rows = db.surveys.filter((s) => canReadStoreRecords(reader, s.storeId)).filter((s) => isCard(s) && inPeriod(surveyKpiDate(s), rp.period) && (!store || s.storeId === store));
   if (sp.link === "linked") rows = rows.filter((s) => s.orderId);
   if (sp.link === "unlinked") rows = rows.filter((s) => !s.orderId);
   if (q) rows = rows.filter((s) => [s.postcardNo, s.comment, s.salesName, s.craftsmanName, users.get(s.salesUserId ?? ""), ...deliveryOf(s).map((id) => users.get(id))].some((t) => t?.includes(q)));
-  rows.sort((a, b) => surveyDate(b).localeCompare(surveyDate(a)));
+  // 担当の名前が未記入のはがき (シートの「ノーカウント」)。集計には入れず、一覧で確かめられるようにする
+  const unnamed = rows.filter((s) => unnamedCard(s, basis));
+  const counted = rows.filter((s) => countsCard(s, basis));
+  if (sp.unnamed === "1") rows = unnamed;
+  rows.sort((a, b) => surveyKpiDate(b).localeCompare(surveyKpiDate(a)) || surveyDate(b).localeCompare(surveyDate(a)));
   const paged = paginate(rows, sp.page, 50);
-  const counts = answerCounts(rows);
+  const counts = answerCounts(counted);
+  const tallyMonths = rp.period ? periodMonths(rp.period).map((m) => m.month) : [];
+  const tally = tallyMonths.length && tallyMonths.length <= 24 ? surveyTally(counted, tallyMonths) : null;
   const stores = db.stores.filter((s) => s.kind === "store" && canReadStoreRecords(reader, s.id));
   const cmap = customers;
   const SOURCE: Record<string, string> = { import: "移行", capture: "写真", manual: "手入力" };
@@ -83,29 +94,35 @@ export default async function SurveysPage({ searchParams }: { searchParams: Prom
             <label className="block"><span className="label">店舗</span><Select name="store" defaultValue={store} className="h-9 py-1 text-sm"><option value="">すべて</option>{db.stores.filter((s) => canReadStoreRecords(reader, s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></label>
             <label className="block"><span className="label">案件の紐づけ</span><Select name="link" defaultValue={sp.link ?? ""} className="h-9 py-1 text-sm"><option value="">すべて</option><option value="linked">紐づけ済み</option><option value="unlinked">未設定</option></Select></label>
             <label className="block"><span className="label">キーワード</span><input name="q" defaultValue={q} className="field h-9 py-1 text-sm" placeholder="No.・担当者・記述" /></label>
+            <label className="block"><span className="label">はがき</span><Select name="unnamed" defaultValue={sp.unnamed ?? ""} className="h-9 py-1 text-sm"><option value="">すべて</option><option value="1">担当の名前がなく数えないもの</option></Select></label>
           </>
         }
       />
 
       <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-3">
         <Card>
-          <CardHeader title="返信率 (店舗別)" description="返信数 ÷ 個人のお客様の案件数" />
+          <CardHeader title="返信率 (店舗別)" description={basis.denominator === "sheet" ? "はがきの枚数 ÷ 個人件数 (年間チラシ計画の本年度実績。値のない月はシステムの個人のお客様の案件数)" : "はがきの枚数 ÷ 個人のお客様の案件数"} />
           <ul className="space-y-1.5 text-sm">
-            {[...stores.map((s) => ({ label: <StoreTag store={s} short />, k: storeKpi(db, rp.period, s.id, cmap) })), { label: <span className="font-semibold">全社</span>, k: storeKpi(db, rp.period, undefined, cmap) }].map((r, i) => (
-              <li key={i} className="flex items-center justify-between gap-2"><span>{r.label}</span><span className="tnum">{r.k.surveys} / {r.k.individualOrders} 件 · <span className="font-semibold">{fmtRate(r.k.replyRate)}</span></span></li>
+            {[...stores.map((s) => ({ label: <StoreTag store={s} short />, k: storeKpi(db, rp.period, s.id, cmap, basis) })), { label: <span className="font-semibold">全社</span>, k: storeKpi(db, rp.period, undefined, cmap, basis) }].map((r, i) => (
+              <li key={i} className="flex items-center justify-between gap-2"><span>{r.label}</span><span className="tnum">{r.k.surveys} 枚 / {r.k.individualOrders} 件 · <span className="font-semibold">{fmtRate(r.k.replyRate)}</span></span></li>
             ))}
           </ul>
+          {unnamed.length > 0 && <p className="mt-3 text-xs text-warn-ink">担当の名前が未記入のため数えないはがき {unnamed.length} 枚 (<Link href={`/kpi/surveys?${new URLSearchParams({ ...(sp.p ? { p: sp.p } : {}), ...(store ? { store } : {}), unnamed: "1" }).toString()}`} className="underline">一覧</Link>)</p>}
         </Card>
         <Card>
-          <CardHeader title="⑤ 重視されたこと" description={`${rows.length} 枚中の件数 (複数回答)`} />
-          <Bars rows={counts.priorities} total={rows.length} />
+          <CardHeader title="⑤ 重視されたこと" description={`回答 ${counts.respondents.priorities} 枚中の件数 (複数回答。選択肢にない回答は「その他」)`} />
+          <Bars rows={counts.priorities} total={counts.respondents.priorities} />
+          {counts.others.priorities.length > 0 && <p className="mt-2 text-[11px] text-ink-3">その他の内容: {counts.others.priorities.slice(0, 8).map(([t, n]) => `${t} (${n})`).join("・")}</p>}
         </Card>
         <Card>
-          <CardHeader title="⑥ 依頼のきっかけ" description="お客様ご自身の回答 (見積時の聞き取りとは別)" />
-          <Bars rows={counts.media} total={rows.length} />
-          <p className="mt-3 text-xs text-ink-2">⑦ 次回も依頼したい: はい {counts.again.yes} / いいえ {counts.again.no}</p>
+          <CardHeader title="⑥ 依頼のきっかけ" description={`回答 ${counts.respondents.media} 枚中 · お客様ご自身の回答 (見積時の聞き取りとは別)。移行データの「R」は以前頼んだことがある`} />
+          <Bars rows={counts.media} total={counts.respondents.media} />
+          {counts.others.media.length > 0 && <p className="mt-2 text-[11px] text-ink-3">その他の内容: {counts.others.media.slice(0, 8).map(([t, n]) => `${t} (${n})`).join("・")}</p>}
+          <p className="mt-3 text-xs text-ink-2">⑦ 次回も依頼したい: はい {counts.again.yes} / わからない {counts.again.unknown} / いいえ {counts.again.no} (回答 {counts.respondents.again} 枚)</p>
         </Card>
       </div>
+
+      {tally && <SurveyTally tally={tally} scopeLabel={`${store ? (db.stores.find((x) => x.id === store)?.name ?? store) : "表示中のはがき"} · ${rp.label}`} />}
 
       <SurveyYearCompare cols={compareCols} scopeLabel={compareLabel} />
 
@@ -116,6 +133,7 @@ export default async function SurveysPage({ searchParams }: { searchParams: Prom
             <thead>
               <tr className="bg-subtle text-xs text-ink-2">
                 <th className="px-4 py-2 text-left font-medium">回答日</th>
+                <th className="px-2 py-2 text-left font-medium">集計月</th>
                 <th className="px-2 py-2 text-left font-medium">No.</th>
                 <th className="px-2 py-2 text-left font-medium">店舗</th>
                 <th className="px-2 py-2 text-left font-medium">案件</th>
@@ -127,12 +145,13 @@ export default async function SurveysPage({ searchParams }: { searchParams: Prom
               </tr>
             </thead>
             <tbody>
-              {paged.items.length === 0 && <tr><td colSpan={12} className="px-4 py-8 text-center text-ink-3">該当するアンケートはありません</td></tr>}
+              {paged.items.length === 0 && <tr><td colSpan={13} className="px-4 py-8 text-center text-ink-3">該当するアンケートはありません</td></tr>}
               {paged.items.map((s) => {
                 const o = s.orderId ? orders.get(s.orderId) : undefined;
                 return (
                   <tr key={s.id} className="border-t border-line hover:bg-subtle/60">
                     <td className="px-4 py-2 text-xs tnum"><Link href={`/kpi/surveys/${s.id}`} className="text-accent hover:underline">{fmtDate(surveyDate(s))}</Link></td>
+                    <td className="px-2 py-2 text-xs tnum">{surveyKpiDate(s).slice(0, 7)}{unnamedCard(s, basis) && <span className="ml-1 text-[10px] text-warn-ink">数えない</span>}</td>
                     <td className="px-2 py-2 text-xs">{s.postcardNo ?? "-"}</td>
                     <td className="px-2 py-2"><StoreTag store={db.stores.find((x) => x.id === s.storeId)} short /></td>
                     <td className="px-2 py-2 text-xs">{o ? <Link href={`/orders/${o.id}`} className="text-accent hover:underline">{o.number} {customers.get(o.customerId)?.name}</Link> : <span className="text-warn-ink">未設定</span>}</td>

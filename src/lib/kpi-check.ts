@@ -1,5 +1,5 @@
 import type { Database } from "@/lib/db/types";
-import { putObject, readObject } from "@/lib/storage";
+import { putObject, readObject, removeObjects } from "@/lib/storage";
 import type { BasisPreview } from "@/lib/kpi-basis-import";
 import { parseKpiTab, reconcileKpi, type ReconYear } from "@/lib/survey-workbook/kpi-sheet";
 import { staffMatcher } from "@/lib/survey-workbook/staff";
@@ -24,6 +24,8 @@ export interface SavedKpiSheet {
 }
 
 export async function saveKpiSheet(s: SavedKpiSheet): Promise<void> {
+  // ストレージは同じキーへの上書きを断るため、前のものを消してから書く
+  await removeObjects([KEY]);
   await putObject(KEY, Buffer.from(JSON.stringify(s)));
 }
 

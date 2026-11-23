@@ -37,7 +37,10 @@ export function SurveyForm({
       <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @3xl:grid-cols-4">
         <Field label="はがき No."><Input name="postcardNo" defaultValue={s?.postcardNo} placeholder="例: 13338 / T698 / H1309" /></Field>
         <Field label="回答日"><Input type="date" name="answeredOn" defaultValue={s?.answeredOn} /></Field>
-        <Field label="案件 (受注番号)" hint="はがき No. が売上台帳にあれば、空欄でも自動で探します" className="@3xl:col-span-2">
+        <Field label="集計月 (KPI)" hint="はがきを集計する月。空欄 = 回答日 (なければ登録日) の月">
+          <Input type="month" name="countMonth" defaultValue={s?.countMonth} />
+        </Field>
+        <Field label="案件 (受注番号)" hint="はがき No. が売上台帳にあれば、空欄でも自動で探します">
           <Input name="orderRef" list="survey-orders" defaultValue={orderRef} autoComplete="off" placeholder="例: O-2026-0123" />
           <datalist id="survey-orders">{orderOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</datalist>
         </Field>
