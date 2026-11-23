@@ -187,6 +187,52 @@ console.log(`\nパソコン (Chrome 1366×900・偽のカメラ) — ${BASE}`);
   await browser.close();
 }
 
+console.log("\nパソコン: カメラが 2 台 (内蔵 + USB でつないだスマートフォン・外付けのカメラ)");
+{
+  // 映像のファイルを指定すると偽のカメラは 1 台になるので、ここは Chrome の試しの映像 (2 台)
+  const browser = await launch(["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream=device-count=2"]);
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.grantPermissions(["camera"], { origin: BASE });
+  const page = await ctx.newPage();
+  page.setDefaultTimeout(30_000);
+  await login(page);
+  await page.goto(`${BASE}/capture`, { waitUntil: "networkidle" });
+  const openCamera = async () => {
+    await page.getByRole("button", { name: "カメラで撮影" }).click();
+    const d = page.getByRole("dialog", { name: /カメラで撮影/ });
+    await d.getByRole("button", { name: "撮影", exact: true }).waitFor();
+    await page.waitForFunction(() => (document.querySelector("dialog video")?.videoWidth ?? 0) > 0 && !document.querySelector("dialog select")?.disabled);
+    return d;
+  };
+  let d = await openCamera();
+  const select = d.getByRole("combobox");
+  const options = await select.locator("option").allTextContents();
+  check("カメラが 2 台あると「カメラ」で選べる", options.length === 2, JSON.stringify(options));
+  const second = await select.locator("option").nth(1).getAttribute("value");
+  await select.selectOption(second);
+  await page.waitForFunction((id) => {
+    const v = document.querySelector("dialog video");
+    const t = v?.srcObject?.getVideoTracks?.()[0];
+    return t && t.getSettings().deviceId === id && v.videoWidth > 0;
+  }, second);
+  check("選んだカメラに切り替わる", (await select.inputValue()) === second);
+  await page.keyboard.press("Escape");
+  await d.waitFor({ state: "detached" });
+  d = await openCamera();
+  check("次に開くと前に選んだカメラ (ブラウザーに保存)", (await d.getByRole("combobox").inputValue()) === second);
+  // 使っているカメラが外された (スマートフォンの USB を抜いた) → ほかのカメラに切り替えて知らせる
+  await page.evaluate(() => document.querySelector("dialog video").srcObject.getVideoTracks()[0].dispatchEvent(new Event("ended")));
+  await d.getByRole("status").filter({ hasText: "外されたため" }).waitFor({ timeout: 10_000 }).catch(() => undefined);
+  check("使っているカメラを外すと、ほかのカメラに切り替えて知らせる", (await d.getByRole("status").filter({ hasText: "外されたため" }).count()) === 1);
+  const switched = await page
+    .waitForFunction(() => !document.querySelector("dialog button[type=button].bg-accent")?.disabled && (document.querySelector("dialog video")?.videoWidth ?? 0) > 0, null, { timeout: 15_000 })
+    .then(() => true, () => false);
+  check("切り替えたカメラで撮影できる", switched && (await d.getByRole("button", { name: "撮影", exact: true }).isEnabled()));
+  await page.screenshot({ path: path.join(SHOTS, "pc-5-two-cameras.png") });
+  await ctx.close();
+  await browser.close();
+}
+
 console.log("\nパソコン: カメラがない・許可されないとき");
 {
   // カメラなし (偽のカメラを使わない。サーバーにはカメラがない)

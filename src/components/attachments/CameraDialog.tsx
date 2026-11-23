@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Camera, Check, CircleAlert, LoaderCircle, RefreshCw, RotateCcw, RotateCw, X } from "lucide-react";
+import { isBuiltInCamera, parseSavedCamera, pickCamera, type CameraInfo, type SavedCamera } from "./camera-pick";
 
 /**
  * パソコンのカメラ (内蔵カメラ・USB の Web カメラ・書画カメラ) で書類・写真を撮影するダイアログ。
@@ -12,7 +13,12 @@ import { Camera, Check, CircleAlert, LoaderCircle, RefreshCw, RotateCcw, RotateC
  *   縮小は送る前に image-prep.ts の prepareFile が行う
  * - 撮った画像は 90 度ずつ回転できる (横向きのカメラで縦の書類を撮ったとき)
  * - multiple = 続けて何枚も撮って最後にまとめて渡す (写真の登録)。そうでなければ 1 枚で閉じる (書類取込)
- * - 選んだカメラはブラウザーに覚える (次も同じカメラ。書画カメラをつないだパソコン向け)
+ * - カメラは内蔵・USB の Web カメラ・書画カメラ・スマートフォン (Android の USB の「ウェブカメラ」・Windows 11 の
+ *   スマートフォン連携・Camo などのアプリ・Mac の連係カメラ) のどれでも、ブラウザーに見えるカメラなら使える。
+ *   選び方は camera-pick.ts (前に選んだカメラ → スマートフォン・書画カメラ → 内蔵以外 → 既定)。選んだカメラは ID と名前を
+ *   ブラウザーに覚える (USB をつなぎ直して ID が変わっても名前で見つける)
+ * - 開いている間のカメラの抜き差しに追従する (つないだら一覧に出し、前に選んだカメラ・スマートフォンなら切り替える。
+ *   使っているカメラを外したら、ほかのカメラに切り替えるか、つなぎ直すよう知らせる)
  * - カメラの許可は https (または localhost) のページだけ。next.config.ts の Permissions-Policy は camera=(self)
  */
 
@@ -51,21 +57,21 @@ export function useCameraPresence(enabled: boolean): boolean | null {
   return enabled ? present : null;
 }
 
-function readSaved(): string | undefined {
+function readSaved(): SavedCamera | undefined {
   try {
-    return localStorage.getItem(CAMERA_KEY) || undefined;
+    return parseSavedCamera(localStorage.getItem(CAMERA_KEY));
   } catch {
     return undefined;
   }
 }
-function save(id: string | undefined) {
+function save(cam: SavedCamera) {
   try {
-    if (id) localStorage.setItem(CAMERA_KEY, id);
-    else localStorage.removeItem(CAMERA_KEY);
+    localStorage.setItem(CAMERA_KEY, JSON.stringify(cam));
   } catch {
     // 保存できなくても撮影はできる
   }
 }
+const labelOf = (list: CameraInfo[], id: string) => list.find((c) => c.id === id)?.label || "カメラ";
 
 /** カメラを開けなかった理由 (利用者に分かる言葉で) */
 function cameraError(e: unknown): string {
@@ -133,12 +139,21 @@ export function CameraDialog({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const shutterRef = useRef<HTMLButtonElement>(null);
-  /** 開くカメラ (空 = ブラウザーに任せる)。変えると映像を取り直す */
-  const [requested, setRequested] = useState<string | undefined>(readSaved);
+  /** 開くカメラ (undefined = 覚えたカメラ・つながっているカメラから選ぶ)。変えると映像を取り直す */
+  const [requested, setRequested] = useState<string | undefined>(undefined);
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<{ phase: "starting" | "live" | "error"; error?: string }>({ phase: "starting" });
-  const [cameras, setCameras] = useState<{ id: string; label: string }[]>([]);
+  const [cameras, setCameras] = useState<CameraInfo[]>([]);
   const [active, setActive] = useState<{ id: string; size: string }>({ id: "", size: "" });
+  /** 自動でカメラを選んだ・切り替えたときの知らせ */
+  const [notice, setNotice] = useState("");
+  /** 開いた直後の選び直し (名前が分かってから) は 1 回だけ */
+  const autoRef = useRef(false);
+  const activeRef = useRef<CameraInfo>({ id: "", label: "" });
+  const phaseRef = useRef(state.phase);
+  useEffect(() => {
+    phaseRef.current = state.phase;
+  }, [state.phase]);
   const [shot, setShot] = useState<Shot | null>(null);
   const [taken, setTaken] = useState<{ file: File; url: string }[]>([]);
   const [busy, setBusy] = useState(false);
@@ -152,40 +167,97 @@ export function CameraDialog({
     return () => d?.removeEventListener("close", cancel);
   }, [onClose]);
 
-  // カメラの映像を出す
+  // カメラの映像を出す (カメラの抜き差しにも追従する)
   useEffect(() => {
     let stream: MediaStream | null = null;
     let alive = true;
+    const md = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
     const open = async (deviceId: string | undefined): Promise<MediaStream> => {
       const video: MediaTrackConstraints = { width: { ideal: 4096 }, height: { ideal: 3072 } };
       if (deviceId) video.deviceId = { exact: deviceId };
       else video.facingMode = { ideal: "environment" };
-      return navigator.mediaDevices.getUserMedia({ video, audio: false });
+      return md!.getUserMedia({ video, audio: false });
     };
+    /** つながっているカメラ (名前はカメラの使用を許可したあとで分かる) */
+    const cams = async (): Promise<CameraInfo[]> => ((await md?.enumerateDevices?.()) ?? []).filter((d) => d.kind === "videoinput").map((d) => ({ id: d.deviceId, label: d.label }));
+    const switchTo = (id: string, message: string) => {
+      setNotice(message);
+      setState({ phase: "starting" });
+      setRequested(id);
+      setAttempt((n) => n + 1);
+    };
+    // 使っているカメラが外された (スマートフォンの USB を抜いた など)
+    const onEnded = async () => {
+      if (!alive) return;
+      const gone = activeRef.current;
+      const rest = (await cams()).filter((c) => c.id && c.id !== gone.id);
+      if (!alive) return;
+      setCameras(rest);
+      if (rest.length) {
+        const next = pickCamera(rest, readSaved()).id ?? rest[0].id;
+        switchTo(next, `カメラ「${gone.label || "カメラ"}」が外されたため、「${labelOf(rest, next)}」に切り替えました。`);
+      } else {
+        setState({ phase: "error", error: "カメラが外されました。つなぎ直してください (つなぐと自動で映ります。映らないときは「もう一度」を押してください)。" });
+      }
+    };
+    // カメラをつないだ・外した
+    const onDeviceChange = async () => {
+      const list = await cams();
+      if (!alive) return;
+      setCameras(list);
+      if (phaseRef.current === "error" && list.length > 0) {
+        switchTo(pickCamera(list, readSaved()).id ?? "", "カメラがつながりました。");
+        return;
+      }
+      if (phaseRef.current !== "live") return;
+      const want = pickCamera(list, readSaved());
+      if (!want.id || want.id === activeRef.current.id || want.reason === "default") return;
+      // 前に選んだカメラが戻った、または内蔵カメラを使っているときにスマートフォン・外付けのカメラがつながった
+      if (want.reason === "saved" || want.reason === "saved-label" || isBuiltInCamera(activeRef.current.label)) {
+        switchTo(want.id, `つないだカメラ「${labelOf(list, want.id)}」に切り替えました。`);
+      }
+    };
+    md?.addEventListener?.("devicechange", onDeviceChange);
     (async () => {
       try {
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error("unsupported");
+        if (!md?.getUserMedia) throw new Error("unsupported");
+        const saved = readSaved();
+        // 選んでいなければ、覚えたカメラ・スマートフォン・外付けのカメラ (許可の前は名前が空なので既定のカメラ)
+        const target = requested || pickCamera(await cams(), saved).id;
         try {
-          stream = await open(requested);
+          stream = await open(target);
         } catch (e) {
-          // 覚えていたカメラが外されたときは、ほかのカメラで開き直す
-          if (!requested || !(e instanceof DOMException) || !["OverconstrainedError", "NotFoundError", "NotReadableError"].includes(e.name)) throw e;
-          save(undefined);
+          // 選んだカメラが外されている・使えないときは、ほかのカメラで開く (覚えたカメラは消さない。つなぎ直せば名前で見つかる)
+          if (!target || !(e instanceof DOMException) || !["OverconstrainedError", "NotFoundError", "NotReadableError"].includes(e.name)) throw e;
           stream = await open(undefined);
         }
         if (!alive) return;
+        const track = stream.getVideoTracks()[0];
+        track?.addEventListener("ended", onEnded);
+        const s = track?.getSettings() ?? {};
+        const list = await cams();
+        if (!alive) return;
+        const id = s.deviceId ?? "";
+        activeRef.current = { id, label: list.find((c) => c.id === id)?.label || track?.label || "" };
+        setCameras(list);
+        setActive({ id, size: s.width && s.height ? `${s.width}×${s.height}` : "" });
+        // 開いた直後に 1 回だけ: 名前が分かってから選び直す (前に選んだカメラ・スマートフォン・外付けのカメラが別にあるとき)
+        if (!autoRef.current) {
+          autoRef.current = true;
+          const want = pickCamera(list, saved);
+          const auto = want.reason === "preferred" || want.reason === "external";
+          if (want.id && want.id !== id && want.reason !== "default") {
+            switchTo(want.id, auto ? `つながっているカメラ「${labelOf(list, want.id)}」を使います。ほかのカメラは「カメラ」で選べます。` : "");
+            return;
+          }
+          if (auto && list.length > 1) setNotice(`つながっているカメラ「${labelOf(list, id)}」を使います。ほかのカメラは「カメラ」で選べます。`);
+        }
         const v = videoRef.current;
         if (v) {
           v.srcObject = stream;
           await v.play().catch(() => undefined);
         }
-        const track = stream.getVideoTracks()[0];
-        const s = track?.getSettings() ?? {};
-        setActive({ id: s.deviceId ?? "", size: s.width && s.height ? `${s.width}×${s.height}` : "" });
-        const list = await navigator.mediaDevices.enumerateDevices();
         if (!alive) return;
-        const vids = list.filter((d) => d.kind === "videoinput");
-        setCameras(vids.map((d, i) => ({ id: d.deviceId, label: d.label || `カメラ ${i + 1}` })));
         setState({ phase: "live" });
         requestAnimationFrame(() => shutterRef.current?.focus());
       } catch (e) {
@@ -194,7 +266,11 @@ export function CameraDialog({
     })();
     return () => {
       alive = false;
-      stream?.getTracks().forEach((t) => t.stop());
+      md?.removeEventListener?.("devicechange", onDeviceChange);
+      stream?.getTracks().forEach((t) => {
+        t.removeEventListener("ended", onEnded);
+        t.stop();
+      });
     };
   }, [requested, attempt]);
 
@@ -209,9 +285,11 @@ export function CameraDialog({
   useEffect(() => () => takenRef.current.forEach((t) => URL.revokeObjectURL(t.url)), []);
 
   function chooseCamera(id: string) {
-    save(id);
+    save({ id, label: cameras.find((c) => c.id === id)?.label });
+    setNotice("");
     setState({ phase: "starting" });
     setRequested(id);
+    setAttempt((n) => n + 1);
   }
 
   function retry() {
@@ -311,14 +389,14 @@ export function CameraDialog({
             <span className="absolute left-1/2 top-2 -translate-x-1/2 rounded-full bg-black/55 px-2.5 py-0.5 text-[11px] text-white">書類を枠の中に</span>
           </div>
         )}
-        {state.phase === "starting" && (
+        {state.phase === "starting" && !shot && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center text-sm text-white/90" role="status">
             <LoaderCircle className="h-6 w-6 animate-spin" aria-hidden />
             カメラを準備しています…
             <span className="text-xs text-white/70">ブラウザーがカメラの使用の許可を求めたら「許可」を押してください</span>
           </div>
         )}
-        {state.phase === "error" && (
+        {state.phase === "error" && !shot && (
           <div role="alert" className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center text-sm text-white">
             <CircleAlert className="h-7 w-7 text-serious" aria-hidden />
             <p className="max-w-md leading-relaxed">{state.error}</p>
@@ -365,8 +443,8 @@ export function CameraDialog({
               <label className="flex min-w-0 items-center gap-2 text-xs text-ink-2">
                 <span className="shrink-0">カメラ</span>
                 <select className="field h-9 min-w-0 max-w-[16rem] py-1 text-xs" value={active.id} onChange={(e) => chooseCamera(e.target.value)} disabled={state.phase === "starting"}>
-                  {cameras.map((c) => (
-                    <option key={c.id} value={c.id}>{c.label}</option>
+                  {cameras.map((c, i) => (
+                    <option key={c.id || i} value={c.id}>{c.label || `カメラ ${i + 1}`}</option>
                   ))}
                 </select>
               </label>
@@ -384,6 +462,7 @@ export function CameraDialog({
             </div>
           </div>
         )}
+        {notice && !shot && <p role="status" className="text-xs text-accent-ink">{notice}</p>}
         <p className="text-[11px] leading-relaxed text-ink-3">
           {shot ? "文字がはっきり読めるか確かめてください。ぼやけていたら「撮り直す」を押します。" : `${hint} ノートパソコンの内蔵カメラより、USB の書画カメラ・Web カメラの方がきれいに撮れます。`}
         </p>
