@@ -3,6 +3,7 @@ import type { ComponentType } from "react";
 import { CalendarDays, CalendarOff, Hammer, Handshake, Landmark, MapPin, Megaphone, PackageOpen, PartyPopper, Ruler, TriangleAlert, Truck, Users } from "lucide-react";
 import type { ScheduleKind } from "@/lib/db/types";
 import { SCHEDULE_GROUP_LABEL, SCHEDULE_KIND, SCHEDULE_KINDS, type ScheduleGroup } from "@/lib/constants";
+import type { WorkToken } from "@/lib/work-summary";
 
 /**
  * 予定表の共通部品 (サーバー・クライアントの両方から使う)
@@ -60,6 +61,35 @@ export function KindIcon({ kind, className }: { kind: ScheduleKind; className?: 
   );
 }
 
+/**
+ * 予定の種類の印 (色の四角に白いアイコン)。予定表のチップの左端 (店舗名の左) に置き、引き取り・納品・現地調査 (見積)・顧客訪問などを
+ * 色とアイコンで見分ける (お客様のご要望 2026-11-23「■2」。件名の右の「引取」「納品」の文字の代わり)
+ */
+export function KindMark({ kind, className, size = "sm" }: { kind: ScheduleKind; className?: string; size?: "sm" | "md" }) {
+  const s = kindStyle(kind);
+  const Icon = s.icon;
+  return (
+    <span aria-hidden title={kindLabel(kind)} className={clsx("inline-flex shrink-0 items-center justify-center rounded-[4px] text-white", size === "md" ? "h-5 w-5" : "h-4 w-4", s.bar, className)}>
+      <Icon className={size === "md" ? "h-3.5 w-3.5" : "h-3 w-3"} />
+    </span>
+  );
+}
+
+/** 仕事内容と数量の省略表記 (「タ12 フ6 シ4 ア2」。へり無し畳の「(縁無6)」は目立たせる。src/lib/work-summary.ts) */
+export function WorkTokens({ tokens, className }: { tokens: WorkToken[] | undefined; className?: string }) {
+  if (!tokens?.length) return null;
+  return (
+    <span className={clsx("inline-flex shrink-0 items-center gap-1 font-semibold tnum text-ink", className)} data-testid="work-tokens">
+      {tokens.map((t) => (
+        <span key={t.key} className="whitespace-nowrap">
+          {t.text}
+          {t.note && <span className="text-critical-ink">{t.note}</span>}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export function KindBadge({ kind, className }: { kind: ScheduleKind; className?: string }) {
   const s = kindStyle(kind);
   return (
@@ -89,14 +119,21 @@ export function KindLegend({ className }: { className?: string }) {
           <span className="font-semibold text-ink-3">{SCHEDULE_GROUP_LABEL[g]}</span>
           {KINDS_BY_GROUP[g].map((k) => (
             <span key={k} className="inline-flex items-center gap-1">
-              <span className={clsx("inline-flex h-4 w-4 items-center justify-center rounded", kindStyle(k).soft, kindStyle(k).ink)}>
-                <KindIcon kind={k} className="h-3 w-3" />
-              </span>
+              <KindMark kind={k} />
               {kindLabel(k)}
             </span>
           ))}
         </div>
       ))}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <span className="font-semibold text-ink-3">仕事内容</span>
+        <span>
+          <span className="font-semibold text-ink">タ</span> 畳・<span className="font-semibold text-ink">フ</span> 襖・<span className="font-semibold text-ink">シ</span> 障子・<span className="font-semibold text-ink">ア</span> 網戸 (数字は枚数)
+        </span>
+        <span>
+          <span className="font-semibold text-critical-ink">(縁無)</span> へり無し畳
+        </span>
+      </div>
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { storePhone } from "@/lib/store-contact";
 import { requireUser } from "@/lib/auth/session";
 import { syncDb } from "@/lib/db/store";
-import { canAccessStore } from "@/lib/auth/permissions";
+import { canEditCaseStore } from "@/lib/auth/permissions";
 import { fmtDate, yen } from "@/lib/format";
 import { PrintToolbar } from "@/components/features/PrintToolbar";
 import { IchijoyaLogo } from "@/components/brand/Logo";
@@ -16,7 +16,8 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
   const db = await syncDb();
   const q = db.quotes.find((x) => x.id === id);
   if (!q) notFound();
-  if (!canAccessStore(user, q.storeId)) redirect("/quotes");
+  // 見積を扱える店舗 (店長は全店舗。permissions.ts の canEditCaseStore)
+  if (!canEditCaseStore(user, q.storeId)) redirect("/quotes");
   const customer = db.customers.find((c) => c.id === q.customerId);
   const store = db.stores.find((s) => s.id === q.storeId)!;
   const creator = db.users.find((u) => u.id === q.createdBy);

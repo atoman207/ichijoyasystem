@@ -1,7 +1,7 @@
 import "server-only";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth/session";
-import { canAccessStore, canSeeAllStores } from "@/lib/auth/permissions";
+import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import type { StoreId, User } from "@/lib/db/types";
 import { getDb } from "@/lib/db/store";
 
@@ -35,6 +35,11 @@ export function fail(path: string, message: string): never {
 
 export function assertStore(user: User, storeId: StoreId, backPath: string) {
   if (!canAccessStore(user, storeId)) fail(backPath, "この店舗の情報を操作する権限がありません。");
+}
+
+/** 顧客・問い合わせ・見積・受注の登録・変更: 自店舗 (全店舗ロールは全店舗)、店長は全店舗 (permissions.ts の canEditCaseStore) */
+export function assertCaseStore(user: User, storeId: StoreId, backPath: string) {
+  if (!canEditCaseStore(user, storeId)) fail(backPath, "この店舗の情報を操作する権限がありません。");
 }
 
 /** 店舗ロールは自店舗に固定、全店舗ロールはフォームの値を採用 */

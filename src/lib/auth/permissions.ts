@@ -6,10 +6,12 @@ import type { CasePost, TidyCheck } from "@/lib/db/types";
  * ------------------------------------------------------------
  * - 管理者 / 本部スタッフ: 全店舗の情報を閲覧
  * - 店長 / 店舗スタッフ: 自店舗の情報のみ。ただし進行中の案件 (問い合わせ → 入金完了まで) は、ほかの店舗の案件も閲覧のみ (canViewOpenCases)
+ * - 顧客・問い合わせ・見積・受注の登録・変更: 店長は全店舗 (お客様の決定 2026-11-23。canEditCaseStore)、店舗スタッフは自店舗。
+ *   請求書・入金・経費・仕入・予定表などはこれまでどおり自店舗 (canAccessStore)
  * - 閲覧の範囲の設定 (src/lib/access-policy.ts。既定 = 経営の数字・顧客情報とも全社員): 経営の数字 (canSeeAllStoreFigures) と
- *   顧客情報 (canSeeAllCustomerRecords) の閲覧だけを全店舗に広げる。policyReader が作る写しで判定し、登録・変更は本物の利用者 (canAccessStore)
+ *   顧客情報 (canSeeAllCustomerRecords) の閲覧だけを全店舗に広げる。policyReader が作る写しで判定し、登録・変更は本物の利用者 (canAccessStore・canEditCaseStore)
  * - 入金完了・全処理完了の案件の内容の変更: 管理者のみ (canEditCompletedCase)
- * - 承認: 店長は自店舗の「店長承認」案件、管理者は全案件
+ * - 承認: 店長は自店舗の「店長承認」案件、管理者は全案件。店長の申請はすべて管理者が承認する (approverRole)
  * - 設定 (商品・承認ルール): 管理者のみ
  * - アカウント: 管理者は全員、店長は自店舗の店舗スタッフ (追加・変更・削除・新規登録の承認)。自分のログイン ID・パスワード・顔写真は本人
  * - 請求書の発行: 管理者・本部スタッフ・店長。入金の登録: 自店舗のメンバー (店舗スタッフも可)
@@ -114,8 +116,19 @@ export function canAccessStore(user: User, storeId: StoreId): boolean {
 }
 
 /**
+ * 顧客・問い合わせ・見積・受注 (とその現場の情報・日程・進捗・やりとり・写真) を登録・変更できる店舗:
+ * 自店舗 (全店舗ロールは全店舗) と、店長はすべての店舗。
+ * お客様の決定 (2026-11-23):「店長には全ての顧客の情報と見積・受注の編集権限をあたえてほしいです。承認は管理者。」
+ * 店長の申請の承認は管理者 (approverRole)。入金完了・全処理完了の案件は管理者だけ (canEditCompletedCase) のまま。
+ * 請求書・入金・経費・仕入・予定表・受付などは canAccessStore のまま (自店舗)
+ */
+export function canEditCaseStore(user: User, storeId: StoreId): boolean {
+  return canAccessStore(user, storeId) || Boolean(user.active && user.role === "store_manager");
+}
+
+/**
  * 進行中の案件 (問い合わせ → 入金完了まで) は、ほかの店舗の案件も閲覧できる: 全社員 (お客様のご要望)。
- * 閲覧だけで、登録・変更はその店舗の社員 (canAccessStore)。入金完了・全処理完了・失注のあとは通常の権限に戻る (src/lib/case-access.ts)
+ * 閲覧だけで、登録・変更はその店舗の社員と店長 (canEditCaseStore)。入金完了・全処理完了・失注のあとは通常の権限に戻る (src/lib/case-access.ts)
  */
 export function canViewOpenCases(user: User): boolean {
   return Boolean(user.active);
@@ -161,16 +174,18 @@ export function canApprove(user: User, approval: Pick<Approval, "storeId" | "req
 }
 
 /**
- * 承認者のロールを決める (見積・金額変更・受注 (契約)・経費)
+ * 承認者のロールを決める (見積・金額変更・受注 (契約)・契約内容の変更・顧客の重要情報・引取納品日の変更・経費)
  * - 本部の案件、または金額が基準以上 → 管理者
- * - 店舗の案件 → 店長。ただし、その店舗に申請者以外の有効な店長がいないとき
- *   (店長のいない店舗・店長本人の申請) は、承認できる人がいないので管理者
+ * - 店長の申請 → 管理者 (自店舗・ほかの店舗の案件とも。お客様の決定 2026-11-23「承認は管理者」。
+ *   店長はほかの店舗の案件も変更できる (canEditCaseStore) ため、その店舗の店長に回さない)
+ * - 店舗の案件 → 店長。ただし、その店舗に申請者以外の有効な店長がいないとき (店長のいない店舗) は、承認できる人がいないので管理者
  * - 店長として数えるのは、申請者と同じ種類のアカウントだけ (社員の申請は社員の店長、デモ用アカウントの申請はデモ用の店長)。
  *   本番データにデモ用アカウントを加えても、社員の申請の承認先は変わらない
  */
 export function approverRole(users: Pick<User, "id" | "email" | "role" | "storeId" | "active">[], storeId: StoreId, overThreshold: boolean, requesterId: string): "store_manager" | "admin" {
   if (storeId === "hq" || overThreshold) return "admin";
   const requester = users.find((u) => u.id === requesterId);
+  if (requester?.role === "store_manager") return "admin";
   const demo = requester ? isDemoAccount(requester) : false;
   // 確認用アカウント (お客様の画面確認用) は、実際の承認先の判定に入れない
   const hasManager = users.some(
@@ -948,4 +963,13 @@ export function canManageTidyItems(user: User): boolean {
 /** LINE の「施工事例写真」「整理整頓の確認」グループの写真を見る・案件やチェックに付ける: グループの店舗のメンバー (店舗のないグループは全社員) */
 export function canUseLineGroupPhotos(user: User, groupStoreId: StoreId | undefined): boolean {
   return user.active && (groupStoreId ? canAccessStore(user, groupStoreId) : true);
+}
+
+/**
+ * 畳製造予定 (/schedule/production。お客様のご要望 2026-11-23「■3」) の繰り越し・製造日の変更・製造日未定・製造済み・手で足した行:
+ * 有効な社員全員 (作業場では店舗をまたいで製造するため。予定表と同じく全社で共有。操作は変更履歴に残る)。
+ * 製造日を変えても、予定表の引取日・納品日は変わらない
+ */
+export function canEditProduction(user: User): boolean {
+  return Boolean(user.active);
 }

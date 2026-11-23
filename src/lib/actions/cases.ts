@@ -13,7 +13,7 @@ import { siteInfoFromForm, siteInfoLines } from "@/lib/site-info";
 import { PLANNED_PAYMENT_LABEL, caseIndex, orderCase } from "@/lib/case-status";
 import { postCash } from "@/lib/cashbook";
 import { completedCaseLock, completedLockMessage, quoteCompletedLock } from "@/lib/case-access";
-import { assertStore, choice, fail, numField, requireActionUser, safeReturn, str, withMsg } from "./guards";
+import { assertCaseStore, assertStore, choice, fail, numField, requireActionUser, safeReturn, str, withMsg } from "./guards";
 import { isBatchInvoice } from "@/lib/billing";
 
 /* ------------------------------------------------------------------ */
@@ -27,7 +27,8 @@ export async function updateSiteInfo(target: "quote" | "order", id: string, form
   await mutate((db) => {
     const rec = target === "quote" ? db.quotes.find((x) => x.id === id) : db.orders.find((x) => x.id === id);
     if (!rec) fail(back, "記録が見つかりません。");
-    assertStore(user, rec.storeId, back);
+    // 店長はほかの店舗の見積・受注も変更できる (permissions.ts の canEditCaseStore)
+    assertCaseStore(user, rec.storeId, back);
     const lock = target === "quote" ? quoteCompletedLock(db, user, rec as Quote) : completedCaseLock(db, user, rec as Order);
     if (lock.locked) fail(back, completedLockMessage(lock.reason));
     const before = new Map(siteInfoLines(rec.siteInfo));
@@ -69,7 +70,7 @@ export async function updateCaseStatus(orderId: string, formData: FormData) {
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === orderId);
     if (!o) fail("/orders", "案件が見つかりません。");
-    assertStore(user, o.storeId, back);
+    assertCaseStore(user, o.storeId, back);
     const lock = completedCaseLock(db, user, o);
     if (lock.locked) fail(back, completedLockMessage(lock.reason));
     const before = { spec: o.specStatus ?? "fixed", specNote: o.specNote ?? "", schedule: o.scheduleStatus ?? "", billing: o.billing ?? "auto", planned: o.plannedPayment ?? "" };
@@ -104,7 +105,7 @@ export async function closeCase(orderId: string, formData: FormData) {
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === orderId);
     if (!o) fail("/orders", "案件が見つかりません。");
-    assertStore(user, o.storeId, back);
+    assertCaseStore(user, o.storeId, back);
     if (!["completed", "invoiced", "paid"].includes(o.status)) fail(back, "工事完了後に登録できます。");
     if (o.closedAt) fail(back, "すでに全処理完了になっています。");
     const row = orderCase(o, caseIndex(db), toDateKey(new Date()));
@@ -130,7 +131,7 @@ export async function reopenCase(orderId: string, formData: FormData) {
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === orderId);
     if (!o) fail("/orders", "案件が見つかりません。");
-    assertStore(user, o.storeId, back);
+    assertCaseStore(user, o.storeId, back);
     if (!o.closedAt) fail(back, "全処理完了になっていません。");
     o.closedAt = undefined;
     o.closedBy = undefined;
@@ -156,6 +157,7 @@ export async function recordCollection(orderId: string, formData: FormData) {
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === orderId);
     if (!o) fail("/orders", "案件が見つかりません。");
+    // 集金・入金の記録 (請求書を作る) はその店舗の社員 (canAccessStore。店長もほかの店舗の入金は記録しない)
     assertStore(user, o.storeId, back);
     if (!["completed", "invoiced", "paid"].includes(o.status)) fail(back, "施工完了を登録してから集金を記録してください。");
     const now = nowIso();
@@ -241,7 +243,7 @@ export async function setQuoteDiscussing(quoteId: string, formData: FormData) {
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === quoteId);
     if (!q) fail("/quotes", "見積が見つかりません。");
-    assertStore(user, q.storeId, back);
+    assertCaseStore(user, q.storeId, back);
     q.specStatus = on ? "discussing" : undefined;
     q.updatedAt = nowIso();
     addAudit(db, { userId: user.id, action: "update", entity: "quote", entityId: q.id, entityLabel: q.number, summary: on ? "お客様と打合せ中にしました" : "打合せ中を解除しました", storeId: q.storeId });

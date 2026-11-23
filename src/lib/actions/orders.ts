@@ -7,13 +7,13 @@ import type { Approval, StoreId } from "@/lib/db/types";
 import { AUTO_APPROVAL_NOTE, settleOwnApproval } from "@/lib/approval-decide";
 import { addDays, toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, PROGRESS_KIND_LABEL } from "@/lib/constants";
-import { approverRole, canAccessStore, canManageFinance, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
+import { approverRole, canEditCaseStore, canManageFinance, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
 import { approvalSettings } from "@/lib/approval-rules";
 import { fieldLabel, fieldValue } from "@/lib/field-labels";
 import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { findConflicts, isDateKey, normTime, shortDate, timeLabel, toMinutes } from "@/lib/calendar";
 import { orderEditable, removeUpcomingOrderEvents, syncHandoverMemo, syncOrderEvent } from "@/lib/db/schedule";
-import { assertStore, choice, fail, requireActionUser, str, withMsg } from "./guards";
+import { assertCaseStore, assertStore, choice, fail, requireActionUser, str, withMsg } from "./guards";
 import { propagateOrderSite } from "@/lib/maps/store";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
 import { closedReason } from "@/lib/mgmt/close";
@@ -37,7 +37,8 @@ export async function updateOrderSchedule(id: string, formData: FormData) {
   const db0 = getDb();
   const o0 = db0.orders.find((x) => x.id === id);
   if (!o0) fail("/orders", "受注が見つかりません。");
-  assertStore(user, o0.storeId, back);
+  // 店長はほかの店舗の受注も変更できる (permissions.ts の canEditCaseStore)
+  assertCaseStore(user, o0.storeId, back);
   if (!orderEditable(o0)) fail(back, "完了済みの案件は変更できません。");
   if (o0.handovers?.length) fail(back, "この受注は品目ごとの引取・納品の日程で予定表に載せています。「引取・納品の日程」で変更してください。");
   const lock0 = completedCaseLock(db0, user, o0);
@@ -87,7 +88,7 @@ export async function addProgress(id: string, formData: FormData) {
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
-    assertStore(user, o.storeId, back);
+    assertCaseStore(user, o.storeId, back);
     o.progressNotes.push({ id: newId("pn"), at: nowIso(), userId: user.id, kind, body });
     if (kind === "install" && (o.status === "scheduled" || o.status === "confirmed")) o.status = "in_progress";
     o.updatedAt = nowIso();
@@ -105,7 +106,7 @@ export async function completeOrder(id: string, formData: FormData) {
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
-    assertStore(user, o.storeId, back);
+    assertCaseStore(user, o.storeId, back);
     if (!["confirmed", "scheduled", "in_progress"].includes(o.status)) fail(back, "この状態の案件は完了にできません。");
     const date = str(formData, "completedAt") || toDateKey(new Date());
     if (!isDateKey(date)) fail(back, "施工完了日を正しく入力してください。");
@@ -133,6 +134,7 @@ export async function createInvoiceFromOrder(id: string, formData: FormData) {
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
+    // 請求書の発行はその店舗の社員 (店長もほかの店舗の請求書は発行しない。canAccessStore)
     assertStore(user, o.storeId, back);
     if (o.status !== "completed") fail(back, "施工完了後に請求書を発行できます。");
     if (o.invoiceId) fail(back, "すでに請求書が発行されています。");
@@ -189,7 +191,7 @@ export async function cancelOrder(id: string, formData: FormData) {
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
-    assertStore(user, o.storeId, back);
+    assertCaseStore(user, o.storeId, back);
     if (["invoiced", "paid", "cancelled"].includes(o.status)) fail(back, "請求済み・入金済みの案件はキャンセルできません。");
     const lock = completedCaseLock(db, user, o);
     if (lock.locked) fail(back, completedLockMessage(lock.reason));
@@ -213,7 +215,7 @@ export async function resubmitOrder(id: string, formData: FormData) {
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
-    assertStore(user, o.storeId, back);
+    assertCaseStore(user, o.storeId, back);
     if (o.status !== "returned") fail(back, "差し戻された受注のみ再申請できます。");
     if (db.approvals.some((a) => a.targetId === o.id && a.type === "order" && a.status === "pending")) fail(back, "すでに承認待ちの申請があります。");
     const now = nowIso();
@@ -250,7 +252,7 @@ export async function requestOrderChange(id: string, formData: FormData) {
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
-    assertStore(user, o.storeId, back);
+    assertCaseStore(user, o.storeId, back);
     if (o.status === "cancelled") fail(back, "キャンセルした受注は変更できません。");
     const lock = completedCaseLock(db, user, o);
     if (lock.locked) fail(back, completedLockMessage(lock.reason));
@@ -320,7 +322,7 @@ export async function updateOrderInfo(id: string, formData: FormData) {
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
-    assertStore(user, o.storeId, back);
+    assertCaseStore(user, o.storeId, back);
     const lock = completedCaseLock(db, user, o);
     if (lock.locked) fail(back, completedLockMessage(lock.reason));
     const before = { ...o };
@@ -337,7 +339,7 @@ export async function updateOrderInfo(id: string, formData: FormData) {
       o.storeId = storeId as StoreId;
       for (const e of db.schedule) if (e.orderId === o.id) e.storeId = o.storeId;
       for (const a of db.approvals) if (a.status === "pending" && a.targetId === o.id) a.storeId = o.storeId;
-      moved = !canAccessStore(user, o.storeId);
+      moved = !canEditCaseStore(user, o.storeId);
     }
     const changes = diffChanges(before, o, ["title", "category", "siteAddress", "receiptName", "storeId", "workDetails"]);
     if (changes.length === 0) fail(back, "変更はありませんでした。");

@@ -7,7 +7,7 @@ import { RecordViewRequest } from "@/components/features/RecordViewRequest";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canReadStoreRecords } from "@/lib/auth/permissions";
+import { canAccessStore, canReadStoreRecords } from "@/lib/auth/permissions";
 import { customerTimeline, userName } from "@/lib/db/queries";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { CHANNEL_LABEL, INQUIRY_STATUS, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
@@ -264,7 +264,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
             newParams={`customerId=${c.id}`}
             returnTo={`/customers/${c.id}`}
             quickKinds={["visit", "survey", "measure"]}
-            canAdd
+            canAdd={canAccessStore(user, c.storeId)}
           />
         </div>
       </div>

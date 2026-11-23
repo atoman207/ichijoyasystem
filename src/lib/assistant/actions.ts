@@ -2,7 +2,7 @@ import "server-only";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Channel, Database, InquiryStatus, ProgressKind, ScheduleEvent, ScheduleKind, ServiceCategory, StoreId, ThreadKind, User } from "@/lib/db/types";
 import { APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, PROGRESS_KIND_LABEL, SCHEDULE_KIND, THREAD_KIND_LABEL } from "@/lib/constants";
-import { canAccessStore, canApprove, canEditEvent, canManageCompanyEvents, canSeeAllStores } from "@/lib/auth/permissions";
+import { canAccessStore, canApprove, canEditCaseStore, canEditEvent, canManageCompanyEvents, canSeeAllStores } from "@/lib/auth/permissions";
 import { findConflicts, isDateKey, normTime, periodLabel, shortDate, timeLabel, toMinutes } from "@/lib/calendar";
 import { caseValue, createCaseResolver, orderEditable, type CaseRef } from "@/lib/db/schedule";
 import { currentEventMode } from "@/lib/maps/store";
@@ -154,9 +154,12 @@ function findCase(db: Database, raw: string): Found<CaseRef> {
   return { ok: false, error: `案件「${raw}」が見つかりません (受注・見積・問い合わせの番号を指定してください)。` };
 }
 
-/** お客様: ID・顧客コード・名前 (自分が扱える店舗で 1 人に決まるとき) */
-function findCustomer(db: Database, user: User, raw: string): Found<Database["customers"][number]> {
-  const rows = db.customers.filter((c) => canAccessStore(user, c.storeId));
+/**
+ * お客様: ID・顧客コード・名前 (自分が扱える店舗で 1 人に決まるとき)。
+ * 扱える店舗は、予定は自店舗 (canAccessStore)、問い合わせは顧客・案件を変更できる店舗 (canEditCaseStore: 店長は全店舗)
+ */
+function findCustomer(db: Database, user: User, raw: string, canUse: (storeId: StoreId) => boolean = (s) => canAccessStore(user, s)): Found<Database["customers"][number]> {
+  const rows = db.customers.filter((c) => canUse(c.storeId));
   const k = norm(raw.replace(/(様|さん)$/, ""));
   const byId = rows.find((c) => c.id === raw || norm(c.code) === k);
   if (byId) return { ok: true, value: byId };
@@ -383,14 +386,15 @@ function proposeCreateInquiry(db: Database, user: User, a: Record<string, unknow
   if (!summary) return bad("問い合わせの内容 (要約) を指定してください。");
   let customer: Database["customers"][number] | undefined;
   if (text(a.customer)) {
-    const c = findCustomer(db, user, text(a.customer));
+    const c = findCustomer(db, user, text(a.customer), (s) => canEditCaseStore(user, s));
     if (!c.ok) return bad(c.error);
     customer = c.value;
   }
   const contactName = customer?.name ?? text(a.contact_name, 80);
   if (!contactName) return bad("お客様の名前 (既存のお客様なら顧客コード・名前) を指定してください。");
   const requested = storeOf(db, user, text(a.store, 40));
-  const storeId: StoreId = customer?.storeId ?? (requested && canSeeAllStores(user) ? requested : user.storeId);
+  // 受付店舗: 全店舗ロールはお客様の店舗 (指定があればその店舗)、店舗のロールは自店舗 (問い合わせの画面と同じ。店長がほかの店舗のお客様の問い合わせを受けても自店舗)
+  const storeId: StoreId = canSeeAllStores(user) ? (customer?.storeId ?? requested ?? user.storeId) : user.storeId;
   if (!canAccessStore(user, storeId)) return bad("この店舗の問い合わせを登録する権限がありません。");
   const channel = keyOf<Channel>(CHANNEL_LABEL, text(a.channel, 20)) ?? "phone";
   const category = keyOf<ServiceCategory>(CATEGORY_LABEL, text(a.category, 20)) ?? "tatami";
@@ -446,7 +450,7 @@ function proposeInquiryStatus(db: Database, user: User, a: Record<string, unknow
   const f = findByNumber(db.inquiries, text(a.inquiry ?? a.id, 60), "問い合わせ");
   if (!f.ok) return bad(f.error);
   const inq = f.value;
-  if (!canAccessStore(user, inq.storeId)) return bad("この問い合わせの店舗を操作する権限がありません。");
+  if (!canEditCaseStore(user, inq.storeId)) return bad("この問い合わせの店舗を操作する権限がありません。");
   const status = keyOf(STATUS_LABELS, text(a.status, 20));
   if (!status) return bad(`状態は ${Object.values(STATUS_LABELS).join("・")} のどれかで指定してください。`);
   if (status === inq.status) return bad(`問い合わせ ${inq.number} はすでに「${STATUS_LABELS[status]}」です。`);
@@ -465,7 +469,7 @@ function proposeOrderProgress(db: Database, user: User, a: Record<string, unknow
   const f = findByNumber(db.orders, text(a.order ?? a.id, 60), "受注");
   if (!f.ok) return bad(f.error);
   const o = f.value;
-  if (!canAccessStore(user, o.storeId)) return bad("この受注の店舗を操作する権限がありません。");
+  if (!canEditCaseStore(user, o.storeId)) return bad("この受注の店舗を操作する権限がありません。");
   const body = text(a.body, 1000);
   if (!body) return bad("記録する内容を指定してください。");
   const kind = keyOf<ProgressKind>(PROGRESS_KIND_LABEL, text(a.progress_kind ?? a.kind, 20)) ?? "note";

@@ -92,7 +92,7 @@ export function buildSeed(db: Pick<Database, "settings" | "knowledge" | "stores"
 
   // 承認ルール
   const rules = approvalSettings(db);
-  const approvalAnswer = `見積・受注 (契約)・契約内容の変更は ${manYen(rules.quoteAdminThreshold)} 以上が管理者、それ未満は所属店舗の店長が承認します。経費は ${manYen(rules.expenseAdminThreshold)} 以上が管理者、それ未満は店長です。店長のいない店舗と、店長本人の申請は管理者が承認します。仕入の支払依頼は管理者が承認します。`;
+  const approvalAnswer = `見積・受注 (契約)・契約内容の変更は ${manYen(rules.quoteAdminThreshold)} 以上が管理者、それ未満は所属店舗の店長が承認します。経費は ${manYen(rules.expenseAdminThreshold)} 以上が管理者、それ未満は店長です。店長の申請 (ほかの店舗の案件を含む) と、店長のいない店舗は管理者が承認します。仕入の支払依頼は管理者が承認します。`;
   add(["承認は誰がする", "誰が承認しますか", "承認者は誰", "いくらから管理者の承認", "管理者の承認が必要な金額", "見積の承認は誰", "経費の承認は誰", "承認の基準額", "承認ルール"], approvalAnswer, linkTo("/approvals", "承認"), ["rules:approval", "overview:approval"]);
   add(["差戻しと却下の違い", "差し戻すとどうなる", "却下するとどうなる"], "「差し戻す」は修正して再申請してもらうとき、「却下する」は申請そのものを取りやめるときに使います。どちらも理由の入力が必要で、申請した人にお知らせが届きます。", linkTo("/approvals", "承認"), ["overview:approval"]);
 

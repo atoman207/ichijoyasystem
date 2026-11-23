@@ -1,6 +1,6 @@
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canSeeAllStores, scopeByStore, skipsApproval } from "@/lib/auth/permissions";
+import { canEditCaseStore, canSeeAllStores, skipsApproval } from "@/lib/auth/permissions";
 import { createQuote } from "@/lib/actions/quotes";
 import { customerOptions } from "@/lib/db/queries";
 import { CustomerSearch } from "@/components/features/CustomerSearch";
@@ -32,7 +32,8 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
   const category = (sp.category ?? inquiry?.category ?? "tatami") as ServiceCategory;
   const customerId = sp.customerId ?? inquiry?.customerId ?? "";
   const customer = db.customers.find((c) => c.id === customerId);
-  const choices = customerOptions(scopeByStore(user, db.customers), sp.cq, customerId);
+  // 見積を作れるお客様: 自店舗 (全店舗ロールは全店舗)、店長は全店舗 (permissions.ts の canEditCaseStore)
+  const choices = customerOptions(db.customers.filter((c) => canEditCaseStore(user, c.storeId)), sp.cq, customerId);
   const customers = choices.options;
 
   // 取込書類 (手書き見積・図面・施工資料・契約書) の読取結果を初期値にする。品名は商品マスタに対応づけ、単価がなければマスタの単価
@@ -71,7 +72,7 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
       <Flash err={sp.err} />
       <PageHeader title="見積を作成" back={{ href: inquiry ? `/inquiries/${inquiry.id}` : "/quotes", label: inquiry ? "問い合わせに戻る" : "見積一覧" }} />
       <Note tone="accent">
-        合計 {approvalSettings(db).quoteAdminThreshold.toLocaleString("ja-JP")} 円未満は店長承認、以上は管理者承認が必要です (本部の案件と、承認できる店長がいない店舗は管理者)。「承認を申請」すると承認者に通知され、承認後にお客様へ送付できます。
+        合計 {approvalSettings(db).quoteAdminThreshold.toLocaleString("ja-JP")} 円未満は店長承認、以上は管理者承認が必要です (本部の案件・店長の申請・承認できる店長がいない店舗は管理者)。「承認を申請」すると承認者に通知され、承認後にお客様へ送付できます。
         {doc && <> この見積は取込書類「{doc.fileName}」の読取結果を初期値にしています (品名は商品マスタに対応づけ、単価が読み取れない行はマスタの単価)。内容を確認・修正してください。</>}
       </Note>
       {customer?.tradeStopped && (
@@ -100,7 +101,7 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
               </Select>
             </Field>
             <Field label="店舗">
-              <Select name="storeId" defaultValue={customer?.storeId ?? (allStores ? "" : user.storeId)} disabled={!allStores}>
+              <Select name="storeId" defaultValue={allStores ? (customer?.storeId ?? "") : (inquiry?.storeId ?? user.storeId)} disabled={!allStores}>
                 {allStores && <option value="">お客様の担当店舗</option>}
                 {db.stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </Select>
@@ -119,7 +120,7 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
           </div>
           <div>
             <div className="label">明細</div>
-            <QuoteEditor products={db.products} defaultCategory={docCategoryValue} initialItems={initialItems} initialDiscount={typeof ex.discount === "number" ? ex.discount : 0} initialTaxIncluded={taxIncludedDefault} {...itemCategoryProps(db, docCategoryValue)} doko={dokoChoiceInfo(db, toDateKey(new Date()))} />
+            <QuoteEditor products={db.products} defaultCategory={docCategoryValue} initialItems={initialItems} autoOnLoad initialDiscount={typeof ex.discount === "number" ? ex.discount : 0} initialTaxIncluded={taxIncludedDefault} {...itemCategoryProps(db, docCategoryValue)} doko={dokoChoiceInfo(db, toDateKey(new Date()))} />
           </div>
           <Field label="施工内容 (見積書に印字し、受注に引き継ぎます)" hint="例: 和室6畳 表替え (さくら)。家具の移動・古畳の引取を含みます">
             <Textarea name="workDetails" rows={3} defaultValue={defaultWork} />

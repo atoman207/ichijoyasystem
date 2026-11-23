@@ -7,13 +7,13 @@ import { userCanCreateCustomer } from "@/lib/ops-settings";
 import type { Inquiry, InquiryStatus } from "@/lib/db/types";
 import { toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS } from "@/lib/constants";
-import { canAccessStore, canSeeAllStores } from "@/lib/auth/permissions";
+import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
 import { createHandoffTask, linkInquiryLogs } from "@/lib/ai-intake";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
 import { storeInquiryNotices } from "@/lib/notify/store-line";
-import { assertStore, choice, fail, isKeyOf, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
+import { assertCaseStore, assertStore, choice, fail, isKeyOf, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 import { MEDIA_LABEL, isMediaKey, mapMediaText, readMediaRules } from "@/lib/media";
 import type { MediaKey } from "@/lib/db/types";
 
@@ -52,8 +52,8 @@ export async function createInquiry(formData: FormData) {
   const id = newId("inq");
   await mutate((db) => {
     const customer = db.customers.find((c) => c.id === str(formData, "customerId"));
-    // 店舗のロールは自店舗のお客様だけを選べる
-    if (customer) assertStore(user, customer.storeId, back);
+    // 店舗のロールは自店舗のお客様だけを選べる (店長は全店舗のお客様。受付店舗は自店舗のまま)
+    if (customer) assertCaseStore(user, customer.storeId, back);
     const storeId = resolveStoreId(user, str(formData, "storeId"), customer?.storeId);
     assertStore(user, storeId, back);
     const contactName = customer?.name ?? str(formData, "contactName");
@@ -105,7 +105,8 @@ export async function updateInquiry(id: string, formData: FormData) {
   await mutate((db) => {
     const inq = db.inquiries.find((x) => x.id === id);
     if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
-    assertStore(user, inq.storeId, back);
+    // 店長はほかの店舗の問い合わせも変更できる (permissions.ts の canEditCaseStore)
+    assertCaseStore(user, inq.storeId, back);
     const before = { ...inq };
     const status = str(formData, "status") as InquiryStatus;
     if (status && isKeyOf(INQUIRY_STATUS, status)) inq.status = status;
@@ -119,7 +120,8 @@ export async function updateInquiry(id: string, formData: FormData) {
     if (formData.has("promotionId")) {
       const pid = str(formData, "promotionId");
       const promo = pid ? (db.promotions ?? []).find((p) => p.id === pid) : undefined;
-      if (pid && (!promo || (promo.storeId !== "hq" && !canAccessStore(user, promo.storeId)))) fail(back, "きっかけの販促が見つかりません。");
+      // 選べるのは全社 (本部)・自店舗・この問い合わせの店舗の販促
+      if (pid && (!promo || (promo.storeId !== "hq" && promo.storeId !== inq.storeId && !canAccessStore(user, promo.storeId)))) fail(back, "きっかけの販促が見つかりません。");
       if (promo) inq.promotionId = promo.id;
       else delete inq.promotionId;
     }
@@ -131,7 +133,7 @@ export async function updateInquiry(id: string, formData: FormData) {
       const assignee = db.users.find((u) => u.id === inq.assignedUserId);
       // 担当者が回した先の店舗の人でなければ外す (回した先の店舗で担当を決める)
       if (assignee && assignee.storeId !== inq.storeId && !canSeeAllStores(assignee)) inq.assignedUserId = undefined;
-      moved = !canAccessStore(user, inq.storeId);
+      moved = !canEditCaseStore(user, inq.storeId);
     }
     inq.updatedAt = nowIso();
     const changes = diffChanges(before, inq, ["status", "assignedUserId", "category", "nextAction", "nextActionDue", "detail", "storeId", "media", "promotionId"]);
@@ -156,7 +158,7 @@ export async function setInquiryStatus(id: string, status: InquiryStatus) {
   await mutate((db) => {
     const inq = db.inquiries.find((x) => x.id === id);
     if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
-    assertStore(user, inq.storeId, back);
+    assertCaseStore(user, inq.storeId, back);
     const before = inq.status;
     inq.status = status;
     inq.updatedAt = nowIso();
@@ -176,7 +178,7 @@ export async function registerCustomerFromInquiry(id: string, formData?: FormDat
   await mutate((db) => {
     const inq = db.inquiries.find((x) => x.id === id);
     if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
-    assertStore(user, inq.storeId, back);
+    assertCaseStore(user, inq.storeId, back);
     if (inq.customerId) fail(back, "すでに顧客に紐づいています。");
     // 既存顧客との重複確認 (同じお客様なら「この顧客に紐づける」を使う)
     // AI 受付で受け取った項目 (ふりがな・メール・住所) も登録と重複の確認に使う
@@ -225,11 +227,11 @@ export async function linkInquiryToCustomer(id: string, customerId: string) {
   await mutate((db) => {
     const inq = db.inquiries.find((x) => x.id === id);
     if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
-    assertStore(user, inq.storeId, back);
+    assertCaseStore(user, inq.storeId, back);
     if (inq.customerId) fail(back, "すでに顧客に紐づいています。");
     const c = db.customers.find((x) => x.id === customerId);
     if (!c) fail(back, "顧客が見つかりません。");
-    if (!canAccessStore(user, c.storeId)) fail(back, "他店舗の顧客には紐づけられません。店舗または本部に依頼してください。");
+    if (!canEditCaseStore(user, c.storeId)) fail(back, "他店舗の顧客には紐づけられません。店舗または本部に依頼してください。");
     inq.customerId = c.id;
     inq.updatedAt = nowIso();
     for (const e of db.schedule) if (e.inquiryId === id && !e.customerId) e.customerId = c.id;
@@ -266,7 +268,7 @@ export async function handoffInquiry(id: string, formData: FormData) {
   await mutate((db) => {
     const inq = db.inquiries.find((x) => x.id === id);
     if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
-    assertStore(user, inq.storeId, back);
+    assertCaseStore(user, inq.storeId, back);
     const assignee = db.users.find((u) => u.id === assigneeId && u.active);
     if (!assignee) fail(back, "引き継ぎ先の社員が見つかりません。");
     if (!canSeeAllStores(user) && assignee.storeId !== inq.storeId && assignee.role !== "admin" && assignee.role !== "hq_staff") fail(back, "引き継ぎ先は、この問い合わせの店舗の社員か本部の社員から選んでください。");

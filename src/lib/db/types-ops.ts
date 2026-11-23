@@ -99,3 +99,57 @@ export interface Promotion {
   updatedBy?: string;
   updatedAt: string;
 }
+
+/* ---------------- 畳製造予定 (お客様のご要望 2026-11-23「■3. 畳製造予定表」。src/lib/production) ---------------- */
+
+/**
+ * 畳製造予定の行で人が決めたこと (製造日の変更・繰り越し・製造日未定・製造済み) と、手で足した製造の予定。
+ * 製造の予定そのもの (いつ・どの店舗の・どの案件 (仕様) の・何畳) は、受注の引取日・採寸日と予定表の引き取りの予定から毎回計算する
+ * (src/lib/production/plan.ts)。この表に行がなければ「元の日 (引取日・採寸日) に製造」。
+ * 製造日を変えても、予定表の引取日・納品日の予定は変えない (お客様のご指示)。
+ */
+export interface TatamiProduction {
+  /** tp_<元の印> (元ごとに 1 行) / 手で足した行は tp_<ID> */
+  id: string;
+  /**
+   * 元の印: ho:<受注の引取・納品の日程の行 ID> / ord:<受注 ID> (日程の行がない受注) / ev:<予定表の予定 ID> (移行した予定表・受注にひも付かない予定) /
+   * man:<ID> (手で足した行)
+   */
+  sourceKey: string;
+  storeId: StoreId;
+  orderId?: string;
+  eventId?: string;
+  customerId?: string;
+  /** 製造日 (人が決めた日)。空なら元の日 (引取日・採寸日) */
+  date?: string;
+  /** 製造日未定 (長期預かりなど) */
+  undecided?: boolean;
+  /** 製造日を決めたときの元の日 (あとで引取日が変わったことを知らせる) */
+  baseDate?: string;
+  /** planned = 予定 / done = 製造済み / cancelled = 製造しない (一覧から外す) */
+  status: "planned" | "done" | "cancelled";
+  doneAt?: string;
+  doneBy?: string;
+  /** 手で足した行の内容 (元の記録がない行) */
+  title?: string;
+  spec?: string;
+  qty?: number;
+  /** へり無し畳の枚数 (手で足した行) */
+  herinashi?: number;
+  note?: string;
+  /** 繰り越し・日付の変更などの記録 (新しい 30 件) */
+  history: TatamiProductionEvent[];
+  createdBy: string;
+  createdAt: string;
+  updatedBy?: string;
+  updatedAt: string;
+}
+
+export interface TatamiProductionEvent {
+  at: string;
+  by: string;
+  action: "create" | "carry" | "move" | "undecided" | "auto" | "done" | "reopen" | "cancel" | "edit";
+  from?: string;
+  to?: string;
+  note?: string;
+}

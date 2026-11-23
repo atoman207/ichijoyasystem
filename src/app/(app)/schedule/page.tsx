@@ -1,6 +1,6 @@
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
-import { CalendarDays, CalendarOff, ChartGantt, ChevronLeft, ChevronRight, Columns3, Gauge, LayoutGrid, List, Plus, Route, Rows3, TriangleAlert, UserRound } from "lucide-react";
+import { CalendarDays, CalendarOff, ChartGantt, ChevronLeft, ChevronRight, Columns3, Factory, Gauge, LayoutGrid, List, Plus, Route, Rows3, TriangleAlert, UserRound } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import type { ScheduleEvent, ScheduleKind, StoreId } from "@/lib/db/types";
@@ -13,7 +13,10 @@ import { addMonths, analyzeConflicts, dateRange, isDateKey, longDate, monthEnd, 
 import { addDays, toDateKey } from "@/lib/format";
 import { SCHEDULE_GROUP_LABEL, SCHEDULE_KIND, SCHEDULE_KINDS } from "@/lib/constants";
 import { Card, CardHeader, Flash, LinkButton, LinkTabs, PageHeader } from "@/components/ui";
-import { ConflictList, DayView, ListView, MonthView, StaffView, WeekView, type CalendarContext, type CalUser } from "@/components/schedule/CalendarViews";
+import { ConflictList, DayView, ListView, MonthView, ProductionLink, StaffView, WeekView, type CalendarContext, type CalUser } from "@/components/schedule/CalendarViews";
+import { scheduleWork } from "@/lib/schedule-work";
+import { workDescription, workTokens } from "@/lib/work-summary";
+import { productionByDay, productionRows } from "@/lib/production/plan";
 import { KindLegend } from "@/components/schedule/parts";
 import { activeHolds } from "@/lib/scheduling/context";
 import { holidayResolver } from "@/lib/holiday-calendar";
@@ -123,6 +126,12 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
     q.set("returnTo", here);
     return `/schedule/new?${q.toString()}`;
   };
+  // 仕事内容と数量 (「タ12 フ6 シ4 ア2」。お客様のご要望 2026-11-23「■2」) と、日ごとの畳製造予定 (「■3」)
+  const work = scheduleWork(db, inRange);
+  const tokenCache = new Map<string, ReturnType<typeof workTokens>>();
+  const production = productionRows(db, { from, to, today }).filter((r) => !storeFilter || r.storeId === storeFilter);
+  const productionDays = productionByDay(production.filter((r) => r.date && r.date >= from && r.date <= to));
+  const productionHref = (d: string) => `/schedule/production?date=${d}&days=1${storeFilter ? `&store=${storeFilter}` : ""}`;
   const ctx: CalendarContext = {
     today,
     nowMinutes: now.getHours() * 60 + now.getMinutes(),
@@ -139,6 +148,12 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
     dayHref: (d) => link({ view: "day", date: d }),
     closedDays: new Set(db.holidays.map((h) => h.date)),
     holidayOf: holidayResolver(db),
+    workOf: (e) => {
+      if (!tokenCache.has(e.id)) tokenCache.set(e.id, workTokens(work.get(e.id)));
+      return tokenCache.get(e.id);
+    },
+    workTextOf: (e) => workDescription(work.get(e.id)) || undefined,
+    production: { byDay: productionDays, href: productionHref },
   };
 
   const storeTabs = [
@@ -171,6 +186,10 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
             <LinkButton href={link({ user: "me", store: "all", view: view === "month" ? "list" : view })} variant="secondary" size="sm">
               <UserRound />
               自分の予定
+            </LinkButton>
+            <LinkButton href={`/schedule/production?date=${view === "day" ? anchor : from >= today || view === "list" ? from : today}${view === "day" ? "&days=1" : ""}${storeFilter ? `&store=${storeFilter}` : ""}`} variant="secondary" size="sm">
+              <Factory />
+              畳製造予定
             </LinkButton>
             <LinkButton href="/schedule/planning" variant="secondary" size="sm">
               <Route />
@@ -302,6 +321,11 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
       {view === "month" && <MonthView days={days} month={anchor.slice(0, 7)} events={shown} ctx={ctx} />}
       {view === "week" && <WeekView days={days} events={shown} ctx={ctx} />}
       {view === "staff" && <StaffView days={days} rows={rowUsers} events={personEvents} unassigned={userParam ? [] : shown.filter((e) => e.assigneeIds.length === 0 && !e.companyWide)} ctx={ctx} />}
+      {view === "day" && productionDays.get(anchor) && (
+        <div className="mb-2">
+          <ProductionLink ctx={ctx} day={anchor} variant="day" />
+        </div>
+      )}
       {view === "day" && <DayView day={anchor} rows={rowUsers} events={personEvents} unassigned={shown.filter((e) => e.assigneeIds.length === 0 && occursOn(e, anchor))} ctx={ctx} />}
       {view === "list" && <ListView days={days} events={shown} ctx={ctx} />}
 
@@ -321,6 +345,8 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
           <CardHeader title="凡例・使い方" />
           <KindLegend />
           <ul className="mt-4 space-y-1.5 text-xs leading-relaxed text-ink-2">
+            <li>・予定の左の色のアイコンが種類 (引き取り・納品・現地調査 (見積)・顧客訪問など)、その右が店舗名 (全社の表示のとき)。お客様の名前の右は仕事内容と数量です (タ = 畳・フ = 襖・シ = 障子・ア = 網戸。<span className="font-semibold text-critical-ink">(縁無)</span> はへり無し畳)。受注の見積の明細、移行した予定表の枚数、メモの「タ6フ1」から表示します。</li>
+            <li>・日の見出しの「<span className="font-semibold">製 タ12</span>」はその日の畳製造予定 (押すとその日の製造予定。繰り越し・製造日未定・製造済みを記録できます)。</li>
             <li>・予定はすべての社員が全店舗分を閲覧できます。上のタブで店舗ごとのカレンダーに切り替えます (全社共通の予定はどの店舗にも表示)。</li>
             <li>・現地調査・採寸・引き取り・納品・施工・顧客訪問は、問い合わせ・見積・受注の画面の「この案件の予定」から登録すると案件に紐づきます。受注の施工予定は「施工」の予定と連動します。</li>
             <li>・「担当者別」「日」は人員配置の確認用です。空いている欄の「＋」から、その社員・その日の予定を追加できます。</li>

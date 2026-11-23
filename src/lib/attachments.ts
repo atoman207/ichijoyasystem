@@ -1,6 +1,6 @@
 import "server-only";
 import type { Attachment, AttachmentParent, Database, StoreId, User } from "@/lib/db/types";
-import { canAccessStore, canDeleteAttachment, canManageFinance, canViewExpense } from "@/lib/auth/permissions";
+import { canAccessStore, canDeleteAttachment, canEditCaseStore, canManageFinance, canViewExpense } from "@/lib/auth/permissions";
 import { customerAccess, inquiryAccess, orderAccess, quoteAccess } from "@/lib/case-access";
 import { newId, nowIso } from "@/lib/db/store";
 import { putObject, removeObjects } from "@/lib/storage";
@@ -141,11 +141,14 @@ function viewableParent(user: User, db: Database, p: ParentInfo): boolean {
   }
 }
 
-/** 登録先に添付ファイルを追加できるか (書類取込の元画像は取込のときだけ。ほかの店舗の案件は閲覧だけ) */
+/**
+ * 登録先に添付ファイルを追加できるか (書類取込の元画像は取込のときだけ)。
+ * 顧客・問い合わせ・見積・受注は変更できる店舗 (canEditCaseStore: 店長は全店舗)。それ以外の人には、ほかの店舗の案件は閲覧だけ
+ */
 export function canAddToParent(user: User, db: Database, p: ParentInfo): boolean {
   if (p.type === "document") return false;
   if (p.type === "expense" || p.type === "purchase") return canViewParent(user, db, p);
-  return canAccessStore(user, p.storeId);
+  return canEditCaseStore(user, p.storeId);
 }
 
 /** 添付ファイルを表示できるか。登録先が消えている場合は店舗で判定する */

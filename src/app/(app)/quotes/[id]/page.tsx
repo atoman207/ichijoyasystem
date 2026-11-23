@@ -5,7 +5,7 @@ import { logRecordView } from "@/lib/record-views";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canApprove, skipsApproval } from "@/lib/auth/permissions";
+import { canAccessStore, canApprove, skipsApproval } from "@/lib/auth/permissions";
 import { quoteChain, userName } from "@/lib/db/queries";
 import { convertQuoteToOrder, deleteQuote, markQuoteLost, sendQuote, submitQuote } from "@/lib/actions/quotes";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
@@ -267,7 +267,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
             newParams={chain.order ? `orderId=${chain.order.id}` : `quoteId=${q.id}`}
             returnTo={returnTo}
             quickKinds={chain.order ? ["pickup", "delivery", "install", "visit"] : ["visit", "measure", "survey"]}
-            canAdd={!["rejected", "expired"].includes(q.status)}
+            canAdd={!["rejected", "expired"].includes(q.status) && canAccessStore(user, q.storeId)}
             description="見積の説明・再採寸などの訪問を担当者つきで登録すると、店舗の共通カレンダーに自動で反映されます。問い合わせ段階の現地調査も表示します"
           />
 

@@ -14,7 +14,7 @@ import type { HolidayWork, LeaveGrant, LeaveRequest } from "./types-hr";
 export type * from "./types-hr";
 import type { Condolence, OfficeImprovement } from "./types-office";
 export type * from "./types-office";
-import type { MediaKey, Promotion, WorkReportDay } from "./types-ops";
+import type { MediaKey, Promotion, TatamiProduction, WorkReportDay } from "./types-ops";
 export type * from "./types-ops";
 import type { DocDraft } from "./types-drafts";
 export type * from "./types-drafts";
@@ -1702,6 +1702,8 @@ export interface Database {
   /* 作業日報・販促の記録 (types-ops.ts) */
   workReportDays: WorkReportDay[];
   promotions: Promotion[];
+  /* 畳製造予定 (types-ops.ts。src/lib/production) */
+  tatamiProduction: TatamiProduction[];
   /* 事務 (types-office.ts。事務改善シート・慶弔リスト) */
   officeImprovements: OfficeImprovement[];
   condolences: Condolence[];

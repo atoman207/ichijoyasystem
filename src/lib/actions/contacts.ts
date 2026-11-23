@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { addAudit, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Channel, CommLog, Database, RelatedType, StoreId, User } from "@/lib/db/types";
 import { CHANNEL_LABEL, DELIVERY_STATUS } from "@/lib/constants";
-import { canAccessStore, canSeeAllStores, canViewPurchase } from "@/lib/auth/permissions";
+import { canAccessStore, canEditCaseStore, canSeeAllStores, canViewPurchase } from "@/lib/auth/permissions";
 import { isEmail, isLineTarget } from "@/lib/notify/channels";
 import { lineGroupName, lineGroups } from "@/lib/line-groups";
 import { sendAndRecord, type Outgoing } from "@/lib/notify/send";
@@ -31,10 +31,13 @@ function findCase(db: Database, ref: string): CaseRef | undefined {
   return undefined;
 }
 
+/** 紐付ける案件を扱えるか: 問い合わせ・見積・受注は canEditCaseStore (店長は全店舗)、請求書は自店舗、仕入請求書は仕入の権限 */
 function assertCaseAccess(user: User, c: CaseRef, back: string) {
   if (c.type === "purchase") {
     if (!canViewPurchase(user, { storeId: c.storeId })) fail(back, "この仕入請求書は閲覧できません。");
-  } else if (!canAccessStore(user, c.storeId)) fail(back, "他店舗の案件には紐付けられません。");
+  } else if (c.type === "invoice") {
+    if (!canAccessStore(user, c.storeId)) fail(back, "他店舗の案件には紐付けられません。");
+  } else if (!canEditCaseStore(user, c.storeId)) fail(back, "他店舗の案件には紐付けられません。");
 }
 
 /** 送信できる宛先 (メール・LINE・Chatwork)。なければ理由 */
@@ -87,7 +90,7 @@ export async function createContactLog(formData: FormData) {
   if (customerId && !customer) fail(back, "お客様が見つかりません。");
   if (supplierId && !supplier) fail(back, "協力業者・仕入先が見つかりません。");
   if (!customer && !supplier) fail(back, "相手 (お客様、または協力業者・仕入先) を選んでください。");
-  if (customer && !canAccessStore(user, customer.storeId)) fail(back, "他店舗のお客様のやりとりは記録できません。");
+  if (customer && !canEditCaseStore(user, customer.storeId)) fail(back, "他店舗のお客様のやりとりは記録できません。");
   if (caseRef?.customerId && customer && caseRef.customerId !== customer.id) fail(back, `案件 ${caseRef.number} は別のお客様の案件です。`);
   const storeId: StoreId = caseRef?.storeId ?? customer?.storeId ?? (canSeeAllStores(user) ? "hq" : user.storeId);
 
@@ -150,7 +153,9 @@ export async function linkContactLog(id: string, formData: FormData) {
     if (!log) fail(back, "やりとりの記録が見つかりません。");
     const customer = log.customerId ? db.customers.find((c) => c.id === log.customerId) : undefined;
     const logStore = log.storeId ?? customer?.storeId;
-    if (logStore && !canAccessStore(user, logStore)) fail(back, "この記録を変更する権限がありません。");
+    // お客様とのやりとり (問い合わせ・見積・受注・お客様あて) は canEditCaseStore (店長は全店舗)。請求書・協力業者・仕入先とのやりとりは自店舗
+    const customerLog = Boolean(log.customerId) && !log.supplierId && log.relatedType !== "invoice" && log.relatedType !== "purchase";
+    if (logStore && !(customerLog ? canEditCaseStore(user, logStore) : canAccessStore(user, logStore))) fail(back, "この記録を変更する権限がありません。");
     const ref = str(formData, "caseRef");
     const c = ref ? findCase(db, ref) : undefined;
     if (ref && !c) fail(back, `案件番号「${ref}」が見つかりません。`);

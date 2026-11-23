@@ -10,11 +10,11 @@ import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { AUTO_APPROVAL_NOTE } from "@/lib/approval-decide";
 import { cleanHandovers } from "@/lib/handover";
 import { planConflicts, savePlan } from "@/lib/handover-save";
-import { assertStore, fail, requireActionUser, str, withMsg } from "./guards";
+import { assertCaseStore, fail, requireActionUser, str, withMsg } from "./guards";
 
 /**
  * 受注の画面の「引取・納品の日程」(品目ごとの引取日・納品日。src/lib/handover.ts)
- * - はじめて入れる日程はすぐに予定表へ反映、登録済みの日程の変更は承認の申請 (店長。店長本人の申請は管理者。管理者は承認を省略)
+ * - はじめて入れる日程はすぐに予定表へ反映、登録済みの日程の変更は承認の申請 (店長。店長の申請は管理者。管理者は承認を省略)
  * - 担当 (施工担当) と現場住所もここで変える (担当は承認なし)
  */
 export async function saveOrderHandovers(id: string, formData: FormData) {
@@ -35,7 +35,8 @@ export async function saveOrderHandovers(id: string, formData: FormData) {
   const db0 = getDb();
   const o0 = db0.orders.find((x) => x.id === id);
   if (!o0) fail("/orders", "受注が見つかりません。");
-  assertStore(user, o0.storeId, back);
+  // 店長はほかの店舗の受注の日程も変更できる (permissions.ts の canEditCaseStore。変更の申請の承認は管理者)
+  assertCaseStore(user, o0.storeId, back);
   if (!orderEditable(o0)) fail(back, "完了・キャンセルした案件の日程は変更できません。");
   const lock0 = completedCaseLock(db0, user, o0);
   if (lock0.locked) fail(back, completedLockMessage(lock0.reason));

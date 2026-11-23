@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nowIso, nextCustomerCode } from "@/lib/db/store";
 import type { Customer, Database, User } from "@/lib/db/types";
-import { approverRole, canAccessStore, canApplyCustomerChange } from "@/lib/auth/permissions";
+import { approverRole, canApplyCustomerChange, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation, type DuplicateInput, type DuplicateResult } from "@/lib/duplicates";
 import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { CHANNEL_LABEL } from "@/lib/constants";
@@ -12,14 +12,14 @@ import { approvalSettings, CUSTOMER_IMPORTANT_FIELDS } from "@/lib/approval-rule
 import { fieldLabel } from "@/lib/field-labels";
 import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { contactLine, parseContacts } from "@/lib/customer-contacts";
-import { assertStore, choice, fail, requireActionUser, resolveStoreId, safeReturn, str, withMsg } from "./guards";
+import { assertCaseStore, assertStore, choice, fail, requireActionUser, resolveStoreId, safeReturn, str, withMsg } from "./guards";
 import { propagateCustomerAddress } from "@/lib/maps/store";
 
 function parseTags(s: string): string[] {
   return s.split(/[,、\s]+/).map((t) => t.trim()).filter(Boolean);
 }
 
-/** 重複候補の表示用 (他店舗の顧客は、閲覧権限がなければリンクを付けない) */
+/** 重複候補の表示用 (他店舗の顧客は、変更できる店舗でなければリンクを付けない。店長は全店舗) */
 export interface DuplicateRow {
   id: string;
   code: string;
@@ -47,7 +47,7 @@ function toReport(db: Database, user: User, r: DuplicateResult): DuplicateReport
     area: m.area,
     reasons: m.reasons,
     level,
-    href: canAccessStore(user, m.storeId) ? `/customers/${m.id}` : undefined,
+    href: canEditCaseStore(user, m.storeId) ? `/customers/${m.id}` : undefined,
   });
   return { rows: [...r.high.map(row("high")), ...r.check.map(row("check")), ...r.sameName.map(row("name"))], blocking: needsConfirmation(r), sameNameTotal: r.sameNameTotal };
 }
@@ -134,7 +134,8 @@ export async function updateCustomer(id: string, formData: FormData) {
   await mutate((db) => {
     const c = db.customers.find((x) => x.id === id);
     if (!c) fail("/customers", "顧客が見つかりません。");
-    assertStore(user, c.storeId, back);
+    // 店長はほかの店舗のお客様も変更できる (permissions.ts の canEditCaseStore)
+    assertCaseStore(user, c.storeId, back);
     const before = { ...c };
     const next: Customer = {
       ...c,
@@ -146,7 +147,8 @@ export async function updateCustomer(id: string, formData: FormData) {
       lineId: str(formData, "lineId") || undefined,
       postalCode: str(formData, "postalCode"),
       address: str(formData, "address"),
-      storeId: resolveStoreId(user, str(formData, "storeId"), c.storeId),
+      // 担当店舗の変更は全店舗ロールだけ (店長がほかの店舗のお客様を変更しても、お客様の店舗は変えない)
+      storeId: canSeeAllStores(user) ? resolveStoreId(user, str(formData, "storeId"), c.storeId) : c.storeId,
       assignedUserId: str(formData, "assignedUserId") || c.assignedUserId,
       preferredChannel: choice(formData, "preferredChannel", CHANNEL_LABEL, c.preferredChannel),
       tags: parseTags(str(formData, "tags")),
@@ -215,7 +217,7 @@ export async function addCommLog(customerId: string, formData: FormData) {
   await mutate((db) => {
     const c = db.customers.find((x) => x.id === customerId);
     if (!c) fail("/customers", "顧客が見つかりません。");
-    assertStore(user, c.storeId, back);
+    assertCaseStore(user, c.storeId, back);
     const relatedType = choice(formData, "relatedType", [...RELATED_TYPES, ""] as const, "") || undefined;
     const relatedId = relatedType ? str(formData, "relatedId") || undefined : undefined;
     const channel = choice(formData, "channel", CHANNEL_LABEL, "phone");

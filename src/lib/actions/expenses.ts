@@ -19,7 +19,7 @@ import { assertStore, choice, fail, numField, requireActionUser, resolveStoreId,
 
 /** 経費の承認の申請。管理者の申請は承認を省略して、その場で承認済みにする (auto = true) */
 function request(db: Database, e: Expense, user: User): { role: "store_manager" | "admin"; approvalId: string; auto: boolean } {
-  // 金額が基準以上、本部の経費、承認できる店長がいない店舗は管理者
+  // 金額が基準以上、本部の経費、店長の申請、承認できる店長がいない店舗は管理者
   const threshold = approvalSettings(db).expenseAdminThreshold;
   const over = e.amount >= threshold;
   const role = approverRole(db.users, e.storeId, over, user.id);

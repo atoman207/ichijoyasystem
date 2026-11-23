@@ -31,7 +31,7 @@ export default async function NewExpensePage({ searchParams }: { searchParams: P
       <Flash err={sp.err} />
       <PageHeader title="経費を登録" back={{ href: "/expenses", label: "経費一覧" }} />
       <Note tone="accent">
-        {threshold.toLocaleString("ja-JP")} 円未満は店長承認、以上 (および本部分・承認できる店長がいない店舗) は管理者承認です。
+        {threshold.toLocaleString("ja-JP")} 円未満は店長承認、以上 (および本部分・店長の申請・承認できる店長がいない店舗) は管理者承認です。
         {doc ? <> 取込書類「{doc.fileName}」の読取結果を初期値にしています (読取確度 {Math.round((doc.confidence ?? 0) * 100)}%)。内容を確認してください。</> : <> 手入力の代わりに <a href="/capture?kind=receipt" className="underline">レシートを撮影して取り込む</a> と、AI が金額・日付・勘定科目の候補を読み取ります。</>}
       </Note>
       {!doc && (

@@ -14,16 +14,17 @@ import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { syncOrderEvent } from "@/lib/db/schedule";
 import { hasHandoverItems, suggestHandovers } from "@/lib/handover";
 import { quoteHandoverLines } from "@/lib/handover-save";
-import { approverLabel, approverRole } from "@/lib/auth/permissions";
+import { approverLabel, approverRole, canSeeAllStores } from "@/lib/auth/permissions";
 import { relinkDocumentAttachments } from "@/lib/attachments";
 import { documentSettings } from "@/lib/doc-settings";
 import { quoteTotals } from "@/lib/quote-calc";
 import { siteInfoFromForm } from "@/lib/site-info";
 import { plannedFromSiteInfo } from "@/lib/case-status";
 import { syncHandoverMemo } from "@/lib/db/schedule";
-import { assertStore, choice, fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
+import { assertCaseStore, choice, fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 import { propagateOrderSite } from "@/lib/maps/store";
 import { quoteCompletedLock, completedLockMessage } from "@/lib/case-access";
+import { autoUnit } from "@/lib/line-kind";
 
 function parseItems(formData: FormData, back: string): QuoteItem[] {
   let raw: unknown;
@@ -48,7 +49,8 @@ function parseItems(formData: FormData, back: string): QuoteItem[] {
       name,
       spec: r.spec ? String(r.spec) : undefined,
       qty,
-      unit: String(r.unit ?? "式"),
+      // 単位が空なら品名・仕様から (src/lib/line-kind.ts。なければ「式」)。画面 (QuoteEditor) は入力のたびに自動で選ぶ
+      unit: String(r.unit ?? "").trim().slice(0, 10) || autoUnit(name, r.spec ? String(r.spec) : undefined, r.productId ? getDb().products.find((p) => p.id === String(r.productId))?.category : undefined) || "式",
       unitPrice,
       amount: Math.round(qty * unitPrice),
       // 管理会計の品目 (明細で選んだときだけ。空なら商品の品目 → 見積の種別から決める)
@@ -112,7 +114,7 @@ function hasActiveInvoice(db: Database, quoteId: string): boolean {
   return db.orders.some((o) => o.quoteId === quoteId && o.status !== "cancelled" && db.invoices.some((i) => i.id === o.invoiceId && i.status !== "void"));
 }
 
-/** 見積・受注の承認者 (金額が基準以上、本部の案件、承認できる店長がいない店舗は管理者) */
+/** 見積・受注の承認者 (金額が基準以上、本部の案件、店長の申請、承認できる店長がいない店舗は管理者) */
 function requiredRole(db: Database, storeId: StoreId, amount: number, requesterId: string): "store_manager" | "admin" {
   return approverRole(db.users, storeId, amount >= approvalSettings(db).quoteAdminThreshold, requesterId);
 }
@@ -178,10 +180,13 @@ export async function createQuote(formData: FormData) {
     if (doc && docBlocksQuote(doc)) fail("/capture?doc=" + doc.id, "この取込書類はすでに登録済み (または破棄済み) です。");
     const customer = db.customers.find((c) => c.id === customerId);
     if (!customer) fail(back, "お客様が見つかりません。");
-    // 店舗のロールは自店舗のお客様だけ (一覧で見えないお客様の見積を作らない)
-    assertStore(user, customer.storeId, back);
-    const storeId = resolveStoreId(user, str(formData, "storeId"), customer.storeId);
-    assertStore(user, storeId, back);
+    // 店舗のロールは自店舗のお客様だけ (一覧で見えないお客様の見積を作らない)。店長は全店舗のお客様 (permissions.ts の canEditCaseStore)
+    assertCaseStore(user, customer.storeId, back);
+    // 店舗のロールの見積は自店舗。ただし、ほかの店舗の問い合わせから作る見積 (店長) は、その問い合わせの店舗の見積にする
+    const fromInquiry = db.inquiries.find((i) => i.id === str(formData, "inquiryId"));
+    if (fromInquiry) assertCaseStore(user, fromInquiry.storeId, back);
+    const storeId = fromInquiry && !canSeeAllStores(user) ? fromInquiry.storeId : resolveStoreId(user, str(formData, "storeId"), customer.storeId);
+    assertCaseStore(user, storeId, back);
     const today = toDateKey(new Date());
     const now = nowIso();
     const taxIncluded = str(formData, "taxIncluded") === "1";
@@ -252,7 +257,7 @@ export async function updateQuote(id: string, formData: FormData) {
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
-    assertStore(user, q.storeId, back);
+    assertCaseStore(user, q.storeId, back);
     const lock = quoteCompletedLock(db, user, q);
     if (lock.locked) fail(`/quotes/${id}`, completedLockMessage(lock.reason));
     const taxIncluded = str(formData, "taxIncluded") === "1";
@@ -350,7 +355,7 @@ export async function submitQuote(id: string) {
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
-    assertStore(user, q.storeId, back);
+    assertCaseStore(user, q.storeId, back);
     if (q.status !== "draft") fail(back, "下書きの見積のみ申請できます。");
     submitted = submittedText(requestApproval(db, q, user));
     approvalId = db.approvals[db.approvals.length - 1].id;
@@ -367,7 +372,7 @@ export async function sendQuote(id: string, formData: FormData) {
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
-    assertStore(user, q.storeId, back);
+    assertCaseStore(user, q.storeId, back);
     if (q.status !== "approved" && q.status !== "sent") fail(back, "承認済みの見積のみ送付できます。");
     const now = nowIso();
     q.status = "sent";
@@ -394,7 +399,7 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
-    assertStore(user, q.storeId, back);
+    assertCaseStore(user, q.storeId, back);
     if (!["approved", "sent"].includes(q.status)) fail(back, "承認済み・送付済みの見積のみ受注にできます。");
     if (q.orderId) fail(back, "この見積はすでに受注登録されています。");
     const customer = db.customers.find((c) => c.id === q.customerId);
@@ -457,7 +462,7 @@ export async function markQuoteLost(id: string, formData: FormData) {
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
-    assertStore(user, q.storeId, back);
+    assertCaseStore(user, q.storeId, back);
     if (!["approved", "sent", "draft"].includes(q.status)) fail(back, "この状態の見積は失注にできません。");
     q.status = "rejected";
     q.updatedAt = nowIso();
@@ -475,7 +480,7 @@ export async function deleteQuote(id: string) {
     const idx = db.quotes.findIndex((x) => x.id === id);
     if (idx < 0) fail("/quotes", "見積が見つかりません。");
     const q = db.quotes[idx];
-    assertStore(user, q.storeId, `/quotes/${id}`);
+    assertCaseStore(user, q.storeId, `/quotes/${id}`);
     if (q.status !== "draft") fail(`/quotes/${id}`, "下書きの見積のみ削除できます。");
     db.quotes.splice(idx, 1);
     // 取込書類から作った見積なら、書類を確認待ちに戻し、元の画像も書類に戻す

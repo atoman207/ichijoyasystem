@@ -12,8 +12,8 @@ import { calcSheet, compareTranscription } from "@/lib/quote-sheet-calc";
 import { REGISTER_TARGETS } from "@/lib/capture-fields";
 import { DOCUMENT_KIND_LABEL } from "@/lib/constants";
 import { findOrderByPostcard, storeFromPostcard, surveyFromExtracted } from "@/lib/survey-link";
-import { assertStore, choice, fail, requireActionUser, resolveStoreId, str, withErr, withMsg } from "./guards";
-import { canAccessStore } from "@/lib/auth/permissions";
+import { assertCaseStore, assertStore, choice, fail, requireActionUser, resolveStoreId, str, withErr, withMsg } from "./guards";
+import { canEditCaseStore } from "@/lib/auth/permissions";
 import { customerHasPhone } from "@/lib/customer-contacts";
 
 // 写真は画面側で縮小してから送る。PDF などは 4 MB まで (Vercel の 1 回の送信の上限 4.5 MB)
@@ -293,7 +293,7 @@ export async function saveExtraction(formData: FormData) {
       const qs = new URLSearchParams({ documentId: id });
       // 電話番号が 1 人のお客様と一致すれば、そのお客様を選ぶ
       const digits = typeof extracted.phone === "string" ? extracted.phone.replace(/\D/g, "") : "";
-      const byPhone = !customerId && digits.length >= 9 ? getDb().customers.filter((c) => customerHasPhone(c, digits) && canAccessStore(user, c.storeId)) : [];
+      const byPhone = !customerId && digits.length >= 9 ? getDb().customers.filter((c) => customerHasPhone(c, digits) && canEditCaseStore(user, c.storeId)) : [];
       if (customerId) qs.set("customerId", customerId);
       else if (byPhone.length === 1) qs.set("customerId", byPhone[0].id);
       else if (cq) qs.set("cq", cq);
@@ -355,7 +355,8 @@ export async function attachDocument(formData: FormData) {
   assertEditable(doc0, back);
   const target0 = resolveTarget(db, ref);
   if (!target0) fail(back, `「${ref}」に当たる受注・問い合わせ・顧客が見つかりません。番号を確認してください。`);
-  assertStore(user, target0.storeId, back);
+  // 店長はほかの店舗の受注・問い合わせ・顧客にも保存できる (permissions.ts の canEditCaseStore)
+  assertCaseStore(user, target0.storeId, back);
   const { extracted, warnings } = normalizeExtracted(doc0.kind, parseEdited(formData, doc0.kind, back), db.products, { mode: calcMode(doc0) });
   let label = "";
   let href = "";

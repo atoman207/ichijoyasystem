@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canApplyCustomerChange } from "@/lib/auth/permissions";
+import { approverRole, canApplyCustomerChange, canEditCaseStore } from "@/lib/auth/permissions";
 import { updateCustomer } from "@/lib/actions/customers";
 import { approvalSettings } from "@/lib/approval-rules";
 import { CustomerForm } from "@/components/features/CustomerForm";
@@ -14,8 +14,11 @@ export default async function EditCustomerPage({ params, searchParams }: { param
   const db = getDb();
   const customer = db.customers.find((c) => c.id === id);
   if (!customer) notFound();
-  if (!canAccessStore(user, customer.storeId)) redirect("/customers?err=" + encodeURIComponent("この顧客を編集する権限がありません。"));
+  // 店長はほかの店舗のお客様も編集できる (permissions.ts の canEditCaseStore)
+  if (!canEditCaseStore(user, customer.storeId)) redirect("/customers?err=" + encodeURIComponent("この顧客を編集する権限がありません。"));
   const needsApproval = approvalSettings(db).customerChange && !canApplyCustomerChange(user, customer.storeId);
+  // 承認者: 店長 (店長の申請・承認できる店長がいない店舗は管理者。actions/customers.ts と同じ approverRole)
+  const approver = needsApproval ? approverRole(db.users, customer.storeId, false, user.id) : "admin";
   const pending = db.approvals.some((a) => a.type === "customer_change" && a.targetId === customer.id && a.status === "pending");
   return (
     <div className="max-w-3xl">
@@ -30,7 +33,7 @@ export default async function EditCustomerPage({ params, searchParams }: { param
           users={db.users.filter((u) => u.active)}
           user={user}
           cancelHref={`/customers/${id}`}
-          changeNote={needsApproval ? "氏名・フリガナ・区分・電話・メール・郵便番号・住所の変更は、店長 (承認できる店長がいない店舗は管理者) の承認後に反映されます。ほかの項目はすぐに反映されます。" : undefined}
+          changeNote={needsApproval ? `氏名・フリガナ・区分・電話・メール・郵便番号・住所の変更は、${approver === "admin" ? "管理者" : "店長"}の承認後に反映されます。ほかの項目はすぐに反映されます。` : undefined}
         />
       </Card>
     </div>

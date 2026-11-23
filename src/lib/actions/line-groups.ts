@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, getDb, mutate } from "@/lib/db/store";
 import type { Database, User } from "@/lib/db/types";
-import { canAccessStore, canManageIntegrations } from "@/lib/auth/permissions";
+import { canEditCaseStore, canManageIntegrations } from "@/lib/auth/permissions";
 import { LINE_GROUP_PURPOSES, LINE_GROUP_PURPOSE_LABEL, findLineGroup, lineGroupName, touchLineGroups, trimPending, LINE_GROUP_ID_RE, type LineGroupPurpose } from "@/lib/line-groups";
 import type { StoreId } from "@/lib/db/types";
 import { recordLineGroupMessage, type LineMediaJob } from "@/lib/notify/inbound";
@@ -18,7 +18,7 @@ import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 /**
  * LINE グループ (施工現場ごとのグループなど) を受注 (案件)・協力業者にひも付ける
  * - 管理者: どのグループも変更できる (設定 → 外部連携・AI)
- * - 店舗の担当者: 自店舗の受注へのひも付け・解除 (受注の画面)
+ * - 店舗の担当者: 自店舗の受注へのひも付け・解除 (受注の画面)。店長はほかの店舗の受注も (permissions.ts の canEditCaseStore)
  * ひも付けたときに、それまで保留していたメッセージを案件のやりとり履歴に移し、写真・資料を保存する
  */
 
@@ -26,7 +26,7 @@ function canEditGroup(user: User, db: Database, orderId?: string): boolean {
   if (canManageIntegrations(user)) return true;
   if (!orderId) return false;
   const o = db.orders.find((x) => x.id === orderId);
-  return Boolean(o && canAccessStore(user, o.storeId));
+  return Boolean(o && canEditCaseStore(user, o.storeId));
 }
 
 export async function linkLineGroup(formData: FormData) {

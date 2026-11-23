@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import Link from "@/components/ui/Link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import clsx from "clsx";
 import {
   ACCENT_BUTTON,
@@ -189,6 +189,8 @@ export interface ShellUser {
   avatarSrc?: string;
   /** 社員管理 (アカウントの管理) ができる: 管理者・店長 (permissions.ts の canManageUsers) */
   canManageStaff?: boolean;
+  /** 承認する立場 (管理者・店長)。ヘッダーに承認のボタン (件数つき) を常に出す */
+  canApprove?: boolean;
 }
 
 export interface NotificationItem {
@@ -281,6 +283,7 @@ export function AppShell({
   nav,
   notifications,
   counts,
+  live,
   logoutAction,
   children,
 }: {
@@ -289,10 +292,47 @@ export function AppShell({
   notifications: NotificationItem[];
   /** signups: 自分が承認できる新規登録の申請 (社員管理のメニューに件数を出す) */
   counts: { approvals: number; mentions: number; signups?: number };
+  /** ヘッダーの件数の印 (src/lib/notify-live.ts)。1 分ごとに確かめ、変わったら画面を読み直す */
+  live?: { sig: string };
   logoutAction: () => Promise<void>;
   children: ReactNode;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
+  // 画面を開いたままでも、新しい承認の申請・問い合わせ・通知が届いたらヘッダーの件数とベルを新しくする
+  // (1 分ごと・画面が表示されているときだけ。件数の印が変わったときだけ読み直す)
+  useEffect(() => {
+    if (!live?.sig) return;
+    let stopped = false;
+    let busy = false;
+    const check = async () => {
+      if (stopped || busy || document.visibilityState !== "visible") return;
+      busy = true;
+      try {
+        const res = await fetch("/api/notifications/summary", { cache: "no-store", headers: { accept: "application/json" } });
+        if (res.ok) {
+          const j = (await res.json()) as { sig?: string };
+          if (!stopped && j.sig && j.sig !== live.sig) router.refresh();
+        }
+      } catch {
+        // 通信できないときは次の回に確かめる
+      } finally {
+        busy = false;
+      }
+    };
+    const timer = window.setInterval(check, 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void check();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [live?.sig, router]);
   const [drawer, setDrawer] = useState(false);
   const [menu, setMenu] = useState<MenuId>(null);
   const [lastPath, setLastPath] = useState(pathname);
@@ -613,6 +653,22 @@ export function AppShell({
                 </div>
               )}
             </div>
+
+            {/* 承認 (管理者・店長、または承認を待っている申請があるとき): 問い合わせのアイコンと同じく件数を出す */}
+            {(user.canApprove || counts.approvals > 0) && (
+              <Link
+                href="/approvals?tab=mine"
+                prefetch={false}
+                onClick={closeAll}
+                aria-label={counts.approvals > 0 ? `承認 (承認を待っている申請 ${counts.approvals} 件)` : "承認 (承認を待っている申請はありません)"}
+                title={counts.approvals > 0 ? `承認を待っている申請 ${counts.approvals} 件` : "承認"}
+                data-testid="header-approvals"
+                className={clsx(ICON_BUTTON, "relative", isActive("/approvals") && "bg-subtle text-ink")}
+              >
+                <ClipboardCheck className={clsx("h-5 w-5", ICON_ZOOM)} />
+                {counts.approvals > 0 && <CountBubble n={counts.approvals} className="absolute top-1 right-1" />}
+              </Link>
+            )}
 
             {/* 通知 */}
             <div className="relative">

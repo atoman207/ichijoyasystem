@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, skipsApproval } from "@/lib/auth/permissions";
+import { canEditCaseStore, skipsApproval } from "@/lib/auth/permissions";
 import { completedLockMessage, quoteCompletedLock } from "@/lib/case-access";
 import { updateQuote } from "@/lib/actions/quotes";
 import { customerName } from "@/lib/db/queries";
@@ -22,7 +22,7 @@ export default async function EditQuotePage({ params, searchParams }: { params: 
   const db = getDb();
   const q = db.quotes.find((x) => x.id === id);
   if (!q) notFound();
-  if (!canAccessStore(user, q.storeId)) redirect("/quotes?err=" + encodeURIComponent("この見積を編集する権限がありません。"));
+  if (!canEditCaseStore(user, q.storeId)) redirect("/quotes?err=" + encodeURIComponent("この見積を編集する権限がありません。"));
   const lock = quoteCompletedLock(db, user, q);
   if (lock.locked) redirect(`/quotes/${id}?err=` + encodeURIComponent(completedLockMessage(lock.reason)));
   const customer = db.customers.find((c) => c.id === q.customerId);

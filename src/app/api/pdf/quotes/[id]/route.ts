@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/session";
-import { canAccessStore } from "@/lib/auth/permissions";
+import { canEditCaseStore } from "@/lib/auth/permissions";
 import { syncDb } from "@/lib/db/store";
 import { pdfHeaders, quotePdfData } from "@/lib/pdf/data";
 import { renderQuotePdf } from "@/lib/pdf/render";
@@ -17,7 +17,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const db = await syncDb();
   const q = db.quotes.find((x) => x.id === id);
   if (!q) return new NextResponse("見積が見つかりません。", { status: 404 });
-  if (!canAccessStore(user, q.storeId)) return new NextResponse("この見積を表示する権限がありません。", { status: 403 });
+  // 見積を扱える店舗 (店長は全店舗。permissions.ts の canEditCaseStore)
+  if (!canEditCaseStore(user, q.storeId)) return new NextResponse("この見積を表示する権限がありません。", { status: 403 });
   const url = new URL(req.url);
   const v = url.searchParams.get("version");
   const version = v && /^\d+$/.test(v) ? Number(v) : undefined;

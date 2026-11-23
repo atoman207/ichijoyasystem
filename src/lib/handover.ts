@@ -14,6 +14,7 @@
 import type { HandoverItem, OrderHandover } from "@/lib/db/types";
 import { isDateKey, normTime, shortDate, toMinutes } from "@/lib/calendar";
 import { addDays } from "@/lib/format";
+import { lineKind, type LineInfo } from "@/lib/line-kind";
 
 export interface HandoverItemDef {
   label: string;
@@ -51,39 +52,31 @@ export const isInstall = (r: Pick<OrderHandover, "item">): boolean => HANDOVER_I
 
 /* ---------------- 明細から品目を見分ける ---------------- */
 
-/** 品目にしない明細 (縁・引手・値引き・諸経費など。主な品目に付くもの) */
-const ACCESSORY = /縁|ヘリ|へり|引手|値引|割引|値下|諸経費|処分|運搬|配送|出張|駐車|乾燥|防虫|シート|手数料|送料|金券|ポイント|クーポン|消費税/;
-
-/**
- * 明細 1 行の品目。品名・仕様の言葉 → 商品の分類 (ServiceCategory) の順で決める。
- * 縁・引手・値引き・諸経費などは品目にしない (undefined)
- */
-export function classifyLine(text: string, productCategory?: string): HandoverItem | undefined {
-  // 「6畳」「8畳間」は部屋の広さ (畳の品目ではない)
-  const t = text.normalize("NFKC").replace(/\d+(?:\.\d+)?\s*(?:畳|帖)間?/g, " ");
-  if (ACCESSORY.test(t)) return undefined;
-  if (/クロス|壁紙|フローリング|クッションフロア|カーテン|ブラインド/.test(t) && !/畳|襖|障子|網戸/.test(t)) return "reform";
-  if (/網戸|アミ戸|あみ戸|網張/.test(t)) return "amido";
-  if (/障子/.test(t)) return "shoji";
-  if (/襖|フスマ|ふすま|天袋|戸襖|板戸/.test(t)) return "fusuma";
-  if (/畳|たたみ|タタミ|表替|裏返|新調|新床|琉球/.test(t)) {
-    if (/新調|新床|新畳/.test(t)) return "tatami_new";
-    if (/裏返/.test(t)) return "tatami_ura";
-    return "tatami_omote";
-  }
-  switch (productCategory) {
+/** 明細の種類 (src/lib/line-kind.ts) → 引取・納品の品目。縁・引手・値引き・諸経費などは品目にしない (undefined) */
+function itemOfKind(k: LineInfo | undefined): HandoverItem | undefined {
+  switch (k?.kind) {
     case "tatami":
-      return "tatami_omote";
+      return k.tatami === "new" ? "tatami_new" : k.tatami === "ura" ? "tatami_ura" : "tatami_omote";
     case "fusuma":
+    case "butsuma":
+      return "fusuma";
     case "shoji":
     case "amido":
-      return productCategory;
-    case "cloth":
+      return k.kind;
     case "curtain":
+    case "reform":
       return "reform";
   }
-  if (/クロス|壁紙|フローリング|クッションフロア|内装|工事|リフォーム|カーテン|ブラインド|塗装|左官/.test(t)) return "reform";
   return undefined;
+}
+
+/**
+ * 明細 1 行の品目。品名・仕様の言葉 → 商品の分類 (ServiceCategory) の順で決める (src/lib/line-kind.ts の lineKind)。
+ * 縁・引手・値引き・諸経費などは品目にしない (undefined)。品名と仕様が分かれているときは name・spec を渡す
+ * (品名が「襖」「畳」だけの行は仕様の「引き手」「縁」を先に見る)
+ */
+export function classifyLine(text: string, productCategory?: string, spec?: string): HandoverItem | undefined {
+  return itemOfKind(lineKind(text, spec, productCategory));
 }
 
 /** 受注の種別 (見積の明細がないとき) の品目 */
@@ -109,7 +102,7 @@ interface ItemGroup {
 export function groupLines(lines: HandoverLine[], category?: string): ItemGroup[] {
   const groups: ItemGroup[] = [];
   for (const l of lines) {
-    const item = classifyLine(`${l.name} ${l.spec ?? ""}`, l.productCategory);
+    const item = classifyLine(l.name, l.productCategory, l.spec);
     if (!item) continue;
     const unit = l.unit?.trim() || undefined;
     const qty = typeof l.qty === "number" && Number.isFinite(l.qty) && l.qty > 0 ? l.qty : 0;

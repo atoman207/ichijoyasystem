@@ -16,6 +16,8 @@ import { canManageHeriStock } from "@/lib/auth/permissions";
 import { officeCtx } from "@/lib/office";
 import { heriBelow } from "@/lib/heri-stock";
 import { canManageKnowledgeSources, canViewKnowledge } from "@/lib/auth/permissions";
+import { isManagerOrAbove } from "@/lib/auth/permissions";
+import { liveSignature } from "@/lib/notify-live";
 import { BACKEND } from "@/lib/db/store";
 import { knowledgeSources } from "@/lib/knowledge";
 import { myReviewItems, reviewCtx } from "@/lib/knowledge-review";
@@ -204,10 +206,12 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         scopeLabel: allStores ? "全店舗の情報を閲覧できます" : `${storeName(user.storeId)} の情報のみ閲覧できます`,
         avatarSrc: avatarUrl(user),
         canManageStaff: canManageUsers(user),
+        canApprove: isManagerOrAbove(user),
       }}
       nav={nav}
       notifications={notifications}
       counts={{ approvals: n.pendingApprovals.length, mentions: n.mentions.length, signups: signups.length }}
+      live={{ sig: liveSignature(user, n).sig }}
       logoutAction={logout}
     >
       {children}

@@ -59,6 +59,7 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   holiday_work: { slot: "区分", days: "日数", kind: "種類" },
   leave_grant: { grantDate: "付与日", baseDate: "もとの付与日", expiresOn: "有効期限", days: "日数" },
   work_report: { visitors: "来店数", flyers: "チラシの配布 (配布人・枚数・地域)", note: "メモ" },
+  production: { date: "製造日", undecided: "製造日未定", status: "状態", title: "案件・内容", spec: "仕様", qty: "畳数", herinashi: "へり無し畳", note: "メモ" },
   holiday: { label: "休業日の名前", closed: "休業日", holiday: "祝日", dates: "日付" },
   promotion: { kind: "販促の種類", title: "名前", startDate: "配布日・開始日", endDate: "終了日", areas: "地域と部数", copies: "部数・件数", cost: "費用", media: "媒体", vendor: "配布業者・依頼先", note: "メモ", status: "状態" },
   office_improvement: { year: "年", date: "日付", staffName: "担当", staffId: "担当 (社員)", item: "項目", content: "内容", cause: "原因", measure: "具体的改善策" },

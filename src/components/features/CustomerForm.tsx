@@ -75,7 +75,8 @@ export function CustomerForm({
         </Field>
         <Field label="担当者">
           <Select name="assignedUserId" defaultValue={customer?.assignedUserId ?? user.id}>
-            {users.filter((u) => allStores || u.storeId === user.storeId || u.id === customer?.assignedUserId).map((u) => (
+            {/* お客様の店舗の社員も選べる (店長がほかの店舗のお客様を編集するとき) */}
+            {users.filter((u) => allStores || u.storeId === user.storeId || u.storeId === storeId || u.id === customer?.assignedUserId).map((u) => (
               <option key={u.id} value={u.id}>{u.name} ({u.title})</option>
             ))}
           </Select>

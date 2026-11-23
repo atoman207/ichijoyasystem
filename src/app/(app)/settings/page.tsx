@@ -283,7 +283,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 <tr className="border-t border-line"><td className="px-3 py-2">経費精算</td><td className="px-3 py-2">{yen(rules.expenseAdminThreshold)} 未満</td><td className="px-3 py-2">店長</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">経費精算</td><td className="px-3 py-2">{yen(rules.expenseAdminThreshold)} 以上 / 本部分</td><td className="px-3 py-2">管理者</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">仕入の支払依頼</td><td className="px-3 py-2">全件</td><td className="px-3 py-2">管理者</td></tr>
-                <tr className="border-t border-line"><td className="px-3 py-2">見積・契約・経費 (店舗分)</td><td className="px-3 py-2">承認できる店長がいない (店長のいない店舗・店長本人の申請)</td><td className="px-3 py-2">管理者</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">見積・契約・経費 (店舗分)</td><td className="px-3 py-2">店長の申請 (自店舗・ほかの店舗の案件とも)・承認できる店長がいない店舗</td><td className="px-3 py-2">管理者</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">すべての申請</td><td className="px-3 py-2">申請者本人</td><td className="px-3 py-2">承認できない (ほかの承認者が判断)</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">請求書の無効化</td><td className="px-3 py-2">-</td><td className="px-3 py-2">本部 / 管理者のみ操作可</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">ユーザー・店舗・商品マスタの変更</td><td className="px-3 py-2">-</td><td className="px-3 py-2">管理者のみ操作可</td></tr>

@@ -2,7 +2,7 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canManageFinance, canManagePurchaseOrders, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
+import { canAccessStore, canManageFinance, canManagePurchaseOrders, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
 import { orderChain, userName } from "@/lib/db/queries";
 import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, requestOrderChange, resubmitOrder, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
@@ -61,6 +61,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const info = orderAccessInfo(db, user, o);
   if (info.access === "none") redirect(deniedHref(info, "/orders", "案件"));
   const viewOnly = info.access === "view";
+  // その店舗の社員 (全店舗ロールを含む)。店長はほかの店舗の受注も変更できる (edit) が、請求書・入金・仕入・発注書・KPI はその店舗のまま (canAccessStore)
+  const ownStore = canAccessStore(user, o.storeId);
   logRecordView(user, info, { entity: "order", id: o.id, label: o.number, storeId: o.storeId }, db.auditLogs);
   const lock = completedCaseLock(db, user, o);
   const customer = db.customers.find((c) => c.id === o.customerId);
@@ -107,7 +109,9 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const AMOUNT_LABEL: [keyof NonNullable<typeof o.amounts>, string][] = [["tatami", "畳"], ["fusuma", "襖"], ["shoji", "障子"], ["amido", "網戸"], ["curtain", "カーテン"], ["cloth", "クロス・工事"], ["own", "自社商品"], ["misc", "諸経費"], ["discount", "値引"]];
 
   // 案件ごとの請求書の発行 (まとめ請求のお客様は折りたたんで出す)
-  const perOrderInvoice = canManageFinance(user) || isManagerOrAbove(user) ? (
+  const perOrderInvoice = !ownStore ? (
+    <Note>この案件の請求書は {store?.name ?? "案件の店舗"} の店長・本部スタッフ・管理者が発行します。</Note>
+  ) : canManageFinance(user) || isManagerOrAbove(user) ? (
     <form action={createInvoiceFromOrder.bind(null, o.id)} className="flex flex-wrap items-end gap-2">
       <Field label="支払期限 (日後)"><Input type="number" name="dueDays" defaultValue={customer?.type === "corporate" ? 30 : 14} className="w-28" /></Field>
       <Field label="送付方法">
@@ -134,7 +138,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           <>
             {chain.quote && <LinkButton href={`/quotes/${chain.quote.id}`} variant="secondary" size="sm">見積 {chain.quote.number}</LinkButton>}
             {chain.quote && !viewOnly && <LinkButton href={`/api/pdf/quotes/${chain.quote.id}`} variant="ghost" size="sm" target="_blank">見積書 PDF</LinkButton>}
-            {chain.invoice && chain.invoice.status !== "void" && !viewOnly && <LinkButton href={`/api/pdf/invoices/${chain.invoice.id}`} variant="secondary" size="sm" target="_blank">請求書 PDF</LinkButton>}
+            {chain.invoice && chain.invoice.status !== "void" && !viewOnly && ownStore && <LinkButton href={`/api/pdf/invoices/${chain.invoice.id}`} variant="secondary" size="sm" target="_blank">請求書 PDF</LinkButton>}
           </>
         }
       />
@@ -299,7 +303,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             newParams={`orderId=${o.id}`}
             returnTo={returnTo}
             quickKinds={["pickup", "delivery", "install", "visit", "measure", "survey"]}
-            canAdd={o.status !== "cancelled"}
+            canAdd={o.status !== "cancelled" && ownStore}
             description="引き取り・納品・施工・顧客訪問などを案件に登録すると、担当者とともに店舗の共通カレンダーへ自動で反映されます。問い合わせ段階の現地調査も含みます"
           />
 
@@ -356,7 +360,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
                 ))}
               </ul>
             )}
-            {o.status !== "cancelled" && o.status !== "pending_approval" && (
+            {o.status !== "cancelled" && o.status !== "pending_approval" && ownStore && (
               <details className="rounded-lg border border-line px-3 py-2">
                 <summary className="cursor-pointer text-sm font-medium text-accent">クレーム・手直しを登録する</summary>
                 <form action={createQualityIssue.bind(null, o.id)} className="mt-3 space-y-3">
@@ -490,7 +494,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
 
           {!viewOnly && (orderPurchases.length > 0 || canRegisterPurchase(user)) && (
             <Card>
-              <CardHeader title="この案件の仕入・外注" description={orderPurchases.length ? `${orderPurchases.length} 件 · ${yen(orderPurchases.filter((p) => p.status !== "rejected").reduce((a, p) => a + p.amount, 0))}` : "協力業者への外注・材料の仕入を案件に紐付けて登録できます"} action={canRegisterPurchase(user) && o.status !== "cancelled" ? <LinkButton href={`/purchases/new?orderRef=${encodeURIComponent(o.number)}`} variant="ghost" size="sm">仕入を登録</LinkButton> : undefined} />
+              <CardHeader title="この案件の仕入・外注" description={orderPurchases.length ? `${orderPurchases.length} 件 · ${yen(orderPurchases.filter((p) => p.status !== "rejected").reduce((a, p) => a + p.amount, 0))}` : "協力業者への外注・材料の仕入を案件に紐付けて登録できます"} action={canRegisterPurchase(user) && ownStore && o.status !== "cancelled" ? <LinkButton href={`/purchases/new?orderRef=${encodeURIComponent(o.number)}`} variant="ghost" size="sm">仕入を登録</LinkButton> : undefined} />
               {orderPurchases.length > 0 && (
                 <ul className="space-y-1 text-xs">
                   {orderPurchases.map((p) => (
@@ -512,7 +516,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               <CardHeader
                 title="発注書 (仕入先への発注)"
                 description={orderPos.length ? `${orderPos.length} 件 · 同じ仕入先への別の案件の材料と 1 枚にまとめた発注書も含みます` : "この案件の材料を仕入先へ発注し、FAX で送れます"}
-                action={canManagePurchaseOrders(user) && o.status !== "cancelled" ? <LinkButton href={`/purchase-orders/new?orderId=${o.id}`} size="sm">発注書を作成</LinkButton> : undefined}
+                action={canManagePurchaseOrders(user) && ownStore && o.status !== "cancelled" ? <LinkButton href={`/purchase-orders/new?orderId=${o.id}`} size="sm">発注書を作成</LinkButton> : undefined}
               />
             </div>
             <div className="px-2 pb-2"><PurchaseOrderTable db={db} user={user} rows={orderPos} /></div>

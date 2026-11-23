@@ -1,7 +1,7 @@
 import type { Database, Order, User } from "@/lib/db/types";
 import { BILLING_LABEL, PAYMENT_STATE_LABEL, PLANNED_PAYMENT_LABEL, SCHEDULE_LABEL, SPEC_LABEL, STAGE_LABEL, STAGE_TONE, billingRequired, caseIndex, orderCase } from "@/lib/case-status";
 import { closeCase, recordCollection, reopenCase, updateCaseStatus } from "@/lib/actions/cases";
-import { canManageFinance, isManagerOrAbove } from "@/lib/auth/permissions";
+import { canAccessStore, canManageFinance, isManagerOrAbove } from "@/lib/auth/permissions";
 import { PAYMENT_METHOD_LABEL } from "@/lib/constants";
 import { fmtDate, toDateKey, yen } from "@/lib/format";
 import { userName } from "@/lib/db/queries";
@@ -24,6 +24,8 @@ export function CaseStatusCard({ db, order: o, user, locked = false }: { db: Dat
   const done = ["completed", "invoiced", "paid"].includes(o.status);
   const remaining = o.total - (row.paid ?? 0);
   const manage = canManageFinance(user) || isManagerOrAbove(user);
+  // 納品時の集金・入金の記録はその店舗の社員 (全店舗ロールを含む)。店長もほかの店舗の入金は記録しない (actions/cases.ts の recordCollection)
+  const ownStore = canAccessStore(user, o.storeId);
   const milestones: [string, string | undefined, string?][] = [
     ["工事完了", o.completedAt ? fmtDate(o.completedAt) : undefined],
     ["売上計上 (施工完了日)", o.salesDate ? fmtDate(o.salesDate) : undefined],
@@ -95,7 +97,7 @@ export function CaseStatusCard({ db, order: o, user, locked = false }: { db: Dat
       {batchInvoice && remaining > 0 && !o.closedAt && (
         <p className="mt-3 rounded-lg bg-subtle px-3 py-2 text-xs text-ink-2">この案件はまとめ請求書 {batchInvoice.number} ({batchInvoice.orderIds?.length ?? 1} 件) で請求しています。入金は請求書の画面で登録してください (入金は売上計上日の古い案件から順に割り当てます)。</p>
       )}
-      {done && remaining > 0 && !o.closedAt && !batchInvoice && (
+      {done && remaining > 0 && !o.closedAt && !batchInvoice && ownStore && (
         <details className="mt-3 rounded-lg border border-line px-3 py-2" open={!required && invoices.length === 0}>
           <summary className="cursor-pointer text-sm font-medium text-accent">納品時の集金・決済を記録する</summary>
           <form action={recordCollection.bind(null, o.id)} className="mt-3 grid grid-cols-1 items-end gap-3 @xl:grid-cols-4">

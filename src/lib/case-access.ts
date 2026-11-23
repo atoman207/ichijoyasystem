@@ -1,5 +1,5 @@
-import type { Approval, Customer, Database, Inquiry, Invoice, Order, Quote, User } from "@/lib/db/types";
-import { canAccessStore, canEditCompletedCase, canReadStoreRecords, canRequestRecordView, canViewOpenCases } from "@/lib/auth/permissions";
+import type { Approval, Customer, Database, Inquiry, Invoice, Order, Quote, StoreId, User } from "@/lib/db/types";
+import { canAccessStore, canEditCaseStore, canEditCompletedCase, canReadStoreRecords, canRequestRecordView, canViewOpenCases } from "@/lib/auth/permissions";
 import { accessPolicy, policyReader, type AccessPolicy } from "@/lib/access-policy";
 import { caseIndex, inquiryCase, orderCase, quoteCase, type CaseIndex, type CaseRow } from "@/lib/case-status";
 import { toDateKey } from "@/lib/format";
@@ -11,13 +11,15 @@ import { invoiceOrderIds } from "@/lib/billing";
  * 1. 進行中の案件 (問い合わせ → 見積 → 受注・施工 → 請求 → 入金完了 まで) は、全社員がほかの店舗の案件も閲覧できる
  *    (お客様が別の店舗に電話したときなどに、どの店舗でも状況を確かめられるように。お客様のご要望)。
  *    入金が完了した・全処理完了にした・失注・キャンセルした案件は、通常の権限 (自店舗。全店舗ロールは全店舗) に戻る。
- *    ほかの店舗の案件は「閲覧のみ」: 登録・変更・削除は従来どおりその店舗の社員 (サーバーの操作は assertStore で断る)。
+ *    ほかの店舗の案件は「閲覧のみ」: 登録・変更・削除はその店舗の社員 (サーバーの操作は assertStore・assertCaseStore で断る)。
+ *    ただし店長は、顧客・問い合わせ・見積・受注をすべての店舗で変更できる (お客様の決定 2026-11-23。permissions.ts の canEditCaseStore)。
+ *    請求書はこれまでどおりその店舗の社員だけ (canAccessStore)
  *    進行中かどうかは「案件の進捗」(src/lib/case-status.ts) と同じ判定: 失注・キャンセル・全処理完了・移行データの完了ではなく、入金が済んでいない
  * 2. 入金が完了した案件・全処理完了の案件は、内容 (案件情報・契約内容・現場の情報・状態・見積) を変更できない。変更できるのは管理者だけ
  *    (canEditCompletedCase。変更は変更履歴に残る)。進捗・やりとりの記録・写真の追加は続けられる
  * 3. 閲覧の範囲の設定 (src/lib/access-policy.ts) で、ほかの店舗の完了した案件も見られるようにできる:
  *    all = 全社員 (既定) / approval = 店長以上は全店舗、店舗スタッフは上司が承認した顧客 (承認の type = record_view、承認から grantDays 日) / open = 1. だけ。
- *    どの場合も、ほかの店舗の記録は閲覧のみ (edit にはならない)。閲覧は自店舗の記録も含めて変更履歴に記録する (src/lib/record-views.ts)
+ *    どの場合も、ほかの店舗の記録は閲覧のみ (edit にはならない。店長の顧客・問い合わせ・見積・受注だけは 1. の例外)。閲覧は自店舗の記録も含めて変更履歴に記録する (src/lib/record-views.ts)
  */
 
 export type RecordAccess = "edit" | "view" | "none";
@@ -100,14 +102,22 @@ export function openCaseCustomerIds(db: Database): Set<string> {
   return out;
 }
 
+/** 記録の種類 (変えられる店舗の判定が違う: 請求書は自店舗だけ) */
+export type RecordKind = "customer" | "inquiry" | "quote" | "order" | "invoice";
+
+/** 記録の店舗で変更できるか: 顧客・問い合わせ・見積・受注は canEditCaseStore (店長は全店舗)、請求書は canAccessStore (自店舗) */
+export function canEditRecordStore(user: User, kind: RecordKind, storeId: StoreId): boolean {
+  return kind === "invoice" ? canAccessStore(user, storeId) : canEditCaseStore(user, storeId);
+}
+
 /**
  * 記録を見られるか・変えられるか
- * - edit: 記録の店舗を扱える (従来の権限)
+ * - edit: 記録の店舗で変更できる (canEditRecordStore)
  * - view: ほかの店舗の記録 (閲覧のみ)。理由は basis
  * - none: 見られない
  */
-export function recordAccess(user: User, storeId: Parameters<typeof canAccessStore>[1], isOpen: () => boolean): RecordAccess {
-  if (canAccessStore(user, storeId)) return "edit";
+export function recordAccess(user: User, kind: RecordKind, storeId: StoreId, isOpen: () => boolean): RecordAccess {
+  if (canEditRecordStore(user, kind, storeId)) return "edit";
   return canViewOpenCases(user) && isOpen() ? "view" : "none";
 }
 
@@ -148,11 +158,12 @@ export function pendingViewRequest(db: Pick<Database, "approvals">, user: Pick<U
 
 /**
  * 閲覧の範囲の設定 (access_policy) を含めて、記録を見られるか・その理由
- * 自店舗 (canAccessStore) → edit / 全社員に公開 (canReadStoreRecords) → view (all) / 進行中の案件 → view (open) /
+ * 変更できる店舗 (canEditRecordStore: 自店舗、店長は顧客・問い合わせ・見積・受注なら全店舗) → edit /
+ * 全社員に公開 (canReadStoreRecords) → view (all) / 進行中の案件 → view (open) /
  * 承認制で閲覧の申請が承認済み → view (grant) / それ以外 → none (承認制なら申請できる)
  */
-export function accessInfo(db: Database, user: User, storeId: Parameters<typeof canAccessStore>[1], isOpen: () => boolean, customerId: string | undefined, now = new Date()): AccessInfo {
-  if (canAccessStore(user, storeId)) return { access: "edit", customerId };
+export function accessInfo(db: Database, user: User, kind: RecordKind, storeId: StoreId, isOpen: () => boolean, customerId: string | undefined, now = new Date()): AccessInfo {
+  if (canEditRecordStore(user, kind, storeId)) return { access: "edit", customerId };
   const policy = accessPolicy(db);
   if (canReadStoreRecords(policyReader(db, user), storeId)) return { access: "view", basis: "all", customerId };
   if (canViewOpenCases(user) && isOpen()) return { access: "view", basis: "open", customerId };
@@ -164,11 +175,12 @@ export function accessInfo(db: Database, user: User, storeId: Parameters<typeof 
   return { access: "none", customerId };
 }
 
-export const orderAccessInfo = (db: Database, user: User, o: Order, now = new Date()) => accessInfo(db, user, o.storeId, () => isOpenOrder(db, o), o.customerId, now);
-export const quoteAccessInfo = (db: Database, user: User, q: Quote, now = new Date()) => accessInfo(db, user, q.storeId, () => isOpenQuote(db, q), q.customerId, now);
-export const inquiryAccessInfo = (db: Database, user: User, i: Inquiry, now = new Date()) => accessInfo(db, user, i.storeId, () => isOpenInquiry(db, i), i.customerId, now);
-export const invoiceAccessInfo = (db: Database, user: User, inv: Invoice, now = new Date()) => accessInfo(db, user, inv.storeId, () => isOpenInvoice(db, inv), inv.customerId, now);
-export const customerAccessInfo = (db: Database, user: User, c: Customer, now = new Date()) => accessInfo(db, user, c.storeId, () => hasOpenCase(db, c), c.id, now);
+export const orderAccessInfo = (db: Database, user: User, o: Order, now = new Date()) => accessInfo(db, user, "order", o.storeId, () => isOpenOrder(db, o), o.customerId, now);
+export const quoteAccessInfo = (db: Database, user: User, q: Quote, now = new Date()) => accessInfo(db, user, "quote", q.storeId, () => isOpenQuote(db, q), q.customerId, now);
+export const inquiryAccessInfo = (db: Database, user: User, i: Inquiry, now = new Date()) => accessInfo(db, user, "inquiry", i.storeId, () => isOpenInquiry(db, i), i.customerId, now);
+/** 請求書は店長でも自店舗だけ変更できる (ほかの店舗の請求書は閲覧のみ) */
+export const invoiceAccessInfo = (db: Database, user: User, inv: Invoice, now = new Date()) => accessInfo(db, user, "invoice", inv.storeId, () => isOpenInvoice(db, inv), inv.customerId, now);
+export const customerAccessInfo = (db: Database, user: User, c: Customer, now = new Date()) => accessInfo(db, user, "customer", c.storeId, () => hasOpenCase(db, c), c.id, now);
 
 export const orderAccess = (db: Database, user: User, o: Order) => orderAccessInfo(db, user, o).access;
 export const quoteAccess = (db: Database, user: User, q: Quote) => quoteAccessInfo(db, user, q).access;

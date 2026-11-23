@@ -1,7 +1,7 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
+import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { customerOptions } from "@/lib/db/queries";
 import { createInquiry } from "@/lib/actions/inquiries";
 import { CustomerSearch } from "@/components/features/CustomerSearch";
@@ -17,7 +17,8 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
   const user = await requireUser();
   const db = getDb();
   const allStores = canSeeAllStores(user);
-  const choices = customerOptions(scopeByStore(user, db.customers), cq, customerId);
+  // 選べるお客様: 自店舗 (全店舗ロールは全店舗)、店長は全店舗 (permissions.ts の canEditCaseStore)。受付店舗は自店舗のまま
+  const choices = customerOptions(db.customers.filter((c) => canEditCaseStore(user, c.storeId)), cq, customerId);
   const customers = choices.options;
   const users = db.users.filter((u) => u.active && (allStores || u.storeId === user.storeId));
   const promotions = promotionOptions(db.promotions ?? [], (sid) => sid === "hq" || canAccessStore(user, sid));

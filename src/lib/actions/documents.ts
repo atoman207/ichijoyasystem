@@ -6,7 +6,7 @@ import { addAudit, getDb, newId, nowIso } from "@/lib/db/store";
 import type { StoreId } from "@/lib/db/types";
 import { toDateKey } from "@/lib/format";
 import { CHANNEL_LABEL } from "@/lib/constants";
-import { canAccessStore } from "@/lib/auth/permissions";
+import { canAccessStore, canEditCaseStore } from "@/lib/auth/permissions";
 import { invoicePdfData, quotePdfData } from "@/lib/pdf/data";
 import { renderInvoicePdf, renderQuotePdf } from "@/lib/pdf/render";
 import { isEmail } from "@/lib/notify/channels";
@@ -44,7 +44,8 @@ export async function sendDocument(kind: "quote" | "invoice", id: string, formDa
   if (kind === "quote") {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
-    if (!canAccessStore(user, q.storeId)) fail("/quotes", "この見積を送る権限がありません。");
+    // 見積は店長ならほかの店舗の見積も送れる (canEditCaseStore)。請求書はその店舗の社員だけ
+    if (!canEditCaseStore(user, q.storeId)) fail("/quotes", "この見積を送る権限がありません。");
     if (q.status !== "approved" && q.status !== "sent" && q.status !== "accepted") fail(back, "承認済みの見積のみ送付できます。");
     const data = quotePdfData(db, q);
     if (!data) fail(back, "見積書を作成できませんでした。");

@@ -5,6 +5,7 @@ import { Trash, Plus } from "lucide-react";
 import type { Product, QuoteItem, ServiceCategory } from "@/lib/db/types";
 import { CATEGORY_LABEL } from "@/lib/constants";
 import { quoteTotals } from "@/lib/quote-calc";
+import { autoItemCategory, autoUnit, UNIT_OPTIONS } from "@/lib/line-kind";
 
 interface Row {
   key: string;
@@ -18,14 +19,24 @@ interface Row {
   itemCategory: string;
   /** 畳床 ("" = 自動: 品名・製造の予定から判定) */
   dokoMaterialId: string;
+  /** 単位を手で選んだ (品名・仕様を変えても自動で選び直さない) */
+  unitTouched: boolean;
+  /** 品目を手で選んだ (同上) */
+  catTouched: boolean;
+  /** 単位を一覧にない値で入力する */
+  unitFree: boolean;
 }
+
+const UNIT_SET = new Set<string>(UNIT_OPTIONS);
+/** 数を数える単位 (品名・仕様から選び直してよい単位) */
+const SOFT_UNITS = new Set(["", "式", "一式", "面", "枚", "畳", "帖", "個", "ヶ所", "箇所", "本"]);
 
 const squash = (s: string) => s.replace(/[\s　]/g, "");
 
 const yen = (n: number) => `¥${Math.round(n).toLocaleString("ja-JP")}`;
 /** 明細の列 (広い欄のとき): 商品・品名・仕様・(品目)・数量・単位・単価・金額・削除 */
-const QCOLS = "minmax(9rem,1.4fr) minmax(7rem,1fr) minmax(7rem,1fr) 4.5rem 3.5rem 6.5rem 6rem 2rem";
-const QCOLS_CAT = "minmax(8rem,1.4fr) minmax(6rem,1fr) minmax(6rem,1fr) 8rem 4.5rem 3.5rem 6.5rem 6rem 2rem";
+const QCOLS = "minmax(9rem,1.4fr) minmax(7rem,1fr) minmax(7rem,1fr) 4.5rem 5rem 6.5rem 6rem 2rem";
+const QCOLS_CAT = "minmax(8rem,1.4fr) minmax(6rem,1fr) minmax(6rem,1fr) 8rem 4.5rem 5rem 6.5rem 6rem 2rem";
 /**
  * 入力欄: 狭い欄 (カード) は指で押しやすい高さ、広い欄 (表) は詰める。
  * 数量・単価・値引きの数字の欄は step="any" (刻みを付けると 10,560 円・1,650 円・値引き 5,300 円などを
@@ -35,6 +46,8 @@ const QCOLS_CAT = "minmax(8rem,1.4fr) minmax(6rem,1fr) minmax(6rem,1fr) 8rem 4.5
 const FIELD = "field h-10 py-1 @4xl:h-8 @4xl:text-xs";
 /** 項目名 (カードのときだけ出す。表は見出しの行) */
 const CELL_LABEL = "mb-0.5 block text-[11px] text-ink-3 @4xl:hidden";
+/** 単位の「その他 (入力)」 */
+const OTHER_UNIT = "__other__";
 let seq = 0;
 const nextKey = () => `r${Date.now().toString(36)}_${seq++}`;
 
@@ -48,6 +61,7 @@ export function QuoteEditor({
   productCategory = {},
   serviceItemCategory,
   doko,
+  autoOnLoad = false,
 }: {
   products: Product[];
   initialItems?: QuoteItem[];
@@ -63,16 +77,61 @@ export function QuoteEditor({
   serviceItemCategory?: string;
   /** 畳床を選べる行 (材料が決まっていない畳床の行を持つ材料構成の商品・品名) と畳床の一覧 (src/lib/mgmt/costing.ts の dokoChoiceInfo) */
   doko?: { options: { id: string; label: string }[]; productIds: string[]; matchNames: string[] };
+  /** 読み込んだ明細 (書類取込・コピー) の単位・品目を、品名・仕様から選び直す (新しい見積) */
+  autoOnLoad?: boolean;
 }) {
   const [taxIncluded, setTaxIncluded] = useState(initialTaxIncluded);
+  const productKind = useMemo(() => new Map(products.map((p) => [p.id, p.category as string])), [products]);
+  const catIds = useMemo(() => new Set(categories.map((c) => c.id)), [categories]);
+  /** 品名・仕様から単位・品目を選ぶ (お客様のご要望 2026-11-23「■1」。src/lib/line-kind.ts)。手で選んだものは変えない */
+  const withAuto = (r: Row): Row => {
+    const pc = r.productId ? productKind.get(r.productId) : undefined;
+    const next = { ...r };
+    if (!r.unitTouched) {
+      const u = autoUnit(r.name, r.spec, pc);
+      if (u) next.unit = u;
+      if (!next.unit) next.unit = "式";
+      next.unitFree = !UNIT_SET.has(next.unit);
+    }
+    // 品目: 商品を選んだ行は商品の品目 (自動) のまま。自由入力の行だけ品名・仕様から選ぶ
+    if (!r.catTouched && !r.productId && catIds.size) {
+      const c = autoItemCategory(r.name, r.spec);
+      next.itemCategory = c && catIds.has(c) ? c : "";
+    }
+    return next;
+  };
   const [rows, setRows] = useState<Row[]>(() => {
     if (initialItems.length > 0) {
-      return initialItems.map((i) => ({ key: nextKey(), productId: i.productId, name: i.name, spec: i.spec ?? "", qty: i.qty, unit: i.unit, unitPrice: i.unitPrice, itemCategory: i.itemCategory ?? "", dokoMaterialId: i.dokoMaterialId ?? "" }));
+      return initialItems.map((i) => {
+        const spec = i.spec ?? "";
+        const pc = i.productId ? productKind.get(i.productId) : undefined;
+        const auto = autoUnit(i.name, spec, pc);
+        const autoCat = autoItemCategory(i.name, spec);
+        const unit = i.unit?.trim() ?? "";
+        const row: Row = {
+          key: nextKey(),
+          productId: i.productId,
+          name: i.name,
+          spec,
+          qty: i.qty,
+          unit,
+          unitPrice: i.unitPrice,
+          itemCategory: i.itemCategory ?? "",
+          dokoMaterialId: i.dokoMaterialId ?? "",
+          // 空・既定の「式」・自動と同じ単位は、品名を直したときに選び直す。それ以外 (面・m など) は手で選んだものとして残す。
+          // 書類取込から作る新しい見積は、用紙の書き方 (面・式など) より品名・仕様の単位を優先する (m・㎡ など長さ・面積の単位は残す)
+          unitTouched: autoOnLoad ? !SOFT_UNITS.has(unit) : Boolean(unit) && unit !== "式" && unit !== auto,
+          catTouched: Boolean(i.itemCategory) && i.itemCategory !== autoCat,
+          unitFree: Boolean(unit) && !UNIT_SET.has(unit),
+        };
+        // 書類取込・コピーから作る新しい見積は、読み込んだときに単位・品目を選ぶ (保存済みの見積の編集は、直した行だけ)
+        return autoOnLoad || !unit ? withAuto(row) : row;
+      });
     }
     const first = products.find((p) => p.category === (defaultCategory ?? "tatami")) ?? products[0];
     const misc = products.find((p) => p.id === "p_misc");
-    const base: Row[] = [{ key: nextKey(), productId: first?.id, name: first?.name ?? "", spec: [first?.grade, first?.sizeLabel].filter(Boolean).join(" / "), qty: 6, unit: first?.unit ?? "式", unitPrice: first?.unitPrice ?? 0, itemCategory: "", dokoMaterialId: "" }];
-    if (misc) base.push({ key: nextKey(), productId: misc.id, name: misc.name, spec: "", qty: 1, unit: misc.unit, unitPrice: misc.unitPrice, itemCategory: "", dokoMaterialId: "" });
+    const base: Row[] = [{ key: nextKey(), productId: first?.id, name: first?.name ?? "", spec: [first?.grade, first?.sizeLabel].filter(Boolean).join(" / "), qty: 6, unit: first?.unit ?? "式", unitPrice: first?.unitPrice ?? 0, itemCategory: "", dokoMaterialId: "", unitTouched: false, catTouched: false, unitFree: !UNIT_SET.has(first?.unit ?? "式") }];
+    if (misc) base.push({ key: nextKey(), productId: misc.id, name: misc.name, spec: "", qty: 1, unit: misc.unit, unitPrice: misc.unitPrice, itemCategory: "", dokoMaterialId: "", unitTouched: true, catTouched: false, unitFree: !UNIT_SET.has(misc.unit) });
     return base;
   });
   const [discount, setDiscount] = useState(initialDiscount);
@@ -90,17 +149,21 @@ export function QuoteEditor({
   function update(key: string, patch: Partial<Row>) {
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   }
+  /** 品名・仕様の入力: 単位・品目を自動で選び直す (手で選んだものはそのまま) */
+  function updateText(key: string, patch: Pick<Partial<Row>, "name" | "spec">) {
+    setRows((rs) => rs.map((r) => (r.key === key ? withAuto({ ...r, ...patch }) : r)));
+  }
   function choose(key: string, productId: string) {
     const p = products.find((x) => x.id === productId);
     if (!p) {
       update(key, { productId: undefined });
       return;
     }
-    // 品目は「自動」に戻す (商品の品目を使う)
-    update(key, { productId: p.id, name: p.name, spec: [p.grade, p.sizeLabel].filter(Boolean).join(" / "), unit: p.unit, unitPrice: p.unitPrice, itemCategory: "", dokoMaterialId: "" });
+    // 品目は「自動」に戻す (商品の品目を使う)。単位は商品マスタの単位
+    update(key, { productId: p.id, name: p.name, spec: [p.grade, p.sizeLabel].filter(Boolean).join(" / "), unit: p.unit, unitPrice: p.unitPrice, itemCategory: "", dokoMaterialId: "", unitTouched: false, catTouched: false, unitFree: !UNIT_SET.has(p.unit) });
   }
   function add() {
-    setRows((rs) => [...rs, { key: nextKey(), name: "", spec: "", qty: 1, unit: "式", unitPrice: 0, itemCategory: "", dokoMaterialId: "" }]);
+    setRows((rs) => [...rs, { key: nextKey(), name: "", spec: "", qty: 1, unit: "式", unitPrice: 0, itemCategory: "", dokoMaterialId: "", unitTouched: false, catTouched: false, unitFree: false }]);
   }
   function remove(key: string) {
     setRows((rs) => rs.filter((r) => r.key !== key));
@@ -110,6 +173,8 @@ export function QuoteEditor({
   const catName = (id: string | undefined) => categories.find((c) => c.id === id)?.name;
   // 「自動」のときに使う品目 (商品の品目 → 見積の種別)
   const autoName = (r: Row) => catName(r.productId ? productCategory[r.productId] : serviceItemCategory) ?? "見積の種別から";
+  // 品名・仕様から選んだ品目・単位か (手で選んでいない) — 画面に「自動」と添える
+  const autoPicked = (r: Row) => !r.catTouched && !r.productId && Boolean(r.itemCategory);
   // 畳床を選べる行: 品目が畳で、材料が決まっていない畳床の行を持つ材料構成に当たる (商品または品名)
   const needsDoko = (r: Row) => {
     if (!doko?.options.length) return false;
@@ -168,16 +233,16 @@ export function QuoteEditor({
                 </div>
                 <div className="col-span-2 min-w-0 @4xl:col-span-1">
                   <span className={CELL_LABEL}>品名</span>
-                  <input className={FIELD} value={r.name} onChange={(e) => update(r.key, { name: e.target.value })} placeholder="品名" required aria-label="品名" />
+                  <input className={FIELD} value={r.name} onChange={(e) => updateText(r.key, { name: e.target.value })} placeholder="品名" required aria-label="品名" />
                 </div>
                 <div className="col-span-2 min-w-0 @4xl:col-span-1">
                   <span className={CELL_LABEL}>仕様・備考</span>
-                  <input className={FIELD} value={r.spec} onChange={(e) => update(r.key, { spec: e.target.value })} placeholder="サイズ・柄など" aria-label="仕様・備考" />
+                  <input className={FIELD} value={r.spec} onChange={(e) => updateText(r.key, { spec: e.target.value })} placeholder="サイズ・柄など" aria-label="仕様・備考" />
                 </div>
                 {categories.length > 0 && (
                   <div className="col-span-2 min-w-0 @4xl:col-span-1">
                     <span className={CELL_LABEL}>品目 (管理会計)</span>
-                    <select className={FIELD} value={r.itemCategory} onChange={(e) => update(r.key, { itemCategory: e.target.value })} aria-label="品目 (管理会計)">
+                    <select className={FIELD} value={r.itemCategory} onChange={(e) => update(r.key, { itemCategory: e.target.value, catTouched: true })} aria-label="品目 (管理会計)" title={autoPicked(r) ? "品名・仕様から自動で選びました (変えられます)" : undefined}>
                       <option value="">自動 ({autoName(r)})</option>
                       {categories.map((c) => (
                         <option key={c.id} value={c.id}>{c.name}</option>
@@ -199,7 +264,22 @@ export function QuoteEditor({
                 </div>
                 <div className="min-w-0">
                   <span className={CELL_LABEL}>単位</span>
-                  <input className={FIELD} value={r.unit} onChange={(e) => update(r.key, { unit: e.target.value })} aria-label="単位" />
+                  {r.unitFree ? (
+                    <input className={FIELD} value={r.unit} onChange={(e) => update(r.key, { unit: e.target.value, unitTouched: true })} onBlur={() => r.unit.trim() && UNIT_SET.has(r.unit.trim()) && update(r.key, { unit: r.unit.trim(), unitFree: false })} aria-label="単位" placeholder="単位" maxLength={10} />
+                  ) : (
+                    <select
+                      className={FIELD}
+                      value={r.unit}
+                      onChange={(e) => (e.target.value === OTHER_UNIT ? update(r.key, { unitFree: true, unitTouched: true, unit: "" }) : update(r.key, { unit: e.target.value, unitTouched: true }))}
+                      aria-label="単位"
+                      title={r.unitTouched ? undefined : "品名・仕様から自動で選びます (変えられます)"}
+                    >
+                      {UNIT_OPTIONS.map((u) => (
+                        <option key={u} value={u}>{u}</option>
+                      ))}
+                      <option value={OTHER_UNIT}>その他 (入力)…</option>
+                    </select>
+                  )}
                 </div>
                 <div className="min-w-0">
                   <span className={CELL_LABEL}>単価 ({taxIncluded ? "税込" : "税抜"})</span>

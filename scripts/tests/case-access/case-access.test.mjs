@@ -111,7 +111,7 @@ section("閲覧の範囲 (edit / view / none)");
   const o = (id) => db.orders.find((x) => x.id === id);
   eq(A.orderAccess(db, koshiStaff, o("o_paid")), "edit", "自店舗の社員は完了した案件も見られる (従来どおり)");
   eq(A.orderAccess(db, nishiStaff, o("o_open")), "view", "ほかの店舗の社員: 進行中の受注は閲覧のみ");
-  eq(A.orderAccess(db, nishiManager, o("o_billed")), "view", "ほかの店舗の店長: 請求済み・未入金も閲覧のみ");
+  eq(A.orderAccess(db, nishiManager, o("o_billed")), "edit", "ほかの店舗の店長: 受注も変更できる (お客様の決定 2026-11-23。請求書は下の「店長の変更の範囲」)");
   eq(A.orderAccess(db, nishiStaff, o("o_paid")), "none", "ほかの店舗の社員: 入金済みの受注は見られない (通常の権限に戻る)");
   eq(A.orderAccess(db, nishiStaff, o("o_closed")), "none", "ほかの店舗の社員: 全処理完了の受注は見られない");
   eq(A.orderAccess(db, hq, o("o_paid")), "edit", "本部スタッフは全店舗 (従来どおり)");
@@ -228,7 +228,7 @@ section("閲覧の範囲 = 承認制");
   const db = withPolicy({ figures: "all", customers: "approval", grantDays: 7 });
   const o = (id) => db.orders.find((x) => x.id === id);
   const c = (id) => db.customers.find((x) => x.id === id);
-  eq(A.customerAccessInfo(db, nishiManager, c("c_paid")).access, "view", "店長はほかの店舗の完了した案件のお客様も見られる");
+  eq(A.customerAccessInfo(db, nishiManager, c("c_paid")).access, "edit", "店長はほかの店舗の完了した案件のお客様も見られる (変更もできる)");
   eq(A.orderAccess(db, nishiStaff, o("o_open")), "view", "店舗スタッフも進行中の案件は見られる");
   const info = A.customerAccessInfo(db, nishiStaff, c("c_paid"));
   eq([info.access, info.canRequest, Boolean(info.pending)], ["none", true, false], "店舗スタッフは完了した案件のお客様は見られず、閲覧の申請ができる");
@@ -254,7 +254,8 @@ section("閲覧の範囲 = 進行中の案件だけ");
 {
   const db = withPolicy({ figures: "store", customers: "open", grantDays: 7 });
   const c = (id) => db.customers.find((x) => x.id === id);
-  eq(A.customerAccessInfo(db, nishiManager, c("c_paid")), { access: "none", customerId: "c_paid" }, "店長もほかの店舗の完了した案件は見られない (申請もない)");
+  eq(A.customerAccessInfo(db, nishiStaff, c("c_paid")), { access: "none", customerId: "c_paid" }, "店舗スタッフはほかの店舗の完了した案件は見られない (申請もない)");
+  eq(A.customerAccessInfo(db, nishiManager, c("c_paid")), { access: "edit", customerId: "c_paid" }, "店長は閲覧の範囲に関わらずほかの店舗のお客様を変更できる (お客様の決定 2026-11-23)");
   eq(A.customerAccessInfo(db, nishiStaff, c("c_open")).basis, "open", "進行中の案件は見られる (理由 = 進行中)");
 }
 
@@ -297,6 +298,103 @@ section("閲覧の記録 (自店舗の記録も。1 人・1 件・1 日に 1 回
   const existing = [{ userId: "u_rv3", action: "view", entity: "quote", entityId: "q_rv1", at: "2026-11-23T01:00:00.000Z" }];
   ok(!RV.shouldLogRecordView("u_rv3", { entity: "quote", id: "q_rv1" }, existing, now), "ほかのサーバーがその日に書いた閲覧があれば残さない");
   ok(RV.shouldLogRecordView("u_rv3", { entity: "quote", id: "q_rv1" }, existing, new Date("2026-11-24T03:00:00.000Z")), "次の日はまた残す");
+}
+
+/* ------------------------------------------------------------------ */
+// 店長は全店舗の顧客・問い合わせ・見積・受注を変更できる。承認は管理者 (お客様の決定 2026-11-23)
+section("店長の変更の範囲 (全店舗の顧客・問い合わせ・見積・受注。請求書は自店舗)");
+{
+  const koshiManager = user("u_km", "store_manager", "koshi");
+  const tamanaManager = user("u_tm", "store_manager", "tamana");
+  const tamanaStaff = user("u_ts", "store_staff", "tamana");
+  const tamanaDb = (policy) => {
+    const db = sampleDb();
+    db.settings = [{ id: "access_policy", value: policy }];
+    db.customers.push(cust("c_t", "tamana"), cust("c_t_paid", "tamana"));
+    db.orders.push(
+      order("o_t", "c_t", "scheduled", { storeId: "tamana", quoteId: "q_t" }),
+      order("o_t_paid", "c_t_paid", "paid", { storeId: "tamana", invoiceId: "inv_t_paid" }),
+      order("o_t_closed", "c_t", "completed", { storeId: "tamana", closedAt: "2030-06-01T00:00:00.000Z" }),
+      order("o_t_billed", "c_t", "invoiced", { storeId: "tamana", invoiceId: "inv_t" }),
+    );
+    db.quotes.push(quote("q_t", "c_t", "accepted", { storeId: "tamana", orderId: "o_t", inquiryId: "i_t" }), quote("q_t_draft", "c_t", "draft", { storeId: "tamana" }));
+    db.inquiries.push(inquiry("i_t", "c_t", "quoted", { storeId: "tamana", quoteId: "q_t" }), inquiry("i_t_lost", "c_t_paid", "lost", { storeId: "tamana" }));
+    db.invoices.push(
+      { id: "inv_t", number: "INV-T1", orderId: "o_t_billed", customerId: "c_t", storeId: "tamana", status: "issued", total: 100000, paidAmount: 0, issueDate: "2030-06-01", dueDate: "2030-06-30" },
+      { id: "inv_t_paid", number: "INV-T2", orderId: "o_t_paid", customerId: "c_t_paid", storeId: "tamana", status: "paid", total: 100000, paidAmount: 100000, issueDate: "2030-06-01", dueDate: "2030-06-30" },
+    );
+    db.payments.push({ id: "pay_t", invoiceId: "inv_t_paid", amount: 100000, method: "cash", paidOn: "2030-06-10" });
+    return db;
+  };
+  const open = tamanaDb({ figures: "store", customers: "open", grantDays: 7 });
+  const all = tamanaDb({ figures: "all", customers: "all", grantDays: 7 });
+  const find = (db, kind, id) => db[kind].find((x) => x.id === id);
+
+  ok(P.canEditCaseStore(koshiManager, "tamana") && P.canEditCaseStore(koshiManager, "hq"), "店長はほかの店舗 (本部を含む) の顧客・案件を変更できる");
+  ok(!P.canEditCaseStore(koshiStaff, "tamana") && P.canEditCaseStore(koshiStaff, "koshi"), "店舗スタッフは自店舗だけ");
+  ok(P.canEditCaseStore(hq, "tamana") && P.canEditCaseStore(admin, "tamana"), "本部スタッフ・管理者は今までどおり全店舗");
+  ok(!P.canEditCaseStore({ ...koshiManager, active: false }, "tamana"), "無効の店長は変更できない");
+  ok(!P.canAccessStore(koshiManager, "tamana"), "店長の canAccessStore (請求書・入金・経費・予定表など) は広がらない");
+
+  for (const [label, db] of [["閲覧の範囲 = 進行中だけ", open], ["閲覧の範囲 = 全社員", all]]) {
+    eq(A.orderAccess(db, koshiManager, find(db, "orders", "o_t")), "edit", `${label}: 合志店の店長 → 玉名店の受注 = 変更できる`);
+    eq(A.orderAccess(db, koshiManager, find(db, "orders", "o_t_paid")), "edit", `${label}: 玉名店の入金済みの受注も開いて変更できる画面 (内容の変更は下の完了の制限)`);
+    eq(A.quoteAccess(db, koshiManager, find(db, "quotes", "q_t")), "edit", `${label}: 玉名店の見積 = 変更できる`);
+    eq(A.quoteAccess(db, koshiManager, find(db, "quotes", "q_t_draft")), "edit", `${label}: 玉名店の下書きの見積 = 変更できる`);
+    eq(A.customerAccess(db, koshiManager, find(db, "customers", "c_t")), "edit", `${label}: 玉名店のお客様 = 変更できる`);
+    eq(A.customerAccess(db, koshiManager, find(db, "customers", "c_t_paid")), "edit", `${label}: 玉名店の完了した案件だけのお客様も変更できる`);
+    eq(A.inquiryAccess(db, koshiManager, find(db, "inquiries", "i_t")), "edit", `${label}: 玉名店の問い合わせ = 変更できる`);
+    eq(A.inquiryAccess(db, koshiManager, find(db, "inquiries", "i_t_lost")), "edit", `${label}: 玉名店の失注の問い合わせも変更できる`);
+    eq(A.orderAccess(db, koshiStaff, find(db, "orders", "o_t")), "view", `${label}: 合志店の店舗スタッフ → 玉名店の進行中の受注 = 閲覧のみ`);
+    eq(A.quoteAccess(db, koshiStaff, find(db, "quotes", "q_t")), "view", `${label}: 店舗スタッフ → 玉名店の見積 = 閲覧のみ`);
+    eq(A.customerAccess(db, koshiStaff, find(db, "customers", "c_t")), "view", `${label}: 店舗スタッフ → 玉名店のお客様 = 閲覧のみ`);
+    eq(A.inquiryAccess(db, koshiStaff, find(db, "inquiries", "i_t")), "view", `${label}: 店舗スタッフ → 玉名店の問い合わせ = 閲覧のみ`);
+    eq(A.invoiceAccess(db, koshiManager, find(db, "invoices", "inv_t")), "view", `${label}: 玉名店の未入金の請求書は店長でも閲覧のみ`);
+    eq(A.invoiceAccess(db, tamanaManager, find(db, "invoices", "inv_t")), "edit", `${label}: 玉名店の請求書は玉名店の店長が変更する`);
+  }
+  eq(A.orderAccess(open, koshiStaff, find(open, "orders", "o_t_paid")), "none", "進行中だけ: 店舗スタッフはほかの店舗の入金済みの受注は見られない");
+  eq(A.invoiceAccess(open, koshiManager, find(open, "invoices", "inv_t_paid")), "none", "進行中だけ: ほかの店舗の入金済みの請求書は店長も見られない (請求書は閲覧の範囲のまま)");
+  eq(A.invoiceAccess(all, koshiManager, find(all, "invoices", "inv_t_paid")), "view", "全社員: ほかの店舗の入金済みの請求書は閲覧のみ (edit にならない)");
+  ok(!A.canEditRecordStore(koshiManager, "invoice", "tamana") && A.canEditRecordStore(koshiManager, "order", "tamana") && A.canEditRecordStore(koshiManager, "invoice", "koshi"), "記録の種類ごとの判定: 請求書だけ自店舗");
+
+  // 入金完了・全処理完了の案件の変更は管理者だけ (店長は自店舗・ほかの店舗とも変えられない)
+  eq(A.completedCaseLock(open, koshiManager, find(open, "orders", "o_t_paid")), { locked: true, reason: "入金済みの案件" }, "ほかの店舗の入金済みの受注は店長も変更できない");
+  ok(A.completedCaseLock(open, koshiManager, find(open, "orders", "o_t_closed")).locked, "ほかの店舗の全処理完了の受注も店長は変更できない");
+  ok(A.completedCaseLock(open, tamanaManager, find(open, "orders", "o_t_paid")).locked, "自店舗の入金済みの受注も店長は変更できない (今までどおり)");
+  ok(!A.completedCaseLock(open, admin, find(open, "orders", "o_t_paid")).locked, "管理者は変更できる");
+  ok(!A.completedCaseLock(open, koshiManager, find(open, "orders", "o_t")).locked, "進行中の受注は店長が変更できる");
+  ok(!A.completedCaseLock(open, koshiManager, find(open, "orders", "o_t_billed")).locked, "請求済み・未入金の受注は (金額以外) 店長が変更できる");
+
+  // 写真・資料
+  const parent = (type, id) => ATT.resolveParent(open, type, id);
+  ok(ATT.canAddToParent(koshiManager, open, parent("order", "o_t")), "店長はほかの店舗の受注に写真を追加できる");
+  ok(ATT.canAddToParent(koshiManager, open, parent("customer", "c_t_paid")) && ATT.canViewParent(koshiManager, open, parent("customer", "c_t_paid")), "店長はほかの店舗のお客様の資料を見て追加できる");
+  ok(!ATT.canAddToParent(koshiStaff, open, parent("order", "o_t")), "店舗スタッフはほかの店舗の受注に写真を追加できない");
+
+  // 承認: 店長の申請は管理者 (自店舗・ほかの店舗とも)。店長の承認の権限は変わらない
+  const users = [koshiManager, user("u_km2", "store_manager", "koshi"), koshiStaff, tamanaManager, tamanaStaff, admin, hq];
+  eq(P.approverRole(users, "tamana", false, koshiManager.id), "admin", "合志店の店長が玉名店の見積・受注を申請 → 管理者 (玉名店の店長ではない)");
+  eq(P.approverRole(users, "koshi", false, koshiManager.id), "admin", "店長の自店舗の申請も管理者 (同じ店舗にほかの店長がいても)");
+  eq(P.approverRole(users, "tamana", false, tamanaManager.id), "admin", "玉名店の店長の申請も管理者");
+  eq(P.approverRole(users, "tamana", false, tamanaStaff.id), "store_manager", "店舗スタッフの申請は今までどおり店舗の店長");
+  eq(P.approverRole(users, "koshi", false, koshiStaff.id), "store_manager", "店舗スタッフの申請 (合志店) は合志店の店長");
+  eq(P.approverRole(users, "koshi", true, koshiStaff.id), "admin", "基準額以上は管理者");
+  eq(P.approverRole(users, "hq", false, hq.id), "admin", "本部の案件は管理者");
+  eq(P.approverRole(users.filter((u) => u.id !== tamanaManager.id), "tamana", false, tamanaStaff.id), "admin", "店長のいない店舗は管理者 (今までどおり)");
+  const ap = { storeId: "tamana", requiredRole: P.approverRole(users, "tamana", false, koshiManager.id), requestedBy: koshiManager.id };
+  ok(!P.canApprove(tamanaManager, ap) && !P.canApprove(koshiManager, ap) && P.canApprove(admin, ap), "店長の申請は管理者だけが承認できる (玉名店の店長・本人は承認できない)");
+  const staffAp = { storeId: "tamana", requiredRole: "store_manager", requestedBy: tamanaStaff.id };
+  ok(P.canApprove(tamanaManager, staffAp) && !P.canApprove(koshiManager, staffAp), "店長が承認できるのは所属店舗の「店長承認」だけ (今までどおり)");
+  ok(P.canApplyCustomerChange(koshiManager, "koshi") && !P.canApplyCustomerChange(koshiManager, "tamana"), "顧客の重要情報: 店長が承認なしで反映できるのは自店舗だけ (ほかの店舗は管理者の承認)");
+
+  // 権限一覧 (設定 → ユーザーと権限)
+  const row = (key) => PT.permissionTable({ figures: "store", customers: "open", grantDays: 7 }).find((r) => r.key === key);
+  eq([row("customers").manager, row("openCases").manager, row("closedCases").manager], ["○", "○", "○"], "権限一覧: 店長は閲覧の範囲に関わらず全店舗の顧客・案件");
+  eq([row("customers").staff, row("closedCases").staff], ["自店", "−"], "権限一覧: 店舗スタッフは設定どおり");
+  const quoteRow = PT.PERMISSION_TABLE.find((r) => r.action.startsWith("見積の作成"));
+  eq([quoteRow.manager, quoteRow.staff], ["○", "自店"], "権限一覧: 見積の作成・編集は店長 ○ / 店舗スタッフ 自店");
+  const invoiceRow = PT.PERMISSION_TABLE.find((r) => r.action.startsWith("請求書の発行"));
+  eq(invoiceRow.manager, "自店", "権限一覧: 請求書の発行は店長も自店舗");
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

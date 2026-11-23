@@ -1,6 +1,6 @@
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
-import { CircleCheck, Globe, Link2, Plus, TriangleAlert } from "lucide-react";
+import { CircleCheck, Factory, Globe, Link2, Plus, TriangleAlert } from "lucide-react";
 import type { ScheduleEvent, Store, StoreId } from "@/lib/db/types";
 import type { CaseRef } from "@/lib/db/schedule";
 import {
@@ -22,7 +22,9 @@ import {
 } from "@/lib/calendar";
 import { daysBetween } from "@/lib/format";
 import { Avatar } from "@/components/ui";
-import { ConflictBadge, KindBadge, KindIcon, kindLabel, kindStyle, shortName } from "./parts";
+import { ConflictBadge, KindBadge, KindIcon, KindMark, WorkTokens, kindLabel, kindStyle, shortName } from "./parts";
+import { stripKindWords, type WorkToken } from "@/lib/work-summary";
+import type { DayTotal } from "@/lib/production/plan";
 
 /**
  * 予定表のビュー (サーバーコンポーネント)
@@ -57,6 +59,41 @@ export interface CalendarContext {
   closedDays?: Set<string>;
   /** 祝日名 (管理者の変更を反映。src/lib/holiday-calendar.ts の holidayResolver)。なければ規則どおりの祝日 */
   holidayOf?: (d: string) => string | undefined;
+  /** 予定の仕事内容と数量 (「タ12 フ6」。src/lib/schedule-work.ts)。分からない予定は undefined */
+  workOf?: (e: ScheduleEvent) => WorkToken[] | undefined;
+  /** 仕事内容の読み上げ用の文 (例: 畳 12・襖 6) */
+  workTextOf?: (e: ScheduleEvent) => string | undefined;
+  /** 畳製造予定の日ごとの合計と、その日の製造予定の画面へのリンク (src/lib/production/plan.ts) */
+  production?: { byDay: Map<string, DayTotal>; href: (d: string) => string };
+}
+
+/** 予定表に出す件名 (「引き取り」「納品」などの言葉は出さない。種類はアイコンと色で表す) */
+export function eventTitle(e: Pick<ScheduleEvent, "title" | "kind">): string {
+  return stripKindWords(e.title, e.kind);
+}
+
+/** 畳製造予定の日のリンク (予定表の日の見出しに置く) */
+export function ProductionLink({ ctx, day, variant }: { ctx: CalendarContext; day: string; variant: "month" | "week" | "day" }) {
+  const t = ctx.production?.byDay.get(day);
+  if (!ctx.production || !t) return null;
+  const qty = Number.isInteger(t.qty) ? t.qty : t.qty.toFixed(1);
+  const label = `畳製造予定 ${t.count} 件 ${qty} 畳${t.herinashiSeen ? " (へり無し畳あり)" : ""}${t.open < t.count ? ` (済 ${t.count - t.open} 件)` : ""}`;
+  return (
+    <Link
+      href={ctx.production.href(day)}
+      title={label}
+      aria-label={label}
+      data-testid="production-link"
+      className={clsx(
+        "inline-flex shrink-0 items-center gap-0.5 rounded-md bg-[#fbeee6] font-semibold whitespace-nowrap text-[#8a3b12] tnum hover:bg-[#f7dccb]",
+        variant === "month" ? "px-1 py-px text-[10px]" : variant === "week" ? "px-1.5 py-0.5 text-[11px]" : "px-2 py-1 text-xs",
+      )}
+    >
+      <Factory className={variant === "day" ? "h-3.5 w-3.5" : "h-3 w-3"} aria-hidden />
+      {variant === "day" ? `畳製造 ${t.count} 件 タ${qty}` : `製 タ${qty}`}
+      {t.herinashiSeen && <span className="text-critical-ink">縁無</span>}
+    </Link>
+  );
 }
 
 /** 仮押さえ (予定表に点線で表示。ID は "hold:<仮押さえの ID>") */
@@ -93,6 +130,7 @@ function describe(ctx: CalendarContext, e: ScheduleEvent, day: string | undefine
     `${day ? shortDate(day) : shortDate(e.date)} ${dayTimeLabel(e, day)}`,
     kindLabel(e.kind),
     e.title,
+    ctx.workTextOf?.(e) ? `仕事内容: ${ctx.workTextOf(e)}` : "",
     people.length ? `担当: ${people.join("・")}` : e.companyWide ? "全社共通" : "",
     store ? `${store.name}` : "",
     c ? `案件 ${c.number}${c.pending ? " (契約承認待ち)" : ""}` : "",
@@ -108,6 +146,8 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
   const conflict = conflictOn(ctx, e, day, personId);
   const label = describe(ctx, e, day, conflict);
   const href = eventHref(e);
+  const tokens = ctx.workOf?.(e);
+  const store = ctx.stores.get(e.storeId);
   if (variant === "month" || variant === "staff") {
     return (
       <Link
@@ -122,15 +162,16 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
           conflict && "ring-1 ring-critical/70",
         )}
       >
-        <KindIcon kind={e.kind} className={clsx("h-3 w-3", s.ink)} />
+        <KindMark kind={e.kind} />
+        {ctx.showStore && store && <span className="shrink-0 font-medium text-ink-2">{store.shortName}</span>}
         <span className="shrink-0 font-medium text-ink-2 tnum">{shortTime(e)}</span>
-        <span className="min-w-0 truncate">{e.title}</span>
+        <span className="min-w-0 truncate">{eventTitle(e)}</span>
+        <WorkTokens tokens={tokens} />
         {conflict && <TriangleAlert className="ml-auto h-3 w-3 shrink-0 text-critical" aria-hidden />}
       </Link>
     );
   }
   const c = ctx.caseOf(e);
-  const store = ctx.stores.get(e.storeId);
   const people = e.assigneeIds.map((id) => ctx.users.get(id)?.name).filter((n): n is string => Boolean(n));
   return (
     <Link
@@ -146,19 +187,21 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
       )}
     >
       <span className="flex items-center gap-1">
-        <KindIcon kind={e.kind} className={clsx("h-3.5 w-3.5", s.ink)} />
-        <span className="font-semibold tnum">{dayTimeLabel(e, day)}</span>
-        {conflict && <ConflictBadge className="ml-auto" />}
-      </span>
-      <span className="mt-0.5 line-clamp-2 block font-medium">{e.title}</span>
-      <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-ink-2">
-        <span className={clsx("font-medium", s.ink)}>{kindLabel(e.kind)}</span>
+        <KindMark kind={e.kind} />
         {ctx.showStore && store && (
-          <span className="inline-flex items-center gap-1">
+          <span className="inline-flex shrink-0 items-center gap-1 font-medium whitespace-nowrap text-ink-2">
             <span className="h-1.5 w-1.5 rounded-full" style={{ background: store.color }} aria-hidden />
             {store.shortName}
           </span>
         )}
+        <span className="min-w-0 font-semibold tnum">{dayTimeLabel(e, day)}</span>
+        {conflict && <ConflictBadge className="ml-auto" />}
+      </span>
+      <span className="mt-0.5 block font-medium">
+        <span className="line-clamp-2">{eventTitle(e)}</span>
+        {tokens?.length ? <WorkTokens tokens={tokens} className="mt-0.5 flex-wrap text-[12px]" /> : null}
+      </span>
+      <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-ink-2">
         {e.companyWide && (
           <span className="inline-flex items-center gap-0.5">
             <Globe className="h-3 w-3" aria-hidden />
@@ -233,6 +276,9 @@ export function MonthView({ days, month, events, ctx }: { days: string[]; month:
                   {Number(d.slice(8))}
                 </Link>
                 {holiday && <span className="hidden min-w-0 truncate text-[10px] text-critical-ink @3xl:inline">{holiday}</span>}
+                <span className="hidden @3xl:inline-flex">
+                  <ProductionLink ctx={ctx} day={d} variant="month" />
+                </span>
                 {ctx.addHref && (
                   <Link
                     href={ctx.addHref({ date: d })}
@@ -302,6 +348,11 @@ export function WeekView({ days, events, ctx }: { days: string[]; events: Schedu
               {holiday && <span className="min-w-0 truncate text-[10px] text-critical-ink">{holiday}</span>}
               <span className="ml-auto text-[11px] text-ink-3 tnum">{list.length > 0 ? `${list.length} 件` : ""}</span>
             </header>
+            {ctx.production?.byDay.get(d) && (
+              <div className="mb-1.5">
+                <ProductionLink ctx={ctx} day={d} variant="week" />
+              </div>
+            )}
             {list.length === 0 && <p className="px-1 py-2 text-[11px] text-ink-3">予定なし</p>}
             <ul className="flex-1 space-y-1.5">
               {list.map((e) => (
@@ -622,9 +673,11 @@ function DayBar({ e, ctx, day, userId, style }: { e: ScheduleEvent; ctx: Calenda
       )}
       style={style}
     >
-      <KindIcon kind={e.kind} className={clsx("h-3 w-3", s.ink)} />
+      <KindMark kind={e.kind} />
+      {ctx.showStore && ctx.stores.get(e.storeId) && <span className="shrink-0 font-medium text-ink-2">{ctx.stores.get(e.storeId)!.shortName}</span>}
       <span className="shrink-0 font-medium text-ink-2 tnum">{dayTimeLabel(e, day)}</span>
-      <span className="truncate">{e.title}</span>
+      <span className="truncate">{eventTitle(e)}</span>
+      <WorkTokens tokens={ctx.workOf?.(e)} />
       {conflict && <TriangleAlert className="h-3 w-3 shrink-0 text-critical" aria-hidden />}
     </Link>
   );
@@ -681,8 +734,9 @@ function ListRow({ e, d, ctx }: { e: ScheduleEvent; d: string; ctx: CalendarCont
       </div>
       <div className="min-w-0">
         <Link href={eventHref(e)} className="font-medium text-ink hover:text-accent hover:underline">
-          {e.title}
+          {eventTitle(e)}
         </Link>
+        <WorkTokens tokens={ctx.workOf?.(e)} className="ml-2 text-sm" />
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-ink-3">
           {c && (
             <span className="inline-flex items-center gap-0.5">

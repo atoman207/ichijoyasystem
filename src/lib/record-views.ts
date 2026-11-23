@@ -3,6 +3,7 @@ import { addAudit, mutate } from "@/lib/db/store";
 import type { StoreId, User } from "@/lib/db/types";
 import { toDateKey } from "@/lib/format";
 import type { AccessInfo } from "@/lib/case-access";
+import { canAccessStore } from "@/lib/auth/permissions";
 
 /**
  * 顧客情報の閲覧の記録 (お客様のご要望 2026-11-23「■10. 権限設定」: 全社員に公開 + 閲覧履歴の記録。自店舗の顧客の閲覧も記録する)
@@ -87,7 +88,9 @@ async function flush(): Promise<void> {
 /** 記録の画面 (Server Component) から呼ぶ。開ける記録 (edit / view) の閲覧を、1 人・1 件・1 日に 1 回残す */
 export function logRecordView(user: User, info: AccessInfo, rec: ViewedRecord, existing: ExistingLog[]): void {
   if (info.access === "none" || !shouldLogRecordView(user.id, rec, existing)) return;
-  queue.push({ userId: user.id, rec, summary: viewSummary(info, rec), at: new Date().toISOString() });
+  // 店長がほかの店舗の記録 (顧客・問い合わせ・見積・受注は変更もできる = edit) を開いたときも、ほかの店舗の記録と分かるようにする
+  const summary = info.access === "edit" && !canAccessStore(user, rec.storeId) ? `${viewSummary(info, rec)} (ほかの店舗の記録)` : viewSummary(info, rec);
+  queue.push({ userId: user.id, rec, summary, at: new Date().toISOString() });
   if (!gv.__ichijoyaViewTimer) {
     gv.__ichijoyaViewTimer = setTimeout(() => void flush(), FLUSH_MS);
     gv.__ichijoyaViewTimer.unref?.();

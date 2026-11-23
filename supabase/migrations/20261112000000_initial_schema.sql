@@ -1395,6 +1395,33 @@ create table if not exists work_report_days (
 );
 comment on table work_report_days is '作業日報の手入力 (店舗 × 日。チラシの配布人・枚数・地域、来店数)';
 
+-- 畳製造予定 (製造日の変更・繰り越し・製造日未定・製造済み・手で足した製造の予定。予定そのものは受注の引取日・採寸日から計算)
+create table if not exists tatami_production (
+  id text primary key,
+  source_key text not null unique,
+  store_id text not null references stores(id),
+  order_id text,
+  event_id text,
+  customer_id text,
+  date date,
+  undecided boolean,
+  base_date date,
+  status text not null check (status in ('planned','done','cancelled')),
+  done_at timestamptz,
+  done_by text,
+  title text,
+  spec text,
+  qty numeric,
+  herinashi numeric,
+  note text,
+  history jsonb not null default '[]',
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz not null
+);
+comment on table tatami_production is '畳製造予定 (製造日の変更・繰り越し・製造日未定・製造済み・手で足した製造の予定。予定そのものは受注の引取日・採寸日から計算)';
+
 -- 販促の記録 (チラシ・イベント・点検の DM・テレアポ。地域ごとの部数)
 create table if not exists promotions (
   id text primary key,
@@ -2606,6 +2633,27 @@ alter table work_report_days add column if not exists created_by text not null;
 alter table work_report_days add column if not exists created_at timestamptz not null;
 alter table work_report_days add column if not exists updated_by text;
 alter table work_report_days add column if not exists updated_at timestamptz not null;
+alter table tatami_production add column if not exists source_key text not null unique;
+alter table tatami_production add column if not exists store_id text not null references stores(id);
+alter table tatami_production add column if not exists order_id text;
+alter table tatami_production add column if not exists event_id text;
+alter table tatami_production add column if not exists customer_id text;
+alter table tatami_production add column if not exists date date;
+alter table tatami_production add column if not exists undecided boolean;
+alter table tatami_production add column if not exists base_date date;
+alter table tatami_production add column if not exists status text not null check (status in ('planned','done','cancelled'));
+alter table tatami_production add column if not exists done_at timestamptz;
+alter table tatami_production add column if not exists done_by text;
+alter table tatami_production add column if not exists title text;
+alter table tatami_production add column if not exists spec text;
+alter table tatami_production add column if not exists qty numeric;
+alter table tatami_production add column if not exists herinashi numeric;
+alter table tatami_production add column if not exists note text;
+alter table tatami_production add column if not exists history jsonb not null default '[]';
+alter table tatami_production add column if not exists created_by text not null;
+alter table tatami_production add column if not exists created_at timestamptz not null;
+alter table tatami_production add column if not exists updated_by text;
+alter table tatami_production add column if not exists updated_at timestamptz not null;
 alter table promotions add column if not exists number text not null unique;
 alter table promotions add column if not exists kind text not null check (kind in ('flyer','event','dm','teleapo','other'));
 alter table promotions add column if not exists title text not null;
@@ -2909,6 +2957,9 @@ create index if not exists holiday_works_user_id_date_idx on holiday_works (user
 create index if not exists holiday_works_load_order_idx on holiday_works (date, created_at, id);
 create index if not exists work_report_days_store_id_date_idx on work_report_days (store_id, date);
 create index if not exists work_report_days_load_order_idx on work_report_days (date, id);
+create index if not exists tatami_production_store_id_date_idx on tatami_production (store_id, date);
+create index if not exists tatami_production_order_id_idx on tatami_production (order_id);
+create index if not exists tatami_production_load_order_idx on tatami_production (date, created_at, id);
 create index if not exists promotions_store_id_start_date_idx on promotions (store_id, start_date);
 create index if not exists promotions_kind_idx on promotions (kind);
 create index if not exists promotions_load_order_idx on promotions (start_date, id);
@@ -3129,6 +3180,9 @@ grant select, insert, update, delete on table holiday_works to service_role;
 alter table work_report_days enable row level security;
 revoke all on table work_report_days from anon, authenticated;
 grant select, insert, update, delete on table work_report_days to service_role;
+alter table tatami_production enable row level security;
+revoke all on table tatami_production from anon, authenticated;
+grant select, insert, update, delete on table tatami_production to service_role;
 alter table promotions enable row level security;
 revoke all on table promotions from anon, authenticated;
 grant select, insert, update, delete on table promotions to service_role;

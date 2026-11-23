@@ -6,7 +6,7 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canSeeAllStores, canViewAuditEntry, scopeByStore } from "@/lib/auth/permissions";
+import { canAccessStore, canEditCaseStore, canSeeAllStores, canViewAuditEntry } from "@/lib/auth/permissions";
 import { customerOptions, userName } from "@/lib/db/queries";
 import { handoffInquiry, linkInquiryToCustomer, linkInquiryToSelectedCustomer, registerCustomerFromInquiry, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
 import { customerOptionLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
@@ -60,8 +60,9 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const ik = inq.intake;
   const dup = customer ? null : findDuplicateCustomers(db, { name: inq.contactName, phone: inq.contactPhone, otherPhones: [ik?.phone, ik?.callbackPhone].filter((x): x is string => Boolean(x)), email: ik?.email, postalCode: ik?.postalCode, address: ik?.address });
   const candidates = dup ? [...dup.high.map((m) => ({ ...m, level: "high" as const })), ...dup.check.map((m) => ({ ...m, level: "check" as const })), ...dup.sameName.slice(0, 5).map((m) => ({ ...m, level: "name" as const }))] : [];
-  const linkChoices = !customer && !viewOnly ? customerOptions(scopeByStore(user, db.customers), cq) : null;
-  const linkCustomers = linkChoices?.options.filter((c) => canAccessStore(user, c.storeId)) ?? [];
+  // 紐づけられるお客様: 自店舗 (全店舗ロールは全店舗)、店長は全店舗 (permissions.ts の canEditCaseStore)
+  const linkChoices = !customer && !viewOnly ? customerOptions(db.customers.filter((c) => canEditCaseStore(user, c.storeId)), cq) : null;
+  const linkCustomers = linkChoices?.options ?? [];
   const storeName = (sid: string) => db.stores.find((s) => s.id === sid)?.name ?? sid;
   // AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) からの受付: 会話の記録
   const fromAi = isAiChannel(inq.channel);
@@ -92,7 +93,8 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   // 媒体 (当社を知ったきっかけ): 入力がなければ過去の記録からの推定 (src/lib/media.ts)
   const media = inquiryMediaMap(db, [inq]).get(inq.id)!;
   const promotion = inq.promotionId ? (db.promotions ?? []).find((p) => p.id === inq.promotionId) : undefined;
-  const promotions = promotionOptions(db.promotions ?? [], (sid) => sid === "hq" || canAccessStore(user, sid), inq.promotionId);
+  // きっかけの販促: 全社 (本部)・自店舗・この問い合わせの店舗の販促 (actions/inquiries.ts の updateInquiry と同じ)
+  const promotions = promotionOptions(db.promotions ?? [], (sid) => sid === "hq" || sid === inq.storeId || canAccessStore(user, sid), inq.promotionId);
 
   return (
     <div>
@@ -187,7 +189,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             newParams={caseParam}
             returnTo={`/inquiries/${inq.id}`}
             quickKinds={order ? ["pickup", "delivery", "install", "visit"] : ["survey", "measure", "visit"]}
-            canAdd={open || Boolean(order)}
+            canAdd={(open || Boolean(order)) && canAccessStore(user, inq.storeId)}
             emptyText={open ? "まだ予定はありません。現地調査・採寸の日程が決まったら登録してください (未対応の問い合わせは「対応中」になります)" : "予定はありません"}
             description="現地調査・採寸・顧客訪問を担当者つきで登録すると、店舗の共通カレンダーに自動で反映されます。見積・受注に進んでも同じ案件の予定として引き継がれます"
           />
@@ -292,12 +294,12 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                       {candidates.map((m) => (
                         <li key={m.id} className="rounded-lg bg-panel p-2">
                           <div className="flex flex-wrap items-baseline gap-x-2">
-                            {canAccessStore(user, m.storeId) ? <Link href={`/customers/${m.id}`} className="font-medium text-accent hover:underline">{m.code} {m.name}</Link> : <span className="font-medium text-ink">{m.code} {m.name}</span>}
+                            {canEditCaseStore(user, m.storeId) ? <Link href={`/customers/${m.id}`} className="font-medium text-accent hover:underline">{m.code} {m.name}</Link> : <span className="font-medium text-ink">{m.code} {m.name}</span>}
                             <span className="text-ink-3">{storeName(m.storeId)}</span>
                           </div>
                           <div className="mt-0.5 text-ink-2">{m.address || (m.area ? `地区 ${m.area}` : "住所未登録")}</div>
                           <div className="text-ink-3">{m.level === "high" ? "重複の可能性が高い" : m.level === "check" ? "要確認" : "参考"}: {m.reasons.join("・")}</div>
-                          {canAccessStore(user, m.storeId) ? (
+                          {canEditCaseStore(user, m.storeId) ? (
                             <form action={linkInquiryToCustomer.bind(null, inq.id, m.id)} className="mt-1.5">
                               <Button type="submit" size="sm" variant="secondary">この顧客に紐づける</Button>
                             </form>
