@@ -94,6 +94,7 @@ export function EventForm({
   returnTo,
   cancelHref,
   syncedOrderNumber,
+  handoverLinked,
 }: {
   mode: "create" | "edit";
   action: (formData: FormData) => void | Promise<void>;
@@ -115,6 +116,8 @@ export function EventForm({
   returnTo?: string;
   cancelHref: string;
   syncedOrderNumber?: string;
+  /** 受注の引取・納品の日程と連動する予定 (日時の変更は受注の日程の変更の申請になる。src/lib/handover.ts) */
+  handoverLinked?: boolean;
 }) {
   const [v, setV] = useState<EventFormValues>(initial);
   const [endTouched, setEndTouched] = useState(Boolean(initial.endTime));
@@ -269,7 +272,7 @@ export function EventForm({
                   </div>
                 </div>
               ))}
-              {lockKind && <p className="mt-2 text-[11px] text-ink-3">受注の施工予定と連動する予定のため、種別は「施工」のままです。</p>}
+              {lockKind && <p className="mt-2 text-[11px] text-ink-3">{handoverLinked ? "受注の引取・納品の日程と連動する予定のため、種別は変えられません。" : "受注の施工予定と連動する予定のため、種別は「施工」のままです。"}</p>}
             </fieldset>
 
             <div className="mt-4 grid gap-3">
@@ -295,7 +298,9 @@ export function EventForm({
                     </Link>
                   )}
                   <p className="w-full text-[11px] text-ink-3">
-                    {syncedOrderNumber
+                    {syncedOrderNumber && handoverLinked
+                      ? `受注 ${syncedOrderNumber} の引取・納品の日程と連動しています。日付・時刻を変えると受注の日程の変更の申請になり、承認のあとに予定表へ反映されます (それまでは前の日時のままです)。担当者・メモはこの予定だけ変わります。`
+                      : syncedOrderNumber
                       ? `受注 ${syncedOrderNumber} の施工予定と連動しています。日付・担当者・場所を変えると、受注の施工期間・施工担当・現場住所も更新されます。`
                       : "案件の画面と、案件の店舗のカレンダー (担当者つき) の両方に表示されます。"}
                   </p>

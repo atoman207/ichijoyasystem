@@ -4,9 +4,11 @@ import { CalendarDays, CalendarOff, ChartGantt, ChevronLeft, ChevronRight, Colum
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import type { ScheduleEvent, ScheduleKind, StoreId } from "@/lib/db/types";
-import { canSeeAllStores, canViewCompanySchedule } from "@/lib/auth/permissions";
+import { canAccessStore, canSeeAllStores, canViewCompanySchedule } from "@/lib/auth/permissions";
 import { redirect } from "next/navigation";
-import { createCaseResolver, type CaseRef } from "@/lib/db/schedule";
+import { createCaseResolver, orderEditable, type CaseRef } from "@/lib/db/schedule";
+import { isHandoverEvent } from "@/lib/db/handover-events";
+import { usesHandoverPlan } from "@/lib/handover-save";
 import { addMonths, analyzeConflicts, dateRange, isDateKey, longDate, monthEnd, monthStart, occursOn, overlapsRange, shortDate, weekStart } from "@/lib/calendar";
 import { addDays, toDateKey } from "@/lib/format";
 import { SCHEDULE_GROUP_LABEL, SCHEDULE_KIND, SCHEDULE_KINDS } from "@/lib/constants";
@@ -147,6 +149,16 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   const users = activeUsers;
   const filtered = Boolean(userParam || kindParam || onlyConflicts);
   const storeName = storeFilter ? db.stores.find((s) => s.id === storeFilter)?.name : "全社";
+  // 畳・襖などで、まだ以前の形 (施工期間の「施工」の予定) のまま載っている受注 → 受注の画面の「引取・納品の日程」で保存すると切り替わる
+  const legacyOrders = [
+    ...new Map(
+      db.schedule
+        .filter((e) => e.source === "order" && e.orderId && !isHandoverEvent(e) && (e.endDate ?? e.date) >= today && (!storeFilter || e.storeId === storeFilter))
+        .map((e) => db.orders.find((o) => o.id === e.orderId))
+        .filter((o): o is NonNullable<typeof o> => Boolean(o && !o.handovers?.length && orderEditable(o) && canAccessStore(user, o.storeId) && usesHandoverPlan(db, o)))
+        .map((o) => [o.id, o] as const),
+    ).values(),
+  ];
 
   return (
     <div>
@@ -181,6 +193,21 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
       />
 
       <LinkTabs items={storeTabs} current={link({ store: storeParam })} />
+
+      {legacyOrders.length > 0 && (
+        <p className="mb-3 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn-ink" data-testid="handover-legacy">
+          畳・襖などの受注 {legacyOrders.length} 件が、まだ施工期間 (間の日にも表示) のまま載っています。受注の画面の「引取・納品の日程」で日程を確かめて保存すると、引き取りの日・納品の日だけの表示になります:{" "}
+          {legacyOrders.slice(0, 8).map((o, i) => (
+            <span key={o.id}>
+              {i > 0 && "、"}
+              <Link href={`/orders/${o.id}`} className="font-medium underline">
+                {db.customers.find((c) => c.id === o.customerId)?.name ?? o.number} 様
+              </Link>
+            </span>
+          ))}
+          {legacyOrders.length > 8 && ` ほか ${legacyOrders.length - 8} 件`}
+        </p>
+      )}
 
       <div className="mb-3 flex flex-col gap-3 @5xl:flex-row @5xl:items-center @5xl:justify-between">
         <div className="flex flex-wrap items-center gap-2">

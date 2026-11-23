@@ -1,0 +1,607 @@
+/**
+ * 受注の品目ごとの引取日・納品日 (お客様のご要望 2026-11-23「■ 予定表への反映方法」「■ 引取日・納品日の登録・変更」)
+ * ------------------------------------------------------------
+ * - 畳・襖・障子・網戸は、予定表に「引き取り」と「納品」の日だけを載せる (間の日には出さない)。
+ *   リフォーム (工事) はこれまでどおり施工期間 (開始日〜終了日) の「施工」の予定。
+ * - 1 つの案件の品目ごとに引取日・納品日を持つ (例: 畳の表替えは当日納品・襖は後日納品)。
+ *   同じ日・同じ時間の引き取り (納品) は 1 回の訪問として予定表の予定 1 件にまとめる。
+ * - はじめて入れる日程 (空 → 日付) はすぐに反映し、登録済みの日程の変更 (日付・時間の変更・削除) は承認を経て反映する
+ *   (承認の type = handover_change。管理者の申請は承認を省略)。
+ * - 予定表の予定は受注と連動 (source = "order"・sourceRef = "handover:<pickup|delivery|install>:<日程の行の ID>+…")。
+ *
+ * ブラウザー (受注の画面の入力) とサーバーの両方から使う純粋関数。データベースには触れない。
+ */
+import type { HandoverItem, OrderHandover } from "@/lib/db/types";
+import { isDateKey, normTime, shortDate, toMinutes } from "@/lib/calendar";
+import { addDays } from "@/lib/format";
+
+export interface HandoverItemDef {
+  label: string;
+  /** handover = 引き取り・納品の 2 つの予定 / install = 施工期間の予定 (リフォーム) */
+  mode: "handover" | "install";
+  /** 既定で引取当日に納品するか (畳の表替え・裏返し) */
+  sameDay: boolean;
+  /** 入力の欄に出す説明 */
+  hint: string;
+}
+
+export const HANDOVER_ITEM: Record<HandoverItem, HandoverItemDef> = {
+  tatami_omote: { label: "畳 表替え", mode: "handover", sameDay: true, hint: "基本は引取当日に納品" },
+  tatami_ura: { label: "畳 裏返し", mode: "handover", sameDay: true, hint: "基本は引取当日に納品" },
+  tatami_new: { label: "畳 新調", mode: "handover", sameDay: false, hint: "引取日と別の日 (後日) に納品" },
+  fusuma: { label: "襖", mode: "handover", sameDay: false, hint: "基本は後日納品 (当日納品もできます)" },
+  shoji: { label: "障子", mode: "handover", sameDay: false, hint: "基本は後日納品 (当日納品もできます)" },
+  amido: { label: "網戸", mode: "handover", sameDay: false, hint: "基本は後日納品 (当日納品もできます)" },
+  other: { label: "その他", mode: "handover", sameDay: false, hint: "引き取り・納品のある品目" },
+  reform: { label: "リフォーム・工事", mode: "install", sameDay: false, hint: "施工期間 (開始日〜終了日) で予定表に載ります" },
+};
+
+export const HANDOVER_ITEMS = Object.keys(HANDOVER_ITEM) as HandoverItem[];
+export const isHandoverItem = (v: unknown): v is HandoverItem => typeof v === "string" && v in HANDOVER_ITEM;
+
+/** 予定表の予定の役割 */
+export type HandoverRole = "pickup" | "delivery" | "install";
+export const HANDOVER_ROLE_LABEL: Record<HandoverRole, string> = { pickup: "引き取り", delivery: "納品", install: "施工" };
+
+/** 日程の行の上限 (1 案件) */
+export const MAX_HANDOVERS = 20;
+
+export const handoverLabel = (r: Pick<OrderHandover, "item" | "label">): string => r.label?.trim() || HANDOVER_ITEM[r.item].label;
+export const isInstall = (r: Pick<OrderHandover, "item">): boolean => HANDOVER_ITEM[r.item].mode === "install";
+
+/* ---------------- 明細から品目を見分ける ---------------- */
+
+/** 品目にしない明細 (縁・引手・値引き・諸経費など。主な品目に付くもの) */
+const ACCESSORY = /縁|ヘリ|へり|引手|値引|割引|値下|諸経費|処分|運搬|配送|出張|駐車|乾燥|防虫|シート|手数料|送料|金券|ポイント|クーポン|消費税/;
+
+/**
+ * 明細 1 行の品目。品名・仕様の言葉 → 商品の分類 (ServiceCategory) の順で決める。
+ * 縁・引手・値引き・諸経費などは品目にしない (undefined)
+ */
+export function classifyLine(text: string, productCategory?: string): HandoverItem | undefined {
+  // 「6畳」「8畳間」は部屋の広さ (畳の品目ではない)
+  const t = text.normalize("NFKC").replace(/\d+(?:\.\d+)?\s*(?:畳|帖)間?/g, " ");
+  if (ACCESSORY.test(t)) return undefined;
+  if (/クロス|壁紙|フローリング|クッションフロア|カーテン|ブラインド/.test(t) && !/畳|襖|障子|網戸/.test(t)) return "reform";
+  if (/網戸|アミ戸|あみ戸|網張/.test(t)) return "amido";
+  if (/障子/.test(t)) return "shoji";
+  if (/襖|フスマ|ふすま|天袋|戸襖|板戸/.test(t)) return "fusuma";
+  if (/畳|たたみ|タタミ|表替|裏返|新調|新床|琉球/.test(t)) {
+    if (/新調|新床|新畳/.test(t)) return "tatami_new";
+    if (/裏返/.test(t)) return "tatami_ura";
+    return "tatami_omote";
+  }
+  switch (productCategory) {
+    case "tatami":
+      return "tatami_omote";
+    case "fusuma":
+    case "shoji":
+    case "amido":
+      return productCategory;
+    case "cloth":
+    case "curtain":
+      return "reform";
+  }
+  if (/クロス|壁紙|フローリング|クッションフロア|内装|工事|リフォーム|カーテン|ブラインド|塗装|左官/.test(t)) return "reform";
+  return undefined;
+}
+
+/** 受注の種別 (見積の明細がないとき) の品目 */
+const CATEGORY_ITEM: Record<string, HandoverItem> = { tatami: "tatami_omote", fusuma: "fusuma", shoji: "shoji", amido: "amido", cloth: "reform", curtain: "reform" };
+
+export interface HandoverLine {
+  name: string;
+  spec?: string;
+  qty?: number;
+  unit?: string;
+  /** 商品マスタの分類 (ServiceCategory) */
+  productCategory?: string;
+}
+
+interface ItemGroup {
+  item: HandoverItem;
+  qty: number;
+  unit?: string;
+  mixedUnit: boolean;
+}
+
+/** 明細を品目ごとにまとめる (出てきた順。数量は単位がそろうときだけ足す) */
+export function groupLines(lines: HandoverLine[], category?: string): ItemGroup[] {
+  const groups: ItemGroup[] = [];
+  for (const l of lines) {
+    const item = classifyLine(`${l.name} ${l.spec ?? ""}`, l.productCategory);
+    if (!item) continue;
+    const unit = l.unit?.trim() || undefined;
+    const qty = typeof l.qty === "number" && Number.isFinite(l.qty) && l.qty > 0 ? l.qty : 0;
+    const g = groups.find((x) => x.item === item);
+    if (!g) groups.push({ item, qty, unit, mixedUnit: false });
+    else {
+      if (g.unit !== unit) g.mixedUnit = true;
+      g.qty += qty;
+    }
+  }
+  if (!groups.length && category && CATEGORY_ITEM[category]) groups.push({ item: CATEGORY_ITEM[category], qty: 0, mixedUnit: true });
+  return groups;
+}
+
+/** 件名に出す名前 (例: 畳 表替え 16枚・襖 4面)。数量の単位が「式」や混ざるときは数量を出さない */
+function groupLabel(g: ItemGroup): string | undefined {
+  if (g.mixedUnit || !g.qty || !g.unit || /式|一式|件|回|ヶ所|箇所/.test(g.unit)) return undefined;
+  const n = Math.round(g.qty * 100) / 100;
+  return `${HANDOVER_ITEM[g.item].label} ${n}${g.unit}`;
+}
+
+/** 引取・納品で予定表に載せる品目があるか (なければこれまでどおりの施工予定) */
+export function hasHandoverItems(lines: HandoverLine[], category?: string): boolean {
+  return groupLines(lines, category).some((g) => HANDOVER_ITEM[g.item].mode === "handover");
+}
+
+/* ---------------- 手書きの日時の読み取り (見積書の「引取日時」「納品日時」) ---------------- */
+
+export interface DateTimeHint {
+  date?: string;
+  start?: string;
+  end?: string;
+}
+
+export interface TextChunk extends DateTimeHint {
+  /** この部分に書かれた品目 (畳・襖・障子・網戸)。空なら全部の品目 */
+  kinds: ("tatami" | "fusuma" | "shoji" | "amido")[];
+  /** 当日・一日仕上げ・即日 */
+  sameDay: boolean;
+  /** 翌日 */
+  nextDay: boolean;
+}
+
+const KIND_WORDS: [TextChunk["kinds"][number], RegExp][] = [
+  ["tatami", /畳|たたみ|タタミ|表替/],
+  ["fusuma", /襖|フスマ|ふすま/],
+  ["shoji", /障子/],
+  ["amido", /網戸|アミ戸|あみ戸/],
+];
+
+/** 月/日 → 基準の日に近い年の日付 (基準の 60 日より前なら翌年) */
+export function resolveMonthDay(month: number, day: number, ref: string): string | undefined {
+  if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+  const y = Number(ref.slice(0, 4));
+  for (const year of [y, y + 1]) {
+    const d = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    if (!isDateKey(d)) return undefined;
+    if (d >= addDays(ref, -60)) return d;
+  }
+  return undefined;
+}
+
+/** 時刻 (「8:30」「8時半」「3時」)。1〜6 時は午後とみなす (営業時間の 15 時を「3時」と書くため) */
+function hourMinute(h: string, m?: string, half?: string): string | undefined {
+  let hh = Number(h);
+  const mm = half ? 30 : m ? Number(m) : 0;
+  if (hh >= 1 && hh <= 6) hh += 12;
+  return normTime(`${hh}:${String(mm).padStart(2, "0")}`);
+}
+
+const DATE_IN_TEXT = /(\d{1,2})\s*[/月]\s*(\d{1,2})\s*日?(?:\s*[(（][^)）]{1,3}[)）])?/g;
+const TIME_RANGE = /(\d{1,2})(?::(\d{2})|時(半)?)?\s*[-〜~ー－–]\s*(\d{1,2})(?::(\d{2})|時(半)?)/;
+const TIME_ONE = /(\d{1,2})(?::(\d{2})|時(半)?)/;
+/** 「PM2-5」「午後2〜5」(時刻の印なしの数字の範囲。午前・午後が書いてあるときだけ) */
+const AMPM_RANGE = /(AM|PM|午前|午後)\s*(\d{1,2})(?::(\d{2}))?\s*[-〜~ー－–]\s*(\d{1,2})(?::(\d{2}))?(?![\d/月])/i;
+
+/**
+ * 「12/2 8:30〜9:00」「畳 一日仕上 15:00〜17:00、襖 12/4」「12/2(水) 8:30-9:00 襖引取 12/4畳表替え」のような手書きの日時を、
+ * 部分ごとの日付・時間・品目に分ける (受注の画面の入力の初期値に使う。人が確かめてから保存する)
+ */
+export function parseScheduleText(text: string | undefined, ref: string): TextChunk[] {
+  if (!text?.trim()) return [];
+  const out: TextChunk[] = [];
+  // 「12/3 畳、障子」: 日付のない品目だけの部分は、前の部分の日付を引き継ぐ
+  let lastDate: string | undefined;
+  for (const seg of text.normalize("NFKC").split(/[、,，;；\n]|\s\/\s/)) {
+    if (!seg.trim()) continue;
+    const dates = [...seg.matchAll(DATE_IN_TEXT)];
+    // 日付が 2 つ以上なら日付ごとに分ける (日付の後ろの言葉がその日の品目)。1 つ以下なら部分全体
+    const pieces = dates.length >= 2 ? dates.map((m, i) => seg.slice(i === 0 ? 0 : m.index, i + 1 < dates.length ? dates[i + 1].index : seg.length)) : [seg];
+    for (const piece of pieces) {
+      const dm = [...piece.matchAll(DATE_IN_TEXT)][0];
+      const date = dm ? resolveMonthDay(Number(dm[1]), Number(dm[2]), ref) : undefined;
+      const rest = dm ? piece.slice(0, dm.index) + " " + piece.slice(dm.index! + dm[0].length) : piece;
+      let start: string | undefined;
+      let end: string | undefined;
+      const ap = AMPM_RANGE.exec(rest);
+      const r = TIME_RANGE.exec(rest);
+      if (ap) {
+        const pm = /PM|午後/i.test(ap[1]);
+        const h = (v: string) => (pm && Number(v) < 12 ? String(Number(v) + 12) : v);
+        start = normTime(`${h(ap[2])}:${ap[3] ?? "00"}`);
+        end = normTime(`${h(ap[4])}:${ap[5] ?? "00"}`);
+        if (start && end && toMinutes(end) <= toMinutes(start)) end = undefined;
+      } else if (r) {
+        start = hourMinute(r[1], r[2], r[3]);
+        end = hourMinute(r[4], r[5], r[6]);
+        if (start && end && toMinutes(end) <= toMinutes(start)) end = undefined;
+      } else {
+        const one = TIME_ONE.exec(rest);
+        if (one) start = hourMinute(one[1], one[2], one[3]);
+      }
+      const kinds = KIND_WORDS.filter(([, re]) => re.test(piece)).map(([k]) => k);
+      const sameDay = /当日|一日仕上|1日仕上|即日|日帰り/.test(piece);
+      const nextDay = /翌日/.test(piece);
+      const inherited = !date && !start && !sameDay && !nextDay && kinds.length > 0 ? lastDate : undefined;
+      if (date) lastDate = date;
+      if (date || start || sameDay || nextDay) out.push({ date, start, end, kinds, sameDay, nextDay });
+      else if (inherited) out.push({ date: inherited, kinds, sameDay: false, nextDay: false });
+    }
+  }
+  return out;
+}
+
+const KIND_OF_ITEM: Partial<Record<HandoverItem, TextChunk["kinds"][number]>> = { tatami_omote: "tatami", tatami_ura: "tatami", tatami_new: "tatami", fusuma: "fusuma", shoji: "shoji", amido: "amido" };
+
+/** 品目に当たる部分 (品目の言葉のある部分を優先、なければ品目の言葉のない部分) */
+function chunkFor(chunks: TextChunk[], item: HandoverItem): TextChunk | undefined {
+  const k = KIND_OF_ITEM[item];
+  return (k ? chunks.find((c) => c.kinds.includes(k)) : undefined) ?? chunks.find((c) => c.kinds.length === 0);
+}
+
+/* ---------------- 初期値 (受注の画面・見積から受注にするとき) ---------------- */
+
+let seq = 0;
+/** 日程の行の ID (受注の中で一意) */
+export function newHandoverId(): string {
+  seq = (seq + 1) % 1296;
+  return `hv_${Date.now().toString(36)}${seq.toString(36).padStart(2, "0")}${Math.random().toString(36).slice(2, 5)}`;
+}
+
+export interface SuggestInput {
+  lines: HandoverLine[];
+  category?: string;
+  /** 見積書の「引取日時」「納品日時」(手書きの文字) */
+  pickupText?: string;
+  deliveryText?: string;
+  /** 決まっている引取日 (見積から受注にするときの入力。手書きの日時より優先) */
+  pickupDate?: string;
+  /** 手書きの日時に引取日がないときの引取日 (以前の施工開始日) */
+  fallbackPickup?: string;
+  /** 以前の施工終了日 (施工期間で登録していた受注) */
+  endDate?: string;
+  /** 年を決める基準の日 (契約日など) */
+  ref: string;
+}
+
+/**
+ * 明細と手書きの日時から日程の行の初期値を作る。
+ * 畳の表替え・裏返しは引取当日に納品、そのほかは納品日を空にする (後日。手書きの日時に書いてあればその日)
+ */
+export function suggestHandovers(input: SuggestInput): OrderHandover[] {
+  const pick = parseScheduleText(input.pickupText, input.ref);
+  const pickupRef = input.pickupDate ?? pick.find((c) => c.date)?.date ?? input.fallbackPickup ?? input.ref;
+  const deliv = parseScheduleText(input.deliveryText, pickupRef);
+  return groupLines(input.lines, input.category).map((g) => {
+    const def = HANDOVER_ITEM[g.item];
+    const label = groupLabel(g);
+    const p = chunkFor(pick, g.item);
+    const pickupDate = input.pickupDate ?? p?.date ?? pick.find((c) => c.date && c.kinds.length === 0)?.date ?? input.fallbackPickup;
+    const row: OrderHandover = { id: newHandoverId(), item: g.item, ...(label ? { label } : {}) };
+    if (def.mode === "install") {
+      if (pickupDate) row.pickupDate = pickupDate;
+      if (input.endDate && pickupDate && input.endDate > pickupDate) row.deliveryDate = input.endDate;
+      return cleanRow(row);
+    }
+    if (pickupDate) row.pickupDate = pickupDate;
+    if (p?.start) row.pickupStart = p.start;
+    if (p?.end) row.pickupEnd = p.end;
+    const d = chunkFor(deliv, g.item);
+    const sameDay = d ? d.sameDay || (!d.date && !d.nextDay && def.sameDay) : def.sameDay;
+    let deliveryDate = d?.date;
+    if (!deliveryDate && pickupDate) {
+      if (d?.nextDay) deliveryDate = addDays(pickupDate, 1);
+      else if (sameDay) deliveryDate = pickupDate;
+      else if (input.endDate && input.endDate > pickupDate) deliveryDate = input.endDate;
+    }
+    if (deliveryDate) row.deliveryDate = deliveryDate;
+    if (d?.start) row.deliveryStart = d.start;
+    if (d?.end) row.deliveryEnd = d.end;
+    return cleanRow(row);
+  });
+}
+
+/* ---------------- 入力の確かめ・正規化 ---------------- */
+
+const SIDE_FIELDS = {
+  pickup: ["pickupDate", "pickupStart", "pickupEnd"],
+  delivery: ["deliveryDate", "deliveryStart", "deliveryEnd"],
+} as const;
+const ALL_FIELDS = [...SIDE_FIELDS.pickup, ...SIDE_FIELDS.delivery] as const;
+type DateField = (typeof ALL_FIELDS)[number];
+
+/** キーの順番をそろえ、空の項目を省いた行 (比べるとき・保存するときに同じ形にする) */
+function cleanRow(r: OrderHandover): OrderHandover {
+  const out: OrderHandover = { id: r.id, item: r.item };
+  if (r.label?.trim()) out.label = r.label.trim().slice(0, 40);
+  for (const f of ALL_FIELDS) if (r[f]) out[f] = r[f];
+  return out;
+}
+
+/** 同じ日程か (キーの順番に関わらず比べる。データベースの jsonb はキーの順番を変えるため) */
+export function sameHandovers(a: unknown, b: unknown): boolean {
+  const canon = (v: unknown): string => {
+    const r = cleanHandovers(v);
+    return JSON.stringify(r.rows.map((x) => ALL_FIELDS.reduce<Record<string, string>>((o, f) => ({ ...o, [f]: x[f] ?? "" }), { id: x.id, item: x.item, label: x.label ?? "" })));
+  };
+  return canon(a) === canon(b);
+}
+
+/**
+ * 画面・申請から受け取った日程の確かめ。返すのはキーの順番をそろえた行 (保存・比較に使う)。
+ * - 日付は YYYY-MM-DD、時刻は HH:MM。時間だけで日付がない・終わりが始まりより前・納品が引き取りより前は誤り
+ * - 品目のない行は省く
+ */
+export function cleanHandovers(raw: unknown): { rows: OrderHandover[]; error?: string } {
+  if (raw === undefined || raw === null || raw === "") return { rows: [] };
+  if (!Array.isArray(raw)) return { rows: [], error: "日程の形式が正しくありません。" };
+  if (raw.length > MAX_HANDOVERS) return { rows: [], error: `品目は ${MAX_HANDOVERS} 行までです。` };
+  const rows: OrderHandover[] = [];
+  const ids = new Set<string>();
+  for (const x of raw as Record<string, unknown>[]) {
+    if (!x || typeof x !== "object" || !isHandoverItem(x.item)) continue;
+    let id = typeof x.id === "string" && /^hv_[a-z0-9]{3,30}$/.test(x.id) ? x.id : newHandoverId();
+    if (ids.has(id)) id = newHandoverId();
+    ids.add(id);
+    const row: OrderHandover = { id, item: x.item };
+    const name = typeof x.label === "string" ? x.label.trim().slice(0, 40) : "";
+    if (name) row.label = name;
+    const label = handoverLabel(row);
+    for (const f of ALL_FIELDS) {
+      const v = typeof x[f] === "string" ? (x[f] as string).trim() : "";
+      if (!v) continue;
+      if (f.endsWith("Date")) {
+        if (!isDateKey(v)) return { rows: [], error: `「${label}」の日付を正しく入力してください。` };
+        row[f] = v;
+      } else {
+        const t = normTime(v);
+        if (!t) return { rows: [], error: `「${label}」の時刻を正しく入力してください。` };
+        row[f] = t;
+      }
+    }
+    const install = isInstall(row);
+    const sides = install ? [["pickupDate", "pickupStart", "pickupEnd"] as const] : [SIDE_FIELDS.pickup, SIDE_FIELDS.delivery];
+    for (const [d, s, e] of sides) {
+      const what = install ? "施工" : d === "pickupDate" ? "引き取り" : "納品";
+      if (!row[d] && (row[s] || row[e])) return { rows: [], error: `「${label}」の${what}の日付を入力してください (時間だけでは予定表に載せられません)。` };
+      if (!row[s] && row[e]) return { rows: [], error: `「${label}」の${what}の開始時刻を入力してください。` };
+      if (row[s] && row[e] && toMinutes(row[e]!) <= toMinutes(row[s]!)) return { rows: [], error: `「${label}」の${what}の終了時刻は開始時刻より後にしてください。` };
+    }
+    if (install) {
+      // 施工: 終了日は開始日以降 (時間帯は各日の時間)。終了日の時刻の欄は使わない
+      delete row.deliveryStart;
+      delete row.deliveryEnd;
+      if (row.deliveryDate && !row.pickupDate) return { rows: [], error: `「${label}」の施工開始日を入力してください。` };
+      if (row.deliveryDate && row.pickupDate && row.deliveryDate < row.pickupDate) return { rows: [], error: `「${label}」の施工終了日は施工開始日以降にしてください。` };
+      if (row.deliveryDate === row.pickupDate) delete row.deliveryDate;
+    } else {
+      if (row.deliveryDate && row.pickupDate && row.deliveryDate < row.pickupDate) return { rows: [], error: `「${label}」の納品日は引取日以降にしてください。` };
+      if (row.deliveryDate && row.pickupDate && row.deliveryDate === row.pickupDate && row.deliveryStart && row.pickupStart && toMinutes(row.deliveryStart) < toMinutes(row.pickupStart)) {
+        return { rows: [], error: `「${label}」は当日納品の時刻が引き取りの時刻より前です。` };
+      }
+    }
+    rows.push(cleanRow(row));
+  }
+  return { rows };
+}
+
+/* ---------------- 登録と変更の区別 (変更だけ承認) ---------------- */
+
+type Side = "pickup" | "delivery" | "install";
+const sideFields = (row: OrderHandover, side: Side): readonly DateField[] => (side === "install" ? ALL_FIELDS : SIDE_FIELDS[side]);
+const sidesOf = (row: OrderHandover): Side[] => (isInstall(row) ? ["install"] : ["pickup", "delivery"]);
+const sideHasDate = (row: OrderHandover, side: Side) => Boolean(side === "delivery" ? row.deliveryDate : row.pickupDate);
+const sameSide = (a: OrderHandover, b: OrderHandover, side: Side) => sideFields(a, side).every((f) => (a[f] ?? "") === (b[f] ?? ""));
+
+export interface HandoverDiff {
+  /** すぐに反映する日程 (はじめて入れた日程・品目と名前の変更・日程のない行の追加と削除) */
+  immediate: OrderHandover[];
+  /** 承認が要る (登録済みの日付・時間の変更・取り消し、日程のある行の削除) */
+  needsApproval: boolean;
+  /** 登録した内容 (進捗・変更履歴の説明) */
+  registered: string[];
+  /** 承認が要る変更の説明 */
+  changed: string[];
+}
+
+/**
+ * 今の日程 (before) と入力 (after) を比べ、すぐに反映する分と承認が要る分に分ける。
+ * 引き取り・納品 (施工は期間) の単位で、前に日付がなかったものは登録、日付があって何か変わったものは変更
+ */
+export function handoverDiff(beforeRaw: OrderHandover[] | undefined, afterRaw: OrderHandover[]): HandoverDiff {
+  const before = cleanHandovers(beforeRaw ?? []).rows;
+  const after = cleanHandovers(afterRaw).rows;
+  const byId = new Map(before.map((r) => [r.id, r]));
+  const immediate: OrderHandover[] = [];
+  const registered: string[] = [];
+  const changed: string[] = [];
+  for (const a of after) {
+    const b = byId.get(a.id);
+    if (!b) {
+      immediate.push(a);
+      if (rowHasDate(a)) registered.push(`${handoverLabel(a)}: ${rowText(a)}`);
+      continue;
+    }
+    // 品目・名前は承認なしで変える。日程は引き取り・納品ごとに
+    const merged: OrderHandover = { ...b, item: a.item, label: a.label };
+    if (!a.label) delete merged.label;
+    // 品目の種類 (引取・納品 ⇔ 施工) が変わった行は、日程の扱いが変わるので行ごと変更とみなす
+    if (isInstall(a) !== isInstall(b)) {
+      if (rowHasDate(b)) {
+        immediate.push(b);
+        changed.push(`${handoverLabel(b)}: ${rowText(b)} → ${handoverLabel(a)}: ${rowText(a)}`);
+      } else {
+        immediate.push(a);
+        if (rowHasDate(a)) registered.push(`${handoverLabel(a)}: ${rowText(a)}`);
+      }
+      continue;
+    }
+    for (const side of sidesOf(a)) {
+      if (sameSide(a, b, side)) continue;
+      if (!sideHasDate(b, side)) {
+        for (const f of sideFields(a, side)) {
+          if (a[f]) merged[f] = a[f];
+          else delete merged[f];
+        }
+        registered.push(`${handoverLabel(a)} の${sideName(a, side)}: ${sideText(a, side)}`);
+      } else {
+        changed.push(`${handoverLabel(a)} の${sideName(a, side)}: ${sideText(b, side)} → ${sideText(a, side)}`);
+      }
+    }
+    immediate.push(cleanRow(merged));
+  }
+  const afterIds = new Set(after.map((r) => r.id));
+  for (const b of before) {
+    if (afterIds.has(b.id)) continue;
+    if (rowHasDate(b)) {
+      // 日程のある行の削除は承認のあと。それまでは今の日程のまま残す (元の並びの位置に)
+      const at = before.indexOf(b);
+      immediate.splice(Math.min(at, immediate.length), 0, b);
+      changed.push(`${handoverLabel(b)} を削除 (${rowText(b)})`);
+    }
+  }
+  return { immediate, needsApproval: changed.length > 0, registered, changed };
+}
+
+const rowHasDate = (r: OrderHandover) => Boolean(r.pickupDate || r.deliveryDate);
+const sideName = (r: OrderHandover, side: Side) => (side === "install" ? "施工" : side === "pickup" ? "引取" : "納品");
+
+/* ---------------- 表示 ---------------- */
+
+const hm = (t: string) => t.replace(/^0(\d)/, "$1");
+const timeText = (s?: string, e?: string) => (s ? ` ${hm(s)}${e ? `–${hm(e)}` : ""}` : "");
+
+/** 引き取り・納品・施工の 1 つの日時 (例: 12/2(火) 8:30–9:00) */
+export function sideText(r: OrderHandover, side: Side): string {
+  if (side === "install") {
+    if (!r.pickupDate) return "未定";
+    return `${shortDate(r.pickupDate)}${r.deliveryDate && r.deliveryDate > r.pickupDate ? `〜${shortDate(r.deliveryDate)}` : ""}${timeText(r.pickupStart, r.pickupEnd)}`;
+  }
+  const [d, s, e] = SIDE_FIELDS[side];
+  return r[d] ? `${shortDate(r[d]!)}${timeText(r[s], r[e])}` : "未定";
+}
+
+/** 1 行の日程 (例: 引取 12/2(火) 8:30–9:00 → 納品 12/2(火) 15:00–17:00) */
+export function rowText(r: OrderHandover): string {
+  if (isInstall(r)) return `施工 ${sideText(r, "install")}`;
+  const same = r.pickupDate && r.deliveryDate === r.pickupDate ? " (当日納品)" : "";
+  return `引取 ${sideText(r, "pickup")} → 納品 ${sideText(r, "delivery")}${same}`;
+}
+
+/** 日程の全体 (変更履歴・通知の文) */
+export function handoverText(rows: unknown): string {
+  const list = cleanHandovers(rows).rows;
+  return list.length ? list.map((r) => `${handoverLabel(r)}: ${rowText(r)}`).join(" / ") : "(なし)";
+}
+
+/** 変更の申請の内容 (承認の画面・通知・受注の画面。品目ごと・引き取り/納品ごとの「前 → 後」) */
+export function handoverChangeLines(beforeRaw: unknown, afterRaw: unknown): string[] {
+  const before = cleanHandovers(beforeRaw).rows;
+  const after = cleanHandovers(afterRaw).rows;
+  const byId = new Map(before.map((r) => [r.id, r]));
+  const out: string[] = [];
+  for (const a of after) {
+    const b = byId.get(a.id);
+    if (!b) {
+      out.push(`${handoverLabel(a)} を追加: ${rowText(a)}`);
+      continue;
+    }
+    if (handoverLabel(a) !== handoverLabel(b)) out.push(`品目の名前: ${handoverLabel(b)} → ${handoverLabel(a)}`);
+    if (isInstall(a) !== isInstall(b)) {
+      out.push(`${handoverLabel(a)}: ${rowText(b)} → ${rowText(a)}`);
+      continue;
+    }
+    for (const side of sidesOf(a)) if (!sameSide(a, b, side)) out.push(`${handoverLabel(a)} の${sideName(a, side)}: ${sideText(b, side)} → ${sideText(a, side)}`);
+  }
+  const ids = new Set(after.map((r) => r.id));
+  for (const b of before) if (!ids.has(b.id)) out.push(`${handoverLabel(b)} を削除 (${rowText(b)})`);
+  return out;
+}
+
+/* ---------------- 予定表の予定 ---------------- */
+
+export interface HandoverGroup {
+  role: HandoverRole;
+  date: string;
+  /** 施工の終了日 (複数日の施工だけ) */
+  endDate?: string;
+  start?: string;
+  end?: string;
+  rowIds: string[];
+  labels: string[];
+}
+
+/**
+ * 予定表に載せる予定 (引き取り・納品は同じ日・同じ時間の品目を 1 件にまとめる。施工は品目ごと)。
+ * 日付の早い順、同じ日は 引き取り → 施工 → 納品・時刻の順
+ */
+export function handoverGroups(rowsRaw: OrderHandover[] | undefined): HandoverGroup[] {
+  const rows = cleanHandovers(rowsRaw ?? []).rows;
+  const map = new Map<string, HandoverGroup>();
+  const add = (role: HandoverRole, r: OrderHandover, date: string, start?: string, end?: string, endDate?: string) => {
+    const key = role === "install" ? `install|${r.id}` : `${role}|${date}|${start ?? ""}|${end ?? ""}`;
+    const g = map.get(key) ?? { role, date, ...(endDate ? { endDate } : {}), ...(start ? { start } : {}), ...(end ? { end } : {}), rowIds: [], labels: [] };
+    g.rowIds.push(r.id);
+    g.labels.push(handoverLabel(r));
+    map.set(key, g);
+  };
+  for (const r of rows) {
+    if (isInstall(r)) {
+      if (r.pickupDate) add("install", r, r.pickupDate, r.pickupStart, r.pickupEnd, r.deliveryDate && r.deliveryDate > r.pickupDate ? r.deliveryDate : undefined);
+      continue;
+    }
+    if (r.pickupDate) add("pickup", r, r.pickupDate, r.pickupStart, r.pickupEnd);
+    if (r.deliveryDate) add("delivery", r, r.deliveryDate, r.deliveryStart, r.deliveryEnd);
+  }
+  const order: Record<HandoverRole, number> = { pickup: 0, install: 1, delivery: 2 };
+  return [...map.values()].sort((a, b) => a.date.localeCompare(b.date) || (a.start ?? "").localeCompare(b.start ?? "") || order[a.role] - order[b.role]);
+}
+
+/** 予定表の予定の印 (sourceRef) */
+export const HANDOVER_REF_PREFIX = "handover:";
+export const handoverRef = (g: Pick<HandoverGroup, "role" | "rowIds">) => `${HANDOVER_REF_PREFIX}${g.role}:${g.rowIds.join("+")}`;
+export function parseHandoverRef(ref: string | undefined): { role: HandoverRole; rowIds: string[] } | undefined {
+  const m = ref?.match(/^handover:(pickup|delivery|install):([a-z0-9_+]+)$/);
+  return m ? { role: m[1] as HandoverRole, rowIds: m[2].split("+").filter(Boolean) } : undefined;
+}
+
+/** 日程の最初の日・最後の日 (受注の scheduledStart / scheduledEnd) */
+export function handoverSpan(rowsRaw: OrderHandover[] | undefined): { start?: string; end?: string } {
+  const days = handoverGroups(rowsRaw).flatMap((g) => [g.date, g.endDate ?? g.date]);
+  if (!days.length) return {};
+  days.sort();
+  return { start: days[0], end: days[days.length - 1] };
+}
+
+/**
+ * 予定表で予定 (引き取り・納品・施工) の日時を変えたときの、受注の日程の入力 (変更の申請に使う)。
+ * その予定にまとめた品目の行だけを変える
+ */
+export function applyEventMove(rowsRaw: OrderHandover[] | undefined, ref: { role: HandoverRole; rowIds: string[] }, when: { date: string; endDate?: string; start?: string; end?: string }): OrderHandover[] {
+  const ids = new Set(ref.rowIds);
+  return cleanHandovers(rowsRaw ?? []).rows.map((r) => {
+    if (!ids.has(r.id)) return r;
+    const next: OrderHandover = { ...r };
+    if (ref.role === "install") {
+      next.pickupDate = when.date;
+      next.pickupStart = when.start;
+      next.pickupEnd = when.start ? when.end : undefined;
+      next.deliveryDate = when.endDate && when.endDate > when.date ? when.endDate : undefined;
+    } else {
+      const [d, s, e] = SIDE_FIELDS[ref.role];
+      next[d] = when.date;
+      next[s] = when.start;
+      next[e] = when.start ? when.end : undefined;
+    }
+    return cleanRow(next);
+  });
+}
+
+/** 受注の画面の入力の初期値に使う、行の日程の欄の値 (空は "") */
+export type HandoverFormRow = { id: string; item: HandoverItem; label: string } & Record<DateField, string>;
+export function toFormRows(rows: OrderHandover[]): HandoverFormRow[] {
+  return rows.map((r) => ({ id: r.id, item: r.item, label: r.label ?? "", ...ALL_FIELDS.reduce((o, f) => ({ ...o, [f]: r[f] ?? "" }), {} as Record<DateField, string>) }));
+}

@@ -268,6 +268,8 @@ export const TABLES: TableDef[] = [
       ["closedBy", "text"],
       // 2026-11: 領収書の宛名 (お客様名と違うとき)
       ["receiptName", "text"],
+      // 2026-11-23: 品目ごとの引取日・納品日 (src/lib/handover.ts)
+      ["handovers", "jsonb"],
     ],
     orderBy: ["created_at"],
     indexes: [["store_id"], ["status"], ["customer_id"], ["sales_date"]],

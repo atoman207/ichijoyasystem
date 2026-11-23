@@ -212,6 +212,7 @@ export const APPROVAL_TYPE_LABEL: Record<ApprovalType, string> = {
   order_change: "契約内容の変更",
   customer_change: "顧客の重要情報の変更",
   record_view: "顧客情報の閲覧の申請",
+  handover_change: "引取・納品日の変更",
 };
 
 /** 承認の判断の説明 (承認・差戻し・却下で記録の扱いが変わる) */

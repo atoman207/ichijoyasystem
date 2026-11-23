@@ -3,6 +3,7 @@ import type { Approval, Database, DocDraft, Message, Thread, User } from "@/lib/
 import { APPROVAL_STATUS, APPROVAL_TYPE_LABEL, TASK_STATUS } from "@/lib/constants";
 import { isDemoAccount, isReviewAccount } from "@/lib/auth/permissions";
 import { fieldLabel, fieldValue } from "@/lib/field-labels";
+import { handoverChangeLines } from "@/lib/handover";
 import { isEmail } from "./channels";
 import { appBaseUrl, chatworkConfig } from "./config";
 import type { Outgoing } from "./send";
@@ -91,13 +92,16 @@ const nameOf = (db: Database, id?: string) => db.users.find((u) => u.id === id)?
 
 export function approvalRequestNotices(db: Database, a: Approval): Outgoing[] {
   const entity = a.type === "customer_change" ? "customer" : "order";
-  const changes = a.changes?.length ? `\n変更: ${a.changes.map((c) => `${fieldLabel(entity, c.field)} ${fieldValue(c.field, c.before)} → ${fieldValue(c.field, c.after)}`).join(" / ")}` : "";
+  const changes = a.changes?.length
+    ? `\n変更: ${a.changes.map((c) => (c.field === "handovers" ? handoverChangeLines(c.before, c.after).join(" / ") : `${fieldLabel(entity, c.field)} ${fieldValue(c.field, c.before)} → ${fieldValue(c.field, c.after)}`)).join(" / ")}`
+    : "";
+  const noAmount = a.type === "record_view" || a.type === "handover_change";
   return build(
     db,
     "approval_request",
     approversFor(db, a),
     `承認依頼: ${APPROVAL_TYPE_LABEL[a.type]} ${a.title}`,
-    `${nameOf(db, a.requestedBy)} さんから承認の依頼があります。\n種類: ${APPROVAL_TYPE_LABEL[a.type]}\n件名: ${a.title}${a.type === "record_view" ? "" : `\n金額: ${yen(a.amount)}`}${a.requestComment ? `\n${a.type === "record_view" ? "閲覧の理由" : "申請コメント"}: ${a.requestComment}` : ""}${changes}`,
+    `${nameOf(db, a.requestedBy)} さんから承認の依頼があります。\n種類: ${APPROVAL_TYPE_LABEL[a.type]}\n件名: ${a.title}${noAmount ? "" : `\n金額: ${yen(a.amount)}`}${a.requestComment ? `\n${a.type === "record_view" ? "閲覧の理由" : "申請コメント"}: ${a.requestComment}` : ""}${changes}`,
     "/approvals?tab=mine",
     { relatedType: "approval", relatedId: a.id },
   );

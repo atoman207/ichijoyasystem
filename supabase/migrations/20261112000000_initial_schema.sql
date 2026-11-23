@@ -223,7 +223,8 @@ create table if not exists orders (
   planned_payment text,
   closed_at timestamptz,
   closed_by text,
-  receipt_name text
+  receipt_name text,
+  handovers jsonb
 );
 comment on table orders is '受注・施工 (売上)';
 
@@ -1767,6 +1768,7 @@ alter table orders add column if not exists planned_payment text;
 alter table orders add column if not exists closed_at timestamptz;
 alter table orders add column if not exists closed_by text;
 alter table orders add column if not exists receipt_name text;
+alter table orders add column if not exists handovers jsonb;
 alter table invoices add column if not exists number text not null unique;
 alter table invoices add column if not exists order_id text not null references orders(id);
 alter table invoices add column if not exists customer_id text not null references customers(id);

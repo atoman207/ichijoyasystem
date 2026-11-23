@@ -7,6 +7,7 @@ import { getDb } from "@/lib/db/store";
 import { canAccessStore, canEditEvent } from "@/lib/auth/permissions";
 import { caseEvents, createCaseResolver, orderEditable } from "@/lib/db/schedule";
 import { deleteScheduleEvent } from "@/lib/actions/schedule";
+import { parseHandoverRef } from "@/lib/handover";
 import { compareEvents, compareInDay, findConflicts, lastDay, longDate, occursOn, periodLabel, shortDate, timeLabel } from "@/lib/calendar";
 import { daysBetween, fmtDateTime } from "@/lib/format";
 import { AUDIT_ACTION_LABEL } from "@/lib/constants";
@@ -89,7 +90,9 @@ export default async function EventDetailPage({ params, searchParams }: { params
       {synced && (
         <div className="mb-4">
           <Note tone="accent">
-            受注 {order?.number} の施工予定と連動している予定です。日付・担当者・場所を変更すると、受注の施工期間・施工担当・現場住所にも反映されます (受注・施工の画面から変更しても、この予定に反映されます)。
+            {parseHandoverRef(e.sourceRef)
+              ? `受注 ${order?.number ?? ""} の引取・納品の日程 (品目ごと) と連動している予定です。受注の画面で日程を変えると、この予定も動きます。ここで日時を変えると受注の日程の変更の申請になり、承認のあとに反映されます。`
+              : `受注 ${order?.number ?? ""} の施工予定と連動している予定です。日付・担当者・場所を変更すると、受注の施工期間・施工担当・現場住所にも反映されます (受注・施工の画面から変更しても、この予定に反映されます)。`}
           </Note>
         </div>
       )}
@@ -292,8 +295,12 @@ export default async function EventDetailPage({ params, searchParams }: { params
           )}
           {synced && (
             <Card>
-              <CardHeader title="受注の施工予定" />
-              <p className="text-xs leading-relaxed text-ink-2">この予定は受注の施工予定と連動しているため、ここでは削除できません。施工を取りやめる場合は受注・施工の画面で施工開始日を空欄にするか、受注をキャンセルしてください。</p>
+              <CardHeader title={parseHandoverRef(e.sourceRef) ? "受注の引取・納品の日程" : "受注の施工予定"} />
+              <p className="text-xs leading-relaxed text-ink-2">
+                {parseHandoverRef(e.sourceRef)
+                  ? "この予定は受注の引取・納品の日程と連動しているため、ここでは削除できません。品目の日程の変更・削除は受注の画面の「引取・納品の日程」で行います (登録済みの日程の変更は承認のあとに反映されます)。"
+                  : "この予定は受注の施工予定と連動しているため、ここでは削除できません。施工を取りやめる場合は受注・施工の画面で施工開始日を空欄にするか、受注をキャンセルしてください。"}
+              </p>
               {order && canAccessStore(user, order.storeId) && (
                 <LinkButton href={`/orders/${order.id}`} variant="secondary" size="sm" className="mt-3">
                   受注 {order.number} を開く

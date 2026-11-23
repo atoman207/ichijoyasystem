@@ -8,6 +8,7 @@ import { getDb } from "@/lib/db/store";
 import { canEditEvent, canManageCompanyEvents, canSeeAllStores } from "@/lib/auth/permissions";
 import { caseValue, createCaseResolver, orderEditable } from "@/lib/db/schedule";
 import { updateScheduleEvent } from "@/lib/actions/schedule";
+import { parseHandoverRef } from "@/lib/handover";
 import { Flash, PageHeader } from "@/components/ui";
 import { EventForm } from "@/components/schedule/EventForm";
 import { formCases, formCustomers, formStores, formUsers, toFormCase } from "@/components/schedule/form-data";
@@ -78,6 +79,7 @@ export default async function EditEventPage({ params, searchParams }: { params: 
         returnTo={`/schedule/${id}`}
         cancelHref={`/schedule/${id}`}
         syncedOrderNumber={synced ? order?.number : undefined}
+        handoverLinked={synced && Boolean(parseHandoverRef(e.sourceRef))}
       />
     </div>
   );

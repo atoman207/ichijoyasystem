@@ -22,6 +22,8 @@ import { setQuoteDiscussing, updateSiteInfo } from "@/lib/actions/cases";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { CasePlanCard } from "@/components/scheduling/CasePlanCard";
 import { caseEvents } from "@/lib/db/schedule";
+import { hasHandoverItems } from "@/lib/handover";
+import { quoteHandoverLines } from "@/lib/handover-save";
 import { toDateKey } from "@/lib/format";
 import { AiSummary } from "@/components/features/AiSummary";
 import { RecordDocDrafts } from "@/components/features/DocDrafts";
@@ -213,7 +215,11 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
                 <CardHeader title="受注 (契約) 登録" description="お客様の承諾後に登録。契約は承認後に確定します" />
                 <form action={convertQuoteToOrder.bind(null, q.id)} className="space-y-2">
                   <div className="grid grid-cols-2 gap-2">
-                    <Field label="施工予定日"><Input type="date" name="scheduledStart" /></Field>
+                    {hasHandoverItems(quoteHandoverLines(db, q.items), q.category) ? (
+                      <Field label="引取日" hint="納品日は受注の画面で品目ごとに入れます (表替えは当日納品)"><Input type="date" name="scheduledStart" /></Field>
+                    ) : (
+                      <Field label="施工予定日"><Input type="date" name="scheduledStart" /></Field>
+                    )}
                     <Field label="施工担当">
                       <Select name="workerIds">
                         {workers.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}

@@ -39,6 +39,7 @@ export async function updateOrderSchedule(id: string, formData: FormData) {
   if (!o0) fail("/orders", "受注が見つかりません。");
   assertStore(user, o0.storeId, back);
   if (!orderEditable(o0)) fail(back, "完了済みの案件は変更できません。");
+  if (o0.handovers?.length) fail(back, "この受注は品目ごとの引取・納品の日程で予定表に載せています。「引取・納品の日程」で変更してください。");
   const lock0 = completedCaseLock(db0, user, o0);
   if (lock0.locked) fail(back, completedLockMessage(lock0.reason));
   if (start) {

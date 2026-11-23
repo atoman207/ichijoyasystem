@@ -5,6 +5,7 @@ import { userName } from "@/lib/db/queries";
 import { fmtDateTime, yen } from "@/lib/format";
 import { APPROVAL_DECISION_HELP, APPROVAL_STATUS, APPROVAL_TYPE_LABEL, AUDIT_ACTION_LABEL } from "@/lib/constants";
 import { fieldLabel, fieldValue } from "@/lib/field-labels";
+import { handoverChangeLines } from "@/lib/handover";
 import { cancelApproval, decideApproval } from "@/lib/actions/approvals";
 import { Badge, Button, Card, CardHeader, Field, Input, StatusBadge } from "@/components/ui";
 
@@ -85,13 +86,20 @@ export function HistoryCard({ db, user, targets, title = "変更履歴", descrip
               {l.changes && l.changes.length > 0 && (
                 <table className="mt-1 w-full table-fixed text-[11px]">
                   <tbody>
-                    {l.changes.map((c, i) => (
-                      <tr key={i} className="align-top">
-                        <td className="w-24 py-0.5 pr-2 text-ink-3">{fieldLabel(l.entity, c.field)}</td>
-                        <td className="py-0.5 pr-2 text-ink-3 line-through">{fieldValue(c.field, c.before, names)}</td>
-                        <td className="py-0.5 text-ink">{fieldValue(c.field, c.after, names)}</td>
-                      </tr>
-                    ))}
+                    {l.changes.map((c, i) =>
+                      c.field === "handovers" ? (
+                        <tr key={i} className="align-top">
+                          <td className="w-24 py-0.5 pr-2 text-ink-3">{fieldLabel(l.entity, c.field)}</td>
+                          <td colSpan={2} className="py-0.5 text-ink">{handoverChangeLines(c.before, c.after).join(" / ") || "(日程の変更なし)"}</td>
+                        </tr>
+                      ) : (
+                        <tr key={i} className="align-top">
+                          <td className="w-24 py-0.5 pr-2 text-ink-3">{fieldLabel(l.entity, c.field)}</td>
+                          <td className="py-0.5 pr-2 text-ink-3 line-through">{fieldValue(c.field, c.before, names)}</td>
+                          <td className="py-0.5 text-ink">{fieldValue(c.field, c.after, names)}</td>
+                        </tr>
+                      ),
+                    )}
                   </tbody>
                 </table>
               )}
@@ -151,6 +159,22 @@ export function ApprovalHistoryCard({ approvals, title = "承認履歴" }: { app
 }
 
 export function ChangeList({ entity, changes }: { entity: string; changes: { field: string; before: unknown; after: unknown }[] }) {
+  // 受注の引取・納品の日程は、品目ごと・引き取り/納品ごとの「前 → 後」で出す (src/lib/handover.ts)
+  const hv = changes.find((c) => c.field === "handovers");
+  if (hv) {
+    const lines = handoverChangeLines(hv.before, hv.after);
+    const rest = changes.filter((c) => c !== hv);
+    return (
+      <div className="mt-1 text-[11px]">
+        <ul className="list-disc space-y-0.5 pl-4 text-ink" data-testid="handover-change-lines">
+          {(lines.length ? lines : ["(日程の変更なし)"]).map((l, i) => (
+            <li key={i}>{l}</li>
+          ))}
+        </ul>
+        {rest.length > 0 && <ChangeList entity={entity} changes={rest} />}
+      </div>
+    );
+  }
   return (
     <table className="mt-1 w-full table-fixed text-[11px]">
       <tbody>

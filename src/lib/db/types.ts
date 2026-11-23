@@ -511,6 +511,32 @@ export interface Order {
   /** 案件の全処理完了 (請求・入金・その他の事務処理まで済んだ) */
   closedAt?: string;
   closedBy?: string;
+  /**
+   * 品目ごとの引取日・納品日 (畳・襖・障子・網戸。リフォームは施工期間)。src/lib/handover.ts。
+   * あるときは予定表の受注の予定 (引き取り・納品・施工) をここから作り、scheduledStart / scheduledEnd は最初の日・最後の日になる
+   * (お客様のご要望 2026-11-23「■ 予定表への反映方法」「■ 引取日・納品日の登録・変更」)
+   */
+  handovers?: OrderHandover[];
+}
+
+/** 引取・納品の品目 (src/lib/handover.ts の HANDOVER_ITEM)。reform は施工期間 (開始日〜終了日) で予定表に載せる */
+export type HandoverItem = "tatami_omote" | "tatami_ura" | "tatami_new" | "fusuma" | "shoji" | "amido" | "other" | "reform";
+
+/**
+ * 受注の 1 品目の引取・納品の日程。日付は YYYY-MM-DD、時刻は HH:MM (なければ時間未定)。
+ * 品目が reform (施工) のときは pickupDate = 施工開始日・pickupStart / pickupEnd = 各日の時間帯・deliveryDate = 施工終了日
+ */
+export interface OrderHandover {
+  id: string;
+  item: HandoverItem;
+  /** 予定表の件名に出す名前 (例: 畳 表替え 16枚)。空なら品目の名前 */
+  label?: string;
+  pickupDate?: string;
+  pickupStart?: string;
+  pickupEnd?: string;
+  deliveryDate?: string;
+  deliveryStart?: string;
+  deliveryEnd?: string;
 }
 
 export type InvoiceStatus =
@@ -735,7 +761,9 @@ export type ApprovalType =
   /** 顧客の重要な情報 (氏名・住所・電話など) の変更 */
   | "customer_change"
   /** ほかの店舗の完了した案件のお客様の閲覧の申請 (閲覧の範囲 = 承認制のとき。承認から決まった日数だけ閲覧のみで見られる。src/lib/case-access.ts) */
-  | "record_view";
+  | "record_view"
+  /** 受注の引取日・納品日 (品目ごと) の変更。はじめて入れる日程は承認なし、登録済みの日程の変更だけ (src/lib/handover.ts) */
+  | "handover_change";
 
 /** returned = 差戻し (修正して再申請) / rejected = 却下 / cancelled = 取下げ */
 export type ApprovalStatus = "pending" | "approved" | "returned" | "rejected" | "cancelled";

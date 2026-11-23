@@ -4,6 +4,7 @@ import { newId, nowIso } from "./store";
 import { scopeByStore } from "@/lib/auth/permissions";
 import { addDays, toDateKey } from "@/lib/format";
 import { HANDOVER_MARK, handoverMemo } from "@/lib/site-info";
+import { syncHandoverEvents } from "./handover-events";
 
 /**
  * 予定表と案件 (問い合わせ → 見積 → 受注) をつなぐサーバー側の処理
@@ -11,6 +12,7 @@ import { HANDOVER_MARK, handoverMemo } from "@/lib/site-info";
  * - 案件はどの段階から辿っても同じ 1 件として扱う (問い合わせ・見積・受注の ID をそろえる)
  * - 予定は案件の ID を持つので、案件に登録した予定は担当者とともに店舗のカレンダーへそのまま載る
  * - 受注の施工予定 (施工期間・施工担当・現場住所) は「施工」の予定 1 件 (source = "order") と双方向に連動する
+ * - 品目ごとの引取・納品の日程 (Order.handovers) のある受注は、引き取り・納品 (・施工) の予定と連動する (./handover-events.ts)
  */
 
 export type CaseType = "inquiry" | "quote" | "order";
@@ -167,6 +169,11 @@ export function selectableCases(db: Database, user: User): CaseRef[] {
  * 施工開始日が未定になれば連動する予定を外す。時刻を渡さなければ既存の時刻 (新規は 9:00–15:00) を使う。
  */
 export function syncOrderEvent(db: Database, o: Order, actorId: string, times?: { startTime?: string; endTime?: string }): ScheduleEvent | undefined {
+  // 品目ごとの引取・納品の日程のある受注 (畳・襖・障子・網戸): 引き取り・納品の日だけの予定 (src/lib/handover.ts)
+  if (o.handovers?.length) {
+    syncHandoverEvents(db, o, actorId);
+    return db.schedule.find((e) => e.orderId === o.id && e.source === "order");
+  }
   const idx = db.schedule.findIndex((e) => e.orderId === o.id && e.source === "order");
   const main = idx >= 0 ? db.schedule[idx] : undefined;
   if (!o.scheduledStart || o.status === "cancelled") {

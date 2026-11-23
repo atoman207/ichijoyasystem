@@ -4,6 +4,8 @@ import type { Approval, AuditChange, Database, User } from "@/lib/db/types";
 import { skipsApproval } from "@/lib/auth/permissions";
 import { APPROVAL_TYPE_LABEL } from "@/lib/constants";
 import { removeUpcomingOrderEvents, syncOrderEvent } from "@/lib/db/schedule";
+import { followMovedEvents, syncHandoverEvents } from "@/lib/db/handover-events";
+import { cleanHandovers, handoverChangeLines, sameHandovers } from "@/lib/handover";
 import { fieldLabel, fieldValue } from "@/lib/field-labels";
 import { fail } from "@/lib/actions/guards";
 import { propagateCustomerAddress } from "@/lib/maps/store";
@@ -194,6 +196,28 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
         addAudit(db, { userId, action: "approve", entity: "order", entityId: o.id, entityLabel: o.number, summary: `契約内容の変更を承認 (${(a.changes ?? []).map((c) => fieldLabel("order", c.field)).join("・")})`, storeId: o.storeId, changes: a.changes });
       } else {
         addAudit(db, { userId, action: "reject", entity: "order", entityId: o.id, entityLabel: o.number, summary: `契約内容の変更を${word}${note}`, storeId: o.storeId });
+      }
+      break;
+    }
+    case "handover_change": {
+      // 受注の引取日・納品日 (品目ごと) の変更 (src/lib/handover.ts)。承認で日程を置き換え、予定表の予定も動かす
+      const o = db.orders.find((x) => x.id === a.targetId);
+      if (!o) return;
+      const change = a.changes?.find((c) => c.field === "handovers");
+      const lines = change ? handoverChangeLines(change.before, change.after) : [];
+      if (decision === "approved" && change) {
+        if (o.status === "cancelled") fail(back, "キャンセルした受注のため、日程の変更を反映できません。この申請は却下してください。");
+        if (!sameHandovers(o.handovers ?? [], change.before)) fail(back, "申請のあとに引取・納品の日程が変更されています。古い内容で上書きしないよう、この申請は差し戻して出し直してください。");
+        o.handovers = cleanHandovers(change.after).rows;
+        const { moved } = syncHandoverEvents(db, o, userId);
+        const follow = followMovedEvents(db, db.users.find((u) => u.id === userId), moved);
+        o.updatedAt = now;
+        o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `引取・納品日の変更が承認されました: ${lines.join(" / ")}${follow.length ? ` (${follow.join(" ")})` : ""}` });
+        addAudit(db, { userId, action: "approve", entity: "order", entityId: o.id, entityLabel: o.number, summary: `引取・納品日の変更を承認 (${lines.join(" / ").slice(0, 150)})`, storeId: o.storeId, changes: a.changes });
+      } else {
+        o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `引取・納品日の変更が${word}されました${note}: ${lines.join(" / ")} (予定表は前の日程のままです)` });
+        o.updatedAt = now;
+        addAudit(db, { userId, action: "reject", entity: "order", entityId: o.id, entityLabel: o.number, summary: `引取・納品日の変更を${word}${note}`, storeId: o.storeId });
       }
       break;
     }

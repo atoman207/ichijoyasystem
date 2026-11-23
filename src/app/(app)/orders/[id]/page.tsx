@@ -12,6 +12,13 @@ import { ApprovalDecision, ApprovalHistoryCard, HistoryCard, RecordStamp } from 
 import { ContactList, ContactLogForm } from "@/components/features/Contacts";
 import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
 import { OrderScheduleForm } from "@/components/schedule/OrderScheduleForm";
+import { HandoverEditor } from "@/components/schedule/HandoverEditor";
+import { saveOrderHandovers } from "@/lib/actions/handovers";
+import { cleanHandovers, handoverLabel, rowText, toFormRows } from "@/lib/handover";
+import { suggestOrderHandovers, usesHandoverPlan } from "@/lib/handover-save";
+import { isHandoverEvent } from "@/lib/db/handover-events";
+import { orderEditable } from "@/lib/db/schedule";
+import { lastDay, shortDate } from "@/lib/calendar";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { CasePlanCard } from "@/components/scheduling/CasePlanCard";
 import { formStores, formUsers } from "@/components/schedule/form-data";
@@ -85,6 +92,13 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const freeGroups = allGroups.filter((g) => !g.orderId && !g.supplierId);
   const active = ["confirmed", "scheduled", "in_progress"].includes(o.status);
   const main = db.schedule.find((e) => e.orderId === o.id && e.source === "order");
+  // 品目ごとの引取・納品の日程 (畳・襖・障子・網戸。src/lib/handover.ts)。リフォームだけの受注はこれまでどおりの施工予定
+  const planMode = usesHandoverPlan(db, o);
+  const savedPlan = cleanHandovers(o.handovers ?? []).rows;
+  const planRows = planMode ? (savedPlan.length ? savedPlan : suggestOrderHandovers(db, o)) : [];
+  const legacyEvent = planMode && !savedPlan.length ? db.schedule.find((e) => e.orderId === o.id && e.source === "order" && !isHandoverEvent(e)) : undefined;
+  const pendingHandover = chain.approvals.find((a) => a.status === "pending" && a.type === "handover_change" && a.targetId === o.id);
+  const planEditable = planMode && orderEditable(o) && !lock.locked && !viewOnly;
   const today = toDateKey(new Date());
   const survey = db.surveys.find((x) => x.orderId === o.id);
   const issues = db.qualityIssues.filter((x) => x.orderId === o.id).sort((a, b) => b.occurredOn.localeCompare(a.occurredOn));
@@ -161,6 +175,12 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           )}
         </Card>
       )}
+      {pendingHandover && (
+        <Card className="mb-4 border-warn/40 bg-warn-soft/40">
+          <CardHeader title={`承認待ち: ${APPROVAL_TYPE_LABEL[pendingHandover.type]}`} description={`${pendingHandover.requiredRole === "admin" ? "管理者" : "店長"}の承認が必要 · 申請 ${userName(pendingHandover.requestedBy)} ${fmtDateTime(pendingHandover.createdAt)}${pendingHandover.requestComment ? ` · 理由: ${pendingHandover.requestComment}` : ""}`} />
+          <ApprovalDecision approval={pendingHandover} user={user} returnTo={returnTo} approveLabel="日程の変更を承認する" waitingText="承認されると予定表に反映されます (それまでは前の日程のままです)。" />
+        </Card>
+      )}
       {pendingChange && (
         <Card className="mb-4 border-warn/40 bg-warn-soft/40">
           <CardHeader title={`承認待ち: ${APPROVAL_TYPE_LABEL[pendingChange.type]}`} description={`${pendingChange.requiredRole === "admin" ? "管理者" : "店長"}の承認が必要 · 申請 ${userName(pendingChange.requestedBy)} ${fmtDateTime(pendingChange.createdAt)} · 理由: ${pendingChange.requestComment ?? "-"}`} />
@@ -170,6 +190,47 @@ export default async function OrderDetailPage({ params, searchParams }: { params
 
       <div className="grid grid-cols-1 gap-4 @3xl:grid-cols-3">
         <div className="space-y-4 @3xl:col-span-2">
+          {planMode ? (
+            <Card>
+              <CardHeader
+                title="引取・納品の日程 (品目ごと)"
+                description={`品目ごとに引取日・納品日を入れます。予定表には引き取りの日と納品の日だけが載ります (間の日には出ません)。はじめて入れる日程はすぐに反映し、登録済みの日程の変更は${own ? "そのまま反映します (管理者のため承認不要)" : "店長 (店長の申請は管理者) の承認のあとに反映します"}`}
+              />
+              {planEditable ? (
+                <HandoverEditor
+                  key={`${o.updatedAt}_${pendingHandover?.id ?? ""}`}
+                  action={saveOrderHandovers.bind(null, o.id)}
+                  initial={toFormRows(planRows)}
+                  saved={savedPlan}
+                  suggested={!savedPlan.length && planRows.length > 0}
+                  legacyNote={
+                    legacyEvent
+                      ? `予定表には以前の形 (「施工」${shortDate(legacyEvent.date)}${lastDay(legacyEvent) !== legacyEvent.date ? `〜${shortDate(lastDay(legacyEvent))} の毎日` : ""}) で載っています。日程を確かめて「保存する」を押すと、引き取りの日・納品の日だけの表示に切り替わります。`
+                      : undefined
+                  }
+                  pendingNote={pendingHandover ? `承認待ちの日程の変更があります (${userName(pendingHandover.requestedBy)} さんの申請)。承認・差戻しのあとに保存できます。急ぐときは上の「申請を取り下げる」のあとに保存し直してください。` : undefined}
+                  own={own}
+                  workerIds={o.workerIds}
+                  siteAddress={o.siteAddress}
+                  users={formUsers(db)}
+                  stores={formStores(db)}
+                  storeId={o.storeId}
+                  currentUserId={user.id}
+                />
+              ) : savedPlan.length ? (
+                <ul className="space-y-1 text-sm" data-testid="handover-list">
+                  {savedPlan.map((r) => (
+                    <li key={r.id}>
+                      <span className="font-medium text-ink">{handoverLabel(r)}</span> <span className="text-ink-2">{rowText(r)}</span>
+                    </li>
+                  ))}
+                  <li className="pt-1 text-xs text-ink-3">担当: {o.workerIds.map((w) => userName(w)).join("・") || "-"} · 現場住所: {o.siteAddress || "-"}</li>
+                </ul>
+              ) : (
+                <p className="text-sm text-ink-3">引取・納品の日程は登録されていません。</p>
+              )}
+            </Card>
+          ) : (
           <Card>
             <CardHeader title="施工予定・担当" description="保存すると予定表 (店舗のカレンダー) の「施工」の予定に施工担当とともに反映されます。予定表の側で日程・担当を変えた場合もここに反映されます" />
             {active ? (
@@ -195,6 +256,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               <Dl columns={3} items={[["施工期間", o.scheduledStart ? `${fmtDate(o.scheduledStart)}${o.scheduledEnd && o.scheduledEnd !== o.scheduledStart ? `〜${fmtDate(o.scheduledEnd)}` : ""}` : "未定"], ["施工担当", o.workerIds.map((w) => userName(w)).join("・") || "-"], ["現場住所", o.siteAddress], ["完了日", o.completedAt ? fmtDate(o.completedAt) : "-"], ["売上計上日", o.salesDate ? fmtDate(o.salesDate) : "-"], ["承認者", userName(o.approvedBy)]]} />
             )}
           </Card>
+          )}
 
           <MapInfoCard db={db} user={user} target={{ type: "order", id: o.id }} returnTo={returnTo} title="施工場所の地図・住宅地図" />
 

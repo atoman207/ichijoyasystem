@@ -38,6 +38,10 @@ import { changeImpacts, moveBookingsWithEvent } from "@/lib/scheduling/impact";
 import { replanProductionForPickup } from "@/lib/scheduling/production";
 import { prefetchForStore } from "@/lib/scheduling/prefetch";
 import { planTablesReady } from "@/lib/scheduling/tables";
+import { applyEventMove, parseHandoverRef } from "@/lib/handover";
+import { pendingHandoverChange, savePlan } from "@/lib/handover-save";
+import { notifyNewApprovals } from "@/lib/notify/approvals";
+import { AUTO_APPROVAL_NOTE } from "@/lib/approval-decide";
 import { fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
 /**
@@ -340,17 +344,42 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
     if (!o || !orderEditable(o)) fail(`/schedule/${id}`, "施工完了・キャンセル済みの受注の施工予定は変更できません。");
   }
   const p = parseEventForm(db, user, formData, back, { allowRepeat: false, current });
+  // 受注の引取・納品の日程と連動する予定: 日時の変更は受注の日程の変更の申請 (承認のあとに予定表へ反映)。担当・メモなどはそのまま保存
+  const hvRef = synced ? parseHandoverRef(current.sourceRef) : undefined;
+  if (hvRef) {
+    if (hvRef.role !== "install") p.fields.endDate = undefined;
+    const moved = p.fields.date !== current.date || (p.fields.endDate ?? "") !== (current.endDate ?? "") || (p.fields.startTime ?? "") !== (current.startTime ?? "") || (p.fields.endTime ?? "") !== (current.endTime ?? "");
+    if (moved) {
+      const o0 = db.orders.find((x) => x.id === current.orderId);
+      if (o0 && pendingHandoverChange(db, o0.id)) fail(back, "この案件には承認待ちの引取・納品日の変更があります。承認・差戻しのあとに変更してください (急ぐときは受注の画面で申請を取り下げてから)。");
+    }
+  }
   const hits = conflictsOf(db, p.fields, [p.fields.date], id);
   if (hits.length > 0 && !p.allowOverlap) {
     fail(back, `担当者の予定が重複しています: ${describeConflicts(db, hits)}。日時・担当者を見直すか、「重複を承知で保存する」にチェックしてください。`);
   }
   let changed = 0;
   const followUps: string[] = [];
+  let hvRequest: { approvalId?: string; auto: boolean; role?: string; applied: boolean } | undefined;
   const impacts = changeImpacts(db, { id, kind: p.fields.kind, date: p.fields.date, endDate: p.fields.endDate, storeId: p.fields.storeId, assigneeIds: p.fields.assigneeIds, orderId: p.fields.orderId, quoteId: p.fields.quoteId, inquiryId: p.fields.inquiryId }).filter((x) => !/予約 .* も .* に移します|保存すると製造の予定を作り直します/.test(x));
   await mutate((db) => {
     const ev = db.schedule.find((e) => e.id === id);
     if (!ev) return;
     const before = { ...ev, assigneeIds: [...ev.assigneeIds] };
+    if (hvRef) {
+      const when = { date: p.fields.date, endDate: p.fields.endDate, start: p.fields.startTime, end: p.fields.startTime ? p.fields.endTime : undefined };
+      const moved = when.date !== ev.date || (when.endDate ?? "") !== (ev.endDate ?? "") || (when.start ?? "") !== (ev.startTime ?? "") || (when.end ?? "") !== (ev.endTime ?? "");
+      // 日時は受注の日程で決める (ここでは変えない)。種別・店舗・案件は連動のまま。担当・件名・メモ・場所はこの予定だけ
+      Object.assign(p.fields, { date: ev.date, endDate: ev.endDate, startTime: ev.startTime, endTime: ev.endTime, slot: ev.slot });
+      if (moved) {
+        const o = db.orders.find((x) => x.id === ev.orderId);
+        if (o) {
+          const r = savePlan(db, user, o, applyEventMove(o.handovers, hvRef, when), { back, reason: `予定表で「${ev.title}」の日時を変更`, via: "schedule" });
+          hvRequest = { approvalId: r.approval?.id, auto: r.auto, role: r.approval?.requiredRole, applied: r.applied };
+          followUps.push(...r.followUps);
+        }
+      }
+    }
     Object.assign(ev, p.fields);
     if (mapTablesReady() && !synced && (ev.customerId || ev.orderId || ev.quoteId || ev.inquiryId)) saveEventLocationMode(db, user, ev, p.locationMode);
     const now = nowIso();
@@ -362,8 +391,10 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
       if (moveBookingsWithEvent(db, ev)) followUps.push("車両・設備の予約も移しました。");
       if (ev.kind === "pickup") followUps.push(...replanProductionForPickup(db, user, ev));
     }
-    if (synced) {
+    if (synced && !hvRef) {
       applyToOrder(db, ev, user);
+    } else if (hvRef) {
+      // 担当・メモなどの変更だけ (日時は上の申請)
     } else if (ev.orderId && changes.some((c) => ["date", "endDate", "startTime", "endTime", "assigneeIds"].includes(c.field))) {
       const o = db.orders.find((x) => x.id === ev.orderId);
       if (o) {
@@ -383,8 +414,19 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
       changes,
     });
   });
+  if (hvRequest?.approvalId && !hvRequest.auto) await notifyNewApprovals([hvRequest.approvalId], user.id);
   revalidateSchedule(current);
   revalidateSchedule(p.fields);
+  if (hvRequest) {
+    const hvMsg = hvRequest.approvalId
+      ? hvRequest.auto
+        ? `${AUTO_APPROVAL_NOTE}し、受注の引取・納品の日程と予定表を変更しました。`
+        : `日時の変更を${hvRequest.role === "admin" ? "管理者" : "店長"}へ申請しました。承認されると予定表と受注の日程に反映されます (それまでは前の日時のままです)。`
+      : hvRequest.applied
+        ? "受注の引取・納品の日程に反映しました。"
+        : "日時は変わりませんでした (受注の日程にこの予定の品目が見つかりません。受注の画面の「引取・納品の日程」で確かめてください)。";
+    redirect(withMsg(returnTo ?? `/schedule/${id}`, `${hvMsg}${changed ? " 担当・メモなどの変更は保存しました。" : ""}${followUps.join("")}`));
+  }
   const freed = changed && p.fields.date > current.date && SUGGEST_KINDS.includes(current.kind) ? ` 空いた ${shortDate(current.date)} に入れられる予定は 予定表 →「計画」で確かめられます。` : "";
   const msg = `${changed ? "予定を更新しました。" : "変更はありませんでした。"}${synced && changed ? "受注の施工予定にも反映しました。" : ""}${hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : ""}${followUps.join("")}${changed && impacts.length ? ` 注意: ${impacts.join(" / ")}。` : ""}${freed}`;
   redirect(withMsg(returnTo ?? `/schedule/${id}`, msg));
@@ -399,7 +441,14 @@ export async function deleteScheduleEvent(id: string, formData: FormData) {
   const e = db.schedule.find((x) => x.id === id);
   if (!e) fail("/schedule", "予定が見つかりません。");
   if (!canEditEvent(user, e)) fail(back, "この予定を削除する権限がありません (登録者・担当者・店舗のメンバーが削除できます)。");
-  if (e.source === "order") fail(back, "受注の施工予定と連動している予定です。受注・施工画面で施工予定を変更してください。");
+  if (e.source === "order") {
+    fail(
+      back,
+      parseHandoverRef(e.sourceRef)
+        ? "受注の引取・納品の日程と連動している予定です。受注の画面の「引取・納品の日程」で品目の日程を変更・削除してください (登録済みの日程の変更は承認のあとに反映されます)。"
+        : "受注の施工予定と連動している予定です。受注・施工画面で施工予定を変更してください。",
+    );
+  }
   let removed = 0;
   await mutate((db) => {
     const targets = scope === "series" && e.seriesId ? db.schedule.filter((x) => x.seriesId === e.seriesId && x.date >= e.date && canEditEvent(user, x)) : [e];

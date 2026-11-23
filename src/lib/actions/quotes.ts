@@ -12,6 +12,8 @@ import { CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { approvalSettings, manYen } from "@/lib/approval-rules";
 import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { syncOrderEvent } from "@/lib/db/schedule";
+import { hasHandoverItems, suggestHandovers } from "@/lib/handover";
+import { quoteHandoverLines } from "@/lib/handover-save";
 import { approverLabel, approverRole } from "@/lib/auth/permissions";
 import { relinkDocumentAttachments } from "@/lib/attachments";
 import { documentSettings } from "@/lib/doc-settings";
@@ -429,6 +431,11 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
     q.updatedAt = now;
     // 施工予定日を入れて受注登録した場合は、契約承認前でも予定表に施工予定を載せて日程を押さえる
     const created = db.orders[db.orders.length - 1];
+    // 畳・襖・障子・網戸の見積: 入れた日を引取日にして品目ごとの日程を作る (表替え・裏返しは当日納品、ほかの納品日は手書きの日時か後で入れる。src/lib/handover.ts)
+    const hvLines = quoteHandoverLines(db, q.items);
+    if (scheduledStart && hasHandoverItems(hvLines, q.category)) {
+      created.handovers = suggestHandovers({ lines: hvLines, category: q.category, pickupText: q.siteInfo?.pickupAt, deliveryText: q.siteInfo?.deliveryAt, pickupDate: scheduledStart, ref: today });
+    }
     if (created.scheduledStart) syncOrderEvent(db, created, user.id);
     syncHandoverMemo(db, created);
     const r = requiredRole(db, q.storeId, q.total, user.id);

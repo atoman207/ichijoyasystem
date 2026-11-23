@@ -109,7 +109,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     ...n.pendingApprovals.map<NotificationItem>((a) => ({
       kind: "approval",
       title: `承認依頼: ${APPROVAL_TYPE_LABEL[a.type]}`,
-      detail: a.type === "record_view" ? a.title : `${a.title} (${yen(a.amount)})`,
+      detail: a.type === "record_view" || a.type === "handover_change" ? a.title : `${a.title} (${yen(a.amount)})`,
       href: "/approvals?tab=mine",
     })),
     ...n.mentions.map<NotificationItem>((m) => ({

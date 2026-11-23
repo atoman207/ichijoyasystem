@@ -8,6 +8,7 @@ export function approvalHref(a: Pick<Approval, "type" | "targetId">): string {
       return `/quotes/${a.targetId}`;
     case "order":
     case "order_change":
+    case "handover_change":
       return `/orders/${a.targetId}`;
     case "expense":
       return `/expenses/${a.targetId}`;
