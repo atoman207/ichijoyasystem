@@ -28,7 +28,7 @@ function titleOf(customerName: string | undefined, g: HandoverGroup): string {
 }
 
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
-const timeKey = (e: Pick<ScheduleEvent, "date" | "endDate" | "startTime" | "endTime">) => `${e.date}|${e.endDate ?? ""}|${e.startTime ?? ""}|${e.endTime ?? ""}`;
+const timeKey = (e: Pick<ScheduleEvent, "date" | "endDate" | "startTime" | "endTime" | "slot">) => `${e.date}|${e.endDate ?? ""}|${e.startTime ?? ""}|${e.endTime ?? ""}|${e.slot ?? ""}`;
 
 /**
  * 日程から予定表の予定を作り直す。戻り値の moved は日時が変わった予定 (車両の予約・製造の予定の作り直しに使う)。
@@ -64,7 +64,8 @@ export function syncHandoverEvents(db: Database, o: Order, actorId: string, opts
       endDate: g.endDate,
       startTime: g.start,
       endTime: g.start ? g.end : undefined,
-      slot: undefined,
+      // 時刻のない午前・午後 (受注の画面の「AM」「PM」)
+      slot: g.start ? undefined : g.slot,
       storeId: o.storeId,
       customerId: o.customerId,
       orderId: o.id,

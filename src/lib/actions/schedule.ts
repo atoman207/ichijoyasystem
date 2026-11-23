@@ -348,7 +348,7 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
   const hvRef = synced ? parseHandoverRef(current.sourceRef) : undefined;
   if (hvRef) {
     if (hvRef.role !== "install") p.fields.endDate = undefined;
-    const moved = p.fields.date !== current.date || (p.fields.endDate ?? "") !== (current.endDate ?? "") || (p.fields.startTime ?? "") !== (current.startTime ?? "") || (p.fields.endTime ?? "") !== (current.endTime ?? "");
+    const moved = p.fields.date !== current.date || (p.fields.endDate ?? "") !== (current.endDate ?? "") || (p.fields.startTime ?? "") !== (current.startTime ?? "") || (p.fields.endTime ?? "") !== (current.endTime ?? "") || (p.fields.slot ?? "") !== (current.slot ?? "");
     if (moved) {
       const o0 = db.orders.find((x) => x.id === current.orderId);
       if (o0 && pendingHandoverChange(db, o0.id)) fail(back, "この案件には承認待ちの引取・納品日の変更があります。承認・差戻しのあとに変更してください (急ぐときは受注の画面で申請を取り下げてから)。");
@@ -367,8 +367,8 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
     if (!ev) return;
     const before = { ...ev, assigneeIds: [...ev.assigneeIds] };
     if (hvRef) {
-      const when = { date: p.fields.date, endDate: p.fields.endDate, start: p.fields.startTime, end: p.fields.startTime ? p.fields.endTime : undefined };
-      const moved = when.date !== ev.date || (when.endDate ?? "") !== (ev.endDate ?? "") || (when.start ?? "") !== (ev.startTime ?? "") || (when.end ?? "") !== (ev.endTime ?? "");
+      const when = { date: p.fields.date, endDate: p.fields.endDate, start: p.fields.startTime, end: p.fields.startTime ? p.fields.endTime : undefined, slot: p.fields.startTime ? undefined : p.fields.slot };
+      const moved = when.date !== ev.date || (when.endDate ?? "") !== (ev.endDate ?? "") || (when.start ?? "") !== (ev.startTime ?? "") || (when.end ?? "") !== (ev.endTime ?? "") || (when.slot ?? "") !== (ev.slot ?? "");
       // 日時は受注の日程で決める (ここでは変えない)。種別・店舗・案件は連動のまま。担当・件名・メモ・場所はこの予定だけ
       Object.assign(p.fields, { date: ev.date, endDate: ev.endDate, startTime: ev.startTime, endTime: ev.endTime, slot: ev.slot });
       if (moved) {

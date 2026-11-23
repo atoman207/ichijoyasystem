@@ -522,9 +522,13 @@ export interface Order {
 /** 引取・納品の品目 (src/lib/handover.ts の HANDOVER_ITEM)。reform は施工期間 (開始日〜終了日) で予定表に載せる */
 export type HandoverItem = "tatami_omote" | "tatami_ura" | "tatami_new" | "fusuma" | "shoji" | "amido" | "other" | "reform";
 
+/** 時刻を決めずに午前 (AM) / 午後 (PM) だけ決めた時間帯 (予定表の ScheduleEvent.slot と同じ) */
+export type HandoverSlot = "am" | "pm";
+
 /**
- * 受注の 1 品目の引取・納品の日程。日付は YYYY-MM-DD、時刻は HH:MM (なければ時間未定)。
- * 品目が reform (施工) のときは pickupDate = 施工開始日・pickupStart / pickupEnd = 各日の時間帯・deliveryDate = 施工終了日
+ * 受注の 1 品目の引取・納品の日程。日付は YYYY-MM-DD、時刻は HH:MM、時間帯は午前・午後 (どちらもなければ時間未定)。
+ * 時刻と時間帯は同時に持たない (時刻があれば時刻)。
+ * 品目が reform (施工) のときは pickupDate = 施工開始日・pickupStart / pickupEnd / pickupSlot = 各日の時間帯・deliveryDate = 施工終了日
  */
 export interface OrderHandover {
   id: string;
@@ -534,9 +538,11 @@ export interface OrderHandover {
   pickupDate?: string;
   pickupStart?: string;
   pickupEnd?: string;
+  pickupSlot?: HandoverSlot;
   deliveryDate?: string;
   deliveryStart?: string;
   deliveryEnd?: string;
+  deliverySlot?: HandoverSlot;
 }
 
 export type InvoiceStatus =

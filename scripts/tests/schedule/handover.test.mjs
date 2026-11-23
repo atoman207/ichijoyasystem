@@ -166,6 +166,69 @@ eq(H.parseHandoverRef(H.handoverRef(g[0])), { role: "pickup", rowIds: ["hv_tatam
 eq(H.applyEventMove(base2, { role: "delivery", rowIds: ["hv_fusuma1"] }, { date: "2026-12-06", start: "10:00", end: "11:00" })[1], { ...fus, deliveryDate: "2026-12-06", deliveryStart: "10:00", deliveryEnd: "11:00" }, "予定表で納品を動かす → その品目の納品だけ変わる");
 
 /* ================================================================== */
+section("6b. 午前 (AM)・午後 (PM) (お客様のご要望 2026-11-23「引取日・納品日の設定について（追加）」)");
+eq(H.parseScheduleText("12/4 AM", ref).map((c) => [c.date, c.start ?? "", c.slot ?? ""]), [["2026-12-04", "", "am"]], "「12/4 AM」→ 午前");
+eq(H.parseScheduleText("翌日 午後", ref).map((c) => [c.nextDay, c.slot]), [[true, "pm"]], "「翌日 午後」→ 翌日の午後");
+eq(H.parseScheduleText("12/4 午前中", ref)[0].slot, "am", "「午前中」→ 午前");
+eq(H.parseScheduleText("12/4 PM", ref)[0].slot, "pm", "「PM」→ 午後");
+eq(H.parseScheduleText("12/4 午前9〜11", ref).map((c) => [c.start, c.end, c.slot ?? ""]), [["09:00", "11:00", ""]], "時刻があれば時刻 (午前・午後は使わない)");
+eq(H.parseScheduleText("12/4 AM・PM", ref)[0].slot, undefined, "午前と午後の両方は決めない");
+eq(H.parseScheduleText("12/4 アミ戸 CAMERA", ref)[0].slot, undefined, "英字の言葉の一部 (CAMERA の AM) は午前にしない");
+const sAm = H.suggestHandovers({ ref, lines: [{ name: "畳表替え", qty: 6, unit: "枚" }, { name: "襖張替え", qty: 4, unit: "面" }], pickupText: "12/2 AM", deliveryText: "畳 当日 PM、襖 12/9 午前" });
+eq(sAm.map((r) => [r.item, r.pickupDate, r.pickupSlot ?? "", r.deliveryDate ?? "", r.deliverySlot ?? ""]), [["tatami_omote", "2026-12-02", "am", "2026-12-02", "pm"], ["fusuma", "2026-12-02", "am", "2026-12-09", "am"]], "手書きの「AM」「PM」「午前」→ 引取・納品の時間帯");
+// 入力の確かめ
+const rowS = (o) => ({ id: "hv_slot01", item: "fusuma", ...o });
+eq(H.cleanHandovers([rowS({ pickupDate: "2026-12-02", pickupSlot: "am", deliveryDate: "2026-12-09", deliverySlot: "pm" })]).rows[0], { id: "hv_slot01", item: "fusuma", pickupDate: "2026-12-02", pickupSlot: "am", deliveryDate: "2026-12-09", deliverySlot: "pm" }, "午前・午後を保存できる");
+eq(H.cleanHandovers([rowS({ pickupDate: "2026-12-02", pickupStart: "09:00", pickupSlot: "pm" })]).rows[0], { id: "hv_slot01", item: "fusuma", pickupDate: "2026-12-02", pickupStart: "09:00" }, "時刻と時間帯が両方あれば時刻 (時間帯は省く)");
+ok(H.cleanHandovers([rowS({ pickupSlot: "am" })]).error?.includes("日付を入力"), "時間帯だけで日付がないのは誤り");
+ok(H.cleanHandovers([rowS({ pickupDate: "2026-12-02", pickupSlot: "evening" })]).error?.includes("午前 (AM) か午後 (PM)"), "午前・午後以外の時間帯は誤り");
+ok(H.cleanHandovers([rowS({ item: "tatami_omote", pickupDate: "2026-12-02", pickupSlot: "pm", deliveryDate: "2026-12-02", deliverySlot: "am" })]).error?.includes("当日納品の時間が引き取りの時間より前"), "当日納品: 引き取り 午後 → 納品 午前 は誤り");
+ok(H.cleanHandovers([rowS({ item: "tatami_omote", pickupDate: "2026-12-02", pickupStart: "13:00", deliveryDate: "2026-12-02", deliverySlot: "am" })]).error?.includes("当日納品"), "当日納品: 引き取り 13:00 → 納品 午前 は誤り");
+ok(!H.cleanHandovers([rowS({ item: "tatami_omote", pickupDate: "2026-12-02", pickupSlot: "am", deliveryDate: "2026-12-02", deliverySlot: "pm" })]).error, "当日納品: 午前に引き取り → 午後に納品 はよい");
+ok(!H.cleanHandovers([rowS({ item: "tatami_omote", pickupDate: "2026-12-02", pickupStart: "10:00", deliveryDate: "2026-12-02", deliverySlot: "am" })]).error, "当日納品: 10:00 に引き取り → 午前のうちに納品 はよい");
+ok(!H.cleanHandovers([rowS({ item: "tatami_omote", pickupDate: "2026-12-02", pickupSlot: "am", deliveryDate: "2026-12-03", deliverySlot: "am" })]).error, "別の日なら午前 → 午前 でもよい");
+eq(H.cleanHandovers([{ id: "hv_reform2", item: "reform", pickupDate: "2026-12-05", pickupSlot: "pm", deliveryDate: "2026-12-07", deliverySlot: "am" }]).rows[0], { id: "hv_reform2", item: "reform", pickupDate: "2026-12-05", pickupSlot: "pm", deliveryDate: "2026-12-07" }, "施工: 各日の時間帯 (午後) を持つ・終了日の時間帯は使わない");
+// 表示・登録と変更
+const slotBase = [{ id: "hv_fus001", item: "fusuma", pickupDate: "2026-12-02", pickupSlot: "am", deliveryDate: "2026-12-09", deliverySlot: "pm" }];
+eq(H.rowText(slotBase[0]), "引取 12/2(水) 午前 → 納品 12/9(水) 午後", "日程の文に午前・午後");
+d = H.handoverDiff(slotBase, [{ ...slotBase[0], deliverySlot: "am" }]);
+ok(d.needsApproval && d.changed[0] === "襖 の納品: 12/9(水) 午後 → 12/9(水) 午前", "登録済みの納品の午後 → 午前 の変更は承認");
+d = H.handoverDiff([{ id: "hv_fus001", item: "fusuma", pickupDate: "2026-12-02" }], [{ id: "hv_fus001", item: "fusuma", pickupDate: "2026-12-02", deliveryDate: "2026-12-09", deliverySlot: "am" }]);
+ok(!d.needsApproval && d.registered[0] === "襖 の納品: 12/9(水) 午前", "はじめて入れる納品 (午前) はすぐ反映");
+// 予定表の予定
+const gs = H.handoverGroups([
+  { id: "hv_tat001", item: "tatami_omote", pickupDate: "2026-12-02", pickupSlot: "pm", deliveryDate: "2026-12-02", deliverySlot: "pm" },
+  { id: "hv_fus001", item: "fusuma", pickupDate: "2026-12-02", pickupSlot: "am", deliveryDate: "2026-12-09", deliverySlot: "pm" },
+  { id: "hv_sho001", item: "shoji", pickupDate: "2026-12-02", pickupSlot: "am", deliveryDate: "2026-12-09", deliverySlot: "pm" },
+  { id: "hv_ami001", item: "amido", pickupDate: "2026-12-02", pickupStart: "10:00", deliveryDate: "2026-12-10" },
+]);
+eq(gs.map((x) => [x.role, x.date.slice(5), x.start ?? x.slot ?? "", x.labels.join("・")]), [["pickup", "12-02", "am", "襖・障子"], ["pickup", "12-02", "10:00", "網戸"], ["pickup", "12-02", "pm", "畳 表替え"], ["delivery", "12-02", "pm", "畳 表替え"], ["delivery", "12-09", "pm", "襖・障子"], ["delivery", "12-10", "", "網戸"]], "同じ日・同じ時間帯 (午前) の引き取りは 1 件、時間帯が違えば別の予定 (午前 → 10:00 → 午後の順)");
+eq(H.applyEventMove(slotBase, { role: "delivery", rowIds: ["hv_fus001"] }, { date: "2026-12-10", slot: "am" })[0], { ...slotBase[0], deliveryDate: "2026-12-10", deliverySlot: "am" }, "予定表で納品を 12/10 午前へ → 品目の納品も午前");
+eq(H.applyEventMove(slotBase, { role: "pickup", rowIds: ["hv_fus001"] }, { date: "2026-12-02", start: "09:00", end: "10:00", slot: "am" })[0], { id: "hv_fus001", item: "fusuma", pickupDate: "2026-12-02", pickupStart: "09:00", pickupEnd: "10:00", deliveryDate: "2026-12-09", deliverySlot: "pm" }, "時刻を入れたら午前・午後は外す");
+ok(!H.sameHandovers(slotBase, [{ ...slotBase[0], deliverySlot: "am" }]) && H.sameHandovers(slotBase, [{ deliverySlot: "pm", ...slotBase[0] }]), "午前・午後の違いは違う日程として比べる");
+eq(H.toFormRows(slotBase)[0].pickupSlot, "am", "受注の画面の初期値に時間帯");
+
+/* ================================================================== */
+section("6c. 襖・障子・網戸の同じ日程 (1 つの品目の日程をほかの品目にも)");
+eq([H.isLinkedItem("fusuma"), H.isLinkedItem("shoji"), H.isLinkedItem("amido"), H.isLinkedItem("tatami_omote"), H.isLinkedItem("other")], [true, true, true, false, false], "まとめる品目は襖・障子・網戸");
+const tg = [
+  { id: "hv_fus001", item: "fusuma", pickupDate: "2026-12-02", pickupSlot: "am", deliveryDate: "2026-12-09" },
+  { id: "hv_sho001", item: "shoji", pickupDate: "2026-12-02", pickupSlot: "am", deliveryDate: "2026-12-09" },
+  { id: "hv_ami001", item: "amido", pickupDate: "2026-12-02", pickupSlot: "am", deliveryDate: "2026-12-11", deliverySlot: "pm" },
+  { id: "hv_tat001", item: "tatami_omote", pickupDate: "2026-12-02", pickupSlot: "am", deliveryDate: "2026-12-09" },
+];
+eq(H.linkedCluster(tg), ["hv_fus001", "hv_sho001"], "開いたとき: 同じ日程の襖・障子をまとめ、網戸 (納品が別の日) は個別・畳は対象外");
+eq(H.linkedCluster([tg[0], tg[3]]), [], "襖・障子・網戸が 1 行ならまとめない");
+eq(H.linkedCluster([tg[2], tg[0], tg[1]]), ["hv_fus001", "hv_sho001"], "いちばん多い組をまとめる (先の行が個別でも)");
+eq(H.linkedCluster([{ id: "hv_fus001", item: "fusuma" }, { id: "hv_ami001", item: "amido" }]), ["hv_fus001", "hv_ami001"], "日程が空どうしもまとめる (あとで入れた日程がほかの品目にも入る)");
+const sLink = H.suggestHandovers({ ref, lines: [{ name: "襖張替え", qty: 4, unit: "面" }, { name: "障子張替え", qty: 2, unit: "枚" }, { name: "網戸張替え", qty: 3, unit: "枚" }], pickupText: "12/2 AM", deliveryText: "襖 12/9 PM" });
+eq(sLink.map((r) => [r.item, r.pickupSlot ?? "", r.deliveryDate ?? "", r.deliverySlot ?? ""]), [["fusuma", "am", "2026-12-09", "pm"], ["shoji", "am", "2026-12-09", "pm"], ["amido", "am", "2026-12-09", "pm"]], "手書きに襖の納品だけ → 障子・網戸にも同じ納品日 (同じ日程)");
+eq(H.linkedCluster(sLink).length, 3, "初期値の襖・障子・網戸は 1 つにまとまる");
+const sSplit = H.suggestHandovers({ ref, lines: [{ name: "襖張替え", qty: 4, unit: "面" }, { name: "網戸張替え", qty: 3, unit: "枚" }], pickupText: "12/2", deliveryText: "襖 12/9、網戸 12/12" });
+eq(sSplit.map((r) => [r.item, r.deliveryDate]), [["fusuma", "2026-12-09"], ["amido", "2026-12-12"]], "品目ごとに書いてあれば品目ごとの日 (網戸だけ別の日)");
+eq(H.linkedCluster(sSplit).length, 1, "別の日の網戸はまとめない");
+
+/* ================================================================== */
 section("7. Server Action (受注の画面・承認・予定表)");
 const store = await imp("lib/db/store.ts");
 const hvActions = await imp("lib/actions/handovers.ts");
@@ -349,6 +412,36 @@ await store.mutate((d) => {
 ok(!SP.usesHandoverPlan(db(), db().orders.find((o) => o.id === "o_hvreform")), "リフォームだけの受注は施工予定のまま");
 r = await act(staff, () => oa.updateOrderSchedule("o_hvreform", form({ scheduledStart: D("12-14"), scheduledEnd: D("12-16"), startTime: "09:00", endTime: "17:00", workerIds: [staff.id], allowOverlap: "1" })));
 eq(db().schedule.filter((e) => e.orderId === "o_hvreform").map((e) => [e.kind, e.date.slice(5), e.endDate?.slice(5)]), [["install", "12-14", "12-16"]], "リフォーム: 施工期間 (12/14〜12/16) の「施工」の予定 (今までどおり)");
+
+// p) 午前・午後 (AM・PM) と襖・障子・網戸の同じ日程: 保存 → 予定表の予定は午前・午後 (時刻未定) で 1 件にまとまる
+await store.mutate((d) => {
+  d.quotes.push({ id: "q_hvtest4", number: "Q-HV-4", version: 1, customerId: cust.id, storeId: "koshi", title: "襖・障子・網戸", category: "fusuma", items: [{ id: "qi1", name: "襖張替え", qty: 4, unit: "枚", unitPrice: 4000, amount: 16000 }, { id: "qi2", name: "障子張替え", qty: 2, unit: "枚", unitPrice: 2000, amount: 4000 }, { id: "qi3", name: "網戸張替え", qty: 3, unit: "枚", unitPrice: 3000, amount: 9000 }], subtotal: 29000, discount: 0, tax: 2636, total: 29000, status: "approved", validUntil: D("12-31"), createdBy: staff.id, createdAt: now, updatedAt: now, orderId: "o_hvtest4" });
+  d.orders.push({ id: "o_hvtest4", number: "O-HV-4", quoteId: "q_hvtest4", customerId: cust.id, storeId: "koshi", title: "襖・障子・網戸", category: "fusuma", contractDate: D("11-23"), total: 29000, status: "confirmed", workerIds: [staff.id], siteAddress: "", progressNotes: [], createdBy: staff.id, createdAt: now, updatedAt: now, siteInfo: { pickupAt: "12/15 AM", deliveryAt: "12/18 PM" } });
+});
+const o4 = () => db().orders.find((o) => o.id === "o_hvtest4");
+const ev4 = () => db().schedule.filter((e) => e.orderId === "o_hvtest4").sort((a, b) => a.date.localeCompare(b.date));
+const plan4 = SP.suggestOrderHandovers(db(), o4());
+eq(plan4.map((x) => [x.item, x.pickupDate?.slice(5), x.pickupSlot, x.deliveryDate?.slice(5), x.deliverySlot]), [["fusuma", "12-15", "am", "12-18", "pm"], ["shoji", "12-15", "am", "12-18", "pm"], ["amido", "12-15", "am", "12-18", "pm"]], "初期値: 手書きの「12/15 AM」「12/18 PM」→ 3 品目とも同じ日程");
+r = await act(staff, () => hvActions.saveOrderHandovers("o_hvtest4", form({ handovers: JSON.stringify(plan4), workerIds: [staff.id], allowOverlap: "1" })));
+ok(!r.err && r.msg?.includes("予定表に反映"), "保存 (はじめての登録はすぐ反映)");
+eq(ev4().map((e) => [e.kind, e.date.slice(5), e.startTime ?? "", e.slot ?? ""]), [["pickup", "12-15", "", "am"], ["delivery", "12-18", "", "pm"]], "予定表: 12/15 午前の引き取り 1 件・12/18 午後の納品 1 件 (3 品目をまとめる)");
+const cal = await imp("lib/calendar.ts");
+eq(ev4().map((e) => cal.timeLabel(e)), ["午前", "午後"], "予定表の時間の表示は「午前」「午後」");
+ok(ev4()[0].title.includes("襖") && ev4()[0].title.includes("障子") && ev4()[0].title.includes("網戸"), "引き取りの件名に 3 品目");
+// 網戸だけ 12/19 午前の納品に変える → 申請 → 承認で網戸の納品だけ別の予定に
+const amiId = o4().handovers.find((x) => x.item === "amido").id;
+r = await act(staff, () => hvActions.saveOrderHandovers("o_hvtest4", form({ handovers: JSON.stringify(o4().handovers.map((x) => (x.id === amiId ? { ...x, deliveryDate: D("12-19"), deliverySlot: "am" } : x))), workerIds: [staff.id], allowOverlap: "1" })));
+const ap8 = db().approvals.find((a) => a.type === "handover_change" && a.status === "pending" && a.targetId === "o_hvtest4");
+ok(ap8 && H.handoverChangeLines(ap8.changes[0].before, ap8.changes[0].after).join() === `網戸 3枚 の納品: ${H.sideText({ id: amiId, item: "amido", deliveryDate: D("12-18"), deliverySlot: "pm" }, "delivery")} → ${H.sideText({ id: amiId, item: "amido", deliveryDate: D("12-19"), deliverySlot: "am" }, "delivery")}`, "網戸だけの変更の申請 (午後 → 午前)");
+await act(manager, () => apActions.decideApproval(ap8.id, "approved", form({ returnTo: "/approvals" })));
+eq(ev4().map((e) => [e.kind, e.date.slice(5), e.slot ?? "", e.title.includes("網戸") ? "網戸" : "襖・障子"]), [["pickup", "12-15", "am", "網戸"], ["delivery", "12-18", "pm", "襖・障子"], ["delivery", "12-19", "am", "網戸"]], "承認: 引き取りは 3 品目のまま 1 件、納品は襖・障子 12/18 午後と網戸 12/19 午前の 2 件");
+// 予定表で襖・障子の納品を午後 → 午前に変える → 申請 (予定表の時間帯の変更も申請になる)
+const fsDel = ev4().find((e) => e.kind === "delivery" && e.date === D("12-18"));
+r = await act(staff, () => schActions.updateScheduleEvent(fsDel.id, evForm(fsDel, { slot: "am", startTime: "", endTime: "" })));
+const ap9 = db().approvals.find((a) => a.type === "handover_change" && a.status === "pending" && a.targetId === "o_hvtest4");
+ok(r.msg?.includes("店長へ申請") && ap9 && db().schedule.find((e) => e.id === fsDel.id).slot === "pm", "予定表で午後 → 午前 → 申請 (承認まで午後のまま)");
+await act(manager, () => apActions.decideApproval(ap9.id, "approved", form({ returnTo: "/approvals" })));
+ok(db().schedule.find((e) => e.id === fsDel.id)?.slot === "am" && o4().handovers.filter((x) => x.item !== "amido").every((x) => x.deliverySlot === "am"), "承認: 予定と襖・障子の納品が午前に");
 
 console.log(`\n${pass} passed, ${fails.length} failed`);
 fs.rmSync(work, { recursive: true, force: true });

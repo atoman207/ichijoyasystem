@@ -8,10 +8,13 @@
  * - はじめて入れる日程 (空 → 日付) はすぐに反映し、登録済みの日程の変更 (日付・時間の変更・削除) は承認を経て反映する
  *   (承認の type = handover_change。管理者の申請は承認を省略)。
  * - 予定表の予定は受注と連動 (source = "order"・sourceRef = "handover:<pickup|delivery|install>:<日程の行の ID>+…")。
+ * - 引取日・納品日は日付 + 時間 (指定なし / 午前 AM / 午後 PM / 時刻)。午前・午後は予定表の予定の slot (お客様のご要望 2026-11-23「■ 引取日・納品日の設定について（追加）」)。
+ * - 襖・障子・網戸 (LINKED_ITEMS) は同じ案件でまとめて引取・納品することが多いため、受注の画面では 1 つの品目に入れた日程を
+ *   ほかの品目にも入れる (同じ日程の組 linkedCluster)。品目ごとに外して別の日程にもできる。保存する形は品目ごとの日程のまま。
  *
  * ブラウザー (受注の画面の入力) とサーバーの両方から使う純粋関数。データベースには触れない。
  */
-import type { HandoverItem, OrderHandover } from "@/lib/db/types";
+import type { HandoverItem, HandoverSlot, OrderHandover } from "@/lib/db/types";
 import { isDateKey, normTime, shortDate, toMinutes } from "@/lib/calendar";
 import { addDays } from "@/lib/format";
 import { lineKind, type LineInfo } from "@/lib/line-kind";
@@ -49,6 +52,14 @@ export const MAX_HANDOVERS = 20;
 
 export const handoverLabel = (r: Pick<OrderHandover, "item" | "label">): string => r.label?.trim() || HANDOVER_ITEM[r.item].label;
 export const isInstall = (r: Pick<OrderHandover, "item">): boolean => HANDOVER_ITEM[r.item].mode === "install";
+
+/** 午前・午後 (時刻を決めない時間帯) */
+export const HANDOVER_SLOT_LABEL: Record<HandoverSlot, string> = { am: "午前", pm: "午後" };
+export const isHandoverSlot = (v: unknown): v is HandoverSlot => v === "am" || v === "pm";
+
+/** 1 つの品目に入れた日程をほかの品目にも入れる品目 (襖・障子・網戸。同じ案件でまとめて引取・納品することが多い) */
+export const LINKED_ITEMS: readonly HandoverItem[] = ["fusuma", "shoji", "amido"];
+export const isLinkedItem = (item: HandoverItem): boolean => LINKED_ITEMS.includes(item);
 
 /* ---------------- 明細から品目を見分ける ---------------- */
 
@@ -135,6 +146,8 @@ export interface DateTimeHint {
   date?: string;
   start?: string;
   end?: string;
+  /** 時刻がなく「AM」「午前」「PM」「午後」だけ書いてあるときの時間帯 */
+  slot?: HandoverSlot;
 }
 
 export interface TextChunk extends DateTimeHint {
@@ -178,6 +191,9 @@ const TIME_RANGE = /(\d{1,2})(?::(\d{2})|時(半)?)?\s*[-〜~ー－–]\s*(\d{1,
 const TIME_ONE = /(\d{1,2})(?::(\d{2})|時(半)?)/;
 /** 「PM2-5」「午後2〜5」(時刻の印なしの数字の範囲。午前・午後が書いてあるときだけ) */
 const AMPM_RANGE = /(AM|PM|午前|午後)\s*(\d{1,2})(?::(\d{2}))?\s*[-〜~ー－–]\s*(\d{1,2})(?::(\d{2}))?(?![\d/月])/i;
+/** 時刻のない「AM」「午前 (中)」「PM」「午後」(英字の言葉の一部は数えない) */
+const SLOT_AM = /(?<![A-Za-z])(?:AM|A\.M\.?)(?![A-Za-z])|午前/i;
+const SLOT_PM = /(?<![A-Za-z])(?:PM|P\.M\.?)(?![A-Za-z])|午後/i;
 
 /**
  * 「12/2 8:30〜9:00」「畳 一日仕上 15:00〜17:00、襖 12/4」「12/2(水) 8:30-9:00 襖引取 12/4畳表替え」のような手書きの日時を、
@@ -215,12 +231,16 @@ export function parseScheduleText(text: string | undefined, ref: string): TextCh
         const one = TIME_ONE.exec(rest);
         if (one) start = hourMinute(one[1], one[2], one[3]);
       }
+      // 時刻がなく午前・午後だけ (「12/4 AM」「翌日 午後」)。両方書いてあるときは決めない
+      const am = SLOT_AM.test(rest);
+      const pmWord = SLOT_PM.test(rest);
+      const slot: HandoverSlot | undefined = start || am === pmWord ? undefined : am ? "am" : "pm";
       const kinds = KIND_WORDS.filter(([, re]) => re.test(piece)).map(([k]) => k);
       const sameDay = /当日|一日仕上|1日仕上|即日|日帰り/.test(piece);
       const nextDay = /翌日/.test(piece);
-      const inherited = !date && !start && !sameDay && !nextDay && kinds.length > 0 ? lastDate : undefined;
+      const inherited = !date && !start && !slot && !sameDay && !nextDay && kinds.length > 0 ? lastDate : undefined;
       if (date) lastDate = date;
-      if (date || start || sameDay || nextDay) out.push({ date, start, end, kinds, sameDay, nextDay });
+      if (date || start || slot || sameDay || nextDay) out.push({ date, start, end, ...(slot ? { slot } : {}), kinds, sameDay, nextDay });
       else if (inherited) out.push({ date: inherited, kinds, sameDay: false, nextDay: false });
     }
   }
@@ -262,13 +282,14 @@ export interface SuggestInput {
 
 /**
  * 明細と手書きの日時から日程の行の初期値を作る。
- * 畳の表替え・裏返しは引取当日に納品、そのほかは納品日を空にする (後日。手書きの日時に書いてあればその日)
+ * 畳の表替え・裏返しは引取当日に納品、そのほかは納品日を空にする (後日。手書きの日時に書いてあればその日)。
+ * 襖・障子・網戸は、手書きの日時が品目を分けて書いていなければ同じ日程 (空の側はほかの品目の日程を入れる)
  */
 export function suggestHandovers(input: SuggestInput): OrderHandover[] {
   const pick = parseScheduleText(input.pickupText, input.ref);
   const pickupRef = input.pickupDate ?? pick.find((c) => c.date)?.date ?? input.fallbackPickup ?? input.ref;
   const deliv = parseScheduleText(input.deliveryText, pickupRef);
-  return groupLines(input.lines, input.category).map((g) => {
+  return fillLinked(groupLines(input.lines, input.category).map((g) => {
     const def = HANDOVER_ITEM[g.item];
     const label = groupLabel(g);
     const p = chunkFor(pick, g.item);
@@ -282,6 +303,7 @@ export function suggestHandovers(input: SuggestInput): OrderHandover[] {
     if (pickupDate) row.pickupDate = pickupDate;
     if (p?.start) row.pickupStart = p.start;
     if (p?.end) row.pickupEnd = p.end;
+    if (pickupDate && !p?.start && p?.slot) row.pickupSlot = p.slot;
     const d = chunkFor(deliv, g.item);
     const sameDay = d ? d.sameDay || (!d.date && !d.nextDay && def.sameDay) : def.sameDay;
     let deliveryDate = d?.date;
@@ -293,25 +315,61 @@ export function suggestHandovers(input: SuggestInput): OrderHandover[] {
     if (deliveryDate) row.deliveryDate = deliveryDate;
     if (d?.start) row.deliveryStart = d.start;
     if (d?.end) row.deliveryEnd = d.end;
+    if (deliveryDate && !d?.start && d?.slot) row.deliverySlot = d.slot;
     return cleanRow(row);
-  });
+  }));
+}
+
+/** 襖・障子・網戸の行で、引き取り (納品) の日程が空の行に、最初に日程のある襖・障子・網戸の行の値を入れる */
+function fillLinked(rows: OrderHandover[]): OrderHandover[] {
+  const linked = rows.filter((r) => isLinkedItem(r.item));
+  if (linked.length < 2) return rows;
+  for (const side of ["pickup", "delivery"] as const) {
+    const fields = SIDE_FIELDS[side];
+    const src = linked.find((r) => r[fields[0]]);
+    if (!src) continue;
+    for (const r of linked) {
+      if (r === src || r[fields[0]]) continue;
+      // 納品が引き取りより前になるときは入れない (引取日の違う行)
+      if (side === "delivery" && r.pickupDate && src.deliveryDate! < r.pickupDate) continue;
+      for (const f of fields) setField(r, f, src[f]);
+    }
+  }
+  return rows.map(cleanRow);
 }
 
 /* ---------------- 入力の確かめ・正規化 ---------------- */
 
-const SIDE_FIELDS = {
-  pickup: ["pickupDate", "pickupStart", "pickupEnd"],
-  delivery: ["deliveryDate", "deliveryStart", "deliveryEnd"],
+/** 引き取り・納品の日程の欄 (日付・開始時刻・終了時刻・午前/午後の順) */
+export const SIDE_FIELDS = {
+  pickup: ["pickupDate", "pickupStart", "pickupEnd", "pickupSlot"],
+  delivery: ["deliveryDate", "deliveryStart", "deliveryEnd", "deliverySlot"],
 } as const;
 const ALL_FIELDS = [...SIDE_FIELDS.pickup, ...SIDE_FIELDS.delivery] as const;
 type DateField = (typeof ALL_FIELDS)[number];
+const isSlotField = (f: DateField): f is "pickupSlot" | "deliverySlot" => f.endsWith("Slot");
+
+/** 日程の欄に値を入れる (空・undefined なら消す) */
+function setField(r: OrderHandover, f: DateField, v: string | undefined): void {
+  if (v) (r as unknown as Record<string, string>)[f] = v;
+  else delete r[f];
+}
 
 /** キーの順番をそろえ、空の項目を省いた行 (比べるとき・保存するときに同じ形にする) */
 function cleanRow(r: OrderHandover): OrderHandover {
   const out: OrderHandover = { id: r.id, item: r.item };
   if (r.label?.trim()) out.label = r.label.trim().slice(0, 40);
-  for (const f of ALL_FIELDS) if (r[f]) out[f] = r[f];
+  for (const f of ALL_FIELDS) if (r[f]) setField(out, f, r[f]);
   return out;
+}
+
+/**
+ * 同じ日の引き取り → 納品の順の確かめに使う、時間の幅 (分)。午前 0〜720・午後 720〜1440・時刻は開始の 1 分。
+ * 時間の指定がなければ undefined (確かめない)
+ */
+function sideWindow(start?: string, slot?: HandoverSlot): [number, number] | undefined {
+  if (start) return [toMinutes(start), toMinutes(start) + 1];
+  return slot === "am" ? [0, 720] : slot === "pm" ? [720, 1440] : undefined;
 }
 
 /** 同じ日程か (キーの順番に関わらず比べる。データベースの jsonb はキーの順番を変えるため) */
@@ -348,32 +406,44 @@ export function cleanHandovers(raw: unknown): { rows: OrderHandover[]; error?: s
       if (!v) continue;
       if (f.endsWith("Date")) {
         if (!isDateKey(v)) return { rows: [], error: `「${label}」の日付を正しく入力してください。` };
-        row[f] = v;
+        setField(row, f, v);
+      } else if (isSlotField(f)) {
+        if (!isHandoverSlot(v)) return { rows: [], error: `「${label}」の時間帯は午前 (AM) か午後 (PM) を選んでください。` };
+        setField(row, f, v);
       } else {
         const t = normTime(v);
         if (!t) return { rows: [], error: `「${label}」の時刻を正しく入力してください。` };
-        row[f] = t;
+        setField(row, f, t);
       }
     }
     const install = isInstall(row);
-    const sides = install ? [["pickupDate", "pickupStart", "pickupEnd"] as const] : [SIDE_FIELDS.pickup, SIDE_FIELDS.delivery];
-    for (const [d, s, e] of sides) {
+    const sides = install ? [SIDE_FIELDS.pickup] : [SIDE_FIELDS.pickup, SIDE_FIELDS.delivery];
+    for (const [d, s, e, slot] of sides) {
       const what = install ? "施工" : d === "pickupDate" ? "引き取り" : "納品";
-      if (!row[d] && (row[s] || row[e])) return { rows: [], error: `「${label}」の${what}の日付を入力してください (時間だけでは予定表に載せられません)。` };
+      // 時刻を入れたときは時刻 (午前・午後は使わない)
+      if (row[s]) delete row[slot];
+      if (!row[d] && (row[s] || row[e] || row[slot])) return { rows: [], error: `「${label}」の${what}の日付を入力してください (時間だけでは予定表に載せられません)。` };
       if (!row[s] && row[e]) return { rows: [], error: `「${label}」の${what}の開始時刻を入力してください。` };
       if (row[s] && row[e] && toMinutes(row[e]!) <= toMinutes(row[s]!)) return { rows: [], error: `「${label}」の${what}の終了時刻は開始時刻より後にしてください。` };
     }
     if (install) {
-      // 施工: 終了日は開始日以降 (時間帯は各日の時間)。終了日の時刻の欄は使わない
+      // 施工: 終了日は開始日以降 (時間帯は各日の時間)。終了日の時刻・時間帯の欄は使わない
       delete row.deliveryStart;
       delete row.deliveryEnd;
+      delete row.deliverySlot;
       if (row.deliveryDate && !row.pickupDate) return { rows: [], error: `「${label}」の施工開始日を入力してください。` };
       if (row.deliveryDate && row.pickupDate && row.deliveryDate < row.pickupDate) return { rows: [], error: `「${label}」の施工終了日は施工開始日以降にしてください。` };
       if (row.deliveryDate === row.pickupDate) delete row.deliveryDate;
     } else {
       if (row.deliveryDate && row.pickupDate && row.deliveryDate < row.pickupDate) return { rows: [], error: `「${label}」の納品日は引取日以降にしてください。` };
-      if (row.deliveryDate && row.pickupDate && row.deliveryDate === row.pickupDate && row.deliveryStart && row.pickupStart && toMinutes(row.deliveryStart) < toMinutes(row.pickupStart)) {
-        return { rows: [], error: `「${label}」は当日納品の時刻が引き取りの時刻より前です。` };
+      if (row.deliveryDate && row.pickupDate && row.deliveryDate === row.pickupDate) {
+        // 当日納品: 納品の時間 (午前・午後・時刻) が引き取りより前は誤り (例: 引き取り 午後 → 納品 午前)
+        const p = sideWindow(row.pickupStart, row.pickupSlot);
+        const dv = sideWindow(row.deliveryStart, row.deliverySlot);
+        if (p && dv && dv[1] <= p[0]) {
+          const both = row.deliveryStart && row.pickupStart;
+          return { rows: [], error: `「${label}」は当日納品の${both ? "時刻" : "時間"}が引き取りの${both ? "時刻" : "時間"}より前です。` };
+        }
       }
     }
     rows.push(cleanRow(row));
@@ -435,10 +505,7 @@ export function handoverDiff(beforeRaw: OrderHandover[] | undefined, afterRaw: O
     for (const side of sidesOf(a)) {
       if (sameSide(a, b, side)) continue;
       if (!sideHasDate(b, side)) {
-        for (const f of sideFields(a, side)) {
-          if (a[f]) merged[f] = a[f];
-          else delete merged[f];
-        }
+        for (const f of sideFields(a, side)) setField(merged, f, a[f]);
         registered.push(`${handoverLabel(a)} の${sideName(a, side)}: ${sideText(a, side)}`);
       } else {
         changed.push(`${handoverLabel(a)} の${sideName(a, side)}: ${sideText(b, side)} → ${sideText(a, side)}`);
@@ -465,16 +532,17 @@ const sideName = (r: OrderHandover, side: Side) => (side === "install" ? "施工
 /* ---------------- 表示 ---------------- */
 
 const hm = (t: string) => t.replace(/^0(\d)/, "$1");
-const timeText = (s?: string, e?: string) => (s ? ` ${hm(s)}${e ? `–${hm(e)}` : ""}` : "");
+/** 時間の文字 (「 8:30–9:00」「 午前」。指定なしは空) */
+const timeText = (s?: string, e?: string, slot?: HandoverSlot) => (s ? ` ${hm(s)}${e ? `–${hm(e)}` : ""}` : slot ? ` ${HANDOVER_SLOT_LABEL[slot]}` : "");
 
-/** 引き取り・納品・施工の 1 つの日時 (例: 12/2(火) 8:30–9:00) */
+/** 引き取り・納品・施工の 1 つの日時 (例: 12/2(火) 8:30–9:00 / 12/4(木) 午前) */
 export function sideText(r: OrderHandover, side: Side): string {
   if (side === "install") {
     if (!r.pickupDate) return "未定";
-    return `${shortDate(r.pickupDate)}${r.deliveryDate && r.deliveryDate > r.pickupDate ? `〜${shortDate(r.deliveryDate)}` : ""}${timeText(r.pickupStart, r.pickupEnd)}`;
+    return `${shortDate(r.pickupDate)}${r.deliveryDate && r.deliveryDate > r.pickupDate ? `〜${shortDate(r.deliveryDate)}` : ""}${timeText(r.pickupStart, r.pickupEnd, r.pickupSlot)}`;
   }
-  const [d, s, e] = SIDE_FIELDS[side];
-  return r[d] ? `${shortDate(r[d]!)}${timeText(r[s], r[e])}` : "未定";
+  const [d, s, e, slot] = SIDE_FIELDS[side];
+  return r[d] ? `${shortDate(r[d]!)}${timeText(r[s], r[e], r[slot])}` : "未定";
 }
 
 /** 1 行の日程 (例: 引取 12/2(火) 8:30–9:00 → 納品 12/2(火) 15:00–17:00) */
@@ -523,34 +591,38 @@ export interface HandoverGroup {
   endDate?: string;
   start?: string;
   end?: string;
+  /** 時刻のない午前・午後 (予定表の予定の slot) */
+  slot?: HandoverSlot;
   rowIds: string[];
   labels: string[];
 }
 
 /**
- * 予定表に載せる予定 (引き取り・納品は同じ日・同じ時間の品目を 1 件にまとめる。施工は品目ごと)。
- * 日付の早い順、同じ日は 引き取り → 施工 → 納品・時刻の順
+ * 予定表に載せる予定 (引き取り・納品は同じ日・同じ時間 (時刻・午前・午後) の品目を 1 件にまとめる。施工は品目ごと)。
+ * 日付の早い順、同じ日は 時間 (指定なし → 午前 9 時 → 午後 13 時の位置) → 引き取り → 施工 → 納品の順
  */
 export function handoverGroups(rowsRaw: OrderHandover[] | undefined): HandoverGroup[] {
   const rows = cleanHandovers(rowsRaw ?? []).rows;
   const map = new Map<string, HandoverGroup>();
-  const add = (role: HandoverRole, r: OrderHandover, date: string, start?: string, end?: string, endDate?: string) => {
-    const key = role === "install" ? `install|${r.id}` : `${role}|${date}|${start ?? ""}|${end ?? ""}`;
-    const g = map.get(key) ?? { role, date, ...(endDate ? { endDate } : {}), ...(start ? { start } : {}), ...(end ? { end } : {}), rowIds: [], labels: [] };
+  const add = (role: HandoverRole, r: OrderHandover, date: string, start?: string, end?: string, slot?: HandoverSlot, endDate?: string) => {
+    const sl = start ? undefined : slot;
+    const key = role === "install" ? `install|${r.id}` : `${role}|${date}|${start ?? ""}|${end ?? ""}|${sl ?? ""}`;
+    const g = map.get(key) ?? { role, date, ...(endDate ? { endDate } : {}), ...(start ? { start } : {}), ...(end ? { end } : {}), ...(sl ? { slot: sl } : {}), rowIds: [], labels: [] };
     g.rowIds.push(r.id);
     g.labels.push(handoverLabel(r));
     map.set(key, g);
   };
   for (const r of rows) {
     if (isInstall(r)) {
-      if (r.pickupDate) add("install", r, r.pickupDate, r.pickupStart, r.pickupEnd, r.deliveryDate && r.deliveryDate > r.pickupDate ? r.deliveryDate : undefined);
+      if (r.pickupDate) add("install", r, r.pickupDate, r.pickupStart, r.pickupEnd, r.pickupSlot, r.deliveryDate && r.deliveryDate > r.pickupDate ? r.deliveryDate : undefined);
       continue;
     }
-    if (r.pickupDate) add("pickup", r, r.pickupDate, r.pickupStart, r.pickupEnd);
-    if (r.deliveryDate) add("delivery", r, r.deliveryDate, r.deliveryStart, r.deliveryEnd);
+    if (r.pickupDate) add("pickup", r, r.pickupDate, r.pickupStart, r.pickupEnd, r.pickupSlot);
+    if (r.deliveryDate) add("delivery", r, r.deliveryDate, r.deliveryStart, r.deliveryEnd, r.deliverySlot);
   }
   const order: Record<HandoverRole, number> = { pickup: 0, install: 1, delivery: 2 };
-  return [...map.values()].sort((a, b) => a.date.localeCompare(b.date) || (a.start ?? "").localeCompare(b.start ?? "") || order[a.role] - order[b.role]);
+  const at = (g: HandoverGroup) => g.start ?? (g.slot === "am" ? "09:00" : g.slot === "pm" ? "13:00" : "");
+  return [...map.values()].sort((a, b) => a.date.localeCompare(b.date) || at(a).localeCompare(at(b)) || order[a.role] - order[b.role]);
 }
 
 /** 予定表の予定の印 (sourceRef) */
@@ -571,26 +643,50 @@ export function handoverSpan(rowsRaw: OrderHandover[] | undefined): { start?: st
 
 /**
  * 予定表で予定 (引き取り・納品・施工) の日時を変えたときの、受注の日程の入力 (変更の申請に使う)。
- * その予定にまとめた品目の行だけを変える
+ * その予定にまとめた品目の行だけを変える (午前・午後は時刻がないときだけ)
  */
-export function applyEventMove(rowsRaw: OrderHandover[] | undefined, ref: { role: HandoverRole; rowIds: string[] }, when: { date: string; endDate?: string; start?: string; end?: string }): OrderHandover[] {
+export function applyEventMove(
+  rowsRaw: OrderHandover[] | undefined,
+  ref: { role: HandoverRole; rowIds: string[] },
+  when: { date: string; endDate?: string; start?: string; end?: string; slot?: HandoverSlot },
+): OrderHandover[] {
   const ids = new Set(ref.rowIds);
+  const slot = when.start ? undefined : when.slot;
   return cleanHandovers(rowsRaw ?? []).rows.map((r) => {
     if (!ids.has(r.id)) return r;
     const next: OrderHandover = { ...r };
-    if (ref.role === "install") {
-      next.pickupDate = when.date;
-      next.pickupStart = when.start;
-      next.pickupEnd = when.start ? when.end : undefined;
-      next.deliveryDate = when.endDate && when.endDate > when.date ? when.endDate : undefined;
-    } else {
-      const [d, s, e] = SIDE_FIELDS[ref.role];
-      next[d] = when.date;
-      next[s] = when.start;
-      next[e] = when.start ? when.end : undefined;
-    }
+    const [d, s, e, sl] = SIDE_FIELDS[ref.role === "install" ? "pickup" : ref.role];
+    setField(next, d, when.date);
+    setField(next, s, when.start);
+    setField(next, e, when.start ? when.end : undefined);
+    setField(next, sl, slot);
+    if (ref.role === "install") setField(next, "deliveryDate", when.endDate && when.endDate > when.date ? when.endDate : undefined);
     return cleanRow(next);
   });
+}
+
+/* ---------------- 襖・障子・網戸の同じ日程 (受注の画面の入力) ---------------- */
+
+/** 日程の欄の値をつないだ印 (同じ日程かを比べる。空は "") */
+export function scheduleKey(r: OrderHandover): string {
+  return ALL_FIELDS.map((f) => r[f] ?? "").join("|");
+}
+
+/**
+ * 受注の画面を開いたときに「同じ日程」としてまとめる襖・障子・網戸の行の ID。
+ * 同じ日程の行がいちばん多い組 (同じ数なら先に出てくる組)。襖・障子・網戸が 1 行以下ならまとめない (空)
+ */
+export function linkedCluster(rows: OrderHandover[]): string[] {
+  const linked = rows.filter((r) => isLinkedItem(r.item));
+  if (linked.length < 2) return [];
+  const byKey = new Map<string, string[]>();
+  for (const r of linked) {
+    const k = scheduleKey(r);
+    byKey.set(k, [...(byKey.get(k) ?? []), r.id]);
+  }
+  let best: string[] = [];
+  for (const ids of byKey.values()) if (ids.length > best.length) best = ids;
+  return best;
 }
 
 /** 受注の画面の入力の初期値に使う、行の日程の欄の値 (空は "") */

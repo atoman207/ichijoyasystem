@@ -112,13 +112,13 @@ export function savePlan(
  */
 export function planConflicts(db: Database, o: Order, requestedRaw: OrderHandover[], workerIds: string[]): string[] {
   const quote = db.quotes.find((q) => q.id === o.quoteId);
-  const key = (g: { role: string; date: string; endDate?: string; start?: string; end?: string }) => `${g.role}|${g.date}|${g.endDate ?? ""}|${g.start ?? ""}|${g.end ?? ""}`;
+  const key = (g: { role: string; date: string; endDate?: string; start?: string; end?: string; slot?: string }) => `${g.role}|${g.date}|${g.endDate ?? ""}|${g.start ?? ""}|${g.end ?? ""}|${g.slot ?? ""}`;
   const current = new Set(handoverGroups(o.handovers).map(key));
   const out: string[] = [];
   for (const g of handoverGroups(cleanHandovers(requestedRaw).rows)) {
     if (current.has(key(g))) continue;
     const hits = findConflicts(
-      { date: g.date, endDate: g.endDate, startTime: g.start, endTime: g.start ? g.end : undefined, assigneeIds: workerIds.length ? workerIds : o.workerIds, orderId: o.id, quoteId: o.quoteId, inquiryId: quote?.inquiryId },
+      { date: g.date, endDate: g.endDate, startTime: g.start, endTime: g.start ? g.end : undefined, slot: g.start ? undefined : g.slot, assigneeIds: workerIds.length ? workerIds : o.workerIds, orderId: o.id, quoteId: o.quoteId, inquiryId: quote?.inquiryId },
       db.schedule,
     );
     for (const h of hits) out.push(`${db.users.find((u) => u.id === h.userId)?.name ?? "-"} さん ${shortDate(h.day)} ${timeLabel(h.event)}「${h.event.title}」`);

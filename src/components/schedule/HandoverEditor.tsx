@@ -1,35 +1,49 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Trash } from "lucide-react";
+import { Link2, Plus, Trash, Unlink } from "lucide-react";
 import type { HandoverItem, OrderHandover, StoreId } from "@/lib/db/types";
 import {
   HANDOVER_ITEM,
   HANDOVER_ITEMS,
   HANDOVER_ROLE_LABEL,
+  HANDOVER_SLOT_LABEL,
   cleanHandovers,
   handoverDiff,
   handoverGroups,
+  isLinkedItem,
+  linkedCluster,
   newHandoverId,
+  rowText,
   type HandoverFormRow,
 } from "@/lib/handover";
 import { shortDate } from "@/lib/calendar";
 import { Button, Field, Input, Select } from "@/components/ui";
 import { AssigneePicker, type FormStore, type FormUser } from "./form-parts";
 
-type Row = HandoverFormRow & { same: boolean };
+/** 時間の指定: なし / 午前 (AM) / 午後 (PM) / 時刻 */
+type TimeMode = "" | "am" | "pm" | "time";
+const TIME_MODES: { value: TimeMode; label: string; title: string }[] = [
+  { value: "", label: "指定なし", title: "時間は決めない (終日)" },
+  { value: "am", label: "AM 午前", title: "午前 (時刻は未定)" },
+  { value: "pm", label: "PM 午後", title: "午後 (時刻は未定)" },
+  { value: "time", label: "時刻", title: "開始・終了の時刻を入れる" },
+];
 
-/** 引き取り・納品・施工の日程の欄 (先頭が日付) */
-const SIDES = {
-  pickup: ["pickupDate", "pickupStart", "pickupEnd"],
-  delivery: ["deliveryDate", "deliveryStart", "deliveryEnd"],
-  install: ["pickupDate", "pickupStart", "pickupEnd", "deliveryDate"],
-} as const;
+/** 画面の行 (保存する日程の欄 + 当日納品・時間の指定・同じ日程にまとめるか) */
+type Row = HandoverFormRow & { same: boolean; pickupMode: TimeMode; deliveryMode: TimeMode; linked: boolean };
+
+/** 襖・障子・網戸で同じ日程にする欄 (まとめた品目のどれかに入れると、まとめたほかの品目にも入る) */
+const SHARED = ["pickupDate", "pickupMode", "pickupStart", "pickupEnd", "same", "deliveryDate", "deliveryMode", "deliveryStart", "deliveryEnd"] as const;
+type SharedKey = (typeof SHARED)[number];
+type PickupKey = "pickupDate" | "pickupMode" | "pickupStart" | "pickupEnd";
+const pickShared = (r: Row): Pick<Row, SharedKey> => Object.fromEntries(SHARED.map((k) => [k, r[k]])) as Pick<Row, SharedKey>;
 
 const isInstall = (r: Pick<Row, "item">) => HANDOVER_ITEM[r.item].mode === "install";
 const hm = (t?: string) => (t ? t.replace(/^0(\d)/, "$1") : "");
+const modeOf = (start: string, slot: string): TimeMode => (start ? "time" : slot === "am" || slot === "pm" ? slot : "");
 
-/** 画面の行 → 保存する日程 (当日納品は納品日 = 引取日) */
+/** 画面の行 → 保存する日程 (当日納品は納品日 = 引取日。時間は選んだ指定の分だけ) */
 function toPlan(rows: Row[]): OrderHandover[] {
   return rows.map((r) => {
     const out: OrderHandover = { id: r.id, item: r.item };
@@ -38,22 +52,87 @@ function toPlan(rows: Row[]): OrderHandover[] {
       if (v) (out as unknown as Record<string, string>)[k] = v;
     };
     set("pickupDate", r.pickupDate);
-    set("pickupStart", r.pickupStart);
-    set("pickupEnd", r.pickupStart ? r.pickupEnd : "");
+    if (r.pickupMode === "time") {
+      set("pickupStart", r.pickupStart);
+      set("pickupEnd", r.pickupStart ? r.pickupEnd : "");
+    } else if (r.pickupMode) set("pickupSlot", r.pickupMode);
     if (isInstall(r)) {
       set("deliveryDate", r.deliveryDate);
     } else {
       set("deliveryDate", r.same ? r.pickupDate : r.deliveryDate);
-      set("deliveryStart", r.deliveryStart);
-      set("deliveryEnd", r.deliveryStart ? r.deliveryEnd : "");
+      if (r.deliveryMode === "time") {
+        set("deliveryStart", r.deliveryStart);
+        set("deliveryEnd", r.deliveryStart ? r.deliveryEnd : "");
+      } else if (r.deliveryMode) set("deliverySlot", r.deliveryMode);
     }
     return out;
   });
 }
 
+/** 同じ日程にまとめている襖・障子・網戸の行 (2 行以上のときだけ。行の並びの順) */
+function linkedIds(rs: Row[]): string[] {
+  const ids = rs.filter((r) => isLinkedItem(r.item) && r.linked).map((r) => r.id);
+  return ids.length >= 2 ? ids : [];
+}
+
+/** 時間の指定 (指定なし・AM 午前・PM 午後・時刻) と、時刻のときの開始・終了 */
+function TimeChoice({
+  what,
+  index,
+  mode,
+  start,
+  end,
+  onMode,
+  onStart,
+  onEnd,
+}: {
+  what: string;
+  index: number;
+  mode: TimeMode;
+  start: string;
+  end: string;
+  onMode: (m: TimeMode) => void;
+  onStart: (v: string) => void;
+  onEnd: (v: string) => void;
+}) {
+  return (
+    <div className="min-w-0">
+      <span className="label">時間</span>
+      <div role="radiogroup" aria-label={`${what}の時間 ${index}`} className="grid grid-cols-4 overflow-hidden rounded-lg border border-line">
+        {TIME_MODES.map((m) => (
+          <button
+            key={m.value || "none"}
+            type="button"
+            role="radio"
+            aria-checked={mode === m.value}
+            title={m.title}
+            onClick={() => onMode(m.value)}
+            className={`h-9 min-w-0 whitespace-nowrap border-l border-line px-1 text-xs font-medium first:border-l-0 ${mode === m.value ? "bg-accent text-white" : "bg-panel text-ink-2 hover:bg-subtle"}`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+      {mode === "time" && (
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <Field label="開始">
+            <Input type="time" step={300} value={start} onChange={(e) => onStart(e.target.value)} aria-label={`${what}の開始時刻 ${index}`} />
+          </Field>
+          <Field label="終了">
+            <Input type="time" step={300} value={end} onChange={(e) => onEnd(e.target.value)} aria-label={`${what}の終了時刻 ${index}`} />
+          </Field>
+        </div>
+      )}
+      {mode === "time" && !start && <p className="mt-1 text-[11px] text-ink-3">開始時刻を入れてください (空欄のあいだは時間の指定なし)。</p>}
+    </div>
+  );
+}
+
 /**
  * 受注の画面の「引取・納品の日程」(品目ごとの引取日・納品日。src/lib/handover.ts)。
- * 予定表に載る予定 (引き取り・納品・施工) と、承認が要る変更を保存の前に見せる
+ * - 引取日・納品日は日付 + 時間 (指定なし・AM 午前・PM 午後・時刻)
+ * - 襖・障子・網戸は同じ日程にまとめ、1 つの品目に入れた日程をほかの品目にも入れる。品目ごとに外して別の日程にできる
+ * - 予定表に載る予定 (引き取り・納品・施工) と、承認が要る変更を保存の前に見せる
  */
 export function HandoverEditor({
   action,
@@ -89,9 +168,18 @@ export function HandoverEditor({
   storeId: StoreId;
   currentUserId: string;
 }) {
-  const [rows, setRows] = useState<Row[]>(() =>
-    initial.map((r) => ({ ...r, same: !isInstall(r) && (r.pickupDate ? r.deliveryDate === r.pickupDate : HANDOVER_ITEM[r.item].sameDay) })),
-  );
+  const [rows, setRows] = useState<Row[]>(() => {
+    const base: Row[] = initial.map((r) => ({
+      ...r,
+      same: !isInstall(r) && (r.pickupDate ? r.deliveryDate === r.pickupDate : HANDOVER_ITEM[r.item].sameDay),
+      pickupMode: modeOf(r.pickupStart, r.pickupSlot),
+      deliveryMode: modeOf(r.deliveryStart, r.deliverySlot),
+      linked: false,
+    }));
+    // 開いたとき: 襖・障子・網戸のうち同じ日程の行をまとめる (違う日程の行は個別のまま)
+    const cluster = new Set(linkedCluster(toPlan(base)));
+    return base.map((r) => ({ ...r, linked: cluster.has(r.id) }));
+  });
   const [workers, setWorkers] = useState(workerIds);
   const [site, setSite] = useState(siteAddress);
   const savedById = useMemo(() => new Map(saved.map((r) => [r.id, r])), [saved]);
@@ -100,31 +188,91 @@ export function HandoverEditor({
   const check = useMemo(() => cleanHandovers(plan), [plan]);
   const diff = useMemo(() => handoverDiff(saved, check.error ? saved : check.rows), [saved, check]);
   const groups = useMemo(() => (check.error ? [] : handoverGroups(check.rows)), [check]);
+  const links = useMemo(() => linkedIds(rows), [rows]);
+  const leaderId = links[0];
+  const tategu = rows.filter((r) => isLinkedItem(r.item));
 
   const update = (id: string, patch: Partial<Row>) => setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
 
   /**
-   * 引き取りの日時: まだ日程を保存していない、ほかの品目の空欄 (または同じ値) にも同じ値を入れる
-   * (1 回の訪問でまとめて引き取ることが多いため)
+   * 日程の欄を変える。まとめた襖・障子・網戸の行は、まとめたほかの行にも同じ値を入れる。
+   * 引き取りの日時 (pickupKey) は、まだ日程を保存していないほかの品目 (畳など) の空欄 (または同じ値) にも入れる
+   * (1 回の訪問でまとめて引き取ることが多いため。まとめた襖・障子・網戸は全部が当てはまるときだけ全部に)
    */
-  const setPickup = (id: string, field: "pickupDate" | "pickupStart" | "pickupEnd", value: string) =>
+  const edit = (id: string, patch: Partial<Row>, pickupKey?: PickupKey) =>
     setRows((rs) => {
-      const old = rs.find((r) => r.id === id)?.[field] ?? "";
-      return rs.map((r) => {
-        if (r.id === id) return { ...r, [field]: value };
-        if (isInstall(r) || savedById.get(r.id)?.pickupDate) return r;
-        return r[field] === "" || r[field] === old ? { ...r, [field]: value } : r;
-      });
+      const src = rs.find((r) => r.id === id);
+      if (!src) return rs;
+      const linked = new Set(linkedIds(rs));
+      const together = linked.has(id) ? linked : new Set([id]);
+      const spread = new Set<string>();
+      if (pickupKey) {
+        const old = src[pickupKey];
+        const passes = (r: Row) => !isInstall(r) && !savedById.get(r.id)?.pickupDate && (r[pickupKey] === "" || r[pickupKey] === old);
+        const others = rs.filter((r) => !together.has(r.id));
+        const otherLinked = others.filter((r) => linked.has(r.id));
+        if (otherLinked.length && otherLinked.every(passes)) otherLinked.forEach((r) => spread.add(r.id));
+        others.filter((r) => !linked.has(r.id) && passes(r)).forEach((r) => spread.add(r.id));
+      }
+      return rs.map((r) => (together.has(r.id) ? { ...r, ...patch } : spread.has(r.id) && pickupKey ? { ...r, [pickupKey]: patch[pickupKey] } : r));
+    });
+  const setPickup = (id: string, key: PickupKey, value: string) => edit(id, { [key]: value } as Partial<Row>, key);
+
+  /** この品目だけ別の日程にする (まとめから外す。今の日程はそのまま残る) */
+  const unlink = (id: string) => update(id, { linked: false });
+  /** ほかの襖・障子・網戸と同じ日程にする (まとめた行の日程を写す) */
+  const relink = (id: string) =>
+    setRows((rs) => {
+      const src = rs.find((r) => r.id !== id && isLinkedItem(r.item) && r.linked) ?? rs.find((r) => r.id !== id && isLinkedItem(r.item));
+      if (!src) return rs;
+      return rs.map((r) => (r.id === id ? { ...r, ...pickShared(src), linked: true } : r.id === src.id ? { ...r, linked: true } : r));
     });
 
+  /** 品目を変える。襖・障子・網戸になった行は、まだ日程がなければほかの襖・障子・網戸の日程を入れてまとめる */
   const setItem = (id: string, item: HandoverItem) =>
-    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, item, same: HANDOVER_ITEM[item].mode === "install" ? false : r.pickupDate && r.deliveryDate ? r.deliveryDate === r.pickupDate : HANDOVER_ITEM[item].sameDay } : r)));
+    setRows((rs) => {
+      const cur = rs.find((r) => r.id === id);
+      if (!cur) return rs;
+      const install = HANDOVER_ITEM[item].mode === "install";
+      let next: Row = { ...cur, item, same: install ? false : cur.pickupDate && cur.deliveryDate ? cur.deliveryDate === cur.pickupDate : HANDOVER_ITEM[item].sameDay };
+      let srcId: string | undefined;
+      if (!isLinkedItem(item)) next.linked = false;
+      else if (!isLinkedItem(cur.item)) {
+        const src = rs.find((r) => r.id !== id && isLinkedItem(r.item) && r.linked) ?? rs.find((r) => r.id !== id && isLinkedItem(r.item));
+        const p = toPlan([next])[0];
+        if (src && !p.pickupDate && !p.deliveryDate) {
+          next = { ...next, ...pickShared(src), linked: true };
+          srcId = src.id;
+        } else if (src) {
+          const same = JSON.stringify(SHARED.map((k) => next[k])) === JSON.stringify(SHARED.map((k) => src[k]));
+          next.linked = same;
+          if (same) srcId = src.id;
+        } else next.linked = true;
+      }
+      return rs.map((r) => (r.id === id ? next : r.id === srcId ? { ...r, linked: true } : r));
+    });
 
   const addRow = () => {
     const first = rows.find((r) => !isInstall(r));
     setRows((rs) => [
       ...rs,
-      { id: newHandoverId(), item: "other", label: "", pickupDate: first?.pickupDate ?? "", pickupStart: first?.pickupStart ?? "", pickupEnd: first?.pickupEnd ?? "", deliveryDate: "", deliveryStart: "", deliveryEnd: "", same: false },
+      {
+        id: newHandoverId(),
+        item: "other",
+        label: "",
+        pickupDate: first?.pickupDate ?? "",
+        pickupStart: first?.pickupStart ?? "",
+        pickupEnd: first?.pickupEnd ?? "",
+        pickupSlot: "",
+        pickupMode: first?.pickupMode ?? "",
+        deliveryDate: "",
+        deliveryStart: "",
+        deliveryEnd: "",
+        deliverySlot: "",
+        deliveryMode: "",
+        same: false,
+        linked: false,
+      },
     ]);
   };
 
@@ -135,11 +283,14 @@ export function HandoverEditor({
     if (!p) return null;
     const registered = { text: "登録 (すぐ反映)", tone: "bg-info-soft text-info-ink" };
     if (!s) return p.pickupDate || p.deliveryDate ? registered : null;
-    const sides = isInstall(r) ? [SIDES.install] : [SIDES.pickup, SIDES.delivery];
+    const c = cleanHandovers([p]).rows[0] ?? p;
+    const sides = isInstall(r)
+      ? [["pickupDate", "pickupStart", "pickupEnd", "pickupSlot", "deliveryDate"] as const]
+      : [["pickupDate", "pickupStart", "pickupEnd", "pickupSlot"] as const, ["deliveryDate", "deliveryStart", "deliveryEnd", "deliverySlot"] as const];
     let reg = false;
     let chg = isInstall(s) !== isInstall(r) && Boolean(s.pickupDate || s.deliveryDate);
     for (const fields of sides) {
-      if (fields.every((f) => (s[f] ?? "") === (p[f] ?? ""))) continue;
+      if (fields.every((f) => (s[f] ?? "") === (c[f] ?? ""))) continue;
       if (s[fields[0]]) chg = true;
       else reg = true;
     }
@@ -147,6 +298,10 @@ export function HandoverEditor({
     return reg ? registered : null;
   };
 
+  const nameOf = (id: string) => {
+    const r = rows.find((x) => x.id === id);
+    return r ? r.label.trim() || HANDOVER_ITEM[r.item].label : "";
+  };
   const blocked = Boolean(pendingNote) || Boolean(check.error);
 
   return (
@@ -164,82 +319,135 @@ export function HandoverEditor({
         {rows.map((r, i) => {
           const def = HANDOVER_ITEM[r.item];
           const st = status(r);
+          const n = i + 1;
+          const inGroup = links.includes(r.id);
+          const follower = inGroup && r.id !== leaderId;
+          const others = links.filter((x) => x !== r.id).map(nameOf);
+          const groupNames = (links.length ? links : tategu.filter((x) => x.id !== r.id).map((x) => x.id)).filter((x) => x !== r.id).map(nameOf);
           return (
             <div key={r.id} className="rounded-xl border border-line p-3" data-testid="handover-row">
               <div className="flex flex-wrap items-end gap-2">
-                <Field label={`品目 ${i + 1}`} className="w-full @md:w-44">
-                  <Select value={r.item} onChange={(e) => setItem(r.id, e.target.value as HandoverItem)} aria-label={`品目 ${i + 1}`}>
+                <Field label={`品目 ${n}`} className="w-full @md:w-44">
+                  <Select value={r.item} onChange={(e) => setItem(r.id, e.target.value as HandoverItem)} aria-label={`品目 ${n}`}>
                     {HANDOVER_ITEMS.map((k) => (
                       <option key={k} value={k}>{HANDOVER_ITEM[k].label}</option>
                     ))}
                   </Select>
                 </Field>
                 <Field label="名前 (予定表の件名・数量など)" className="min-w-0 flex-1">
-                  <Input value={r.label} onChange={(e) => update(r.id, { label: e.target.value })} placeholder={def.label} maxLength={40} aria-label={`名前 ${i + 1}`} />
+                  <Input value={r.label} onChange={(e) => update(r.id, { label: e.target.value })} placeholder={def.label} maxLength={40} aria-label={`名前 ${n}`} />
                 </Field>
                 {st && <span className={`mb-2 rounded-full px-2 py-0.5 text-[11px] font-medium ${st.tone}`}>{st.text}</span>}
-                <button type="button" onClick={() => setRows((rs) => rs.filter((x) => x.id !== r.id))} className="mb-1 rounded p-2 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`品目 ${i + 1} を削除`}>
+                <button type="button" onClick={() => setRows((rs) => rs.filter((x) => x.id !== r.id))} className="mb-1 rounded p-2 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`品目 ${n} を削除`}>
                   <Trash className="h-4 w-4" />
                 </button>
               </div>
               <p className="mt-1 text-[11px] text-ink-3">{def.hint}</p>
+
+              {/* 襖・障子・網戸: 同じ日程にまとめる / 個別の日程 */}
+              {isLinkedItem(r.item) && tategu.length >= 2 && !follower && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]" data-testid={inGroup ? "handover-link-leader" : "handover-link-single"}>
+                  {inGroup ? (
+                    <>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 font-medium text-accent-ink">
+                        <Link2 className="h-3.5 w-3.5" aria-hidden />
+                        {others.join("・")}にも同じ日程が入ります
+                      </span>
+                      <button type="button" onClick={() => unlink(r.id)} className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-ink-2 hover:bg-subtle" aria-label={`品目 ${n} だけ別の日程にする`}>
+                        <Unlink className="h-3.5 w-3.5" aria-hidden />
+                        この品目だけ別の日程にする
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="rounded-full bg-subtle px-2 py-0.5 font-medium text-ink-2">この品目だけ別の日程</span>
+                      <button type="button" onClick={() => relink(r.id)} className="inline-flex items-center gap-1 rounded-full border border-accent/40 px-2 py-0.5 text-accent-ink hover:bg-accent-soft/50" aria-label={`品目 ${n} をほかの襖・障子・網戸と同じ日程にする`}>
+                        <Link2 className="h-3.5 w-3.5" aria-hidden />
+                        {groupNames.join("・")}と同じ日程にする
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
               {isInstall(r) ? (
-                <div className="mt-2 grid grid-cols-2 gap-2 @xl:grid-cols-4">
+                <div className="mt-2 grid grid-cols-1 gap-2 @xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.6fr)]">
                   <Field label="施工開始日">
-                    <Input type="date" value={r.pickupDate} onChange={(e) => update(r.id, { pickupDate: e.target.value })} aria-label={`施工開始日 ${i + 1}`} />
+                    <Input type="date" value={r.pickupDate} onChange={(e) => update(r.id, { pickupDate: e.target.value })} aria-label={`施工開始日 ${n}`} />
                   </Field>
                   <Field label="施工終了日" hint="1 日で終わるときは空欄">
-                    <Input type="date" value={r.deliveryDate} min={r.pickupDate || undefined} onChange={(e) => update(r.id, { deliveryDate: e.target.value })} aria-label={`施工終了日 ${i + 1}`} />
+                    <Input type="date" value={r.deliveryDate} min={r.pickupDate || undefined} onChange={(e) => update(r.id, { deliveryDate: e.target.value })} aria-label={`施工終了日 ${n}`} />
                   </Field>
-                  <Field label="開始時刻">
-                    <Input type="time" step={300} value={r.pickupStart} onChange={(e) => update(r.id, { pickupStart: e.target.value })} aria-label={`施工の開始時刻 ${i + 1}`} />
-                  </Field>
-                  <Field label="終了時刻">
-                    <Input type="time" step={300} value={r.pickupEnd} onChange={(e) => update(r.id, { pickupEnd: e.target.value })} aria-label={`施工の終了時刻 ${i + 1}`} />
-                  </Field>
+                  <TimeChoice
+                    what="施工"
+                    index={n}
+                    mode={r.pickupMode}
+                    start={r.pickupStart}
+                    end={r.pickupEnd}
+                    onMode={(m) => update(r.id, { pickupMode: m })}
+                    onStart={(v) => update(r.id, { pickupStart: v })}
+                    onEnd={(v) => update(r.id, { pickupEnd: v })}
+                  />
+                </div>
+              ) : follower ? (
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed border-accent/40 bg-accent-soft/30 px-3 py-2" data-testid="handover-linked">
+                  <div className="min-w-0 text-xs text-ink-2">
+                    <span className="inline-flex items-center gap-1 font-medium text-accent-ink">
+                      <Link2 className="h-3.5 w-3.5" aria-hidden />
+                      {nameOf(leaderId!)}と同じ日程
+                    </span>{" "}
+                    <span data-testid="handover-linked-text">{rowText(plan.find((p) => p.id === r.id) ?? { id: r.id, item: r.item })}</span>
+                  </div>
+                  <Button type="button" variant="secondary" size="sm" onClick={() => unlink(r.id)} aria-label={`品目 ${n} だけ別の日程にする`}>
+                    <Unlink /> この品目だけ別の日程にする
+                  </Button>
                 </div>
               ) : (
                 <div className="mt-2 grid grid-cols-1 gap-3 @2xl:grid-cols-2">
-                  <fieldset className="min-w-0 rounded-lg bg-subtle/60 p-2">
+                  <fieldset className="min-w-0 space-y-2 rounded-lg bg-subtle/60 p-2">
                     <legend className="px-1 text-xs font-medium text-ink">引き取り</legend>
-                    <div className="grid grid-cols-2 gap-2 @md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                      <Field label="引取日" className="col-span-2 @md:col-span-1">
-                        <Input type="date" value={r.pickupDate} onChange={(e) => setPickup(r.id, "pickupDate", e.target.value)} aria-label={`引取日 ${i + 1}`} />
-                      </Field>
-                      <Field label="開始">
-                        <Input type="time" step={300} value={r.pickupStart} onChange={(e) => setPickup(r.id, "pickupStart", e.target.value)} aria-label={`引き取りの開始時刻 ${i + 1}`} />
-                      </Field>
-                      <Field label="終了">
-                        <Input type="time" step={300} value={r.pickupEnd} onChange={(e) => setPickup(r.id, "pickupEnd", e.target.value)} aria-label={`引き取りの終了時刻 ${i + 1}`} />
-                      </Field>
-                    </div>
+                    <Field label="引取日">
+                      <Input type="date" value={r.pickupDate} onChange={(e) => setPickup(r.id, "pickupDate", e.target.value)} aria-label={`引取日 ${n}`} />
+                    </Field>
+                    <TimeChoice
+                      what="引き取り"
+                      index={n}
+                      mode={r.pickupMode}
+                      start={r.pickupStart}
+                      end={r.pickupEnd}
+                      onMode={(m) => setPickup(r.id, "pickupMode", m)}
+                      onStart={(v) => setPickup(r.id, "pickupStart", v)}
+                      onEnd={(v) => setPickup(r.id, "pickupEnd", v)}
+                    />
                   </fieldset>
-                  <fieldset className="min-w-0 rounded-lg bg-subtle/60 p-2">
+                  <fieldset className="min-w-0 space-y-2 rounded-lg bg-subtle/60 p-2">
                     <legend className="px-1 text-xs font-medium text-ink">納品</legend>
-                    <label className="mb-1 inline-flex cursor-pointer items-center gap-2 text-xs text-ink">
-                      <input type="checkbox" checked={r.same} onChange={(e) => update(r.id, { same: e.target.checked })} className="h-4 w-4 accent-accent" aria-label={`当日納品 ${i + 1}`} />
+                    <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-ink">
+                      <input type="checkbox" checked={r.same} onChange={(e) => edit(r.id, { same: e.target.checked })} className="h-4 w-4 accent-accent" aria-label={`当日納品 ${n}`} />
                       当日納品 (引取日に納品)
                     </label>
-                    <div className="grid grid-cols-2 gap-2 @md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                      <Field label="納品日" className="col-span-2 @md:col-span-1">
-                        <Input
-                          type="date"
-                          value={r.same ? r.pickupDate : r.deliveryDate}
-                          min={r.pickupDate || undefined}
-                          readOnly={r.same}
-                          onChange={(e) => update(r.id, { deliveryDate: e.target.value })}
-                          className={r.same ? "bg-subtle text-ink-2" : undefined}
-                          aria-label={`納品日 ${i + 1}`}
-                        />
-                      </Field>
-                      <Field label="開始">
-                        <Input type="time" step={300} value={r.deliveryStart} onChange={(e) => update(r.id, { deliveryStart: e.target.value })} aria-label={`納品の開始時刻 ${i + 1}`} />
-                      </Field>
-                      <Field label="終了">
-                        <Input type="time" step={300} value={r.deliveryEnd} onChange={(e) => update(r.id, { deliveryEnd: e.target.value })} aria-label={`納品の終了時刻 ${i + 1}`} />
-                      </Field>
-                    </div>
-                    {!r.same && !r.deliveryDate && r.pickupDate && <p className="mt-1 text-[11px] text-ink-3">納品日が決まったら入れてください (空欄のあいだは引き取りだけが予定表に載ります)。</p>}
+                    <Field label="納品日">
+                      <Input
+                        type="date"
+                        value={r.same ? r.pickupDate : r.deliveryDate}
+                        min={r.pickupDate || undefined}
+                        readOnly={r.same}
+                        onChange={(e) => edit(r.id, { deliveryDate: e.target.value })}
+                        className={r.same ? "bg-subtle text-ink-2" : undefined}
+                        aria-label={`納品日 ${n}`}
+                      />
+                    </Field>
+                    <TimeChoice
+                      what="納品"
+                      index={n}
+                      mode={r.deliveryMode}
+                      start={r.deliveryStart}
+                      end={r.deliveryEnd}
+                      onMode={(m) => edit(r.id, { deliveryMode: m })}
+                      onStart={(v) => edit(r.id, { deliveryStart: v })}
+                      onEnd={(v) => edit(r.id, { deliveryEnd: v })}
+                    />
+                    {!r.same && !r.deliveryDate && r.pickupDate && <p className="text-[11px] text-ink-3">納品日が決まったら入れてください (空欄のあいだは引き取りだけが予定表に載ります)。</p>}
                   </fieldset>
                 </div>
               )}
@@ -250,7 +458,9 @@ export function HandoverEditor({
           <Button type="button" variant="secondary" size="sm" onClick={addRow}>
             <Plus /> 品目を追加
           </Button>
-          <span className="text-[11px] text-ink-3">引き取りの日時は、まだ日程のないほかの品目にも同じ値が入ります。</span>
+          <span className="text-[11px] text-ink-3">
+            襖・障子・網戸は 1 つの品目に入れた日程がほかの品目にも入ります (別の日にする品目は「この品目だけ別の日程にする」)。引き取りの日時は、まだ日程のないほかの品目にも同じ値が入ります。
+          </span>
         </div>
       </div>
 
@@ -259,11 +469,11 @@ export function HandoverEditor({
         {groups.length ? (
           <ul className="mt-1 space-y-0.5 text-xs text-ink-2" data-testid="handover-preview">
             {groups.map((g) => (
-              <li key={`${g.role}${g.date}${g.start ?? ""}${g.rowIds.join()}`}>
+              <li key={`${g.role}${g.date}${g.start ?? ""}${g.slot ?? ""}${g.rowIds.join()}`}>
                 <span className="font-medium text-ink">
                   {shortDate(g.date)}
                   {g.endDate ? `〜${shortDate(g.endDate)}` : ""}
-                  {g.start ? ` ${hm(g.start)}${g.end ? `–${hm(g.end)}` : ""}` : ""}
+                  {g.start ? ` ${hm(g.start)}${g.end ? `–${hm(g.end)}` : ""}` : g.slot ? ` ${HANDOVER_SLOT_LABEL[g.slot]}` : ""}
                 </span>{" "}
                 {HANDOVER_ROLE_LABEL[g.role]}: {g.labels.join("・")}
               </li>
@@ -304,7 +514,7 @@ export function HandoverEditor({
         </Button>
         <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-ink-2">
           <input type="checkbox" name="allowOverlap" value="1" className="h-4 w-4 accent-accent" />
-          担当者の予定と重なっても保存する (調整済み)
+          重複を承知で保存する (担当者・店長と調整済み)
         </label>
       </div>
     </form>
