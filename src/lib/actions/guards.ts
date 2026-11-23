@@ -12,14 +12,21 @@ export async function requireActionUser(): Promise<User> {
   return user;
 }
 
+/** 戻り先に ?msg= / ?err= を付ける。ページ内の位置 (#…) があればその前に付ける (後ろに付けると位置の一部になって画面にメッセージが出ない) */
+function withParam(path: string, key: string, value: string): string {
+  const i = path.indexOf("#");
+  const base = i < 0 ? path : path.slice(0, i);
+  const hash = i < 0 ? "" : path.slice(i);
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}${key}=${encodeURIComponent(value)}${hash}`;
+}
+
 export function withMsg(path: string, msg: string): string {
-  const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}msg=${encodeURIComponent(msg)}`;
+  return withParam(path, "msg", msg);
 }
 
 export function withErr(path: string, err: string): string {
-  const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}err=${encodeURIComponent(err)}`;
+  return withParam(path, "err", err);
 }
 
 export function fail(path: string, message: string): never {

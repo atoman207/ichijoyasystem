@@ -845,7 +845,8 @@ export async function previewMaterialMoves(fd: FormData) {
   const plan = planMaterialMoveImport(getDb(), sheets, { hash, fileName: file.name.slice(0, 100), now: nowIso() });
   if (!plan.sheets) fail(back, "月ごとのシート (「2026.10」のような名前) が見つかりません。");
   await putObject(MM_KEY(hash), Buffer.from(JSON.stringify(plan)));
-  redirect(withMsg(`${BASE}?tab=stock&mmplan=${hash}#mm-import`, `${plan.sheets} か月分を読みました。内容を確かめてから「取り込む」を押してください。`));
+  // メッセージは「#」より前に付ける (後ろに付けるとページ内の位置の一部になって消える)
+  redirect(`${withMsg(`${BASE}?tab=stock&mmplan=${hash}`, `${plan.sheets} か月分を読みました。内容を確かめてから「取り込む」を押してください。`)}#mm-import`);
 }
 
 /** 確かめた内容を取り込む (材料移動 = 原価の振替・内部受注 = 売上の調整)。すでに取り込んだ行・確定した月の行は飛ばす。管理者 */
