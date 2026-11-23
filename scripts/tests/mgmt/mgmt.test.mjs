@@ -19,6 +19,7 @@ const DK = await imp("lib/mgmt/doko.ts");
 const OD = await imp("lib/mgmt/omote-diff.ts");
 const TR = await imp("lib/mgmt/transfers.ts");
 const EC = await imp("lib/mgmt/expense-class.ts");
+const EX = await imp("lib/mgmt/export.ts");
 
 const db = store.getDb();
 const admin = db.users.find((u) => u.role === "admin");
@@ -588,6 +589,19 @@ section("Test 25: お客様のご説明で確定した設定");
   const o = d.orders.find((x) => x.id === o13.id);
   const att = AT.attributionOf({ ...d, orderAttributions: [{ id: "x", orderId: o.id, receivedStoreId: "hq", workStoreId: "chuo", workKind: "normal", hqSpecial: true, updatedBy: admin.id, updatedAt: now }] }, o, "tatami");
   eq(att.warnings.length, 0, "本部の売上で作業だけ店舗 (本部の特殊配分) は「施工店舗が違う」と警告しない");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 26: 管理会計の CSV (税理士へ渡す資料)");
+{
+  const d = store.getDb();
+  const pnlRows = EX.mgmtExportRows(d, "pnl", "2031-10-01", "2031-10-31");
+  ok(pnlRows[1][0] === "店舗" && pnlRows.some((r) => r[0] === "全社"), "店舗別損益: 見出しと全社の行");
+  const moves = EX.mgmtExportRows(d, "moves", "2031-10-01", "2031-10-31");
+  ok(moves.slice(2).length > 0 && moves.slice(2).every((r) => /材料移動|内部受注|本部の特殊配分|手入力の調整|案分|畳表の差額/.test(String(r[6]))), "店舗間の振り分け: 材料移動・内部受注・案分などの行だけ");
+  eq(moves.slice(2).reduce((a, r) => a + Number(r[5]), 0), 0, "材料移動と取消しの行は相殺して合計 0 (全社の材料費は変わらない)");
+  const own = EX.mgmtExportRows(d, "ledger", "2031-10-01", "2031-10-31", ["tamana"]);
+  ok(own.slice(2).every((r) => r[2] === "玉名店"), "店舗を絞ると、その店舗の行だけ");
 }
 
 summary();

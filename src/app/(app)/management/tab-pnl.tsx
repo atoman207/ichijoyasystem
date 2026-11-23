@@ -7,6 +7,7 @@ import { percent1 } from "@/lib/mgmt/decimal";
 import { Card, CardHeader, Note, Table, Td, Th, Tr } from "@/components/ui";
 import { StackedBarChart } from "@/components/charts";
 import { Money, Pct, PeriodForm, Provisional, qs, type Ctx } from "./parts";
+import { MGMT_EXPORTS } from "@/lib/mgmt/export";
 
 const shiftYear = (d: string, n: number) => `${Number(d.slice(0, 4)) + n}${d.slice(4)}`;
 
@@ -61,6 +62,15 @@ export function PnlTab({ ctx }: { ctx: Ctx }) {
         </span>
         <Provisional reasons={res.total.provisional} />
         {res.closedMonths.length > 0 && <span className="text-xs text-ink-2">月次確定済み: {res.closedMonths.join("・")}</span>}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        <span className="text-ink-2">CSV (この期間・画面と同じ計算):</span>
+        {Object.entries(MGMT_EXPORTS).map(([k, label]) => (
+          <a key={k} className="text-accent hover:underline" href={`/api/management?kind=${k}&from=${ctx.from}&to=${ctx.to}`}>
+            {label}
+          </a>
+        ))}
+        <span className="text-ink-2">— 「店舗間の振り分け」はこれまで税理士に渡していた材料移動の表に当たります</span>
       </div>
       {res.allocations.some((a) => a.status === "held" || a.status === "provisional") && (
         <Note tone="warn">

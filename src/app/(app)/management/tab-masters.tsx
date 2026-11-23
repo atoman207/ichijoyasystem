@@ -129,7 +129,7 @@ export function MastersTab({ ctx }: { ctx: Ctx }) {
       )}
 
       <Card>
-        <CardHeader title={`材料構成 (BOM・${boms.length} 件)`} description="商品 1 単位 (畳 1 枚) あたりの材料と使用量。半畳は材料ごとの係数 (例: 畳表 0.5・畳床 0.5・副資材 1)。畳床は種類だけを決めておき (doko)、受注ごとに製造仕様で材料を選びます" />
+        <CardHeader title={`材料構成 (BOM・${boms.length} 件)`} description="商品 1 単位 (畳 1 枚) あたりの材料と使用量。半畳は材料ごとの係数 (例: 畳表 0.5・畳床 0.5・副資材 1)。畳床は種類だけを決めておき (doko)、受注ごとに品名・製造の予定 (床・サイズ) から自動で選びます。決まらないときに使う既定の畳床を行の 3 つ目に書けます" />
         <Table minWidth="min-w-[760px]">
           <thead>
             <tr>
