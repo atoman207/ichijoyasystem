@@ -13,6 +13,7 @@ D = f"{W}/data"
 DB = f"{D}/testweek-db.json"
 SNAP = "/srv/ichijoya/data/cache/db-production.ndjson.gz"
 PROD = "/srv/ichijoya/data"
+BACKUPS = "/var/backups/ichijoya"
 SYSTEM = "system"
 
 
@@ -59,6 +60,17 @@ def build(app):
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     db["meta"] = {**(head.get("meta") or {}), "copyOfRevision": head.get("revision"), "copyOfSavedAt": head.get("savedAt"), "copiedAt": now, "testWeek": True}
     write_db(db)
+    # 期間の始まりの本番の控え (期間中のデータを本番に引き継ぐときに、何が増えた・変わったかを比べる元。scripts/ops/testweek-carryover.mjs)
+    keep = f"{BACKUPS}/testweek-baseline-rev{head.get('revision')}-{datetime.date.today():%Y%m%d}.ndjson.gz"
+    try:
+        if not os.path.exists(keep):
+            os.makedirs(BACKUPS, exist_ok=True)
+            shutil.copy2(SNAP, keep + ".tmp")
+            os.chmod(keep + ".tmp", 0o600)
+            os.replace(keep + ".tmp", keep)
+        print(f"期間の始まりの控え: {keep}")
+    except OSError as e:
+        print(f"注意: 期間の始まりの控えを残せませんでした ({e})")
     if os.path.isdir(f"{PROD}/uploads"):
         shutil.rmtree(f"{D}/uploads")
         shutil.copytree(f"{PROD}/uploads", f"{D}/uploads")

@@ -9,7 +9,8 @@
 #   - https://ichijoya-system.jp のすべての要求をテスト用のサーバーへ (nginx の本番の設定ファイルは変えない。本番の server が読み込む
 #     /etc/nginx/snippets/ichijoya-host-testweek.conf を置くだけ。消すと元に戻る)
 #   - 本番の版を公開 (deploy.sh) すると、テスト用のサーバーも同じ版にそろえる (refresh-app。データはそのまま)
-# 期間の終わり (12-01 0:00) に、外部から届いた記録を CSV に控えてから、画面を本番に戻し、テスト用のデータベースを削除する
+# 期間の終わり (12-01 0:00) に、外部から届いた記録を CSV に控えてから、画面を本番に戻し、テスト用のデータベースを控えてから削除する
+# 期間中のデータを本番に引き継ぐときは scripts/ops/testweek-carryover.mjs (期間の始まりの控え testweek-baseline-*.ndjson.gz と終わりの控えを比べる。deploy/README.md)
 #
 # 使い方 (root):
 #   sudo bash deploy/testweek.sh schedule     … 予約 (11-23 0:00 に start、12-01 0:00 に end) と、デプロイからの refresh-app の許可
@@ -235,7 +236,7 @@ cmd_end() {
   systemctl disable --now "$UNIT" >/dev/null 2>&1 || true
   rm -f "/etc/systemd/system/$UNIT.service"
   systemctl daemon-reload
-  log "4. テスト用のデータベースの控えを残す (期間中のデータを本番に引き継ぐと決めたときに使う。root だけが読める・60 日で削除)"
+  log "4. テスト用のデータベースの控えを残す (期間中のデータを本番に引き継ぐときに使う。アプリの利用者 ($APP_USER) と root だけが読める・60 日で削除)"
   if [[ -f "$DATA/testweek-db.json" ]]; then
     mkdir -p "$EXPORT_DIR"
     local since final
@@ -243,6 +244,8 @@ cmd_end() {
     final="$EXPORT_DIR/testweek-final-$(date +%Y%m%d).tar.gz"
     # データベース (JSON) と、期間中に増えた・変わったファイル (添付・写真・チャットボットなど) だけ
     if ( umask 077 && cd "$DATA" && { echo testweek-db.json; find . -type f -newermt "$since" ! -name testweek-db.json -printf '%P\n'; } | sort -u | tar -czf "$final" -T - ); then
+      # 引き継ぎ (scripts/ops/testweek-carryover.mjs) はアプリの利用者で読む ($EXPORT_DIR はアプリの利用者だけのフォルダー)
+      chown "$APP_USER:$APP_USER" "$final"
       chmod 600 "$final"
       log "  控え: $final (期間の始まり $since 以降のファイル)"
     else

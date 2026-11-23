@@ -283,7 +283,30 @@ OS のセキュリティ更新は自動 (unattended-upgrades) です。カーネ
 - デプロイ: `npm run deploy` は本番を公開したあと、試験期間ならテスト用のサーバーも同じ版にそろえる (`sudo -n /usr/local/sbin/ichijoya-testweek refresh-app`。データはそのまま、新しい表は空で足す。止まるのは起動し直す十数秒)。そろえられなかったときはデプロイが失敗の終了コードで知らせる
 - 定期処理: データを扱うもの (knowledge-sync・fax・survey-workbook) は期間中テスト用のサーバーへ (`run-task.sh`)。バックアップと本番の死活監視は本番。テスト用のサーバーの死活監視 (`health-testweek`、5 分ごと) は期間中だけ
 - バックアップ: 毎日 3:30 の `backup.sh` は、期間中だけテスト用のデータベースも控える (`/var/backups/ichijoya/testweek/testweek-<日時>.tar.gz`: データベースの JSON・チャットボット・期間中に増えた添付ファイル。14 日で削除)。テスト用のサーバーの画面の「今すぐバックアップ」は何もしない (アプリのコピーの `backup.sh` を置き換えている)
-- 予約: `sudo bash deploy/testweek.sh schedule` で、11-23 0:00 に `start`、12-01 0:00 に `end` を cron (`/etc/cron.d/ichijoya-testweek`) で実行し、デプロイからの `refresh-app` を許可する (`/etc/sudoers.d/ichijoya-testweek`)。`end` は、期間中に外部 (LINE・Web フォーム・AI 受付・電話のシステム) から届いた記録を `/var/backups/ichijoya/testweek-inbound-<日付>.csv` に控えてから、画面を本番に戻し、テスト用のデータベースの控え (データベースの JSON と期間中に増えた・変わったファイル。`/var/backups/ichijoya/testweek-final-<日付>.tar.gz`・root だけが読める・60 日で削除。お客様が期間中のデータを本番に引き継ぐと決めたときに使う) を作ってから削除する (控えを作れなければ削除しない)。手動は `sudo ichijoya-testweek start|end|status|refresh-app|reset-data` (`reset-data` は期間中のデータベースをいまの本番の写しで作り直す。練習で入れたデータを消してから本番さながらに使い、12/1 にそのデータを本番に引き継ぐときに使う。作り直す前の控えを残す)。ログは `/var/log/ichijoya/testweek.log`
+- 予約: `sudo bash deploy/testweek.sh schedule` で、11-23 0:00 に `start`、12-01 0:00 に `end` を cron (`/etc/cron.d/ichijoya-testweek`) で実行し、デプロイからの `refresh-app` を許可する (`/etc/sudoers.d/ichijoya-testweek`)。`end` は、期間中に外部 (LINE・Web フォーム・AI 受付・電話のシステム) から届いた記録を `/var/backups/ichijoya/testweek-inbound-<日付>.csv` に控えてから、画面を本番に戻し、テスト用のデータベースの控え (データベースの JSON と期間中に増えた・変わったファイル。`/var/backups/ichijoya/testweek-final-<日付>.tar.gz`・アプリの利用者 (ichijoya) と root だけが読める・60 日で削除。期間中のデータを本番に引き継ぐときに使う) を作ってから削除する (控えを作れなければ削除しない)。手動は `sudo ichijoya-testweek start|end|status|refresh-app|reset-data` (`reset-data` は期間中のデータベースをいまの本番の写しで作り直す。練習で入れたデータを消してから本番さながらに使い、12/1 にそのデータを本番に引き継ぐときに使う。作り直す前の控えを残す)。ログは `/var/log/ichijoya/testweek.log`
 - 期間中は 3001 番の開発サーバーで動作を確かめない (3001 番は本番のデータベースを使うため)。Supabase に直接書くスクリプトも使わない
+
+### 試験期間のデータを本番に引き継ぐ (`scripts/ops/testweek-carryover.mjs`)
+
+お客様が期間中に「本番さながら」に登録したデータ (例: 11/23 の店長会議で登録したコンパス未入力の問い合わせ・見積) を、12/1 に本番のデータベースへ引き継ぐ。テストは `npm run test:carryover`。
+
+- 比べる元: 期間の始まりの本番の控え `/var/backups/ichijoya/testweek-baseline-rev<リビジョン>-<日付>.ndjson.gz` (`testweek-data.py build` が残す。11/23 の分は `testweek-baseline-rev354.ndjson.gz`)。テスト用のデータベースの meta.copyOfSavedAt と同じ控えでないと止まる
+- まとまり: 期間中に増えた・変わった・消えた行を、ID の参照でつながる「まとまり」(お客様 → 問い合わせ → 見積 → 承認・写真・やりとり・変更履歴) に分け、最初の操作の日時 (受付日などの業務の日付ではなく、システムが付けた日時) が `--since`〜`--until` (日本時間) のものを引き継ぐ。除くのは `--exclude <番号・ID>`、指定したものだけは `--only`。お客様名・件名・要約に「練習」「テスト」とあるものは練習として引き継がない。ログイン・閲覧だけの変更履歴は引き継がない。引き継ぐ行が参照する期間中に増えた行 (新しい仕入先など) は一緒に引き継ぐ。社員はプロフィールの項目 (ログイン ID・通知先・顔写真など。パスワードは期間中は変更を止めている) だけ。設定・店舗の変更は `--settings <ID>` で指定したものだけ (例: 運用の設定 `operations`)
+- 本番への書き込み: 1 つのトランザクションで、行を読む (for update) → 期間中に本番の側で変わった行・番号の重複 (12/1 以降に本番で登録した記録など)・ファイルの重複があれば何も書かずに中止 → 追加・更新・削除 → 読み直して計画と照合 → `record_changes` (動いているサーバーは変わった行だけを取り直す) → commit。写真・資料のファイルは `/srv/ichijoya/data/uploads` へ写す (上書きしない)。2 回実行しても同じ (同じ内容は飛ばす)
+
+手順 (12/1 の朝、本番で登録を始める前に。番号が重ならないように):
+
+```bash
+cd /home/ichijoya/Documents/ichijoyasistem
+# 1. 計画と一覧 (期間中はいつでも作れる。テスト用のデータベースは読むだけ。12/1 以降は期間の終わりの控えを読む)
+node scripts/ops/testweek-carryover.mjs plan --since 2026-11-23 --until 2026-11-23 --settings operations [--exclude INQ-2026-0604,...]
+#    → /var/backups/ichijoya/carryover/<日時>/carryover-list.csv (お客様に確かめていただく一覧) と carryover-plan.json
+# 2. 本番と突き合わせ (読むだけ) → 予行 (書いて照合してから取り消す) → 書く
+node scripts/ops/testweek-carryover.mjs check --plan <…>/carryover-plan.json
+node scripts/ops/testweek-carryover.mjs apply --plan <…>/carryover-plan.json
+node scripts/ops/testweek-carryover.mjs apply --plan <…>/carryover-plan.json --yes
+```
+
+12/1 0:00 の `end` のあとは、テスト用のデータベースは `testweek-final-<日付>.tar.gz` から読む (`--test` を省くと新しい控え)。2026-11-23 の時点で使われている `end` は、`schedule` を実行し直すまで控えを root だけが読める形で作る (`sudo bash deploy/testweek.sh schedule` で入れ直すか、`sudo chown ichijoya: /var/backups/ichijoya/testweek-final-*.tar.gz`)。
 
 練習用の架空のデータの環境 (`/srv/ichijoya/training`・ユーザーのサービス `ichijoya-training`・127.0.0.1:3200) も作ってあるが、試験期間の方式にしたため止めている (`systemctl --user start ichijoya-training` で起動。初期化は `bash /srv/ichijoya/training/reset.sh`)。
