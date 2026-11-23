@@ -14,6 +14,8 @@ interface Row {
   qty: number;
   unit: string;
   unitPrice: number;
+  /** 管理会計の品目 ("" = 自動: 商品の品目 → 見積の種別) */
+  itemCategory: string;
 }
 
 const yen = (n: number) => `¥${Math.round(n).toLocaleString("ja-JP")}`;
@@ -26,6 +28,9 @@ export function QuoteEditor({
   initialDiscount = 0,
   defaultCategory,
   initialTaxIncluded = false,
+  categories = [],
+  productCategory = {},
+  serviceItemCategory,
 }: {
   products: Product[];
   initialItems?: QuoteItem[];
@@ -33,16 +38,22 @@ export function QuoteEditor({
   defaultCategory?: ServiceCategory;
   /** 単価を税込で入力する (手書き見積書の「税込」) */
   initialTaxIncluded?: boolean;
+  /** 管理会計の品目の一覧 (畳・襖・リフォーム・カーテン類・自社商品・その他・諸経費) */
+  categories?: { id: string; name: string }[];
+  /** 商品 → 品目 (商品マスタの品目。src/lib/mgmt/categories.ts の productItemCategory) */
+  productCategory?: Record<string, string>;
+  /** 自由入力の行の品目の既定 (見積の種別から) */
+  serviceItemCategory?: string;
 }) {
   const [taxIncluded, setTaxIncluded] = useState(initialTaxIncluded);
   const [rows, setRows] = useState<Row[]>(() => {
     if (initialItems.length > 0) {
-      return initialItems.map((i) => ({ key: nextKey(), productId: i.productId, name: i.name, spec: i.spec ?? "", qty: i.qty, unit: i.unit, unitPrice: i.unitPrice }));
+      return initialItems.map((i) => ({ key: nextKey(), productId: i.productId, name: i.name, spec: i.spec ?? "", qty: i.qty, unit: i.unit, unitPrice: i.unitPrice, itemCategory: i.itemCategory ?? "" }));
     }
     const first = products.find((p) => p.category === (defaultCategory ?? "tatami")) ?? products[0];
     const misc = products.find((p) => p.id === "p_misc");
-    const base: Row[] = [{ key: nextKey(), productId: first?.id, name: first?.name ?? "", spec: [first?.grade, first?.sizeLabel].filter(Boolean).join(" / "), qty: 6, unit: first?.unit ?? "式", unitPrice: first?.unitPrice ?? 0 }];
-    if (misc) base.push({ key: nextKey(), productId: misc.id, name: misc.name, spec: "", qty: 1, unit: misc.unit, unitPrice: misc.unitPrice });
+    const base: Row[] = [{ key: nextKey(), productId: first?.id, name: first?.name ?? "", spec: [first?.grade, first?.sizeLabel].filter(Boolean).join(" / "), qty: 6, unit: first?.unit ?? "式", unitPrice: first?.unitPrice ?? 0, itemCategory: "" }];
+    if (misc) base.push({ key: nextKey(), productId: misc.id, name: misc.name, spec: "", qty: 1, unit: misc.unit, unitPrice: misc.unitPrice, itemCategory: "" });
     return base;
   });
   const [discount, setDiscount] = useState(initialDiscount);
@@ -66,16 +77,20 @@ export function QuoteEditor({
       update(key, { productId: undefined });
       return;
     }
-    update(key, { productId: p.id, name: p.name, spec: [p.grade, p.sizeLabel].filter(Boolean).join(" / "), unit: p.unit, unitPrice: p.unitPrice });
+    // 品目は「自動」に戻す (商品の品目を使う)
+    update(key, { productId: p.id, name: p.name, spec: [p.grade, p.sizeLabel].filter(Boolean).join(" / "), unit: p.unit, unitPrice: p.unitPrice, itemCategory: "" });
   }
   function add() {
-    setRows((rs) => [...rs, { key: nextKey(), name: "", spec: "", qty: 1, unit: "式", unitPrice: 0 }]);
+    setRows((rs) => [...rs, { key: nextKey(), name: "", spec: "", qty: 1, unit: "式", unitPrice: 0, itemCategory: "" }]);
   }
   function remove(key: string) {
     setRows((rs) => rs.filter((r) => r.key !== key));
   }
 
-  const payload = JSON.stringify(rows.map((r) => ({ productId: r.productId, name: r.name, spec: r.spec, qty: r.qty, unit: r.unit, unitPrice: r.unitPrice })));
+  const payload = JSON.stringify(rows.map((r) => ({ productId: r.productId, name: r.name, spec: r.spec, qty: r.qty, unit: r.unit, unitPrice: r.unitPrice, itemCategory: r.itemCategory || undefined })));
+  const catName = (id: string | undefined) => categories.find((c) => c.id === id)?.name;
+  // 「自動」のときに使う品目 (商品の品目 → 見積の種別)
+  const autoName = (r: Row) => catName(r.productId ? productCategory[r.productId] : serviceItemCategory) ?? "見積の種別から";
 
   return (
     <div>
@@ -87,12 +102,13 @@ export function QuoteEditor({
         単価・金額は税込 (手書き見積書の「税込」に○。消費税は合計から内税で計算します)
       </label>
       <div className="overflow-x-auto rounded-xl border border-line">
-        <table className="w-full min-w-[760px] text-sm">
+        <table className="w-full min-w-[900px] text-sm">
           <thead>
             <tr className="bg-subtle text-xs text-ink-2">
               <th className="px-3 py-2 text-left font-medium">商品 (マスタから選択)</th>
               <th className="px-3 py-2 text-left font-medium">品名</th>
               <th className="px-3 py-2 text-left font-medium">仕様・備考</th>
+              {categories.length > 0 && <th className="px-3 py-2 text-left font-medium" title="管理会計 (店舗別・品目別の原価率) で数える品目。自社商品 (ミニ畳など) やリフォーム工事 (大工など) はここで選びます">品目</th>}
               <th className="px-3 py-2 text-right font-medium">数量</th>
               <th className="px-3 py-2 text-left font-medium">単位</th>
               <th className="px-3 py-2 text-right font-medium">単価 ({taxIncluded ? "税込" : "税抜"})</th>
@@ -119,6 +135,16 @@ export function QuoteEditor({
                 </td>
                 <td className="px-2 py-1.5"><input className="field h-8 py-1 text-xs" value={r.name} onChange={(e) => update(r.key, { name: e.target.value })} placeholder="品名" required /></td>
                 <td className="px-2 py-1.5"><input className="field h-8 py-1 text-xs" value={r.spec} onChange={(e) => update(r.key, { spec: e.target.value })} placeholder="サイズ・柄など" /></td>
+                {categories.length > 0 && (
+                  <td className="px-2 py-1.5">
+                    <select className="field h-8 w-32 py-1 text-xs" value={r.itemCategory} onChange={(e) => update(r.key, { itemCategory: e.target.value })} aria-label="品目 (管理会計)">
+                      <option value="">自動 ({autoName(r)})</option>
+                      {categories.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                )}
                 <td className="px-2 py-1.5"><input type="number" step="0.5" min="0" className="field h-8 w-20 py-1 text-right text-xs tnum" value={r.qty} onChange={(e) => update(r.key, { qty: Number(e.target.value) })} /></td>
                 <td className="px-2 py-1.5"><input className="field h-8 w-14 py-1 text-xs" value={r.unit} onChange={(e) => update(r.key, { unit: e.target.value })} /></td>
                 <td className="px-2 py-1.5"><input type="number" step="100" className="field h-8 w-28 py-1 text-right text-xs tnum" title="値引きの行はマイナス (例: -1000)" value={r.unitPrice} onChange={(e) => update(r.key, { unitPrice: Number(e.target.value) })} /></td>

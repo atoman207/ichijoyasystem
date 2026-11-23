@@ -22,6 +22,7 @@ import { cronHealth } from "@/lib/knowledge-sync";
 import { NOTIFY_EVENT_LABEL, notifySettings, type NotifyEvent } from "@/lib/notify/events";
 import { canManageIntegrations } from "@/lib/auth/permissions";
 import type { ServiceCategory } from "@/lib/db/types";
+import { categoryName, itemCategories, productItemCategory } from "@/lib/mgmt/categories";
 import { Badge, Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select, StoreTag, Textarea } from "@/components/ui";
 import Link from "@/components/ui/Link";
 import { GoLivePanel } from "@/components/settings/GoLivePanel";
@@ -38,6 +39,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const user = await requireUser();
   const db = getDb();
   const admin = canManageSettings(user);
+  const mgmtCats = itemCategories(db).filter((c) => c.active);
   const tab = sp.tab ?? "users";
   const base = "/settings";
   const ai = aiStatus();
@@ -93,16 +95,26 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           <Card className="@4xl:col-span-2" padded={false}>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-sm">
-                <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-4 py-2 text-left font-medium">種別</th><th className="px-3 py-2 text-left font-medium">商品名</th><th className="px-3 py-2 text-left font-medium">グレード / サイズ</th><th className="px-3 py-2 text-right font-medium">単価 (税抜)</th><th className="px-3 py-2 text-right font-medium">税込</th><th className="px-4 py-2 text-left font-medium">状態</th></tr></thead>
+                <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-4 py-2 text-left font-medium">種別</th><th className="px-3 py-2 text-left font-medium">商品名</th><th className="px-3 py-2 text-left font-medium">グレード / サイズ</th><th className="px-3 py-2 text-left font-medium" title="管理会計 (店舗別・品目別の原価率) で数える品目">品目</th><th className="px-3 py-2 text-right font-medium">単価 (税抜)</th><th className="px-3 py-2 text-right font-medium">税込</th><th className="px-4 py-2 text-left font-medium">状態</th></tr></thead>
                 <tbody>
                   {db.products.map((p) => (
                     <tr key={p.id} className="border-t border-line">
                       <td className="px-4 py-2 text-xs text-ink-2">{CATEGORY_LABEL[p.category]}</td>
                       <td className="px-3 py-2 font-medium">{p.name}</td>
                       <td className="px-3 py-2 text-xs text-ink-2">{[p.grade, p.sizeLabel].filter(Boolean).join(" / ") || "-"}</td>
+                      <td className="px-3 py-2 text-xs">
+                        {admin ? (
+                          <select form={`pf_${p.id}`} name="mgmtCategory" defaultValue={p.mgmtCategory ?? ""} className="field h-8 w-36 py-1 text-xs" aria-label={`${p.name} の品目`}>
+                            <option value="">自動 ({categoryName(db, productItemCategory({ category: p.category }))})</option>
+                            {mgmtCats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                          </select>
+                        ) : (
+                          categoryName(db, productItemCategory(p))
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right">
                         {admin ? (
-                          <form action={updateProduct.bind(null, p.id)} className="flex items-center justify-end gap-1">
+                          <form id={`pf_${p.id}`} action={updateProduct.bind(null, p.id)} className="flex items-center justify-end gap-1">
                             <input type="hidden" name="active" value={p.active ? "on" : "off"} />
                             <input type="number" name="unitPrice" defaultValue={p.unitPrice} className="field h-8 w-28 py-1 text-right text-xs tnum" />
                             <span className="text-xs text-ink-3">/{p.unit}</span>
@@ -121,12 +133,13 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             </div>
           </Card>
           <div>
-            <Note>単価は税抜。Web サイト掲載の税込価格 (例: 古都 27,500 円/畳) に対応しています。変更は今後作成する見積に反映され、既存の見積は変わりません。</Note>
+            <Note>単価は税抜。Web サイト掲載の税込価格 (例: 古都 27,500 円/畳) に対応しています。変更は今後作成する見積に反映され、既存の見積は変わりません。「品目」は管理会計 (店舗別・品目別の原価率) で数える区分です。自動のときは種別から決まります (畳 → 畳、襖・障子・網戸 → 襖、カーテン → カーテン類、クロス → リフォーム、その他 → 諸経費)。自社商品・クロス以外のリフォーム工事の商品は、ここで品目を選んでください。品目を変えると、品目を選んでいない見積の明細の集計も変わります。</Note>
             {admin && (
               <Card className="mt-4">
                 <CardHeader title="商品を追加" />
                 <form action={createProduct} className="space-y-2">
                   <Field label="種別"><Select name="category" defaultValue="tatami">{(Object.keys(CATEGORY_LABEL) as ServiceCategory[]).map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}</Select></Field>
+                  <Field label="品目 (管理会計)" hint="自社商品 (ミニ畳など)・リフォーム工事 (大工など) は種別と別に選びます"><Select name="mgmtCategory" defaultValue=""><option value="">自動 (種別から)</option>{mgmtCats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field>
                   <Field label="商品名" required><Input name="name" required /></Field>
                   <Field label="グレード"><Input name="grade" /></Field>
                   <div className="grid grid-cols-3 gap-2">

@@ -20,6 +20,8 @@ const OD = await imp("lib/mgmt/omote-diff.ts");
 const TR = await imp("lib/mgmt/transfers.ts");
 const EC = await imp("lib/mgmt/expense-class.ts");
 const EX = await imp("lib/mgmt/export.ts");
+const FACTS = await imp("lib/assistant/facts.ts");
+const FL = await imp("lib/field-labels.ts");
 
 const db = store.getDb();
 const admin = db.users.find((u) => u.role === "admin");
@@ -604,6 +606,49 @@ section("Test 26: 管理会計の CSV (税理士へ渡す資料)");
   eq(moves.slice(2).reduce((a, r) => a + Number(r[5]), 0), 0, "材料移動と取消しの行は相殺して合計 0 (全社の材料費は変わらない)");
   const own = EX.mgmtExportRows(d, "ledger", "2031-10-01", "2031-10-31", ["tamana"]);
   ok(own.slice(2).every((r) => r[2] === "玉名店"), "店舗を絞ると、その店舗の行だけ");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 27: 新システムの見積の明細の品目 (自社商品・リフォーム工事を品目どおりに数える)");
+{
+  const M27 = "2032-01";
+  const c27 = cust("品目 三郎", "熊本県合志市テスト町27");
+  const pOwn = { id: "p_t27_own", category: "other", name: "テスト ミニ畳", unit: "個", unitPrice: 1000, active: true, mgmtCategory: "own" };
+  const pTatami = { id: "p_t27_tatami", category: "tatami", name: "テスト 表替え", unit: "畳", unitPrice: 10000, active: true };
+  const o27 = order(c27.id, "koshi", 0, "tatami", { contractDate: `${M27}-01`, salesDate: `${M27}-10`, quoteId: "q_t27" });
+  const items = [
+    { id: "a", productId: pTatami.id, name: pTatami.name, qty: 6, unit: "畳", unitPrice: 10000, amount: 60000 },
+    { id: "b", productId: pOwn.id, name: pOwn.name, qty: 2, unit: "個", unitPrice: 1000, amount: 2000 },
+    { id: "c", name: "大工工事 (敷居の交換)", qty: 1, unit: "式", unitPrice: 30000, amount: 30000, itemCategory: "reform" },
+    { id: "d", name: "クッションフロア張替", qty: 1, unit: "式", unitPrice: 8000, amount: 8000 },
+  ];
+  const sub = items.reduce((a, i) => a + i.amount, 0);
+  const total = Math.round(sub * 1.1);
+  o27.total = total;
+  const q27 = { id: "q_t27", number: "QT-2032-0027", version: 1, customerId: c27.id, storeId: "koshi", title: "テスト", category: "tatami", items, subtotal: sub, discount: 0, tax: total - sub, total, status: "accepted", validUntil: `${M27}-30`, createdBy: admin.id, source: "manual", orderId: o27.id, createdAt: now, updatedAt: now };
+  await store.mutate((d) => { d.products.push(pOwn, pTatami); d.customers.push(c27); d.quotes.push(q27); d.orders.push(o27); });
+  const d = store.getDb();
+  const fact = FACTS.salesFacts(d).byId.get(o27.id);
+  eq(fact.items.map((i) => [i.cat, i.mgmtCat]), [["tatami", "tatami"], ["own", "own"], ["misc", "reform"], ["tatami", "tatami"]], "明細ごとの品目: 商品の品目 (自社商品)・明細で選んだ品目 (リフォーム)・既定 (見積の種別)。売上の分析の内訳は、リフォーム (クロス以外) を諸経費・雑工事に");
+  const cats = CAT.orderCategorySales(d, o27, fact, `${M27}-10`);
+  eq(cats, { tatami: 74800, own: 2200, reform: 33000 }, "管理会計の品目別の売上 (税込): 畳 74,800・自社商品 2,200・リフォーム 33,000 (合計は受注の金額と一致)");
+  eq(Object.values(cats).reduce((a, b) => a + b, 0), total, "品目別の合計 = 受注の金額");
+  eq(AT.suggestWorkKind(CAT.mainCategory({ reform: 50000, tatami: 10000 }, "other")), "reform", "リフォームが主な品目なら工事の区分の初期値はリフォーム (内部受注 5%)");
+  const lines = C.costingLines(d, o27, fact);
+  eq(lines.map((l) => l.itemCategory), ["tatami", "own", "reform", "tatami"], "材料原価の明細も同じ品目 (自社商品の明細に畳の材料構成を使わない)");
+  eq(CAT.productItemCategory({ category: "cloth" }), "reform", "商品の品目の既定: クロス → リフォーム");
+  eq(CAT.productItemCategory({ category: "other" }), "misc", "商品の品目の既定: その他 → 諸経費");
+  eq(CAT.productItemCategory({ category: "other", mgmtCategory: "own" }), "own", "商品に品目を登録すればその品目");
+  ok(CAT.isItemCategory(d, "own") && !CAT.isItemCategory(d, "bogus"), "品目の ID を確かめる");
+  // 商品の品目を変えると、品目を選んでいない明細の集計も変わる (売上の分析のキャッシュも作り直す)
+  await store.mutate((dd) => { dd.products.find((p) => p.id === pTatami.id).mgmtCategory = "own"; });
+  const fact2 = FACTS.salesFacts(store.getDb()).byId.get(o27.id);
+  eq(fact2.items[0].mgmtCat, "own", "商品の品目の変更が明細の品目に反映される");
+  await store.mutate((dd) => { delete dd.products.find((p) => p.id === pTatami.id).mgmtCategory; });
+  const src = CAT.orderLineSource(store.getDb(), store.getDb().orders.find((o) => o.id === o27.id));
+  eq([src?.kind, src?.items.length], ["quote", 4], "受注の明細の元は見積 (金額が同じ)");
+  eq(FL.fieldLabel("quote", "items.3.itemCategory"), "明細 3 行目の品目 (管理会計)", "変更履歴の項目名");
+  eq(FL.fieldValue ? FL.fieldValue("items.3.itemCategory", "reform") : "リフォーム", "リフォーム", "変更履歴の値 (品目の名前)");
 }
 
 summary();

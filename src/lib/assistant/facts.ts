@@ -1,7 +1,8 @@
 import "server-only";
-import type { Database, Order, OrderAmounts, QuoteItem } from "@/lib/db/types";
+import type { Database, Order, OrderAmounts, Product, QuoteItem } from "@/lib/db/types";
 import { ITEM_KEY, taxRate } from "@/lib/sales-ledger";
 import { compactName, orderStaffIndex } from "@/lib/order-staff";
+import { AMOUNT_TO_CATEGORY, itemToAmountKey, lineItemCategory } from "@/lib/mgmt/categories";
 
 /**
  * 売上の分析用データ (受注 1 件 = 1 行、明細 1 行 = 1 行)
@@ -37,6 +38,8 @@ export interface ItemFact {
   /** 税込の単価・金額 */
   unitPrice: number;
   amount: number;
+  /** 管理会計の品目 (新システムの見積・請求の明細だけ。明細で選んだ品目 → 商品の品目 → 見積の種別。src/lib/mgmt/categories.ts) */
+  mgmtCat?: string;
 }
 
 export interface OrderFact {
@@ -95,12 +98,19 @@ export function parseLedgerItems(body: string, date: string): ItemFact[] | null 
   return out;
 }
 
-function itemsFromQuote(items: QuoteItem[], taxIncluded: boolean | undefined, date: string, cat: AmountKey, productCat: Map<string, AmountKey>): ItemFact[] {
+function itemsFromQuote(items: QuoteItem[], taxIncluded: boolean | undefined, date: string, cat: AmountKey, products: Map<string, Product>, serviceCategory: Order["category"]): ItemFact[] {
   const factor = taxIncluded ? 1 : 1 + taxRate(date);
   return items.map((i) => {
-    const c = (i.productId && productCat.get(i.productId)) || (/値引/.test(i.name) ? "discount" : cat);
+    const product = i.productId ? products.get(i.productId) : undefined;
+    const productKey = product ? (CATEGORY_TO_AMOUNT[product.category] ?? "misc") : undefined;
+    const money = { qty: i.qty, unitPrice: Math.round(i.unitPrice * factor), amount: Math.round(i.amount * factor) };
+    if (!product && !i.itemCategory && /値引/.test(i.name)) return { cat: "discount" as AmountKey, product: [AMOUNT_LABEL.discount, i.name, i.spec].filter(Boolean).join(" "), ...money };
+    // 管理会計の品目 (明細で選んだ品目 → 商品の品目 → 見積の種別)。内訳のキーは、品目が既定と同じなら今まで通り (障子・網戸なども区別)、違えば品目に合うキー
+    const defaultKey = productKey ?? cat;
+    const mgmtCat = lineItemCategory(i, product, serviceCategory);
+    const c: AmountKey = defaultKey !== "discount" && AMOUNT_TO_CATEGORY[defaultKey] === mgmtCat ? defaultKey : itemToAmountKey(mgmtCat);
     const label = [AMOUNT_LABEL[c], i.name, i.spec].filter(Boolean).join(" ");
-    return { cat: c, product: label, qty: i.qty, unitPrice: Math.round(i.unitPrice * factor), amount: Math.round(i.amount * factor) };
+    return { cat: c, product: label, ...money, mgmtCat };
   });
 }
 
@@ -116,7 +126,7 @@ function buildOrderFacts(db: Database): OrderFact[] {
   const staffIdx = orderStaffIndex(db);
   const customerArea = new Map((db.customers ?? []).filter((c) => c.area).map((c) => [c.id, c.area!]));
   const quoteById = new Map((db.quotes ?? []).map((q) => [q.id, q]));
-  const productCat = new Map((db.products ?? []).map((p) => [p.id, CATEGORY_TO_AMOUNT[p.category] ?? "misc"]));
+  const products = new Map((db.products ?? []).map((p) => [p.id, p]));
   const invoiceByOrder = new Map((db.invoices ?? []).filter((i) => i.status !== "void" && i.items?.length).map((i) => [i.orderId, i]));
   const purchaseByOrder = new Map<string, number>();
   for (const p of db.purchases ?? []) if (p.orderId && p.status !== "rejected") purchaseByOrder.set(p.orderId, (purchaseByOrder.get(p.orderId) ?? 0) + p.amount);
@@ -140,11 +150,11 @@ function buildOrderFacts(db: Database): OrderFact[] {
       const q = o.quoteId ? quoteById.get(o.quoteId) : undefined;
       const inv = invoiceByOrder.get(o.id);
       if (q && q.total === o.total && q.items.length) {
-        items = itemsFromQuote(q.items, q.taxIncluded, date, mainCat, productCat);
+        items = itemsFromQuote(q.items, q.taxIncluded, date, mainCat, products, o.category);
         if (q.discount > 0) items.push({ cat: "discount", product: "値引", qty: 1, unitPrice: -Math.round(q.discount * (q.taxIncluded ? 1 : 1 + taxRate(date))), amount: -Math.round(q.discount * (q.taxIncluded ? 1 : 1 + taxRate(date))) });
         itemSource = "quote";
       } else if (inv?.items?.length) {
-        items = itemsFromQuote(inv.items, inv.taxIncluded, date, mainCat, productCat);
+        items = itemsFromQuote(inv.items, inv.taxIncluded, date, mainCat, products, o.category);
         itemSource = "invoice";
       }
     }
@@ -193,8 +203,11 @@ function signature(db: Database): string {
   for (const p of db.purchases ?? []) if (p.updatedAt > latest) latest = p.updatedAt;
   let quoteLatest = "";
   for (const q of db.quotes ?? []) if (q.updatedAt > quoteLatest) quoteLatest = q.updatedAt;
+  for (const i of db.invoices ?? []) if ((i.updatedAt ?? "") > quoteLatest) quoteLatest = i.updatedAt ?? "";
   const users = (db.users ?? []).map((u) => `${u.id}:${u.name}:${u.active ? 1 : 0}`).join(",");
-  return [db.orders?.length, db.quotes?.length, db.purchases?.length, db.invoices?.length, latest, quoteLatest, users].join("|");
+  // 商品の種別・管理会計の品目が変わると明細の品目が変わる
+  const products = (db.products ?? []).map((p) => `${p.id}:${p.category}:${p.mgmtCategory ?? ""}`).join(",");
+  return [db.orders?.length, db.quotes?.length, db.purchases?.length, db.invoices?.length, latest, quoteLatest, users, products].join("|");
 }
 
 /** 売上の分析用データ (キャンセルを除く全受注。閲覧範囲の絞り込みは呼び出し側で行う) */

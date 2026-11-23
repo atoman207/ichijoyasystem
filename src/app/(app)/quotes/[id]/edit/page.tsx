@@ -8,6 +8,7 @@ import { customerName } from "@/lib/db/queries";
 import { CATEGORY_LABEL } from "@/lib/constants";
 import type { ServiceCategory } from "@/lib/db/types";
 import { QuoteEditor } from "@/components/features/QuoteEditor";
+import { itemCategoryProps } from "@/lib/mgmt/categories";
 import { Button, Card, Field, Flash, FormActions, Input, LinkButton, Note, PageHeader, Select, Textarea } from "@/components/ui";
 
 export default async function EditQuotePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ err?: string }> }) {
@@ -53,7 +54,7 @@ export default async function EditQuotePage({ params, searchParams }: { params: 
           </div>
           <div>
             <div className="label">明細</div>
-            <QuoteEditor products={db.products} initialItems={q.items} initialDiscount={q.discount} initialTaxIncluded={Boolean(q.taxIncluded)} />
+            <QuoteEditor products={db.products} initialItems={q.items} initialDiscount={q.discount} initialTaxIncluded={Boolean(q.taxIncluded)} {...itemCategoryProps(db, q.category)} />
           </div>
           <Field label="施工内容 (見積書に印字し、受注に引き継ぎます)" hint="例: 和室6畳 表替え (さくら)。家具の移動・古畳の引取を含みます">
             <Textarea name="workDetails" defaultValue={q.workDetails} rows={3} />

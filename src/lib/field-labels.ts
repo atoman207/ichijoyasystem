@@ -64,12 +64,19 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   condolence: { date: "年月日", category: "区分", kind: "内容", name: "名前", relation: "関係", amount: "金額", attendee: "担当 (参列者)", note: "備考" },
   material: { code: "コード", name: "名前", series: "シリーズ", supplierCode: "品番", unit: "単位", supplierId: "発注先", reorderLevel: "規定量", lineup: "通常ヘリ (ラインナップ)", active: "使う", note: "メモ" },
   stock_move: { status: "状態" },
+  product: { unitPrice: "単価 (税抜)", active: "販売中", mgmtCategory: "品目 (管理会計)" },
   doc_draft: { title: "名前", subject: "件名", body: "本文", status: "状態", version: "版", refs: "関係する記録", channel: "送信方法", recipient: "宛先", recipientLabel: "宛先の名前" },
 };
 
 export function fieldLabel(entity: string, field: string): string {
+  // 見積・請求書の明細の品目 (管理会計): items.<行>.itemCategory
+  const line = field.match(/^items\.(\d+)\.itemCategory$/);
+  if (line) return `明細 ${line[1]} 行目の品目 (管理会計)`;
   return BY_ENTITY[entity]?.[field] ?? COMMON[field] ?? field;
 }
+
+/** 管理会計の品目 (src/lib/mgmt/categories.ts の既定の 7 区分。設定で名前を変えた品目は ID のまま) */
+const ITEM_CATEGORY_LABEL: Record<string, string> = { tatami: "畳", fusuma: "襖 (障子・網戸を含む)", reform: "リフォーム", curtain: "カーテン類", own: "自社商品", other: "その他", misc: "諸経費" };
 
 const VALUE_LABEL: Record<string, Record<string, string>> = {
   channel: CHANNEL_LABEL,
@@ -102,6 +109,7 @@ export function fieldValue(field: string, v: unknown, names?: Map<string, string
   if (typeof v === "object") return JSON.stringify(v).slice(0, 200);
   if (typeof v === "number" && /amount|total|price|Amount|Total|Threshold/.test(field)) return `¥${v.toLocaleString("ja-JP")}`;
   const s = String(v);
+  if (/(^|\.)(itemCategory|mgmtCategory)$/.test(field) && ITEM_CATEGORY_LABEL[s]) return ITEM_CATEGORY_LABEL[s];
   const opts = VALUE_LABEL[field];
   if (opts && opts[s]) return opts[s];
   return names?.get(s) ?? s;

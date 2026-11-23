@@ -4,7 +4,8 @@ import { salesFacts } from "@/lib/assistant/facts";
 import { autoUsage, costingLines, countedUsages, planUsage, MATERIAL_KIND_LABEL, STAGE_LABEL, SIZE_LABEL } from "@/lib/mgmt/costing";
 import { productionNoteIndex, productionNotes } from "@/lib/mgmt/doko";
 import { canRecordUsage } from "@/lib/mgmt/access";
-import { recordOrderCost } from "@/lib/actions/mgmt";
+import { recordOrderCost, saveLineCategories } from "@/lib/actions/mgmt";
+import { categoryName, itemCategories, lineItemCategory, orderLineSource } from "@/lib/mgmt/categories";
 import { Badge, Button, Card, CardHeader, Field, Input, Note, Select, Table, Td, Th, Tr } from "@/components/ui";
 import { Money, PeriodForm, back, qs, type Ctx } from "./parts";
 
@@ -117,6 +118,7 @@ function OrderCosting({ ctx, orderId, docoIds }: { ctx: Ctx; orderId: string; do
       <CardHeader title={`材料原価: ${o.number} ${o.title}`} description={`明細 ${lines.length} 行 · ${date} 時点の単価で計算${o.tatamiCost ? ` · 移行の畳原価 ${yen(Math.round(o.tatamiCost))}` : ""}`} />
       {lines.length === 0 && <Note tone="warn">原価を計算できる明細がありません (見積の明細・売上台帳の明細がない受注)。</Note>}
       {hint && <p className="mb-2 text-xs text-ink-2">製造の予定のメモ (畳床の判定に使用): {hint}</p>}
+      <LineCategories ctx={ctx} orderId={o.id} />
       {plan.unmatched.length > 0 && <Note tone="warn">材料構成のない畳の明細: {plan.unmatched.map((l) => `${l.label} ×${l.qty}`).join("・")} — 材料・単価・材料構成のタブで材料構成を登録してください。</Note>}
       {editable && plan.usages.length > 0 && (
         <form action={recordOrderCost} className="space-y-3">
@@ -213,5 +215,56 @@ function OrderCosting({ ctx, orderId, docoIds }: { ctx: Ctx; orderId: string; do
         <Button type="submit" variant="secondary">開く</Button>
       </form>
     </Card>
+  );
+}
+
+/** 受注の明細の品目 (管理会計)。見積の画面で直せない受注 (完了・入金済み) もここで直せる (本部スタッフ・管理者) */
+function LineCategories({ ctx, orderId }: { ctx: Ctx; orderId: string }) {
+  const { db } = ctx;
+  const o = db.orders.find((x) => x.id === orderId)!;
+  const src = orderLineSource(db, o);
+  if (!src) return null;
+  const products = new Map(db.products.map((p) => [p.id, p]));
+  const cats = itemCategories(db).filter((c) => c.active);
+  return (
+    <details className="mb-3 rounded-lg border border-line p-3 text-sm" open={src.items.some((i) => !i.productId && !i.itemCategory)}>
+      <summary className="cursor-pointer font-medium">明細の品目 (店舗別・品目別の集計に使う区分) · {src.kind === "quote" ? `見積 ${src.record.number}` : `請求書 ${src.record.number}`}</summary>
+      <p className="mt-1 text-xs text-ink-2">「自動」は 商品の品目 → 見積の種別 で決まります。自社商品 (ミニ畳など) やクロス以外のリフォーム工事 (大工など) は品目を選んでください。見積の画面でも、明細ごとに選べます。</p>
+      <form action={saveLineCategories} className="mt-2 space-y-2">
+        {back(ctx, { order: o.id })}
+        <input type="hidden" name="orderId" value={o.id} />
+        <Table minWidth="min-w-[560px]">
+          <thead>
+            <tr>
+              <Th>明細</Th>
+              <Th align="right">金額</Th>
+              <Th>品目</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {src.items.map((it, k) => {
+              const auto = lineItemCategory({}, it.productId ? products.get(it.productId) : undefined, o.category);
+              return (
+                <Tr key={it.id ?? k}>
+                  <Td className="text-xs">{it.name}{it.spec ? ` ${it.spec}` : ""}</Td>
+                  <Td align="right">{yen(it.amount)}</Td>
+                  <Td>
+                    {ctx.canEdit ? (
+                      <Select name={`cat_${k}`} defaultValue={it.itemCategory ?? ""} aria-label={`${it.name} の品目`}>
+                        <option value="">自動 ({categoryName(db, auto)})</option>
+                        {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </Select>
+                    ) : (
+                      <span className="text-xs">{categoryName(db, it.itemCategory ?? auto)}{it.itemCategory ? "" : " (自動)"}</span>
+                    )}
+                  </Td>
+                </Tr>
+              );
+            })}
+          </tbody>
+        </Table>
+        {ctx.canEdit && <Button type="submit" size="sm" variant="secondary">品目を保存</Button>}
+      </form>
+    </details>
   );
 }

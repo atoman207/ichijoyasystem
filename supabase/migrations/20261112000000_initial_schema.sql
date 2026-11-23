@@ -136,7 +136,8 @@ create table if not exists products (
   unit_price numeric not null,
   size_label text,
   description text,
-  active boolean not null default true
+  active boolean not null default true,
+  mgmt_category text
 );
 comment on table products is '商品マスタ';
 
@@ -1629,6 +1630,7 @@ alter table products add column if not exists unit_price numeric not null;
 alter table products add column if not exists size_label text;
 alter table products add column if not exists description text;
 alter table products add column if not exists active boolean not null default true;
+alter table products add column if not exists mgmt_category text;
 alter table quotes add column if not exists number text not null unique;
 alter table quotes add column if not exists version integer not null default 1;
 alter table quotes add column if not exists customer_id text not null references customers(id);

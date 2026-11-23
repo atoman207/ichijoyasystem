@@ -232,6 +232,11 @@ export interface Product {
   sizeLabel?: string;
   description?: string;
   active: boolean;
+  /**
+   * 管理会計の品目 (畳・襖・リフォーム・カーテン類・自社商品・その他・諸経費。src/lib/mgmt/categories.ts の ID)。
+   * 空なら種別から決める (畳 → 畳、襖・障子・網戸 → 襖、カーテン → カーテン類、クロス → リフォーム、その他 → 諸経費)
+   */
+  mgmtCategory?: string;
 }
 
 export interface QuoteItem {
@@ -243,6 +248,8 @@ export interface QuoteItem {
   unit: string;
   unitPrice: number;
   amount: number;
+  /** 管理会計の品目 (明細ごとに選んだもの)。空なら商品の品目 → 見積の種別から決める (src/lib/mgmt/categories.ts の lineItemCategory) */
+  itemCategory?: string;
 }
 
 export type QuoteStatus =

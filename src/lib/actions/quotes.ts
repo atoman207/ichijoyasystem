@@ -2,7 +2,8 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { addAudit, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
+import { addAudit, getDb, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
+import { categoryName, isItemCategory } from "@/lib/mgmt/categories";
 import type { Approval, Database, Quote, QuoteItem, StoreId, User } from "@/lib/db/types";
 import { AUTO_APPROVAL_NOTE, settleOwnApproval } from "@/lib/approval-decide";
 import { addDays, toDateKey } from "@/lib/format";
@@ -47,10 +48,18 @@ function parseItems(formData: FormData, back: string): QuoteItem[] {
       unit: String(r.unit ?? "式"),
       unitPrice,
       amount: Math.round(qty * unitPrice),
+      // 管理会計の品目 (明細で選んだときだけ。空なら商品の品目 → 見積の種別から決める)
+      itemCategory: isItemCategory(getDb(), String(r.itemCategory ?? "")) ? String(r.itemCategory) : undefined,
     });
   }
   if (items.length === 0) fail(back, "明細を 1 行以上入力してください。");
   return items;
+}
+
+/** 明細の品目だけが違うか (金額・品名・数量などは同じ) */
+function categoryChanges(before: QuoteItem[], after: QuoteItem[]): { line: number; name: string; before?: string; after?: string }[] {
+  if (before.length !== after.length) return [];
+  return after.flatMap((it, k) => ((it.itemCategory ?? "") !== (before[k].itemCategory ?? "") ? [{ line: k + 1, name: it.name, before: before[k].itemCategory, after: it.itemCategory }] : []));
 }
 
 /** 施工場所 (お客様の住所と違うとき) と領収書の宛名。フォームに欄がないときは undefined (変更しない) */
@@ -253,11 +262,18 @@ export async function updateQuote(id: string, formData: FormData) {
       const sameItems = JSON.stringify(items.map((i) => [i.name, i.spec ?? "", i.qty, i.unit, i.unitPrice])) === JSON.stringify(q.items.map((i) => [i.name, i.spec ?? "", i.qty, i.unit, i.unitPrice]));
       const sameContent = sameItems && t.discount === q.discount && taxIncluded === Boolean(q.taxIncluded) && title === q.title && workDetails === (q.workDetails ?? "") && notes === (q.notes ?? "");
       const siteChanged = Boolean(site) && ((site!.siteAddress ?? "") !== (q.siteAddress ?? "") || (site!.receiptName ?? "") !== (q.receiptName ?? ""));
-      // 施工場所・領収書の宛名だけの変更は、承認・変更理由なしで反映する (金額・契約内容に関わらない)
-      if (sameContent && siteChanged) {
-        const changed = applySiteFields(db, q, site!, user);
+      const cats = sameItems ? categoryChanges(q.items, items) : [];
+      // 施工場所・領収書の宛名・明細の品目 (管理会計の分類) だけの変更は、承認・変更理由なしで反映する (金額・契約内容に関わらない)
+      if (sameContent && (siteChanged || cats.length)) {
+        const done: string[] = [];
+        if (siteChanged) done.push(...applySiteFields(db, q, site!, user).map((f) => (f === "siteAddress" ? "施工場所" : "領収書の宛名")));
+        if (cats.length) {
+          cats.forEach((c) => (q.items[c.line - 1].itemCategory = c.after));
+          addAudit(db, { userId: user.id, action: "update", entity: "quote", entityId: id, entityLabel: q.number, summary: `明細の品目 (管理会計) を変更: ${cats.map((c) => `${c.line} 行目 ${c.name} ${c.before ? categoryName(db, c.before) : "自動"} → ${c.after ? categoryName(db, c.after) : "自動"}`).join(" / ")}`, storeId: q.storeId, changes: cats.map((c) => ({ field: `items.${c.line}.itemCategory`, before: c.before ?? null, after: c.after ?? null })) });
+          done.push("明細の品目");
+        }
         q.updatedAt = now;
-        message = `${changed.map((f) => (f === "siteAddress" ? "施工場所" : "領収書の宛名")).join("・")}を変更しました${q.orderId ? " (受注にも反映しました)" : ""}。`;
+        message = `${done.join("・")}を変更しました${siteChanged && q.orderId ? " (受注にも反映しました)" : ""}。`;
         return;
       }
       if (sameContent) fail(back, "変更された内容がありません。");

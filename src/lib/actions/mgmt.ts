@@ -20,7 +20,7 @@ import { confirmAllocation, previewAllocation } from "@/lib/mgmt/allocation";
 import { confirmOmoteDiff, omoteDiffKey, previewOmoteDiff, reverseOmoteDiff } from "@/lib/mgmt/omote-diff";
 import { planTransfer, reverseTransfer } from "@/lib/mgmt/transfers";
 import { storePnl } from "@/lib/mgmt/pnl";
-import { CATEGORY_IDS, itemCategories, mainCategory, orderCategorySales } from "@/lib/mgmt/categories";
+import { CATEGORY_IDS, categoryName, isItemCategory, itemCategories, mainCategory, orderCategorySales, orderLineSource } from "@/lib/mgmt/categories";
 import { salesFacts } from "@/lib/assistant/facts";
 import { round4 } from "@/lib/mgmt/decimal";
 import { areaRowsFromXlsx } from "@/lib/xlsx";
@@ -254,6 +254,50 @@ export async function recordOrderCost(fd: FormData) {
     const review = rows.filter((r) => r.needsReview).length;
     msg = `材料の${stage === "actual" ? "使用実績" : stage === "planned" ? "使用予定" : "予想原価"}を登録しました (${rows.length} 行・${total.toLocaleString("ja-JP")} 円${review ? `・要確認 ${review} 行` : ""})。`;
     addAudit(db, { userId: user.id, action: "create", entity: "material_usage", entityId: o.id, entityLabel: o.number, summary: msg, storeId: o.storeId });
+  });
+  done(back, msg);
+}
+
+/**
+ * 受注の明細の品目 (管理会計) を直す (本部スタッフ・管理者)。見積の画面で直せない受注 (完了・入金済みで編集できない見積など) のため。
+ * 売上の明細の元 (見積 → 請求書) の明細に品目を書く。同じ受注の請求書の同じ明細も合わせる。月次確定済みの月の受注は断る
+ */
+export async function saveLineCategories(fd: FormData) {
+  const { user, back } = await start(fd, `${BASE}?tab=cost`, "edit");
+  const order = orderByNumberOrId(str(fd, "orderId"));
+  if (!order) fail(back, "受注が見つかりません。");
+  let msg = "";
+  await mutate((db) => {
+    const o = db.orders.find((x) => x.id === order.id)!;
+    const closed = closedReason(db, o.salesDate ?? today(), "明細の品目の変更");
+    if (closed) fail(back, closed);
+    const src = orderLineSource(db, o);
+    if (!src) fail(back, "この受注には見積・請求書の明細がありません (移行した受注は売上台帳の区分のままです)。");
+    const now = nowIso();
+    const changes: { field: string; before: unknown; after: unknown }[] = [];
+    const lines: string[] = [];
+    src.items.forEach((it, k) => {
+      if (!fd.has(`cat_${k}`)) return;
+      const raw = str(fd, `cat_${k}`);
+      if (raw && !isItemCategory(db, raw)) fail(back, `${k + 1} 行目: 品目を選んでください。`);
+      const next = raw || undefined;
+      if ((it.itemCategory ?? "") === (next ?? "")) return;
+      changes.push({ field: `items.${k + 1}.itemCategory`, before: it.itemCategory ?? null, after: next ?? null });
+      lines.push(`${k + 1} 行目 ${it.name}: ${it.itemCategory ? categoryName(db, it.itemCategory) : "自動"} → ${next ? categoryName(db, next) : "自動"}`);
+      it.itemCategory = next;
+    });
+    if (!changes.length) fail(back, "変更された品目がありません。");
+    src.record.updatedAt = now;
+    // 同じ受注の請求書 (見積から作った同じ明細) も合わせる
+    if (src.kind === "quote") {
+      for (const inv of db.invoices.filter((i) => i.orderId === o.id && i.items?.length === src.items.length)) {
+        if (!inv.items!.every((x, k) => x.name === src.items[k].name && x.amount === src.items[k].amount)) continue;
+        inv.items!.forEach((x, k) => (x.itemCategory = src.items[k].itemCategory));
+        inv.updatedAt = now;
+      }
+    }
+    msg = `明細の品目を変更しました (${changes.length} 行)。`;
+    addAudit(db, { userId: user.id, action: "update", entity: src.kind === "quote" ? "quote" : "invoice", entityId: src.record.id, entityLabel: src.record.number, summary: `明細の品目 (管理会計) を変更 (受注 ${o.number}): ${lines.join(" / ")}`, storeId: o.storeId, changes });
   });
   done(back, msg);
 }

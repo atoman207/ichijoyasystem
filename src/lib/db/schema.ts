@@ -169,6 +169,7 @@ export const TABLES: TableDef[] = [
       ["sizeLabel", "text"],
       ["description", "text"],
       ["active", "boolean not null default true"],
+      ["mgmtCategory", "text"],
     ],
     orderBy: ["id"],
   },

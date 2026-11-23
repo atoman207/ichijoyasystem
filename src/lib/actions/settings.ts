@@ -10,6 +10,7 @@ import { CUSTOMER_CREATOR_LABEL, OPS_SETTINGS_ID } from "@/lib/ops-settings";
 import type { StoreId } from "@/lib/db/types";
 import { canManageSettings } from "@/lib/auth/permissions";
 import { CATEGORY_LABEL } from "@/lib/constants";
+import { categoryName, isItemCategory, productItemCategory } from "@/lib/mgmt/categories";
 import { choice, fail, numField, requireActionUser, str, withMsg } from "./guards";
 
 async function requireAdmin(back: string) {
@@ -23,16 +24,30 @@ export async function updateProduct(id: string, formData: FormData) {
   const admin = await requireAdmin(back);
   const price = numField(formData, "unitPrice");
   if (price < 0) fail(back, "単価は 0 円以上で入力してください。");
+  let catChanged = false;
   await mutate((db) => {
     const p = db.products.find((x) => x.id === id);
     if (!p) fail(back, "商品が見つかりません。");
     const before = p.unitPrice;
     p.unitPrice = price;
     p.active = str(formData, "active") !== "off";
-    addAudit(db, { userId: admin.id, action: "update", entity: "product", entityId: id, entityLabel: p.name, summary: `商品単価を変更 (${p.name}: ¥${before.toLocaleString("ja-JP")} → ¥${price.toLocaleString("ja-JP")})`, changes: [{ field: "unitPrice", before, after: price }] });
+    const changes: { field: string; before: unknown; after: unknown }[] = [];
+    if (before !== price) changes.push({ field: "unitPrice", before, after: price });
+    // 管理会計の品目 (欄があるときだけ。空 = 種別から自動)
+    if (formData.has("mgmtCategory")) {
+      const raw = str(formData, "mgmtCategory");
+      if (raw && !isItemCategory(db, raw)) fail(back, "品目を選んでください。");
+      const next = raw || undefined;
+      if ((p.mgmtCategory ?? "") !== (next ?? "")) {
+        changes.push({ field: "mgmtCategory", before: p.mgmtCategory ?? null, after: next ?? null });
+        p.mgmtCategory = next;
+        catChanged = true;
+      }
+    }
+    addAudit(db, { userId: admin.id, action: "update", entity: "product", entityId: id, entityLabel: p.name, summary: `商品を変更 (${p.name}: 単価 ¥${before.toLocaleString("ja-JP")} → ¥${price.toLocaleString("ja-JP")}${catChanged ? ` / 品目 ${categoryName(db, productItemCategory(p))}` : ""})`, changes });
   });
   revalidatePath("/settings");
-  redirect(withMsg(back, "商品を更新しました。今後作成する見積に反映されます (既存の見積は変わりません)。"));
+  redirect(withMsg(back, catChanged ? "商品を更新しました。品目の変更は、品目を選んでいない見積の明細の集計 (管理会計) にも反映されます。" : "商品を更新しました。今後作成する見積に反映されます (既存の見積は変わりません)。"));
 }
 
 export async function createProduct(formData: FormData) {
@@ -43,7 +58,9 @@ export async function createProduct(formData: FormData) {
   if (numField(formData, "unitPrice") < 0) fail(back, "単価は 0 円以上で入力してください。");
   await mutate((db) => {
     const id = newId("p");
-    db.products.push({ id, category: choice(formData, "category", CATEGORY_LABEL, "other"), name, grade: str(formData, "grade") || undefined, unit: str(formData, "unit") || "式", unitPrice: numField(formData, "unitPrice"), sizeLabel: str(formData, "sizeLabel") || undefined, active: true });
+    const mgmt = str(formData, "mgmtCategory");
+    if (mgmt && !isItemCategory(db, mgmt)) fail(back, "品目を選んでください。");
+    db.products.push({ id, category: choice(formData, "category", CATEGORY_LABEL, "other"), name, grade: str(formData, "grade") || undefined, unit: str(formData, "unit") || "式", unitPrice: numField(formData, "unitPrice"), sizeLabel: str(formData, "sizeLabel") || undefined, active: true, mgmtCategory: mgmt || undefined });
     addAudit(db, { userId: admin.id, action: "create", entity: "product", entityId: id, entityLabel: name, summary: `商品を追加 (${name})` });
   });
   revalidatePath("/settings");

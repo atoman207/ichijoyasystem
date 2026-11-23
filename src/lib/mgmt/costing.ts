@@ -2,7 +2,7 @@ import type { Bom, BomLine, Database, Material, MaterialCost, MaterialKind, Mate
 import type { OrderFact } from "@/lib/assistant/facts";
 import { qtyTimesCost, round4 } from "./decimal";
 import { ruleAt, prevDay } from "./rules";
-import { ORDER_CATEGORY_TO_ITEM, AMOUNT_TO_CATEGORY } from "./categories";
+import { AMOUNT_TO_CATEGORY, lineItemCategory } from "./categories";
 import { dokoHints, pickDoko } from "./doko";
 
 /**
@@ -99,11 +99,12 @@ export function costingLines(db: Pick<Database, "quotes" | "products">, order: P
     const products = new Map(db.products.map((p) => [p.id, p]));
     return q.items
       .filter((i) => i.qty > 0)
-      .map((i) => ({ key: i.id, productId: i.productId, label: [i.name, i.spec].filter(Boolean).join(" "), qty: i.qty, itemCategory: ORDER_CATEGORY_TO_ITEM[products.get(i.productId ?? "")?.category ?? order.category] ?? "other" }));
+      .map((i) => ({ key: i.id, productId: i.productId, label: [i.name, i.spec].filter(Boolean).join(" "), qty: i.qty, itemCategory: lineItemCategory(i, products.get(i.productId ?? ""), order.category) }));
   }
+  // 移行した受注 (売上台帳の明細): 雑工事は売上の品目と同じくリフォーム
   return (fact?.items ?? [])
     .filter((i) => i.qty > 0 && i.cat !== "discount")
-    .map((i, n) => ({ key: `item${n}`, label: i.product, qty: i.qty, itemCategory: AMOUNT_TO_CATEGORY[i.cat as keyof typeof AMOUNT_TO_CATEGORY] ?? "other" }));
+    .map((i, n) => ({ key: `item${n}`, label: i.product, qty: i.qty, itemCategory: i.mgmtCat ?? (i.cat === "misc" && i.product.startsWith("雑工事") ? "reform" : (AMOUNT_TO_CATEGORY[i.cat as keyof typeof AMOUNT_TO_CATEGORY] ?? "other")) }));
 }
 
 /** 畳床などの製造仕様 (明細ごとに選んだ材料) */
