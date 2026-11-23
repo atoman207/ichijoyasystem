@@ -140,7 +140,7 @@ export async function makePlan(opts) {
     base: { path: baseFile, savedAt: head.savedAt, revision: head.revision },
     window: { since, until },
     options: { exclude: list(opts.exclude), only: list(opts.only), settings: wantSettings, users: !opts["no-users"] },
-    review: { include: review.include.length, exclude: review.exclude.length, decidedAt: review.decidedAt ?? null, decidedBy: review.decidedBy ?? null },
+    review: { include: review.include.length, exclude: review.exclude.length, decidedAt: review.decidedAt ?? null, decidedBy: review.decidedBy ? ((test.users ?? []).find((u) => u.id === review.decidedBy)?.name ?? review.decidedBy) : null },
     groups: g.groups.map(({ idxs: _i, ...x }) => x),
     settings: g.settings,
     ...body,
