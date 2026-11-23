@@ -123,8 +123,8 @@ export interface SheetPlan {
   counts: { add: number; update: number; same: number; duplicate: number; kept: number; remove: number; newCustomers: number; linkedCustomers: number; newCases: number; linkedCases: number; ambiguous: number; noCustomer: number };
 }
 
-const KJ: Partial<Record<ScheduleKind, string>> = { delivery: "納品", pickup: "引き取り", measure: "採寸", survey: "現地調査・見積", visit: "顧客訪問" };
-const CASE_KINDS = new Set<ScheduleKind>(["pickup", "delivery", "survey", "measure", "visit", "install"]);
+const KJ: Partial<Record<ScheduleKind, string>> = { delivery: "納品", pickup: "引き取り", measure: "採寸", survey: "現地調査・見積", visit: "顧客訪問", site: "現場管理" };
+const CASE_KINDS = new Set<ScheduleKind>(["pickup", "delivery", "survey", "measure", "visit", "install", "site"]);
 const OPEN_ORDER = new Set(["confirmed", "scheduled", "in_progress"]);
 const OPEN_INQUIRY = new Set(["new", "in_progress", "quoted"]);
 const family = (k: ScheduleKind) => (k === "pickup" ? "pickup" : k === "delivery" ? "delivery" : k === "install" ? "install" : CASE_KINDS.has(k) ? "visit" : k);

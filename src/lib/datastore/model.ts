@@ -710,7 +710,7 @@ export const GLOSSARY: [string, string][] = [
   ["問い合わせ・依頼・相談・反響・TEL", "inquiries / v_inquiries"],
   ["請求・請求書・売掛・未入金・督促", "invoices / v_invoices"],
   ["入金・支払い (お客様から)", "payments / v_payments"],
-  ["予定・スケジュール・引き取り・納品・現地調査・訪問", "schedule_events / v_schedule"],
+  ["予定・スケジュール・引き取り・納品・見積り・現地調査・訪問・現場管理", "schedule_events / v_schedule"],
   ["経費・レシート・精算", "expenses / v_expenses"],
   ["仕入・買掛・材料費・外注 (請求)", "purchases / v_purchases"],
   ["発注・発注書・注文 (仕入先へ)", "purchase_orders / v_purchase_orders"],

@@ -159,7 +159,7 @@ function tools(user: User): ToolDef[] {
           to: { type: "string", description: "YYYY-MM-DD" },
           store: { type: "string", description: "店舗 (id または名前)" },
           staff: { type: "string", description: "担当者の名前 (一部でよい)" },
-          kind: { type: "string", description: "予定の種類 (例: 引き取り・納品・施工・現地調査・会議)" },
+          kind: { type: "string", description: "予定の種類 (例: 引き取り・納品・施工・見積り (現地調査)・顧客訪問・現場管理・会議)" },
           keyword: { type: "string", description: "件名・メモ・場所に含む言葉" },
         },
         required: ["from", "to"],
@@ -298,7 +298,7 @@ function tools(user: User): ToolDef[] {
       properties: {
         action: { type: "string", enum: Object.keys(ACTION_LABEL), description: "操作の種類" },
         event_id: { type: "string", description: "予定の変更・削除: 予定の ID" },
-        event_kind: { type: "string", description: "予定の登録: 種類 (survey 現地調査・pickup 引取・delivery 納品・install 施工・visit 訪問・meeting 打合せ・leave 休暇・other その他 など。日本語の名前でもよい)" },
+        event_kind: { type: "string", description: "予定の登録: 種類 (survey 見積り (現地調査)・pickup 引取・delivery 納品・install 施工・visit 顧客訪問・site 現場管理・meeting 打合せ・leave 休暇・other その他 など。日本語の名前でもよい)" },
         title: { type: "string", description: "予定・社内連絡の件名 (予定は案件を指定すれば省略可)" },
         date: { type: "string", description: "予定の日付 YYYY-MM-DD" },
         end_date: { type: "string", description: "複数日の予定の終了日 YYYY-MM-DD" },

@@ -88,6 +88,7 @@ function sheet(day, opts = {}) {
   if (day === 1) {
     set(2, "X", "ズーム　8：00～");
     set(3, "X", "13時(高平)大西 建具採寸");
+    set(4, "X", "（八景水谷）藤田邸　大工工事　現場確認");
     set(2, "AA", "（須屋）大岩様　近所　挨拶");
   }
   set(6, "A", "総数");
@@ -192,6 +193,8 @@ const zoom = day1.find((e) => e.side === "person" && /ズーム/.test(e.raw));
 eq([zoom?.kind, zoom?.startTime, zoom?.person], ["meeting", "08:00", "光子"], "右上の人の予定: ズーム 8:00 (会議)");
 const saiSun = day1.find((e) => e.side === "person" && /採寸/.test(e.raw));
 eq([saiSun?.kind, saiSun?.area, saiSun?.name, saiSun?.startTime, saiSun?.slot], ["measure", "高平", "大西", "13:00", "pm"], "「13時(高平)大西 建具採寸」: 時刻のあとの地区と名前・採寸");
+const genba = day1.find((e) => e.side === "person" && /大工工事/.test(e.raw));
+eq([genba?.kind, genba?.area, genba?.name], ["site", "八景水谷", "藤田"], "「（八景水谷）藤田邸 大工工事 現場確認」は現場管理 (お客様の現場の工事の確認)");
 const aisatsu = day1.find((e) => e.side === "person" && /挨拶/.test(e.raw));
 eq([aisatsu?.kind, aisatsu?.name, aisatsu?.slot], ["visit", "大岩", "pm"], "「（須屋）大岩様 近所 挨拶」(午後の欄) は顧客訪問");
 eq(day1.filter((e) => e.side === "office").map((e) => [e.raw, e.person, e.remark]), [["インセンティブ準備", surname(hqStaff), "現金支給分"]], "事務の欄: その人の予定 (集金準備は省く)");
@@ -336,7 +339,8 @@ const yamaDay2 = ev((e) => /山口/.test(e.title) && e.date === D(2));
 eq([yamaDay2?.orderId, yamaDay2?.customerId], ["o_yama", "cust_yama"], "山口様の 2 日目の引き取りは進行中の受注にひも付け");
 ok(!db().schedule.some((e) => e.id === "ev_legacy_gone") && db().auditLogs.some((a) => a.action === "delete" && a.entityId === "ev_legacy_gone"), "なくなった予定を消し、変更履歴に残す (試験期間の引き継ぎも同じ扱い)");
 ok(db().schedule.some((e) => e.id === "ev_legacy_edit") && db().schedule.some((e) => e.id === "ev_old_before"), "新システムで変えた予定・取り込む日より前の予定は残す");
-eq([db().customers.length - before.customers, db().inquiries.length - before.inquiries], [2, 4], "新しい顧客 2 人 (新規田・大西)・新しい案件 4 件 (大岩・早川・新規田・大西)");
+eq([db().customers.length - before.customers, db().inquiries.length - before.inquiries], [3, 5], "新しい顧客 3 人 (新規田・大西・藤田)・新しい案件 5 件 (大岩・早川・新規田・大西・藤田)");
+eq(ev((e) => /大工工事/.test(e.title))?.kind, "site", "現場管理の予定として取り込む");
 const memoEv = ev((e) => e.title === "社長 3450 オイル交換");
 eq([memoEv?.kind, memoEv?.storeId, memoEv?.customerId], ["other", "koshi", undefined], "お客様以外の書き込みは店舗の「その他」の予定 (顧客なし)");
 const office = ev((e) => e.title === "インセンティブ準備");

@@ -267,20 +267,23 @@ export const SCHEDULE_GROUP_LABEL: Record<ScheduleGroup, string> = {
  * 予定の種別 (表示順 = この並び)
  * - group: case = 案件 (問い合わせ・見積・受注) に紐づく予定 / internal = 案件と関係のない予定
  * - minutes: 開始時刻を入れたときの標準の所要時間 (終了時刻の初期値)。0 は終日を既定にする
+ * - short: 予定表のアイコンの横に出す短い名前 (お客様のご要望 2026-11-23「アイコンの横に『納品』『引取』『見積り』『顧客訪問』『現場管理』などの文字」)
+ * survey は見積り (現地調査・見積) の予定 (お客様の言い方は「見積予定」)
  */
-export const SCHEDULE_KIND: Record<ScheduleKind, { label: string; tone: Tone; group: ScheduleGroup; minutes: number }> = {
-  survey: { label: "現地調査", tone: "info", group: "case", minutes: 60 },
-  measure: { label: "採寸", tone: "info", group: "case", minutes: 60 },
-  pickup: { label: "引き取り", tone: "warn", group: "case", minutes: 60 },
-  delivery: { label: "納品", tone: "good", group: "case", minutes: 90 },
-  install: { label: "施工", tone: "accent", group: "case", minutes: 360 },
-  visit: { label: "顧客訪問", tone: "serious", group: "case", minutes: 60 },
-  meeting: { label: "会議・打合せ", tone: "neutral", group: "internal", minutes: 60 },
-  gathering: { label: "会合", tone: "neutral", group: "internal", minutes: 120 },
-  company: { label: "社内行事", tone: "neutral", group: "internal", minutes: 120 },
-  event: { label: "イベント", tone: "neutral", group: "internal", minutes: 0 },
-  leave: { label: "休暇・不在", tone: "critical", group: "internal", minutes: 0 },
-  other: { label: "その他", tone: "neutral", group: "internal", minutes: 60 },
+export const SCHEDULE_KIND: Record<ScheduleKind, { label: string; short: string; tone: Tone; group: ScheduleGroup; minutes: number }> = {
+  survey: { label: "見積り (現地調査)", short: "見積り", tone: "info", group: "case", minutes: 60 },
+  measure: { label: "採寸", short: "採寸", tone: "info", group: "case", minutes: 60 },
+  pickup: { label: "引き取り", short: "引取", tone: "warn", group: "case", minutes: 60 },
+  delivery: { label: "納品", short: "納品", tone: "good", group: "case", minutes: 90 },
+  install: { label: "施工", short: "施工", tone: "accent", group: "case", minutes: 360 },
+  visit: { label: "顧客訪問", short: "顧客訪問", tone: "serious", group: "case", minutes: 60 },
+  site: { label: "現場管理", short: "現場管理", tone: "accent", group: "case", minutes: 60 },
+  meeting: { label: "会議・打合せ", short: "会議", tone: "neutral", group: "internal", minutes: 60 },
+  gathering: { label: "会合", short: "会合", tone: "neutral", group: "internal", minutes: 120 },
+  company: { label: "社内行事", short: "社内行事", tone: "neutral", group: "internal", minutes: 120 },
+  event: { label: "イベント", short: "イベント", tone: "neutral", group: "internal", minutes: 0 },
+  leave: { label: "休暇・不在", short: "休暇", tone: "critical", group: "internal", minutes: 0 },
+  other: { label: "その他", short: "その他", tone: "neutral", group: "internal", minutes: 60 },
 };
 
 export const SCHEDULE_KINDS = Object.keys(SCHEDULE_KIND) as ScheduleKind[];

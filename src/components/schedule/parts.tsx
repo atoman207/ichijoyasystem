@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import type { ComponentType } from "react";
-import { CalendarDays, CalendarOff, Hammer, Handshake, Landmark, MapPin, Megaphone, PackageOpen, PartyPopper, Ruler, TriangleAlert, Truck, Users } from "lucide-react";
+import { CalendarDays, CalendarOff, ClipboardList, Hammer, Handshake, HardHat, Landmark, Megaphone, PackageOpen, PartyPopper, Ruler, TriangleAlert, Truck, Users } from "lucide-react";
 import type { ScheduleKind } from "@/lib/db/types";
 import { SCHEDULE_GROUP_LABEL, SCHEDULE_KIND, SCHEDULE_KINDS, type ScheduleGroup } from "@/lib/constants";
 import type { WorkToken } from "@/lib/work-summary";
@@ -25,12 +25,13 @@ export interface KindStyle {
 }
 
 export const KIND_STYLE: Record<ScheduleKind, KindStyle> = {
-  survey: { icon: MapPin, bar: "bg-[#2a78d6]", border: "border-l-[#2a78d6]", soft: "bg-[#eaf2fd]", ink: "text-[#1c5cab]" },
+  survey: { icon: ClipboardList, bar: "bg-[#2a78d6]", border: "border-l-[#2a78d6]", soft: "bg-[#eaf2fd]", ink: "text-[#1c5cab]" },
   measure: { icon: Ruler, bar: "bg-[#5b4fd6]", border: "border-l-[#5b4fd6]", soft: "bg-[#efedfc]", ink: "text-[#4338b0]" },
   pickup: { icon: PackageOpen, bar: "bg-[#c98500]", border: "border-l-[#c98500]", soft: "bg-[#fff5dc]", ink: "text-[#8a5a00]" },
   delivery: { icon: Truck, bar: "bg-[#0d9488]", border: "border-l-[#0d9488]", soft: "bg-[#e2f5f2]", ink: "text-[#0b6b62]" },
   install: { icon: Hammer, bar: "bg-[#1f7a4d]", border: "border-l-[#1f7a4d]", soft: "bg-[#e6f3eb]", ink: "text-[#145a37]" },
   visit: { icon: Handshake, bar: "bg-[#d9602f]", border: "border-l-[#d9602f]", soft: "bg-[#fdeee6]", ink: "text-[#9a3f16]" },
+  site: { icon: HardHat, bar: "bg-[#6d7f12]", border: "border-l-[#6d7f12]", soft: "bg-[#f1f5df]", ink: "text-[#4d5a0b]" },
   meeting: { icon: Users, bar: "bg-[#4f6b8a]", border: "border-l-[#4f6b8a]", soft: "bg-[#edf1f6]", ink: "text-[#36506d]" },
   gathering: { icon: Landmark, bar: "bg-[#8a6a4f]", border: "border-l-[#8a6a4f]", soft: "bg-[#f4efea]", ink: "text-[#6b4f37]" },
   company: { icon: PartyPopper, bar: "bg-[#c2477f]", border: "border-l-[#c2477f]", soft: "bg-[#fbebf3]", ink: "text-[#97305f]" },
@@ -45,6 +46,11 @@ export function kindStyle(kind: ScheduleKind): KindStyle {
 
 export function kindLabel(kind: ScheduleKind): string {
   return SCHEDULE_KIND[kind]?.label ?? kind;
+}
+
+/** アイコンの横の短い名前 (納品・引取・見積り・顧客訪問・現場管理 など) */
+export function kindShort(kind: ScheduleKind): string {
+  return SCHEDULE_KIND[kind]?.short ?? kindLabel(kind);
 }
 
 export const KINDS_BY_GROUP: Record<ScheduleGroup, ScheduleKind[]> = {
@@ -62,15 +68,33 @@ export function KindIcon({ kind, className }: { kind: ScheduleKind; className?: 
 }
 
 /**
- * 予定の種類の印 (色の四角に白いアイコン)。予定表のチップの左端 (店舗名の左) に置き、引き取り・納品・現地調査 (見積)・顧客訪問などを
- * 色とアイコンで見分ける (お客様のご要望 2026-11-23「■2」。件名の右の「引取」「納品」の文字の代わり)
+ * 予定の種類の印 (色の札に白いアイコンと短い名前「納品」「引取」「見積り」「顧客訪問」「現場管理」…)。予定表のチップの左端 (店舗名の左) に置く
+ * (お客様のご要望 2026-11-23「■2」= 件名の右の「引取」「納品」の文字の代わりに色とアイコン、同日の追加のご要望 = 初めての社員にも分かるよう
+ * アイコンの横に文字)。iconOnly はアイコンだけ (凡例など、横に名前を書く所)
  */
-export function KindMark({ kind, className, size = "sm" }: { kind: ScheduleKind; className?: string; size?: "sm" | "md" }) {
+export function KindMark({ kind, className, size = "sm", iconOnly = false }: { kind: ScheduleKind; className?: string; size?: "sm" | "md"; iconOnly?: boolean }) {
   const s = kindStyle(kind);
   const Icon = s.icon;
+  if (iconOnly) {
+    return (
+      <span aria-hidden title={kindLabel(kind)} className={clsx("inline-flex shrink-0 items-center justify-center rounded-[4px] text-white", size === "md" ? "h-5 w-5" : "h-4 w-4", s.bar, className)}>
+        <Icon className={size === "md" ? "h-3.5 w-3.5" : "h-3 w-3"} />
+      </span>
+    );
+  }
   return (
-    <span aria-hidden title={kindLabel(kind)} className={clsx("inline-flex shrink-0 items-center justify-center rounded-[4px] text-white", size === "md" ? "h-5 w-5" : "h-4 w-4", s.bar, className)}>
-      <Icon className={size === "md" ? "h-3.5 w-3.5" : "h-3 w-3"} />
+    <span
+      title={kindLabel(kind)}
+      data-testid="kind-mark"
+      className={clsx(
+        "inline-flex shrink-0 items-center gap-0.5 rounded-[4px] font-semibold whitespace-nowrap text-white",
+        size === "md" ? "h-5 px-1.5 text-[11px]" : "h-4 px-1 text-[10px] leading-none",
+        s.bar,
+        className,
+      )}
+    >
+      <Icon className={size === "md" ? "h-3.5 w-3.5" : "h-3 w-3"} aria-hidden />
+      {kindShort(kind)}
     </span>
   );
 }
@@ -118,9 +142,13 @@ export function KindLegend({ className }: { className?: string }) {
         <div key={g} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <span className="font-semibold text-ink-3">{SCHEDULE_GROUP_LABEL[g]}</span>
           {KINDS_BY_GROUP[g].map((k) => (
-            <span key={k} className="inline-flex items-center gap-1">
+            <span key={k} className="inline-flex items-center gap-1" title={kindLabel(k)}>
               <KindMark kind={k} />
-              {kindLabel(k)}
+              {/* 正式な名前の補足 (見積り → 現地調査・会議 → 打合せ・休暇 → 不在) */}
+              {(() => {
+                const rest = kindLabel(k).includes(kindShort(k)) ? kindLabel(k).replace(kindShort(k), "").replace(/[()（）]/g, "").replace(/^[\s・]+|[\s・]+$/g, "") : "";
+                return rest ? <span className="text-ink-3">({rest})</span> : null;
+              })()}
             </span>
           ))}
         </div>

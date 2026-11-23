@@ -188,7 +188,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             today={toDateKey(new Date())}
             newParams={caseParam}
             returnTo={`/inquiries/${inq.id}`}
-            quickKinds={order ? ["pickup", "delivery", "install", "visit"] : ["survey", "measure", "visit"]}
+            quickKinds={order ? ["pickup", "delivery", "install", "site", "visit"] : ["survey", "measure", "visit"]}
             canAdd={(open || Boolean(order)) && canAccessStore(user, inq.storeId)}
             emptyText={open ? "まだ予定はありません。現地調査・採寸の日程が決まったら登録してください (未対応の問い合わせは「対応中」になります)" : "予定はありません"}
             description="現地調査・採寸・顧客訪問を担当者つきで登録すると、店舗の共通カレンダーに自動で反映されます。見積・受注に進んでも同じ案件の予定として引き継がれます"

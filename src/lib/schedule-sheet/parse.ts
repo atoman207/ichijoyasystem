@@ -117,7 +117,9 @@ export function monthOfLabel(label: string): { year: number; month: number } | u
 /** 店舗の欄の中で予定ではない書き込み (欄の見出し・集計・メモ) */
 const SKIP_RE = /^繰り?越|工場ストップ|^上限|まで$|^※|係数|翌日持越|集金準備|指示書|^AM$|^PM$|^計$|^合計|^現場名|^ハギ$|^シキ$|^無し$|^人$|^表$|^新$/;
 const LEAVE_RE = /有休|有給|公休|振休|代休|休み|お休|欠勤|特休|慶弔/;
-const SURVEY_RE = /現見|現調|見積(?!書)|見積のみ|下見|現場確認/;
+const SURVEY_RE = /現見|現調|見積(?!書)|見積のみ|下見/;
+/** 現場管理 (工事・施工の現場の確認・立ち会い・取り付けの立ち会い) */
+const SITE_RE = /現場管理|現場確認|工事|立会|立ち会|取り?付け?|施工確認|養生/;
 const MEASURE_RE = /採寸/;
 const CLAIM_RE = /クレーム/;
 const MEETING_RE = /会議|ミーティング|ズーム|zoom|打合せ|打ち合わせ|打合わせ|面談|研修|勉強会|説明会/i;
@@ -215,6 +217,8 @@ function kindOf(side: SheetSide, raw: string, total: number, customerLike: boole
   if (LEAVE_RE.test(s) && !/^\(/.test(s)) return "leave";
   if (SURVEY_RE.test(s)) return "survey";
   if (MEASURE_RE.test(s)) return "measure";
+  // お客様の現場の工事・取り付けの確認 (枚数のある引き取り・納品の行は除く)
+  if (customerLike && total === 0 && SITE_RE.test(s)) return "site";
   if (side === "hagi" || side === "shiki") {
     if (customerLike && CLAIM_RE.test(s) && total === 0) return "visit";
     if (total > 0) return side === "hagi" ? "pickup" : "delivery";

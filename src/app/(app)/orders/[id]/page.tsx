@@ -319,7 +319,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             today={today}
             newParams={`orderId=${o.id}`}
             returnTo={returnTo}
-            quickKinds={["pickup", "delivery", "install", "visit", "measure", "survey"]}
+            quickKinds={["pickup", "delivery", "install", "site", "visit", "measure", "survey"]}
             canAdd={o.status !== "cancelled" && ownStore}
             description="引き取り・納品・施工・顧客訪問などを案件に登録すると、担当者とともに店舗の共通カレンダーへ自動で反映されます。問い合わせ段階の現地調査も含みます"
           />

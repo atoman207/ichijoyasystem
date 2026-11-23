@@ -1041,6 +1041,8 @@ export type ScheduleKind =
   | "delivery"
   | "install"
   | "visit"
+  /** 現場管理 (工事・施工の現場の確認・立ち会い。お客様のご要望 2026-11-23「予定表のアイコン: 見積り・現場管理」) */
+  | "site"
   | "meeting"
   | "gathering"
   | "company"
