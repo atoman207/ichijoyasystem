@@ -76,7 +76,7 @@ export function PublicHeader({ current }: { current: PublicPage }) {
 
           {/* ロゴ */}
           <Link href="/home" onClick={close} aria-label="一畳屋 統合業務システム (ホーム)" className={LOGO_LINK}>
-            <IchijoyaLogo title="" className="h-6 w-auto sm:h-7" />
+            <IchijoyaLogo title="" className="h-4 w-auto max-w-[4.75rem] shrink-0 sm:h-7 sm:max-w-none" />
           </Link>
 
           {/* PC: メニューのタブ */}

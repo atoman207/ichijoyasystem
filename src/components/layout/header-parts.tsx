@@ -14,7 +14,7 @@ export const HEADER_WRAP = "pointer-events-none sticky top-0 z-40 px-3 pt-3 sm:p
 export const HEADER_BAR =
   "pointer-events-auto mx-auto flex h-16 max-w-[1680px] items-center gap-1 rounded-2xl border border-white/80 bg-panel/85 px-2 shadow-header backdrop-blur-xl sm:gap-2 sm:px-3 xl:gap-4 xl:px-4";
 /** ロゴのリンク */
-export const LOGO_LINK = "flex shrink-0 items-center rounded-xl px-1.5 py-2 outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/40";
+export const LOGO_LINK = "flex shrink-0 items-center rounded-xl px-0.5 py-1.5 outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/40 sm:px-1.5 sm:py-2";
 /** 本文の外枠と中身 (中身はコンテナクエリの基準) */
 export const MAIN_PAD = "px-3 pt-5 pb-24 sm:px-4 lg:px-6 lg:pt-7";
 export const MAIN_INNER = "@container mx-auto w-full max-w-[1680px] animate-fade";

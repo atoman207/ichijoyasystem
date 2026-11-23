@@ -543,7 +543,7 @@ export function AppShell({
             aria-label="一畳屋 統合業務システム (ダッシュボード)"
             className={LOGO_LINK}
           >
-            <IchijoyaLogo title="" className="h-6 w-auto sm:h-7" />
+            <IchijoyaLogo title="" className="h-4 w-auto max-w-[4.75rem] shrink-0 sm:h-7 sm:max-w-none" />
           </Link>
 
           {/* 重要な機能 (予定表): ロゴの右に常に表示し、アニメーションで目立たせる */}
@@ -729,11 +729,11 @@ export function AppShell({
                 aria-expanded={menu === "user"}
                 title={`${user.name} (${user.roleLabel})`}
                 className={clsx(
-                  "group flex items-center gap-1 rounded-full p-1 outline-none transition-colors hover:bg-subtle focus-visible:ring-2 focus-visible:ring-accent/40 sm:pr-1.5",
+                  "group flex shrink-0 items-center gap-1 rounded-full p-1 outline-none transition-colors hover:bg-subtle focus-visible:ring-2 focus-visible:ring-accent/40 sm:pr-1.5",
                   menu === "user" && "bg-subtle",
                 )}
               >
-                <span className={clsx("inline-flex", ICON_ZOOM, "group-hover:scale-110 group-focus-visible:scale-110")}>
+                <span className={clsx("inline-flex shrink-0", ICON_ZOOM, "group-hover:scale-110 group-focus-visible:scale-110")}>
                   <Avatar name={user.name} id={user.id} size={32} ring src={user.avatarSrc} />
                 </span>
                 <ChevronDown className={clsx("hidden h-4 w-4 text-ink-3 transition-transform sm:block", menu === "user" && "rotate-180")} />
