@@ -8,6 +8,8 @@ import type { NextRequest } from "next/server";
  * サーバーの定期実行 (/api/cron/*) はログインなしで届くため matcher から除外し、署名・共有鍵の確認を各ルートで行う。
  * サイトのアイコン (/icon.png・/apple-icon.png。src/app の icon.png・apple-icon.png) もログイン前の画面 (ブラウザーのタブ・
  * スマートフォンのホーム画面・リンクのプレビュー) で読み込まれるため除外する。
+ * ホーム画面に追加するときのマニフェスト (/manifest.webmanifest。src/app/manifest.ts) とそのアイコン (public/icons/*) も、
+ * ログイン前に読まれるため除外する (ログインに回すと、アプリとして追加できない)。
  * 公開ホームの店舗写真・飾り (public/brand/*) も除外する。
  * 署名の検証とロール判定はサーバーコンポーネント側 (requireUser) で行う。
  */
@@ -40,5 +42,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.png|apple-icon.png|brand/|api/health|api/integrations/|api/doc/|api/cron/).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.png|apple-icon.png|manifest.webmanifest|icons/|brand/|api/health|api/integrations/|api/doc/|api/cron/).*)"],
 };
