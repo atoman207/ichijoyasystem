@@ -6,11 +6,12 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canSeeAllStores, canViewAuditEntry } from "@/lib/auth/permissions";
-import { userName } from "@/lib/db/queries";
-import { handoffInquiry, linkInquiryToCustomer, registerCustomerFromInquiry, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
-import { findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
+import { canAccessStore, canSeeAllStores, canViewAuditEntry, scopeByStore } from "@/lib/auth/permissions";
+import { customerOptions, userName } from "@/lib/db/queries";
+import { handoffInquiry, linkInquiryToCustomer, linkInquiryToSelectedCustomer, registerCustomerFromInquiry, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
+import { customerOptionLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
 import { addCommLog } from "@/lib/actions/customers";
+import { CustomerSearch } from "@/components/features/CustomerSearch";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, ORDER_STATUS, QUOTE_STATUS, TASK_STATUS } from "@/lib/constants";
 import { Badge, Button, Card, CardHeader, ChannelTag, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
@@ -25,9 +26,9 @@ import { MediaSelect, MediaTag, PromotionSelect, promotionOptions } from "@/comp
 import { inquiryMediaMap } from "@/lib/ops-reports/promo-analysis";
 import { MEDIA_SOURCE_LABEL, mediaLabel } from "@/lib/media";
 
-export default async function InquiryDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
+export default async function InquiryDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string; cq?: string }> }) {
   const { id } = await params;
-  const { msg, err } = await searchParams;
+  const { msg, err, cq } = await searchParams;
   const user = await requireUser();
   const db = getDb();
   const inq = db.inquiries.find((x) => x.id === id);
@@ -59,6 +60,8 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const ik = inq.intake;
   const dup = customer ? null : findDuplicateCustomers(db, { name: inq.contactName, phone: inq.contactPhone, otherPhones: [ik?.phone, ik?.callbackPhone].filter((x): x is string => Boolean(x)), email: ik?.email, postalCode: ik?.postalCode, address: ik?.address });
   const candidates = dup ? [...dup.high.map((m) => ({ ...m, level: "high" as const })), ...dup.check.map((m) => ({ ...m, level: "check" as const })), ...dup.sameName.slice(0, 5).map((m) => ({ ...m, level: "name" as const }))] : [];
+  const linkChoices = !customer && !viewOnly ? customerOptions(scopeByStore(user, db.customers), cq) : null;
+  const linkCustomers = linkChoices?.options.filter((c) => canAccessStore(user, c.storeId)) ?? [];
   const storeName = (sid: string) => db.stores.find((s) => s.id === sid)?.name ?? sid;
   // AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) からの受付: 会話の記録
   const fromAi = isAiChannel(inq.channel);
@@ -281,17 +284,18 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
               </div>
             ) : (
               <div>
-                <p className="text-sm text-ink-2">{inq.contactName} 様はまだ顧客登録されていません。</p>
+                <p className="text-sm text-ink-2">{inq.contactName} 様はまだ顧客登録されていません。既存のお客様なら住所で探して紐づけてください (受注番号は不要です)。</p>
                 {candidates.length > 0 && (
                   <div className="mt-3 rounded-xl border border-warn/40 bg-warn-soft/40 p-3 text-xs" data-testid="inquiry-duplicates">
-                    <div className="mb-2 font-semibold text-ink">既存の顧客 (全店舗) に候補があります</div>
+                    <div className="mb-2 font-semibold text-ink">既存の顧客 (全店舗) に候補があります (住所をいちばん確かめてください)</div>
                     <ul className="space-y-2">
                       {candidates.map((m) => (
                         <li key={m.id} className="rounded-lg bg-panel p-2">
                           <div className="flex flex-wrap items-baseline gap-x-2">
                             {canAccessStore(user, m.storeId) ? <Link href={`/customers/${m.id}`} className="font-medium text-accent hover:underline">{m.code} {m.name}</Link> : <span className="font-medium text-ink">{m.code} {m.name}</span>}
-                            <span className="text-ink-3">{storeName(m.storeId)}{m.area ? ` · 地区 ${m.area}` : ""}</span>
+                            <span className="text-ink-3">{storeName(m.storeId)}</span>
                           </div>
+                          <div className="mt-0.5 text-ink-2">{m.address || (m.area ? `地区 ${m.area}` : "住所未登録")}</div>
                           <div className="text-ink-3">{m.level === "high" ? "重複の可能性が高い" : m.level === "check" ? "要確認" : "参考"}: {m.reasons.join("・")}</div>
                           {canAccessStore(user, m.storeId) ? (
                             <form action={linkInquiryToCustomer.bind(null, inq.id, m.id)} className="mt-1.5">
@@ -303,7 +307,22 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                         </li>
                       ))}
                     </ul>
-                    {dup && dup.sameNameTotal > 5 && <p className="mt-2 text-ink-3">同じ氏名の顧客がほかに {dup.sameNameTotal - 5} 件あります (顧客一覧で検索できます)。</p>}
+                    {dup && dup.sameNameTotal > 5 && <p className="mt-2 text-ink-3">同じ氏名の顧客がほかに {dup.sameNameTotal - 5} 件あります (下の検索か顧客一覧で住所を確かめてください)。</p>}
+                  </div>
+                )}
+                {linkChoices && (
+                  <div className="mt-3 rounded-xl border border-line bg-subtle/50 p-3" data-testid="inquiry-link-search">
+                    <div className="mb-2 text-xs font-semibold text-ink">住所・お名前で既存の顧客を探して紐づける</div>
+                    {linkChoices.searchable && <CustomerSearch total={linkChoices.total} q={cq} shown={linkCustomers.length} keep={{}} />}
+                    <form action={linkInquiryToSelectedCustomer.bind(null, inq.id)} className="mt-2 space-y-2">
+                      <Field label="既存顧客" hint="候補の住所を確かめて選んでください">
+                        <Select name="customerId" defaultValue="" required>
+                          <option value="">{linkChoices.searchable && !cq ? "(上で住所・お名前を検索)" : "(選んでください)"}</option>
+                          {linkCustomers.map((c) => <option key={c.id} value={c.id}>{customerOptionLabel(c)}</option>)}
+                        </Select>
+                      </Field>
+                      {linkCustomers.length > 0 ? <Button type="submit" size="sm" variant="secondary">この顧客に紐づける</Button> : <p className="text-xs text-ink-3">上で住所・お名前を検索すると候補が出ます。</p>}
+                    </form>
                   </div>
                 )}
                 <form action={registerCustomerFromInquiry.bind(null, inq.id)} className="mt-3 space-y-2">
@@ -313,7 +332,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                       上の候補とは別のお客様であることを確認した
                     </label>
                   )}
-                  <Button type="submit" size="sm" variant={candidates.length ? "secondary" : "primary"}>{candidates.length ? "新しい顧客として登録する" : "顧客として登録する"}</Button>
+                  <Button type="submit" size="sm" variant={candidates.length || linkCustomers.length ? "secondary" : "primary"}>{candidates.length || linkCustomers.length ? "新しい顧客として登録する" : "顧客として登録する"}</Button>
                 </form>
               </div>
             )}

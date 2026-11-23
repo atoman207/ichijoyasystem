@@ -7,6 +7,7 @@ import { createInquiry } from "@/lib/actions/inquiries";
 import { CustomerSearch } from "@/components/features/CustomerSearch";
 import { DuplicateWatcher } from "@/components/features/DuplicateWatcher";
 import { checkCustomerDuplicates } from "@/lib/actions/customers";
+import { customerOptionLabel } from "@/lib/duplicates";
 import { CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { MediaSelect, PromotionSelect, promotionOptions } from "@/components/ops-reports/MediaFields";
 import { Button, Card, Field, Flash, FormActions, Input, LinkButton, Note, PageHeader, Select, Textarea } from "@/components/ui";
@@ -24,16 +25,16 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
     <div className="max-w-3xl">
       <Flash err={err} />
       <PageHeader title="問い合わせを登録" back={{ href: "/inquiries", label: "問い合わせ一覧" }} />
-      <Note tone="accent">電話・来店 (対面)・郵送・LINE などで受けた問い合わせを手入力で登録します。スマートフォン・タブレットからも入力できます。手書きのメモを撮影する・話して入力する・通話の録音から読み取るときは <Link href="/inquiries/reception" className="font-medium underline">受付を登録</Link> を使うと、AI がお名前・電話番号・用件を読み取り、登録済みのお客様・進行中の案件も探します。</Note>
+      <Note tone="accent">電話・来店 (対面)・郵送・LINE などで受けた問い合わせを手入力で登録します。既存のお客様の新規案件は、受注番号は不要です。「既存顧客を選択」で住所・お名前から選んでください (同じ氏名・電話でも住所が違うことがあります)。手書きのメモを撮影する・話して入力する・通話の録音から読み取るときは <Link href="/inquiries/reception" className="font-medium underline">受付を登録</Link> を使うと、AI がお名前・電話・住所・用件を読み取り、登録済みのお客様・進行中の案件も探します。</Note>
       <Card className="mt-4">
         {choices.searchable && <CustomerSearch total={choices.total} q={cq} shown={customers.filter((c) => c.id !== customerId).length} keep={{ customerId }} />}
         <form action={createInquiry} className="space-y-5">
           <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
-            <Field label="既存顧客を選択" hint={choices.searchable ? "上の検索で候補を表示。未登録のお客様は下の氏名欄に入力" : "未登録のお客様は下の氏名欄に入力"}>
+            <Field label="既存顧客を選択" hint={choices.searchable ? "上の検索 (住所・町名が確実) で候補を表示。未登録のお客様は下の氏名欄に入力" : "未登録のお客様は下の氏名欄に入力。候補の住所を確かめて選んでください"}>
               <Select name="customerId" defaultValue={customerId ?? ""}>
                 <option value="">(新規のお客様)</option>
                 {customers.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name} ({c.code})</option>
+                  <option key={c.id} value={c.id}>{customerOptionLabel(c)}</option>
                 ))}
               </Select>
             </Field>

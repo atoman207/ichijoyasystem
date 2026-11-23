@@ -196,6 +196,28 @@ section("2. 照合と登録先の提案");
   const m7 = R.matchReception(db(), koshiStaff, f({ customerName: "受付 一郎", phone: "" }));
   eq(m7.customers.map((c) => c.level), ["name"], "電話番号がなければお名前で候補を出す (自動では選ばない)");
   eq(m7.suggestion.customerId, undefined, "お名前だけの一致はお客様を選ばない");
+
+  const m8 = R.matchReception(db(), koshiStaff, f({ customerName: "受付 一郎", phone: "", address: "合志市須屋 1-1" }));
+  eq(m8.customers[0]?.level, "address", "住所+氏名でお客様を見つける");
+  eq(m8.suggestion.customerId, "cust_rc1", "住所が一致すれば自動で選ぶ");
+
+  const m9 = R.matchReception(db(), koshiStaff, f({ phone: "090-8101-0001", customerName: "受付 一郎", address: "熊本県合志市須屋 1-1" }));
+  eq(m9.customers[0]?.level, "address", "住所一致を電話より優先して表示する");
+  eq(m9.suggestion.customerId, "cust_rc1", "住所+電話でもお客様を選ぶ");
+
+  await store.mutate((d) => {
+    d.customers.push({
+      id: "cust_rc1b", code: "C-RC1B", name: "受付 別邸", kana: "", type: "individual", phone: "090-8101-0001",
+      postalCode: "", address: "熊本県合志市幾久富 9-9", storeId: "koshi", preferredChannel: "phone", firstContactChannel: "phone",
+      tags: [], notes: "", createdAt: nowIso, updatedAt: nowIso,
+    });
+  });
+  const m10 = R.matchReception(db(), koshiStaff, f({ phone: "090-8101-0001", customerName: "受付", address: "合志市幾久富 9-9" }));
+  eq(m10.suggestion.customerId, "cust_rc1b", "同じ電話でも住所が一致する方を選ぶ");
+  ok(m10.warnings.some((w) => w.includes("電話番号が一致するお客様が")), "同じ電話の複数候補を知らせる");
+  await store.mutate((d) => {
+    d.customers = d.customers.filter((c) => c.id !== "cust_rc1b");
+  });
 }
 
 /* ================================================================== */

@@ -271,7 +271,8 @@ export interface CaseCandidate {
 
 export interface CustomerCandidate {
   customer: Customer;
-  level: "phone" | "name";
+  /** address = 住所で一致 (いちばんの目印) / phone = 電話 / name = お名前など */
+  level: "phone" | "address" | "name";
   reason: string;
 }
 
@@ -355,43 +356,78 @@ const digitsOf = (v: string) => {
 
 /**
  * 受付の内容から、登録済みのお客様・仕入先・進行中の案件を探し、登録先の候補を決める。
- * 閲覧できる店舗のお客様・案件だけを候補にする (ほかの店舗のお客様と一致したときは店舗名だけ知らせる)
+ * 閲覧できる店舗のお客様・案件だけを候補にする (ほかの店舗のお客様と一致したときは店舗名だけ知らせる)。
+ * お客様の判別は住所をいちばんの目印にする (同じ氏名・電話が別住所で登録されることがある)。
  */
 export function matchReception(db: MatchDb, user: User, f: ReceptionFields, today = new Date()): ReceptionMatch {
   const warnings: string[] = [];
   const phones = [...new Set([digitsOf(f.phone), digitsOf(f.otherPhone)].filter(Boolean))];
   const byPhone = phones.length ? db.customers.filter((c) => phones.some((d) => customerHasPhone(c, d))) : [];
-  const visible = byPhone.filter((c) => canAccessStore(user, c.storeId));
   const otherStores = [...byPhone.filter((c) => !canAccessStore(user, c.storeId)).reduce((m, c) => m.set(c.storeId, (m.get(c.storeId) ?? 0) + 1), new Map<StoreId, number>())].map(([storeId, count]) => ({ storeId, count }));
-  const customers: CustomerCandidate[] = visible.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")).map((c) => ({ customer: c, level: "phone", reason: "電話番号が一致" }));
-  if (!customers.length && f.customerName) {
-    // 電話番号で見つからなければ、お名前 (+ 住所・郵便番号) で候補を出す (自動では選ばない)
-    const dup = findDuplicateCustomers(db, { name: f.customerName, phone: f.phone, otherPhones: f.otherPhone ? [f.otherPhone] : [], email: f.email, postalCode: f.postalCode, address: f.address });
-    for (const m of [...dup.high, ...dup.check, ...dup.sameName.slice(0, 5)]) {
-      const c = db.customers.find((x) => x.id === m.id);
-      if (c && canAccessStore(user, c.storeId) && !customers.some((x) => x.customer.id === c.id)) customers.push({ customer: c, level: "name", reason: m.reasons.join("・") || "お名前が同じ" });
-    }
+
+  // 住所・氏名・電話をまとめて照合 (住所一致を優先して候補に載せる)
+  const byId = new Map<string, CustomerCandidate>();
+  const put = (c: Customer, level: CustomerCandidate["level"], reason: string) => {
+    if (!canAccessStore(user, c.storeId)) return;
+    const rank = { address: 3, phone: 2, name: 1 } as const;
+    const prev = byId.get(c.id);
+    if (!prev || rank[level] > rank[prev.level]) byId.set(c.id, { customer: c, level, reason });
+  };
+  for (const c of byPhone) put(c, "phone", "電話番号が一致");
+  const dup = findDuplicateCustomers(db, {
+    name: f.customerName,
+    phone: f.phone,
+    otherPhones: f.otherPhone ? [f.otherPhone] : [],
+    email: f.email,
+    postalCode: f.postalCode,
+    address: f.address,
+  });
+  const levelOf = (reasons: string[]): CustomerCandidate["level"] => {
+    const t = reasons.join("・");
+    // 「住所も確かめてください」のような注意書きは住所一致ではない
+    if (/(氏名と住所が一致|同じ姓と住所が一致|電話番号と住所が一致|住所が一致)/.test(t) && !/住所は異なる/.test(t)) return "address";
+    if (/電話番号/.test(t)) return "phone";
+    return "name";
+  };
+  for (const m of [...dup.high, ...dup.check, ...dup.sameName.slice(0, 5)]) {
+    const c = db.customers.find((x) => x.id === m.id);
+    if (c) put(c, levelOf(m.reasons), m.reasons.join("・") || "お名前が同じ");
   }
+  const customers = [...byId.values()].sort((a, b) => {
+    const rank = { address: 0, phone: 1, name: 2 };
+    return rank[a.level] - rank[b.level] || (b.customer.updatedAt ?? "").localeCompare(a.customer.updatedAt ?? "");
+  });
+
   const suppliers = phones.length || f.companyName
     ? db.suppliers.filter((s) => (phones.length && phones.some((d) => [s.phone, s.fax].some((p) => digitsOf(p ?? "") === d))) || (f.companyName && s.name && normalize(s.name).includes(normalize(f.companyName).slice(0, 8)) && normalize(f.companyName).length >= 2))
     : [];
 
-  // 案件: 番号の一致 → 電話で一致したお客様の案件 (お名前だけの一致は選ばれたときに画面で出す)
+  // 案件: 番号の一致 → 住所・電話で一致したお客様の案件 (お名前だけの一致は選ばれたときに画面で出す)
   const hinted = caseByNumber(db, [f.caseHint, f.summary, f.detail, f.memoText].join(" "));
   const cases: CaseCandidate[] = [];
   if (hinted && canAccessStore(user, hinted.storeId)) cases.push(hinted);
-  for (const c of customers.filter((x) => x.level === "phone").slice(0, 3)) for (const k of customerCases(db, c.customer.id, today)) if (!cases.some((x) => caseKey(x) === caseKey(k)) && canAccessStore(user, k.storeId)) cases.push(k);
+  for (const c of customers.filter((x) => x.level === "address" || x.level === "phone").slice(0, 5)) {
+    for (const k of customerCases(db, c.customer.id, today)) if (!cases.some((x) => caseKey(x) === caseKey(k)) && canAccessStore(user, k.storeId)) cases.push(k);
+  }
+
+  // 自動で選ぶお客様: 住所一致が 1 件 → それを優先。なければ電話一致が 1 件だけ。複数なら選ばず人が確かめる
+  const addressHits = customers.filter((c) => c.level === "address");
+  const phoneHits = customers.filter((c) => c.level === "phone");
+  const picked =
+    addressHits.length === 1 ? addressHits[0] :
+    addressHits.length === 0 && phoneHits.length === 1 ? phoneHits[0] :
+    undefined;
+  const pickedCustomer = picked?.customer;
 
   const type = f.callType || "new_inquiry";
-  const phoneCustomer = customers.find((c) => c.level === "phone")?.customer;
   const openCases = cases.filter((c) => c.open);
   let suggestion: ReceptionMatch["suggestion"];
   if (type === "existing_case") {
     const target = hinted && canAccessStore(user, hinted.storeId) ? hinted : openCases[0] ?? cases[0];
     if (target) suggestion = { action: "case", caseKey: caseKey(target), customerId: target.customerId, reason: hinted && target === hinted ? `${target.number} の連絡として追加します (番号が一致)` : openCases.length > 1 ? `進行中の案件が ${openCases.length} 件あります。いちばん最近の案件を選びました。違う場合は選び直してください` : `${target.number} の連絡として追加します` };
     else {
-      suggestion = { action: "inquiry", customerId: phoneCustomer?.id, reason: "案件の連絡と判定しましたが、該当する案件が見つかりません。お客様と案件を確かめてください (新しい問い合わせとして登録することもできます)" };
-      warnings.push("該当する案件が見つかりません。お客様の電話番号・お名前、または案件番号を確かめてください。");
+      suggestion = { action: "inquiry", customerId: pickedCustomer?.id, reason: "案件の連絡と判定しましたが、該当する案件が見つかりません。お客様と案件を確かめてください (新しい問い合わせとして登録することもできます)" };
+      warnings.push("該当する案件が見つかりません。お客様の住所・電話番号・お名前、または案件番号を確かめてください。");
     }
   } else if (type === "supplier") {
     suggestion = { action: "record", supplierId: suppliers[0]?.id, reason: suppliers[0] ? `仕入先・協力業者「${suppliers[0].name}」とのやりとりとして記録します` : "仕入先・協力業者からの連絡と判定しました。相手を選んで記録するか、記録しないを選んでください" };
@@ -400,15 +436,32 @@ export function matchReception(db: MatchDb, user: User, f: ReceptionFields, toda
   } else if (type === "internal") {
     suggestion = { action: "dismiss", reason: "社内の連絡と判定しました。必要なら社内連絡・業務依頼で伝えてください" };
   } else if (type === "other") {
-    suggestion = { action: phoneCustomer ? "record" : "dismiss", customerId: phoneCustomer?.id, reason: "内容の種類を判断できませんでした。内容を確かめて登録先を選んでください" };
+    suggestion = { action: pickedCustomer ? "record" : "dismiss", customerId: pickedCustomer?.id, reason: "内容の種類を判断できませんでした。内容を確かめて登録先を選んでください" };
   } else {
-    suggestion = { action: "inquiry", customerId: phoneCustomer?.id, reason: phoneCustomer ? `登録済みのお客様「${phoneCustomer.name}」様の新しい問い合わせとして登録します` : "新しいお客様の問い合わせとして登録します" };
+    const how = picked?.level === "address" ? "住所" : picked?.level === "phone" ? "電話番号" : "";
+    suggestion = {
+      action: "inquiry",
+      customerId: pickedCustomer?.id,
+      reason: pickedCustomer
+        ? `登録済みのお客様「${pickedCustomer.name}」様の新しい問い合わせとして登録します (${how}で一致)`
+        : customers.length
+          ? "候補のお客様が複数あります。住所を確かめて選んでから登録してください"
+          : "新しいお客様の問い合わせとして登録します",
+    };
     // 同じお客様の対応中の問い合わせがあれば知らせる (同じ件の再度の連絡のことがある)
     const sameOpen = openCases.find((c) => c.type === "inquiry" && today.getTime() - Date.parse(c.date) < 30 * DAY);
     if (sameOpen) warnings.push(`このお客様には対応中の問い合わせ ${sameOpen.number} (${sameOpen.title}) があります。同じ件の連絡なら「案件のやりとりに追加する」を選んでください。`);
   }
-  if (customers.filter((c) => c.level === "phone").length > 1) warnings.push(`電話番号が一致するお客様が ${customers.filter((c) => c.level === "phone").length} 人います。どのお客様か確かめてください。`);
-  if (phoneCustomer?.tradeStopped) warnings.push(`「${phoneCustomer.name}」様は取引停止のお客様です。対応の前に店長に確かめてください。`);
+  if (addressHits.length > 1) warnings.push(`住所が近いお客様が ${addressHits.length} 人います。どの住所のお客様か確かめてください。`);
+  const phoneMatchCount = byPhone.filter((c) => canAccessStore(user, c.storeId)).length;
+  if (phoneMatchCount > 1) warnings.push(`電話番号が一致するお客様が ${phoneMatchCount} 人います。同じ番号でも住所が違うことがあるため、住所で確かめてください。`);
+  if (dup.check.some((m) => m.reasons.some((r) => r.includes("住所は異なる")))) {
+    warnings.push("電話番号は一致しますが住所が異なる候補があります。別の住所の記録の可能性があるので、住所で選んでください。");
+  }
+  if (!f.address?.trim() && (phoneHits.length > 0 || customers.some((c) => c.level === "name"))) {
+    warnings.push("住所が読み取れていません。メモの住所を入力すると、既存のお客様と正しく結びつけやすくなります。");
+  }
+  if (pickedCustomer?.tradeStopped) warnings.push(`「${pickedCustomer.name}」様は取引停止のお客様です。対応の前に店長に確かめてください。`);
   if (otherStores.length) {
     const names = otherStores.map((o) => db.stores.find((s) => s.id === o.storeId)?.name ?? o.storeId).join("・");
     warnings.push(`電話番号が${names}のお客様と一致します (閲覧の権限がないため候補に出していません)。${names}に知らせてください。`);

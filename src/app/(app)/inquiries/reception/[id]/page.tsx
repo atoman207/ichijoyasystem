@@ -53,8 +53,13 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
   if (pending) {
     const m = matchReception(db, user, f);
     matchWarnings = m.warnings;
-    const customers: ReviewCustomer[] = m.customers.slice(0, 8).map((c) => ({ id: c.customer.id, label: `${c.customer.name} (${c.customer.code} · ${storeName(c.customer.storeId)})${c.customer.address ? ` ${c.customer.address.slice(0, 20)}` : ""}`, level: c.level, reason: c.reason }));
-    // 案件: 電話で一致したお客様の案件 + お名前で一致したお客様の案件 (選んだときに出す)
+    const customers: ReviewCustomer[] = m.customers.slice(0, 8).map((c) => ({
+      id: c.customer.id,
+      label: `${c.customer.name} (${c.customer.code} · ${storeName(c.customer.storeId)})${c.customer.address ? ` ${c.customer.address.slice(0, 28)}` : c.customer.area ? ` 地区 ${c.customer.area}` : ""}`,
+      level: c.level,
+      reason: c.reason,
+    }));
+    // 案件: 住所・電話で一致したお客様の案件 + お名前で一致したお客様の案件 (選んだときに出す)
     const list: CaseCandidate[] = [...m.cases];
     for (const c of m.customers.filter((x) => x.level === "name").slice(0, 3)) for (const k of customerCases(db, c.customer.id)) if (!list.some((x) => caseKey(x) === caseKey(k)) && canAccessStore(user, k.storeId)) list.push(k);
     const custName = (cid?: string) => (cid ? db.customers.find((c) => c.id === cid)?.name : undefined);

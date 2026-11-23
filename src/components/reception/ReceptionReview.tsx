@@ -17,7 +17,7 @@ import {
 export interface ReviewCustomer {
   id: string;
   label: string;
-  level: "phone" | "name";
+  level: "phone" | "address" | "name";
   reason: string;
 }
 
@@ -179,10 +179,10 @@ export function ReceptionReview({
 
         {(act === "inquiry" || act === "case") && customers.length > 0 && (
           <label className="block">
-            <span className="label">お客様</span>
+            <span className="label">お客様 (住所がいちばんの目印。電話・氏名だけでは別住所と取り違えることがあります)</span>
             <select name="customerId" value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="field">
               <option value="">{act === "inquiry" ? "(新しいお客様。あとで「顧客として登録する」)" : "(すべての候補の案件を表示)"}</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.label} — {c.reason}</option>)}
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.level === "address" ? "【住所】" : c.level === "phone" ? "【電話】" : "【名前】"} {c.label} — {c.reason}</option>)}
             </select>
           </label>
         )}

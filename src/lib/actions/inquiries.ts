@@ -221,6 +221,7 @@ export async function registerCustomerFromInquiry(id: string, formData?: FormDat
 export async function linkInquiryToCustomer(id: string, customerId: string) {
   const user = await requireActionUser();
   const back = `/inquiries/${id}`;
+  if (!customerId) fail(back, "お客様を選んでください。");
   await mutate((db) => {
     const inq = db.inquiries.find((x) => x.id === id);
     if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
@@ -241,6 +242,11 @@ export async function linkInquiryToCustomer(id: string, customerId: string) {
   });
   revalidatePath(back);
   redirect(withMsg(back, "既存の顧客に紐づけました。これまでの履歴とあわせて表示されます。"));
+}
+
+/** 問い合わせ画面の検索プルダウンから既存顧客へ紐づける */
+export async function linkInquiryToSelectedCustomer(id: string, formData: FormData) {
+  await linkInquiryToCustomer(id, str(formData, "customerId"));
 }
 
 /**

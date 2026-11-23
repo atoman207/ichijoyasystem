@@ -8,8 +8,8 @@ export function CustomerSearch({ total, q, shown, keep }: { total: number; q?: s
   return (
     <form method="get" className="mb-5 flex flex-wrap items-end gap-2 rounded-xl border border-line bg-subtle p-3">
       {Object.entries(keep).map(([k, v]) => (v ? <input key={k} type="hidden" name={k} value={v} /> : null))}
-      <Field label={`お客様を検索 (登録 ${total.toLocaleString("ja-JP")} 件)`} hint="氏名・フリガナ・顧客コード・電話番号の一部で検索し、下の「お客様」から選びます" className="min-w-0 flex-1">
-        <Input name="cq" defaultValue={q ?? ""} placeholder="例: 田中 / C-01234 / 0968" />
+      <Field label={`お客様を検索 (登録 ${total.toLocaleString("ja-JP")} 件)`} hint="住所・町名がいちばん確実です。氏名・フリガナ・顧客コード・電話番号でも検索できます。同じ氏名・電話でも住所が違うことがあるので、候補の住所を確かめて選んでください" className="min-w-0 flex-1">
+        <Input name="cq" defaultValue={q ?? ""} placeholder="例: 坪井 / 田中 / C-01234 / 0968" />
       </Field>
       <Button type="submit" variant="secondary">検索</Button>
       {q ? <p className="w-full text-xs text-ink-3">「{q}」に一致するお客様: {shown >= 50 ? "50 件以上 (先頭の 50 件を表示)" : `${shown} 件`}</p> : null}

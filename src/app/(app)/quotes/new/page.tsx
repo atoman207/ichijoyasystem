@@ -4,6 +4,7 @@ import { canSeeAllStores, scopeByStore, skipsApproval } from "@/lib/auth/permiss
 import { createQuote } from "@/lib/actions/quotes";
 import { customerOptions } from "@/lib/db/queries";
 import { CustomerSearch } from "@/components/features/CustomerSearch";
+import { customerOptionLabel } from "@/lib/duplicates";
 import { addDays, toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, DOCUMENT_KIND_LABEL } from "@/lib/constants";
 import { approvalSettings } from "@/lib/approval-rules";
@@ -92,10 +93,10 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
             </div>
           )}
           <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2 @4xl:grid-cols-4">
-            <Field label="お客様" required className="@4xl:col-span-2" hint={choices.searchable ? "上の検索で候補を表示して選びます" : undefined}>
+            <Field label="お客様" required className="@4xl:col-span-2" hint={choices.searchable ? "上の検索 (住所・町名が確実) で候補を表示。同じ氏名・電話でも住所が違うことがあるので、住所を確かめて選んでください" : "候補の住所を確かめて選んでください (受注番号は不要です)"}>
               <Select name="customerId" defaultValue={customerId} required>
                 <option value="">選択してください</option>
-                {customers.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.code})</option>)}
+                {customers.map((c) => <option key={c.id} value={c.id}>{customerOptionLabel(c)}</option>)}
               </Select>
             </Field>
             <Field label="店舗">
