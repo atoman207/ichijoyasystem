@@ -6,6 +6,7 @@ import { HANDOVER_REF_PREFIX, HANDOVER_ROLE_LABEL, handoverGroups, handoverRef, 
 import { moveBookingsWithEvent } from "@/lib/scheduling/impact";
 import { replanProductionForPickup } from "@/lib/scheduling/production";
 import { planTablesReady } from "@/lib/scheduling/tables";
+import { toDateKey } from "@/lib/format";
 
 /**
  * 受注の品目ごとの引取・納品の日程 (Order.handovers) → 予定表の予定 (src/lib/handover.ts)
@@ -14,6 +15,8 @@ import { planTablesReady } from "@/lib/scheduling/tables";
  * - 予定は source = "order"・sourceRef = "handover:<役割>:<行の ID>+…"。作り直すときは同じ役割で品目の重なる予定を使い回す
  *   (予定の ID・担当者・手で書いたメモ・車両の予約・製造の予定のつながりを保つ)
  * - 以前の形 (施工期間の「施工」の予定 1 件) の予定は、日程を保存したときに置き換える
+ * - 予定表 (スプレッドシート) から移行した、同じ案件 (この受注・見積・問い合わせ) の今日以降の引き取り・納品の予定は、
+ *   新しく作る代わりに使い回す (同じ予定を二重にしない。src/lib/schedule-sheet/plan.ts)
  * - 受注の scheduledStart / scheduledEnd は日程の最初の日・最後の日 (経営ダッシュボード・案件の状態・予定の提案が使う)
  */
 
@@ -47,6 +50,16 @@ export function syncHandoverEvents(db: Database, o: Order, actorId: string, opts
   const memo = handoverMemo(o.siteInfo, o.workDetails);
   const location = o.siteAddress || customer?.address || undefined;
   const now = nowIso();
+  const today = toDateKey(new Date());
+  const inquiryId = quote?.inquiryId;
+  const adoptable = db.schedule.filter(
+    (e) =>
+      e.source === "import" &&
+      e.date >= today &&
+      (e.kind === "pickup" || e.kind === "delivery") &&
+      (!e.orderId || e.orderId === o.id) &&
+      (e.orderId === o.id || (o.quoteId && e.quoteId === o.quoteId) || (inquiryId && e.inquiryId === inquiryId)),
+  );
 
   for (const g of groups) {
     const cand =
@@ -56,7 +69,14 @@ export function syncHandoverEvents(db: Database, o: Order, actorId: string, opts
         .filter((x) => x.ref?.role === g.role)
         .map((x) => ({ e: x.e, overlap: x.ref!.rowIds.filter((id) => g.rowIds.includes(id)).length }))
         .filter((x) => x.overlap > 0)
-        .sort((a, b) => b.overlap - a.overlap)[0]?.e ?? legacy.find((e) => !used.has(e.id));
+        .sort((a, b) => b.overlap - a.overlap)[0]?.e ??
+      legacy.find((e) => !used.has(e.id)) ??
+      // 予定表から移行した同じ案件の予定 (同じ日 → 近い日)
+      (g.role === "install"
+        ? undefined
+        : adoptable
+            .filter((e) => !used.has(e.id) && e.kind === g.role)
+            .sort((a, b) => Number(b.date === g.date) - Number(a.date === g.date) || Math.abs(Date.parse(a.date) - Date.parse(g.date)) - Math.abs(Date.parse(b.date) - Date.parse(g.date)))[0]);
     const fields = {
       title: titleOf(customer?.name, g),
       kind: KIND[g.role],

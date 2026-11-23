@@ -973,3 +973,11 @@ export function canUseLineGroupPhotos(user: User, groupStoreId: StoreId | undefi
 export function canEditProduction(user: User): boolean {
   return Boolean(user.active);
 }
+
+/**
+ * 予定表 (スプレッドシート) の予定を新システムへ取り込む (予定表 →「スプレッドシートの取込」。本部スタッフ・管理者)。
+ * 顧客・案件 (問い合わせ) の登録と、以前に移行した予定の書き換え・削除をまとめて行うため、全店舗を扱える人だけ
+ */
+export function canImportScheduleSheet(user: User): boolean {
+  return Boolean(user.active) && canImportData(user);
+}

@@ -18,7 +18,7 @@ import { addAudit, newId, nextCustomerCode, nextNumber, nowIso } from "@/lib/db/
 import { stripKindWords } from "@/lib/work-summary";
 import { addDays, toDateKey } from "@/lib/format";
 import { foldName, staffMatcher, type StaffAliases } from "@/lib/survey-workbook/staff";
-import { fold, nk, type SheetEvent, type SheetMonth } from "./parse";
+import { fold, nk, splitName, withoutTime, type SheetEvent, type SheetMonth } from "./parse";
 
 export const SHEET_SETTINGS_ID = "schedule_sheet";
 /** 取り込んだ予定の印 (sourceRef の頭) */
@@ -130,7 +130,7 @@ const OPEN_INQUIRY = new Set(["new", "in_progress", "quoted"]);
 const family = (k: ScheduleKind) => (k === "pickup" ? "pickup" : k === "delivery" ? "delivery" : k === "install" ? "install" : CASE_KINDS.has(k) ? "visit" : k);
 
 /** 地区の比べ方 (空白・市町村郡の字を除く) */
-const foldArea = (s: string | undefined) => fold(s).replace(/[市町村郡区大字]/g, "");
+const foldArea = (s: string | undefined) => fold(s).replace(/大字/g, "").replace(/[市町村郡区]/g, "");
 function areaMatches(area: string, c: Pick<Customer, "area" | "address">): boolean {
   const a = foldArea(area);
   if (!a) return false;
@@ -180,7 +180,7 @@ function titleOf(ev: SheetEvent): string {
     const claim = ev.tags.some((t) => t.startsWith("クレーム")) ? " (クレーム対応)" : "";
     return `${ev.area ? `(${ev.area}) ` : ""}${ev.name} ${KJ[ev.kind] ?? SCHEDULE_KIND[ev.kind].label}${claim}`;
   }
-  return ev.raw.slice(0, 80);
+  return (ev.startTime ? withoutTime(ev.raw) : ev.raw).slice(0, 80);
 }
 
 /** 予定のメモ: 1 行目は枚数 (予定表の仕事内容・畳製造予定が読む)・備考・製造の表・読めなかった担当欄 */
@@ -267,6 +267,7 @@ export function planSheetImport(db: Database, months: SheetMonth[], opts: PlanOp
   const to = monthRanges.reduce((x, r) => (r.last > x ? r.last : x), opts.from);
 
   const unknownCount = new Map<string, { count: number; example: string }>();
+  const drafts = new Map<string, { area?: string; name: string; stores: StoreId[]; keys: string[] }>();
   const personUse = new Map<string, number>();
   const groups = new Map<string, PlanGroup>();
   const items: PlanItem[] = [];
@@ -309,19 +310,36 @@ export function planSheetImport(db: Database, months: SheetMonth[], opts: PlanOp
       const sid: StoreId = storeId ?? "hq";
       const item: PlanItem = { key: ev.key, ev, status: "add", storeId: sid, title: titleOf(ev), assigneeIds, unknownStaff: unknown };
       item.memo = memoOf(ev, unknown);
-      // お客様の照合の単位
+      // お客様の照合の単位 (地区があれば地区 + 名前 (店舗をまたぐ)。地区がなければ店舗 + 名前)
       if (ev.customerLike && ev.name && ev.kind !== "leave") {
-        const gkey = `${sid}|${foldArea(ev.area)}|${foldName(ev.name)}`;
+        const gkey = ev.area ? `${foldArea(ev.area)}|${foldName(ev.name)}` : `${sid}||${foldName(ev.name)}`;
         item.gkey = gkey;
-        let g = groups.get(gkey);
-        if (!g) {
-          g = makeGroup(db, idx, gkey, sid, ev.area, ev.name);
-          groups.set(gkey, g);
-        }
-        g.eventKeys.push(ev.key);
+        const d = drafts.get(gkey) ?? { area: ev.area, name: ev.name, stores: [], keys: [] };
+        d.stores.push(sid);
+        d.keys.push(ev.key);
+        drafts.set(gkey, d);
       }
       items.push(item);
     }
+  }
+  // 地区のない名前 (右上の予定の「清原邸」など) は、同じ名前の地区つきのお客様が 1 組だけならそちらにまとめる
+  for (const [gkey, d] of [...drafts]) {
+    if (d.area) continue;
+    const name = foldName(d.name);
+    const same = [...drafts].filter(([, x]) => x.area && foldName(x.name) === name);
+    if (same.length !== 1) continue;
+    const [tk, target] = same[0];
+    target.stores.push(...d.stores);
+    target.keys.push(...d.keys);
+    for (const it of items) if (it.gkey === gkey) it.gkey = tk;
+    drafts.delete(gkey);
+  }
+  for (const [gkey, d] of drafts) {
+    // 店舗の欄の予定の店舗 (右上の予定・事務の欄だけなら、その人の店舗)
+    const storeId = d.stores.find((x) => x !== "hq") ?? d.stores[0] ?? "hq";
+    const g = makeGroup(db, idx, gkey, storeId, d.area, d.name);
+    g.eventKeys.push(...d.keys);
+    groups.set(gkey, g);
   }
 
   // 画面で選んだ顧客
@@ -342,7 +360,12 @@ export function planSheetImport(db: Database, months: SheetMonth[], opts: PlanOp
   const used = new Set<string>();
   const byRef = new Map<string, ScheduleEvent>();
   for (const e of db.schedule) if (e.sourceRef?.startsWith(SHEET_REF_PREFIX)) byRef.set(e.sourceRef.slice(SHEET_REF_PREFIX.length), e);
-  const legacyKey = (date: string, storeId: string, kind: ScheduleKind, title: string) => `${date}|${storeId}|${family(kind)}|${fold(stripKindWords(title, kind)).replace(/\(クレーム対応\)/, "")}`;
+  // 以前の移行の予定: 件名「(地区) 名前 …」の地区と名前で見分ける (後ろの言葉は書き方が違うことがある)
+  const nameKey = (text: string) => {
+    const sp = splitName(text);
+    return sp.name ? `${foldArea(sp.area)}|${foldName(sp.name)}` : fold(text);
+  };
+  const legacyKey = (date: string, storeId: string, kind: ScheduleKind, title: string) => `${date}|${storeId}|${family(kind)}|${nameKey(stripKindWords(title, kind).replace(/\(クレーム対応\)/, ""))}`;
   const legacy = new Map<string, ScheduleEvent[]>();
   for (const list of byDate.values())
     for (const e of list) {
@@ -436,7 +459,7 @@ function makeGroup(db: Database, idx: ReturnType<typeof customerIndex>, gkey: st
   const key = foldName(name);
   let list = idx.bySurname.get(key) ?? [];
   if (area) list = list.filter((c) => areaMatches(area, c));
-  else list = list.filter((c) => c.storeId === storeId);
+  else if (storeId !== "hq") list = list.filter((c) => c.storeId === storeId);
   const today = new Date().toISOString().slice(0, 10);
   const scored = list
     .map((c) => {

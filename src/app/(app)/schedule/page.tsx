@@ -1,10 +1,10 @@
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
-import { CalendarDays, CalendarOff, ChartGantt, ChevronLeft, ChevronRight, Columns3, Factory, Gauge, LayoutGrid, List, Plus, Route, Rows3, TriangleAlert, UserRound } from "lucide-react";
+import { CalendarDays, CalendarOff, ChartGantt, ChevronLeft, ChevronRight, Columns3, Factory, FileSpreadsheet, Gauge, LayoutGrid, List, Plus, Route, Rows3, TriangleAlert, UserRound } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import type { ScheduleEvent, ScheduleKind, StoreId } from "@/lib/db/types";
-import { canAccessStore, canSeeAllStores, canViewCompanySchedule } from "@/lib/auth/permissions";
+import { canAccessStore, canImportScheduleSheet, canSeeAllStores, canViewCompanySchedule } from "@/lib/auth/permissions";
 import { redirect } from "next/navigation";
 import { createCaseResolver, orderEditable, type CaseRef } from "@/lib/db/schedule";
 import { isHandoverEvent } from "@/lib/db/handover-events";
@@ -203,6 +203,12 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
               <Gauge />
               仕事量と提案の設定
             </LinkButton>
+            {canImportScheduleSheet(user) && (
+              <LinkButton href="/schedule/import" variant="secondary" size="sm">
+                <FileSpreadsheet />
+                スプレッドシートの取込
+              </LinkButton>
+            )}
             <LinkButton href={addBase({ date: anchor >= today ? anchor : today })} size="sm">
               <Plus />
               予定を追加

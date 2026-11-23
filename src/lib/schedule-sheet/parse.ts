@@ -125,6 +125,12 @@ const MEETING_RE = /会議|ミーティング|ズーム|zoom|打合せ|打ち合
 const TAG_RE = /(現見|現調|見積のみ|見積|採寸|点検|クレーム対応|クレーム|打合せ|打合わせ|打ち合わせ|下見|現場確認)/g;
 /** 時刻の書き方 (名前から外す) */
 const TIME_TEXT_RE = /\d{1,2}(?::\d{2})?\s*(?:時(?:半)?)?\s*[〜～~\-ー－]\s*(?:\d{1,2}(?::\d{2})?\s*時?(?:半)?)?|\d{1,2}:\d{2}|\d{1,2}時(?:半|\d{1,2}分)?(?:頃|以降|から)?/g;
+/** 書き込みの頭の時刻 (「13時(高平)大西 建具採寸」) */
+const LEAD_TIME_RE = new RegExp(`^(?:${TIME_TEXT_RE.source})\\s*`);
+/** 名前の後ろに付く作業の言葉 (「佐藤補修」) */
+const NAME_TAIL_RE = /(補修|手直し|手直|追加|残り)$/;
+/** 時刻を除いた書き込み (件名に使う。時刻は予定の時刻に入れる) */
+export const withoutTime = (raw: string): string => nk(nk(raw).replace(TIME_TEXT_RE, " ")) || nk(raw);
 
 const COUNT_LABELS: [string, string, string][] = [
   ["畳", "表替え", "新調"],
@@ -187,19 +193,19 @@ function slotWord(text: string | undefined): "am" | "pm" | undefined {
  * 「(須屋)大岩」「（植木町）早川　現見」「清原邸8〜9時 クロス工事」「（須屋）清原様 近所 挨拶」
  */
 export function splitName(raw: string): { area?: string; name?: string; extra?: string; tags: string[]; customerLike: boolean } {
-  const s = nk(raw);
+  const s = nk(nk(raw).replace(LEAD_TIME_RE, ""));
   const tags = [...s.matchAll(TAG_RE)].map((m) => m[1]);
   const paren = s.match(/^\(([^()]{1,20})\)\s*(.*)$/);
   const area = paren ? nk(paren[1]) : undefined;
   const rest = nk((paren ? paren[2] : s).replace(TAG_RE, " ").replace(TIME_TEXT_RE, " "));
   const honorific = /^(.{1,12}?)(邸|様|さま|さん)(.*)$/.exec(rest);
   if (honorific && honorific[1].trim()) {
-    const name = nk(honorific[1]);
+    const name = nk(honorific[1]).replace(NAME_TAIL_RE, "") || nk(honorific[1]);
     return { area, name, extra: nk(honorific[3]) || undefined, tags, customerLike: true };
   }
   if (!paren) return { tags, customerLike: false };
   const tokens = rest.split(" ").filter(Boolean);
-  const first = (tokens[0] ?? "").replace(/[A-Za-zｦ-ﾟァ-ヶ]*\d+$/, "") || tokens[0];
+  const first = ((tokens[0] ?? "").replace(/[A-Za-zｦ-ﾟァ-ヶ]*\d+$/, "") || tokens[0] || "").replace(NAME_TAIL_RE, "") || tokens[0];
   return { area, name: first || undefined, extra: tokens.slice(1).join(" ") || undefined, tags, customerLike: Boolean(first) };
 }
 
@@ -210,7 +216,7 @@ function kindOf(side: SheetSide, raw: string, total: number, customerLike: boole
   if (SURVEY_RE.test(s)) return "survey";
   if (MEASURE_RE.test(s)) return "measure";
   if (side === "hagi" || side === "shiki") {
-    if (CLAIM_RE.test(s) && total === 0) return "visit";
+    if (customerLike && CLAIM_RE.test(s) && total === 0) return "visit";
     if (total > 0) return side === "hagi" ? "pickup" : "delivery";
     if (customerLike) return side === "shiki" ? "delivery" : "visit";
   }
@@ -349,7 +355,8 @@ function readDay(rows: string[][], date: string, ref: (row: number) => string, s
       const pieces = num(r[25]);
       if (site && pieces && !/^現場名$|^計$|本日製造/.test(site) && !storeOf(site)) {
         const herinashi = /^無し?$|^なし$/.test(nk(r[27])) ? pieces : 0;
-        const text = ["製造:", nk(r[24]).replace(/\s+/g, ""), `${fmtNum(pieces)}枚`, nk(r[26]), nk(r[27]) && `縁 ${nk(r[27])}`, nk(r[28]), nk(r[29])].filter(Boolean).join(" ") + (herinashi ? ` 縁無${fmtNum(herinashi)}` : "");
+        const cell = (v: unknown) => nk(v).replace(/^(\d+)\.0$/, "$1");
+        const text = ["製造:", cell(r[24]).replace(/\s+/g, ""), `${fmtNum(pieces)}枚`, cell(r[26]), cell(r[27]) && `縁 ${cell(r[27])}`, cell(r[28]), cell(r[29])].filter(Boolean).join(" ") + (herinashi ? ` 縁無${fmtNum(herinashi)}` : "");
         const k = fold(site);
         production.set(k, [...(production.get(k) ?? []), { text, herinashi }]);
       }
