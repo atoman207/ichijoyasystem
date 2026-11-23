@@ -1090,6 +1090,28 @@ create table if not exists stock_moves (
 );
 comment on table stock_moves is '在庫の移動 (受入・店舗間の移動・使用・返品・廃棄・棚卸の調整)';
 
+-- 店舗間の材料移動 (原価の振替。渡した店舗の材料費 −・受け取った店舗の材料費 +)
+create table if not exists material_transfers (
+  id text primary key,
+  number text not null unique,
+  date date not null,
+  from_store_id text not null references stores(id),
+  to_store_id text not null references stores(id),
+  material_id text,
+  name text not null,
+  item_category text not null,
+  qty numeric not null,
+  unit_cost numeric not null,
+  amount numeric not null,
+  note text,
+  status text not null check (status in ('active','reversed')),
+  reversal_of text,
+  reversed_by text,
+  created_by text not null,
+  created_at timestamptz not null
+);
+comment on table material_transfers is '店舗間の材料移動 (原価の振替。渡した店舗の材料費 −・受け取った店舗の材料費 +)';
+
 -- 仕入明細の振り分け (読み取り・自動判定・確定した振り分けを別々に保存)
 create table if not exists purchase_line_allocs (
   id text primary key,
@@ -2299,6 +2321,22 @@ alter table stock_moves add column if not exists created_by text not null;
 alter table stock_moves add column if not exists created_at timestamptz not null;
 alter table stock_moves add column if not exists approved_by text;
 alter table stock_moves add column if not exists approved_at timestamptz;
+alter table material_transfers add column if not exists number text not null unique;
+alter table material_transfers add column if not exists date date not null;
+alter table material_transfers add column if not exists from_store_id text not null references stores(id);
+alter table material_transfers add column if not exists to_store_id text not null references stores(id);
+alter table material_transfers add column if not exists material_id text;
+alter table material_transfers add column if not exists name text not null;
+alter table material_transfers add column if not exists item_category text not null;
+alter table material_transfers add column if not exists qty numeric not null;
+alter table material_transfers add column if not exists unit_cost numeric not null;
+alter table material_transfers add column if not exists amount numeric not null;
+alter table material_transfers add column if not exists note text;
+alter table material_transfers add column if not exists status text not null check (status in ('active','reversed'));
+alter table material_transfers add column if not exists reversal_of text;
+alter table material_transfers add column if not exists reversed_by text;
+alter table material_transfers add column if not exists created_by text not null;
+alter table material_transfers add column if not exists created_at timestamptz not null;
 alter table purchase_line_allocs add column if not exists purchase_id text not null;
 alter table purchase_line_allocs add column if not exists item_id text not null;
 alter table purchase_line_allocs add column if not exists line_no integer not null;
@@ -2724,6 +2762,10 @@ create index if not exists stock_moves_material_id_date_idx on stock_moves (mate
 create index if not exists stock_moves_store_id_idx on stock_moves (store_id);
 create index if not exists stock_moves_purchase_id_idx on stock_moves (purchase_id);
 create index if not exists stock_moves_load_order_idx on stock_moves (date, created_at, id);
+create index if not exists material_transfers_date_idx on material_transfers (date);
+create index if not exists material_transfers_from_store_id_idx on material_transfers (from_store_id);
+create index if not exists material_transfers_to_store_id_idx on material_transfers (to_store_id);
+create index if not exists material_transfers_load_order_idx on material_transfers (date, created_at, id);
 create index if not exists purchase_line_allocs_purchase_id_item_id_idx on purchase_line_allocs (purchase_id, item_id);
 create index if not exists purchase_line_allocs_load_order_idx on purchase_line_allocs (purchase_id, line_no, id);
 create index if not exists expense_classes_load_order_idx on expense_classes (expense_id, id);
@@ -2924,6 +2966,9 @@ grant select, insert, update, delete on table material_usages to service_role;
 alter table stock_moves enable row level security;
 revoke all on table stock_moves from anon, authenticated;
 grant select, insert, update, delete on table stock_moves to service_role;
+alter table material_transfers enable row level security;
+revoke all on table material_transfers from anon, authenticated;
+grant select, insert, update, delete on table material_transfers to service_role;
 alter table purchase_line_allocs enable row level security;
 revoke all on table purchase_line_allocs from anon, authenticated;
 grant select, insert, update, delete on table purchase_line_allocs to service_role;

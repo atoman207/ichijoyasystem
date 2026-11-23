@@ -15,6 +15,10 @@ const AL = await imp("lib/mgmt/allocation.ts");
 const P = await imp("lib/mgmt/pnl.ts");
 const CL = await imp("lib/mgmt/close.ts");
 const CAT = await imp("lib/mgmt/categories.ts");
+const DK = await imp("lib/mgmt/doko.ts");
+const OD = await imp("lib/mgmt/omote-diff.ts");
+const TR = await imp("lib/mgmt/transfers.ts");
+const EC = await imp("lib/mgmt/expense-class.ts");
 
 const db = store.getDb();
 const admin = db.users.find((u) => u.role === "admin");
@@ -100,7 +104,7 @@ section("Test 3: リフォーム工事の内部受注 (5%)");
   const calc = AT.calcInternalOrder(store.getDb(), o3, "reform");
   eq(calc.amount, 5000, "依頼元 5,000 円");
   eq(100000 - calc.amount, 95000, "施工店舗 95,000 円");
-  ok(calc.provisional, "5% は社内資料にないため暫定として印が付く");
+  ok(!calc.provisional, "5% はお客様のご説明 (2026-11-23) で確認済み (暫定の印は付かない)");
   const special = AT.calcInternalOrder(store.getDb(), o3, "reform", 1500);
   eq([special.amount, special.rateSource], [15000, "override"], "管理者の特例の率 (15%) も計算できる");
 }
@@ -385,6 +389,205 @@ section("設定の履歴 (変更前の期間は前の値)");
   eq(R.validateRule("internal.rate.normal", "20000"), "率は 100% (10000) 以下にしてください。", "100% を超える率は断る");
   const cats = CAT.orderCategorySales(d, { total: 110000, category: "tatami", amounts: { tatami: 60000, fusuma: 40000, shoji: 0, amido: 0, curtain: 10000, cloth: 0, own: 0, misc: 10000, discount: -10000 } }, { amounts: { tatami: 60000, fusuma: 40000, shoji: 0, amido: 0, curtain: 10000, cloth: 0, own: 0, misc: 10000, discount: -10000 }, items: [], itemSource: "ledger" }, "2031-03-01");
   eq(cats, { tatami: 54000, fusuma: 36000, curtain: 10000, misc: 10000 }, "値引は 畳・襖・リフォーム・自社商品 の割合で案分 (カーテン・諸経費には案分しない)");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 18: 畳床の仕様を品名・製造の予定から判定 (お客様のご説明 2026-11-23 の畳床の課題)");
+const mDokoKG = { id: "mat_dkg", code: "T-DK-KG", name: "テスト建材床55 五八間", kind: "doko", spec: "建材床", unit: "枚", thickness: 55, size: "gohachi", itemCategory: "tatami", active: true, createdAt: now, updatedAt: now };
+const mDokoKH = { id: "mat_dkh", code: "T-DK-KH", name: "テスト建材床55 本間", kind: "doko", spec: "建材床", unit: "枚", thickness: 55, size: "honma", itemCategory: "tatami", active: true, createdAt: now, updatedAt: now };
+const mDokoKT = { id: "mat_dkt", code: "T-DK-KT", name: "テスト建材床30 本間", kind: "doko", spec: "建材床", unit: "枚", thickness: 30, size: "honma", itemCategory: "tatami", active: true, createdAt: now, updatedAt: now };
+const mDokoW = { id: "mat_dkw", code: "T-DK-W", name: "テストわら床 本間", kind: "doko", spec: "わら床", unit: "枚", thickness: 55, size: "honma", itemCategory: "tatami", active: true, createdAt: now, updatedAt: now };
+await store.mutate((d) => {
+  d.materials.push(mDokoKG, mDokoKH, mDokoKT, mDokoW);
+  for (const [m, c] of [[mDokoKG, 2800], [mDokoKH, 3200], [mDokoKT, 2500], [mDokoW, 6000]]) C.setMaterialCost(d, { materialId: m.id, unitCost: c, kind: "standard", validFrom: "2030-01-01" }, admin.id, id("mc"), now);
+  d.boms.push({ id: "bom_shin", matchName: "テスト畳新調", name: "テスト畳新調 (1 枚)", lines: [{ materialId: mOmote.id, materialKind: "omote", qty: 1 }, { materialId: mHeri.id, materialKind: "heri", qty: 1 }, { materialKind: "doko", qty: 1, defaultMaterialId: mDokoKH.id }, { materialKind: "sub", qty: 1 }], validFrom: "2000-01-01", createdBy: admin.id, createdAt: now });
+});
+{
+  const d = store.getDb();
+  const h = DK.dokoHints("テスト畳新調（建材床） / 床 建材 / サイズ 六一");
+  eq([h.type, h.sizeClass, h.sizeExact], ["建材", "honma", "rokuichi"], "建材・六一 → 本間の畳床");
+  eq(DK.dokoHints("サイズ 五八 / 床 建材t=30").thickness, 30, "厚み t=30 を読む");
+  eq(DK.dokoHints("サイズ 五七").sizeClass, "gohachi", "五七は五八間の畳床");
+  eq(DK.dokoHints("畳新調 2580円").sizeClass, undefined, "金額の数字 (2580) を寸法と取り違えない");
+  eq(DK.dokoHints("床 ワラ").type, "わら", "ワラ = わら床");
+  eq(DK.dokoHints("床 3型建材").type, "3型", "3型建材は 3型");
+  const p1 = DK.pickDoko(d, DK.dokoHints("床 建材 / サイズ 六一"), mDokoKH.id);
+  eq([p1.material?.id, p1.assumed, p1.candidates], [mDokoKH.id, true, 2], "建材・本間で厚みが分からず候補 2 件 (55mm・30mm) → 既定の畳床 (建材床55 本間) で計算し、既定と印を付ける");
+  const p2 = DK.pickDoko(d, DK.dokoHints("床 建材t=30 / サイズ 六一"), mDokoKH.id);
+  eq([p2.material?.id, p2.assumed], [mDokoKT.id, false], "厚み 30mm が分かれば 建材床30 本間に決まる (既定ではない)");
+  const p3 = DK.pickDoko(d, DK.dokoHints("床 建材 / サイズ 五八"), mDokoKH.id);
+  ok(p3.material?.id === mDokoKG.id || (p3.material && p3.material.size === "gohachi"), "建材・五八 → 五八間の畳床");
+  const p4 = DK.pickDoko(d, DK.dokoHints("畳新調"), mDokoKH.id);
+  eq([p4.material?.id, p4.assumed], [mDokoKH.id, true], "仕様が読めなければ既定の畳床で計算し、既定と印を付ける");
+  const p5 = DK.pickDoko(d, DK.dokoHints("畳新調"), undefined);
+  ok(!p5.material && p5.reason.includes("選んで"), "既定もなければ要確認 (金額を入れない)");
+  // planUsage に製造の予定のメモを渡す
+  const pl = C.planUsage(d, [{ key: "s", label: "テスト畳新調（建材床）", qty: 2, itemCategory: "tatami" }], day(5), {}, { hintText: "床 わら / サイズ 本間" });
+  const dk = pl.usages.find((u) => u.materialKind === "doko");
+  eq([dk.materialId, dk.amount, Boolean(dk.spec?.inferred)], [mDokoW.id, 12000, true], "製造の予定の「床 わら」でわら床 6,000 × 2 = 12,000");
+  eq(pl.usages.find((u) => u.materialKind === "sub").amount, 200, "副資材 100 × 2 枚");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 19: 売上明細から材料原価を自動で計算 (原価の行を登録していなくても店舗別損益に入る)");
+const M19 = "2031-08";
+const c19 = cust("自動 原価", "熊本県合志市テスト町19");
+const o19 = order(c19.id, "koshi", 66000, "tatami", { contractDate: `${M19}-01`, salesDate: `${M19}-10`, quoteId: "q_t19" });
+const q19 = { id: "q_t19", number: "QT-2031-0019", version: 1, customerId: c19.id, storeId: "koshi", title: "テスト新調", category: "tatami", items: [{ id: "qi1", name: "テスト畳新調（建材床）", qty: 2, unit: "枚", unitPrice: 30000, amount: 60000 }], subtotal: 60000, discount: 0, tax: 6000, total: 66000, status: "accepted", validUntil: `${M19}-30`, createdBy: admin.id, source: "manual", orderId: o19.id, createdAt: now, updatedAt: now };
+await store.mutate((d) => {
+  d.customers.push(c19);
+  d.quotes.push(q19);
+  d.orders.push(o19);
+  d.productionJobs.push({ id: "pj_t19", storeId: "koshi", orderId: o19.id, title: "テスト", items: [{ workTypeId: "tatami_new", qty: 2, note: "表 テスト / 床 建材t=30 / サイズ 六一" }], steps: [], startDate: `${M19}-08`, endDate: `${M19}-08`, status: "done", createdBy: admin.id, createdAt: now });
+});
+{
+  const r = P.storePnl(store.getDb(), `${M19}-01`, `${M19}-31`);
+  const rows = r.rows.filter((x) => x.source.kind === "usage_auto" && x.source.id.startsWith(o19.id));
+  ok(rows.length === 4, `自動計算の行 (畳表・畳縁・畳床・副資材) ${rows.length} 行`);
+  const doko = rows.find((x) => x.materialKind === "doko");
+  // pnl.basis は 2031-01-01 から税込 (Test 2)。税抜 2,500 × 2 = 5,000 → 税込 5,500
+  eq(doko.amount, 5500, "畳床は製造の予定 (建材 t=30・六一) から建材床30 本間で計算");
+  ok(!rows.some((x) => x.provisional), "仕様から決まった自動計算は暫定にしない");
+  eq(storeOf(r, "koshi").material, rows.reduce((a, x) => a + x.amount, 0), "合志店の材料費 = 自動計算の合計");
+  // 原価の行を登録したら自動計算は使わない (二重に数えない)
+  await store.mutate((d) => {
+    const o = d.orders.find((x) => x.id === o19.id);
+    const plan = C.planUsage(d, C.costingLines(d, o, undefined), `${M19}-10`, {}, { hintText: DK.productionNotes(d, o.id) });
+    C.recordUsages(d, o, "koshi", "actual", plan.usages, { userId: admin.id, now, date: `${M19}-10`, source: "bom", makeId: () => id("mu") });
+  });
+  const r2 = P.storePnl(store.getDb(), `${M19}-01`, `${M19}-31`);
+  ok(!r2.rows.some((x) => x.source.kind === "usage_auto" && x.source.id.startsWith(o19.id)), "原価の行を登録した受注は自動計算をやめる");
+  eq(storeOf(r2, "koshi").material, storeOf(r, "koshi").material, "登録した原価と自動計算の原価は同じ金額");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 20: 輸出など消費税のかからない売上は税を引かない");
+const M20 = "2031-09";
+const c20 = cust("輸出 先", "海外");
+const o20 = order(c20.id, "hq", 450000, "tatami", { contractDate: `${M20}-01`, salesDate: `${M20}-15` });
+const o20b = order(c20.id, "hq", 110000, "tatami", { contractDate: `${M20}-01`, salesDate: `${M20}-16` });
+await store.mutate((d) => {
+  R.setRule(d, { key: "pnl.basis", value: "tax_excluded", validFrom: `${M20}-01`, status: "confirmed" }, admin.id, id("rule"), now);
+  d.customers.push(c20);
+  d.orders.push(o20, o20b);
+  d.orderAttributions.push({ id: AT.attributionId(o20.id), orderId: o20.id, receivedStoreId: "hq", workStoreId: "hq", workKind: "normal", taxCategory: "exempt", updatedBy: admin.id, updatedAt: now });
+});
+{
+  const r = P.storePnl(store.getDb(), `${M20}-01`, `${M20}-30`);
+  eq(storeOf(r, "hq").externalSales, 450000 + 100000, "免税の売上 450,000 はそのまま、課税の 110,000 は税抜 100,000");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 21: 店舗間の材料移動 (原価の振替): 渡した店舗 −・受け取った店舗 +、全社は変わらない");
+const M21 = "2031-10";
+{
+  const d0 = store.getDb();
+  const before = P.storePnl(d0, `${M21}-01`, `${M21}-31`);
+  const bad = TR.planTransfer(d0, { date: `${M21}-05`, fromStoreId: "tamana", toStoreId: "tamana", name: "x", itemCategory: "fusuma", qty: 1, unitCost: 1 });
+  eq(bad, "渡した店舗と受け取った店舗は別々に選んでください。", "同じ店舗には移せない");
+  const plan = TR.planTransfer(d0, { date: `${M21}-05`, fromStoreId: "koshi", toStoreId: "tamana", name: "テスト障子紙", itemCategory: "fusuma", qty: 6, unitCost: 2000 });
+  eq(plan.amount, 12000, "6 × 2,000 = 12,000");
+  let t;
+  await store.mutate((d) => {
+    t = { id: id("mt"), number: num("MT"), date: `${M21}-05`, fromStoreId: "koshi", toStoreId: "tamana", name: plan.name, itemCategory: plan.itemCategory, qty: 6, unitCost: plan.unitCost, amount: plan.amount, status: "active", createdBy: admin.id, createdAt: now };
+    d.materialTransfers.push(t);
+  });
+  const r = P.storePnl(store.getDb(), `${M21}-01`, `${M21}-31`);
+  eq([storeOf(r, "koshi").material - storeOf(before, "koshi").material, storeOf(r, "tamana").material - storeOf(before, "tamana").material], [-12000, 12000], "合志店 −12,000・玉名店 +12,000");
+  eq(r.total.material, before.total.material, "全社の材料費は変わらない");
+  eq(r.categories.find((c) => c.storeId === "tamana" && c.itemCategory === "fusuma").material, 12000, "玉名店 × 襖 の材料費に入る (品目別の原価率)");
+  const sum = TR.transferSummary(store.getDb(), M21);
+  eq(sum.map((x) => [x.storeId, x.net]), [["koshi", -12000], ["tamana", 12000]], "月の店舗ごとの集計 (材料移動の表の合計)");
+  let rev;
+  await store.mutate((d) => { rev = TR.reverseTransfer(d, d.materialTransfers.find((x) => x.id === t.id), { id: id("mt"), number: num("MT"), userId: admin.id, now, today: `${M21}-06`, reason: "数量の誤り" }); });
+  ok(typeof rev !== "string" && rev.reversalOf === t.id, "取消しは逆の行 (元の行は残る)");
+  const r2 = P.storePnl(store.getDb(), `${M21}-01`, `${M21}-31`);
+  eq(storeOf(r2, "tamana").material, storeOf(before, "tamana").material, "取消し後は元の材料費");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 22: 畳表の仮原価と実際の仕入の差額を粗利益の比率で案分");
+const M22 = "2031-11";
+await store.mutate((d) => {
+  // 実際の仕入: 畳表 10 枚 12,000 円 (本部の在庫に受入)。仮原価 1,500 × 6 枚 = 9,000 円を店舗に計上
+  ST.postMove(d, { id: id("sm"), number: num("SM"), date: `${M22}-02`, kind: "receive", materialId: mOmote.id, qty: 10, unitCost: 1200, fromLoc: "supplier", toLoc: "store:hq", createdBy: admin.id, createdAt: now });
+  const mk = (sid, total, sheets) => {
+    const o = order(c2.id, sid, total, "tatami", { contractDate: `${M22}-01`, salesDate: `${M22}-10` });
+    d.orders.push(o);
+    C.recordUsages(d, o, sid, "actual", C.planUsage(d, [{ key: "a", label: "テスト表替え", qty: sheets, itemCategory: "tatami" }], `${M22}-10`).usages, { userId: admin.id, now, date: `${M22}-10`, source: "bom", makeId: () => id("mu") });
+  };
+  mk("koshi", 330000, 3); mk("chuo", 220000, 2); mk("nishi", 110000, 1); mk("tamana", 110000, 0.0001);
+});
+{
+  const p = OD.previewOmoteDiff(store.getDb(), M22, M22);
+  eq(p.method.value, "gross_ratio", "設定の既定: 粗利益の比率で案分 (お客様のご説明)");
+  eq(p.purchases, 12000, "実際の仕入 12,000 (税抜)");
+  ok(p.booked > 0 && p.diff === p.purchases - p.booked, `差額 = 仕入 − 仮原価の計上 (${p.purchases} − ${p.booked} = ${p.diff})`);
+  eq(p.status, "ok", "粗利益がすべて正なので案分できる");
+  eq(p.results.reduce((a, r) => a + r.amount, 0), p.diff, "案分額の合計 = 差額");
+  const before = P.storePnl(store.getDb(), `${M22}-01`, `${M22}-30`).total.material;
+  let rows;
+  await store.mutate((d) => { rows = OD.confirmOmoteDiff(d, OD.previewOmoteDiff(d, M22, M22), { userId: admin.id, now, makeId: () => id("me") }); });
+  ok(Array.isArray(rows) && rows.every((r) => r.itemCategory === "tatami" && r.kind === "material_adjust"), "店舗ごとの材料の差額調整 (品目 = 畳) として登録");
+  const after = P.storePnl(store.getDb(), `${M22}-01`, `${M22}-30`).total.material;
+  eq(after - before, p.diff, "全社の材料費が差額の分だけ増え、実際の仕入と一致する方向に直る");
+  const again = OD.previewOmoteDiff(store.getDb(), M22, M22);
+  ok(again.overlap && again.diff === p.diff, "確定のあとも計算は同じ (確定した差額を基準に入れない) で、重なる期間は二重に確定できない");
+  let res;
+  await store.mutate((d) => { res = OD.confirmOmoteDiff(d, again, { userId: admin.id, now, makeId: () => id("me") }); });
+  ok(typeof res === "string", "重なる期間の確定は断る");
+  let rev;
+  await store.mutate((d) => { rev = OD.reverseOmoteDiff(d, OD.omoteDiffKey(M22, M22), { userId: admin.id, now, makeId: () => id("me"), reason: "テストの取消し" }); });
+  ok(Array.isArray(rev), "取り消せる (逆の行)");
+  eq(P.storePnl(store.getDb(), `${M22}-01`, `${M22}-30`).total.material, before, "取消し後は元の材料費");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 23: 経費の区分の既定 (消耗品・廃棄物処分・広告・本部 = 案分経費)");
+{
+  eq(EC.defaultExpenseClass({ account: "消耗品費", storeId: "nishi" }).allocClass, "common", "消耗品費はどの店舗で使っても案分経費");
+  eq(EC.defaultExpenseClass({ account: "廃棄物処分費", storeId: "koshi" }).allocClass, "common", "畳の処分費などの廃棄物処分費は案分経費");
+  eq(EC.defaultExpenseClass({ account: "広告宣伝費", storeId: "chuo" }).allocClass, "common", "広告宣伝費は既定で案分経費 (予算超過分は店舗独自経費に変える)");
+  eq(EC.defaultExpenseClass({ account: "通信費", storeId: "koshi", description: "アンケートハガキ" }).allocClass, "common", "アンケートのハガキは案分経費");
+  eq(EC.defaultExpenseClass({ account: "旅費交通費", storeId: "hq" }).allocClass, "common", "本部の経費は全社で集約して案分");
+  eq(EC.defaultExpenseClass({ account: "旅費交通費", storeId: "tamana" }).allocClass, "store", "それ以外の店舗の経費は店舗独自経費");
+  const M23 = "2031-12";
+  const e = { id: "ex_t23", number: "EX-2031-0023", storeId: "nishi", submittedBy: admin.id, date: `${M23}-05`, vendor: "テスト", amount: 11000, taxAmount: 1000, account: "消耗品費", paymentMethod: "cash", description: "コピー用紙", status: "approved", source: "manual", createdAt: now, updatedAt: now };
+  await store.mutate((d) => { d.expenses.push(e); });
+  const p = AL.previewAllocation(store.getDb(), M23);
+  ok(p.pool.some((x) => x.id === e.id && x.amount === 10000), "区分を登録していない消耗品費も案分の対象 (税抜 10,000)");
+  await store.mutate((d) => { d.expenseClasses.push({ id: `ec_${e.id}`, expenseId: e.id, allocClass: "store", costKind: "消耗品費", updatedBy: admin.id, updatedAt: now }); });
+  ok(!AL.previewAllocation(store.getDb(), M23).pool.some((x) => x.id === e.id), "区分を登録すればその区分が優先 (店舗独自経費)");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 24: 材料マスタにないクロス紙 (品番だけ) も使い道で判定 / 襖とリフォームが両方の案件は要確認");
+{
+  const cB = cust("両方 次郎", "熊本県合志市テスト町24");
+  const oB = order(cB.id, "koshi", 50000, "fusuma", { amounts: { tatami: 0, fusuma: 20000, shoji: 0, amido: 0, curtain: 0, cloth: 30000, own: 0, misc: 0, discount: 0 } });
+  const pu24 = { ...pu7, id: "pu_t24", number: "AP-2031-9024", documentId: "doc_t24", amount: 11000, taxAmount: 1000, items: [{ id: "n1", name: "壁紙 RE-1234", qty: 10, unit: "m", unitPrice: 550, amount: 5500 }, { id: "n2", name: "クロス紙", qty: 10, unit: "m", unitPrice: 550, amount: 5500 }] };
+  const doc24 = { ...doc7, id: "doc_t24", extracted: { items: [{ name: "壁紙 RE-1234", siteName: "壁紙 花子様" }, { name: "クロス紙", siteName: "両方 次郎様" }] } };
+  await store.mutate((d) => { d.customers.push(cB); d.orders.push(oB); d.documents.push(doc24); d.purchases.push(pu24); PL.upsertLineAllocs(d, PL.buildLineAllocs(d, pu24, now)); });
+  const rows = store.getDb().purchaseLineAllocs.filter((a) => a.purchaseId === pu24.id);
+  eq([rows[0].ai.materialId, rows[0].ai.itemCategory], [undefined, "reform"], "材料マスタにない壁紙 (RE-1234) も、案件 (壁紙の張替) でリフォーム材料費");
+  ok(rows[1].ai.needsReview && rows[1].ai.reason.includes("両方"), "案件に襖とリフォームの両方があるときは要確認 (どちらに使ったか)");
+  const ad = { ...pu7, id: "pu_t24b", number: "AP-2031-9025", documentId: undefined, account: "広告宣伝費", amount: 55000, taxAmount: 5000, items: [{ id: "a1", name: "チラシ印刷", qty: 1, unit: "式", unitPrice: 55000, amount: 55000 }] };
+  await store.mutate((d) => { d.purchases.push(ad); PL.upsertLineAllocs(d, PL.buildLineAllocs(d, ad, now)); });
+  const a = store.getDb().purchaseLineAllocs.find((x) => x.purchaseId === ad.id);
+  eq([a.ai.costType, a.ai.storeId], ["common_expense", "hq"], "広告の請求書は案分経費として本部に集約 (店舗の予算超過分は担当者が店舗独自経費に変える)");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 25: お客様のご説明で確定した設定");
+{
+  const d = store.getDb();
+  eq([R.ruleAt(d, "internal.rate.reform", "2031-01-01").value, R.ruleAt(d, "internal.rate.reform", "2031-01-01").status], ["500", "confirmed"], "リフォーム工事の内部受注 5% (確認済み)");
+  eq([R.ruleAt(d, "hq.treatment", "2031-01-01").value, R.ruleAt(d, "hq.treatment", "2031-01-01").status], ["sales_transfer", "confirmed"], "本部の特殊配分の既定 = 店舗への売上の配分 (確認済み)");
+  eq(R.ruleAt(d, "omote.diff_method", "2031-01-01").value, "gross_ratio", "畳表の差額 = 粗利益の比率で案分");
+  eq([R.ruleAt(d, "alloc.include_hq", "2031-01-01").value, R.ruleAt(d, "alloc.include_hq", "2031-01-01").status], ["no", "confirmed"], "案分の対象は 4 店舗 (確認済み)");
+  const o = d.orders.find((x) => x.id === o13.id);
+  const att = AT.attributionOf({ ...d, orderAttributions: [{ id: "x", orderId: o.id, receivedStoreId: "hq", workStoreId: "chuo", workKind: "normal", hqSpecial: true, updatedBy: admin.id, updatedAt: now }] }, o, "tatami");
+  eq(att.warnings.length, 0, "本部の売上で作業だけ店舗 (本部の特殊配分) は「施工店舗が違う」と警告しない");
 }
 
 summary();

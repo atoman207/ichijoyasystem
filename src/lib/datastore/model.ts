@@ -593,7 +593,7 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
   /** 全店舗に広げるときは覆わない (生の表のまま) */
   const unless = (open: boolean, stmt: string) => (open ? [] : [stmt]);
   const knowledgeVis: Record<Role, string> = { admin: "", hq_staff: "", store_manager: "('all', 'manager')", store_staff: "('all')" };
-  const mgmtTables = ["sales_adjustments", "material_usages", "mgmt_entries", "stock_moves", "order_attributions", "expense_classes", "allocation_runs", "period_closes", "purchase_line_allocs", "mgmt_rules", "materials", "material_costs", "boms"];
+  const mgmtTables = ["sales_adjustments", "material_usages", "mgmt_entries", "stock_moves", "material_transfers", "order_attributions", "expense_classes", "allocation_runs", "period_closes", "purchase_line_allocs", "mgmt_rules", "materials", "material_costs", "boms"];
   // 分析用の表 (sales_orders など): 経営の数字だけ全店舗のとき、顧客情報を見られない店舗の行はお客様の名前・ID・地区・件名を空にする
   const salesCols = `order_id, number, sales_date, contract_date, status, store_id, store_name, null as customer_id, null as customer_code, null as customer_name, customer_type, null as area, null as title, total, ${AMOUNT_KEYS.map((k) => `amt_${k}`).join(", ")}, tatami_cost, purchase_cost, staff_names, worker_names, item_source`;
   return [
@@ -659,6 +659,7 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
       : manager
         ? [
             v("sales_adjustments", `select * from main.sales_adjustments where from_store_id = ${store} or to_store_id = ${store}`),
+            v("material_transfers", `select * from main.material_transfers where from_store_id = ${store} or to_store_id = ${store}`),
             ...["material_usages", "mgmt_entries"].map(byStore),
             v("stock_moves", `select * from main.stock_moves where store_id = ${store} or from_loc = ${sq(`store:${user.storeId}`)} or to_loc = ${sq(`store:${user.storeId}`)}`),
             v("order_attributions", `select * from main.order_attributions where order_id in (select id from main.orders where store_id = ${store}) or received_store_id = ${store} or work_store_id = ${store}`),
@@ -733,7 +734,7 @@ export const GLOSSARY: [string, string][] = [
   ["管理会計・店舗別損益・独立採算・管理売上・粗利益 (管理会計)・材料原価率・案分", "道具 management_accounting を使う (計算は画面と同じ。SQL で計算し直さない)"],
   ["内部受注・店舗間の売上配分・本部の特殊配分", "sales_adjustments (依頼元 from_store_id に +amount、施工店舗 to_store_id に −amount。reversal_of があれば取消しの行)"],
   ["材料原価・材料構成・畳表の仮原価・畳床", "materials・material_costs (単価の履歴)・boms・material_usages (受注ごと。stage と status)"],
-  ["在庫・材料移動", "stock_moves (from_loc → to_loc。store:<店舗>)"],
+  ["在庫・材料移動", "stock_moves (在庫の移動。from_loc → to_loc。store:<店舗>)・material_transfers (店舗間の材料移動 = 原価の振替。from_store_id の材料費 −・to_store_id の材料費 +)"],
   ["仕入明細の振り分け・未確認の仕入請求書", "purchase_line_allocs (status = confirmed / needs_review / unassigned)"],
 ];
 

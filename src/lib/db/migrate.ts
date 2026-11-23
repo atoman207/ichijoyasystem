@@ -2,7 +2,7 @@ import type { Database } from "./types";
 import { normTime } from "@/lib/calendar";
 
 /** 管理会計のコレクション (後から追加。無ければ空で作る) */
-export const MGMT_COLLECTIONS = ["mgmtRules", "itemCategories", "salesAreas", "orderAttributions", "salesAdjustments", "materials", "materialCosts", "boms", "materialUsages", "stockMoves", "purchaseLineAllocs", "expenseClasses", "mgmtEntries", "allocationRuns", "periodCloses"] as const;
+export const MGMT_COLLECTIONS = ["mgmtRules", "itemCategories", "salesAreas", "orderAttributions", "salesAdjustments", "materials", "materialCosts", "boms", "materialUsages", "stockMoves", "materialTransfers", "purchaseLineAllocs", "expenseClasses", "mgmtEntries", "allocationRuns", "periodCloses"] as const;
 
 /** 予定の計画のコレクション (後から追加。無ければ空で作る) */
 export const PLAN_COLLECTIONS = ["jobSpecs", "productionJobs", "resourceBookings", "scheduleHolds"] as const;

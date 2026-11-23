@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import type { CostType, MaterialKind, MgmtEntry, Order, PurchaseSplit, SalesAdjustment, StoreId, User, WorkKind } from "@/lib/db/types";
+import type { CostType, MaterialKind, MaterialTransfer, MgmtEntry, Order, PurchaseSplit, SalesAdjustment, StoreId, User, WorkKind } from "@/lib/db/types";
 import { addAudit, getDb, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
 import { toDateKey } from "@/lib/format";
 import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
@@ -13,9 +13,12 @@ import { closedReason, lastClosedMonth, monthOf } from "@/lib/mgmt/close";
 import { activeInternalOrder, attributionId, calcInternalOrder, orderAddress, reverseAdjustment, storeName } from "@/lib/mgmt/attribution";
 import { matchArea, planAreaImport, applyAreaImport } from "@/lib/mgmt/areas";
 import { costingLines, planUsage, recordUsages, setMaterialCost, MATERIAL_KIND_LABEL, type SpecChoice } from "@/lib/mgmt/costing";
+import { productionNotes } from "@/lib/mgmt/doko";
 import { averageCost, postMove, reverseMove, validateMove, locStore } from "@/lib/mgmt/stock";
 import { buildLineAllocs, confirmLineAlloc, upsertLineAllocs, COST_TYPE_LABEL } from "@/lib/mgmt/purchase-lines";
 import { confirmAllocation, previewAllocation } from "@/lib/mgmt/allocation";
+import { confirmOmoteDiff, omoteDiffKey, previewOmoteDiff, reverseOmoteDiff } from "@/lib/mgmt/omote-diff";
+import { planTransfer, reverseTransfer } from "@/lib/mgmt/transfers";
 import { storePnl } from "@/lib/mgmt/pnl";
 import { CATEGORY_IDS, itemCategories, mainCategory, orderCategorySales } from "@/lib/mgmt/categories";
 import { salesFacts } from "@/lib/assistant/facts";
@@ -164,11 +167,12 @@ export async function createAdjustment(fd: FormData) {
   if (orderRaw && !order) fail(back, "受注が見つかりません。");
   const base = str(fd, "base") === "tax_included" ? "tax_included" : "tax_excluded";
   const t = str(fd, "treatment");
-  const treatment = (["sales_transfer", "cost_only", "unset"].includes(t) ? t : "unset") as SalesAdjustment["treatment"];
   let number = "";
   await mutate((db) => {
     const closed = closedReason(db, date, "売上の調整");
     if (closed) fail(back, closed);
+    // 会計上の扱いを選ばなければ設定の既定 (お客様のご説明: 店舗への売上の配分)
+    const treatment = (["sales_transfer", "cost_only", "unset"].includes(t) ? t : ruleAt(db, "hq.treatment", date).value) as SalesAdjustment["treatment"];
     number = nextNumber(db, "SA", db.salesAdjustments, date);
     const adj: SalesAdjustment = { id: newId("adj"), number, kind, orderId: order?.id, date, fromStoreId: from!, toStoreId: to!, base, amount, treatment: kind === "hq_special" ? treatment : undefined, provisional: kind === "hq_special" && treatment === "unset", status: "active", reason, createdBy: user.id, createdAt: nowIso() };
     db.salesAdjustments.push(adj);
@@ -242,7 +246,7 @@ export async function recordOrderCost(fd: FormData) {
     if (closed) fail(back, closed);
     const fact = salesFacts(db).byId.get(o.id);
     const lines = costingLines(db, o, fact);
-    const plan = planUsage(db, lines, date, spec);
+    const plan = planUsage(db, lines, date, spec, { hintText: productionNotes(db, o.id) });
     if (!plan.usages.length) fail(back, "材料構成に合う明細がありません (材料構成を登録するか、明細の品名を確かめてください)。");
     const att = db.orderAttributions.find((a) => a.orderId === o.id);
     const rows = recordUsages(db, o, att?.workStoreId ?? o.storeId, stage, plan.usages, { userId: user.id, now: nowIso(), date, source: Object.keys(spec).length ? "production" : "bom", makeId: () => newId("mu") });
@@ -308,18 +312,24 @@ export async function saveBom(fd: FormData) {
   const matchName = str(fd, "matchName") || undefined;
   if (!productId && !matchName) fail(back, "商品マスタの商品か、品名に含まれる言葉 (例: 半畳) を指定してください。");
   const db0 = getDb();
-  // 行: 「材料コード または 種類, 使用量」 (例: OMOTE-A, 1 / doko, 0.5 / sub, 1)
+  // 行: 「材料コード または 種類, 使用量[, 既定の材料コード]」 (例: OMOTE-A, 1 / doko, 0.5, DOKO-K55 / sub, 1)
   const lines = str(fd, "lines")
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean)
     .map((l, i) => {
-      const [ref, q] = l.split(/[,，\t]/).map((x) => x.trim());
+      const [ref, q, def] = l.split(/[,，\t]/).map((x) => x.trim());
       const qty = decimal(q ?? "");
       if (!(qty > 0)) fail(back, `${i + 1} 行目: 使用量を数で入力してください (例: 0.5)。`);
       const m = db0.materials.find((x) => x.code === ref);
       if (m) return { materialId: m.id, materialKind: m.kind, qty: round4(qty) };
-      if (MATERIAL_KIND_LABEL[ref as MaterialKind]) return { materialKind: ref as MaterialKind, qty: round4(qty) };
+      if (MATERIAL_KIND_LABEL[ref as MaterialKind]) {
+        if (!def) return { materialKind: ref as MaterialKind, qty: round4(qty) };
+        const d = db0.materials.find((x) => x.code === def);
+        if (!d) fail(back, `${i + 1} 行目: 既定の材料コード「${def}」が見つかりません。`);
+        if (d.kind !== ref) fail(back, `${i + 1} 行目: 既定の材料「${d.name}」の種類 (${MATERIAL_KIND_LABEL[d.kind]}) が行の種類と違います。`);
+        return { materialKind: ref as MaterialKind, qty: round4(qty), defaultMaterialId: d.id };
+      }
       fail(back, `${i + 1} 行目: 材料コード「${ref}」が見つかりません (種類だけを決めるときは doko・sub など)。`);
     });
   if (!lines.length) fail(back, "材料の行を入力してください。");
@@ -559,6 +569,85 @@ export async function reverseMgmtEntry(fd: FormData) {
     addAudit(db, { userId: user.id, action: "update", entity: "mgmt_entry", entityId: m.id, entityLabel: m.month, summary: `取消し: ${reason}`, storeId: m.storeId });
   });
   done(back, "取り消しました。");
+}
+
+/* ================================================================== */
+/* 畳表の仮原価と実仕入の差額                                             */
+/* ================================================================== */
+
+/** 期間の差額を計算して、店舗ごとに粗利益の比率で案分した行を登録する (管理者) */
+export async function confirmOmoteDiffAction(fd: FormData) {
+  const { user, back } = await start(fd, `${BASE}?tab=alloc`, "admin");
+  const fromMonth = str(fd, "fromMonth");
+  const toMonth = str(fd, "toMonth");
+  if (!isMonth(fromMonth) || !isMonth(toMonth) || fromMonth > toMonth) fail(back, "期間 (開始月・終了月) を選んでください。");
+  let msg = "";
+  await mutate((db) => {
+    const p = previewOmoteDiff(db, fromMonth, toMonth);
+    const r = confirmOmoteDiff(db, p, { userId: user.id, now: nowIso(), makeId: () => newId("me") });
+    if (typeof r === "string") fail(back, r);
+    msg = `畳表の差額 ${fromMonth}〜${toMonth} (${p.diff.toLocaleString("ja-JP")} 円) を店舗に案分しました。`;
+    addAudit(db, { userId: user.id, action: "approve", entity: "mgmt_entry", entityId: omoteDiffKey(fromMonth, toMonth), entityLabel: `畳表の差額 ${fromMonth}〜${toMonth}`, summary: `${msg} 実際の仕入 ${p.purchases.toLocaleString("ja-JP")} 円 − 仮原価の計上 ${p.booked.toLocaleString("ja-JP")} 円 / ${r.map((x) => `${storeName(db, x.storeId)} ${x.amount.toLocaleString("ja-JP")}`).join("・")}` });
+  });
+  done(back, msg);
+}
+
+export async function reverseOmoteDiffAction(fd: FormData) {
+  const { user, back } = await start(fd, `${BASE}?tab=alloc`, "admin");
+  const key = str(fd, "key");
+  const reason = str(fd, "reason").slice(0, 200);
+  if (!reason) fail(back, "取消しの理由を入力してください。");
+  await mutate((db) => {
+    const r = reverseOmoteDiff(db, key, { userId: user.id, now: nowIso(), makeId: () => newId("me"), reason });
+    if (typeof r === "string") fail(back, r);
+    addAudit(db, { userId: user.id, action: "update", entity: "mgmt_entry", entityId: key, entityLabel: "畳表の差額", summary: `取消し (${r.length} 行): ${reason}` });
+  });
+  done(back, "畳表の差額を取り消しました (逆の行を追加)。");
+}
+
+/* ================================================================== */
+/* 店舗間の材料移動 (原価の振替)                                          */
+/* ================================================================== */
+
+export async function postMaterialTransfer(fd: FormData) {
+  const { user, back } = await start(fd, `${BASE}?tab=stock`, "edit");
+  const date = str(fd, "date") || today();
+  if (!isDate(date)) fail(back, "日付を入力してください。");
+  const qty = decimal(str(fd, "qty"));
+  const unitRaw = str(fd, "unitCost");
+  const unitCost = unitRaw ? decimal(unitRaw) : undefined;
+  if (unitRaw && !(Number(unitCost) >= 0)) fail(back, "単価は 0 以上の数で入力してください。");
+  const itemCategory = str(fd, "itemCategory");
+  if (itemCategory && !itemCategories(getDb()).some((c) => c.id === itemCategory)) fail(back, "品目を選んでください。");
+  let number = "";
+  await mutate((db) => {
+    const closed = closedReason(db, date, "材料移動");
+    if (closed) fail(back, closed);
+    const input = { date, fromStoreId: str(fd, "fromStoreId") as StoreId, toStoreId: str(fd, "toStoreId") as StoreId, materialId: str(fd, "materialId") || undefined, name: str(fd, "name").slice(0, 80), itemCategory, qty, unitCost, note: str(fd, "note").slice(0, 200) || undefined };
+    const plan = planTransfer(db, input);
+    if (typeof plan === "string") fail(back, plan);
+    number = nextNumber(db, "MT", db.materialTransfers, date);
+    const row: MaterialTransfer = { id: newId("mt"), number, date, fromStoreId: input.fromStoreId, toStoreId: input.toStoreId, materialId: input.materialId, name: plan.name, itemCategory: plan.itemCategory, qty: round4(qty), unitCost: plan.unitCost, amount: plan.amount, note: input.note, status: "active", createdBy: user.id, createdAt: nowIso() };
+    db.materialTransfers.push(row);
+    addAudit(db, { userId: user.id, action: "create", entity: "material_transfer", entityId: row.id, entityLabel: number, summary: `${storeName(db, row.fromStoreId)} → ${storeName(db, row.toStoreId)} ${row.name} ×${row.qty} (${row.amount.toLocaleString("ja-JP")} 円・${itemCategories(db).find((c) => c.id === row.itemCategory)?.name ?? row.itemCategory})`, storeId: row.toStoreId });
+  });
+  done(back, `材料移動 ${number} を登録しました (渡した店舗の材料費 −・受け取った店舗の材料費 +)。`);
+}
+
+export async function reverseMaterialTransfer(fd: FormData) {
+  const { user, back } = await start(fd, `${BASE}?tab=stock`, "edit");
+  const reason = str(fd, "reason").slice(0, 200);
+  if (!reason) fail(back, "取消しの理由を入力してください。");
+  let number = "";
+  await mutate((db) => {
+    const t = db.materialTransfers.find((x) => x.id === str(fd, "id"));
+    if (!t) fail(back, "材料移動が見つかりません。");
+    const r = reverseTransfer(db, t, { id: newId("mt"), number: nextNumber(db, "MT", db.materialTransfers, today()), userId: user.id, now: nowIso(), today: today(), reason });
+    if (typeof r === "string") fail(back, r);
+    number = t.number;
+    addAudit(db, { userId: user.id, action: "update", entity: "material_transfer", entityId: t.id, entityLabel: t.number, summary: `取消し (${r.number}): ${reason}`, storeId: t.toStoreId });
+  });
+  done(back, `${number} を取り消しました (取消しの行を追加)。`);
 }
 
 /* ================================================================== */

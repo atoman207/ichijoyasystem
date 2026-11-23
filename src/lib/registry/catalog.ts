@@ -36,7 +36,7 @@ const GROUPS: [string, RegExp][] = [
   ["経理", /^(invoices|payments|expenses|purchases|suppliers|purchaseOrders|cashEntries)$/],
   ["社内・事務", /^(users|stores|threads|messages|approvals|knowledge|attachments|documents|holidays|leaveRequests|leaveGrants|holidayWorks|officeImprovements|condolences|docDrafts)$/],
   ["FAX・地図", /^(faxMessages|faxNumbers|map.*)$/],
-  ["管理会計", /^(materials|materialCosts|boms|materialUsages|stockMoves|mgmt.*|salesAdjustments|orderAttributions|expenseClasses|allocationRuns|periodCloses|purchaseLineAllocs|itemCategories|salesAreas)$/],
+  ["管理会計", /^(materials|materialCosts|boms|materialUsages|stockMoves|materialTransfers|mgmt.*|salesAdjustments|orderAttributions|expenseClasses|allocationRuns|periodCloses|purchaseLineAllocs|itemCategories|salesAreas)$/],
   ["システム", /^(auditLogs|deliveries|settings|sourceFiles)$/],
 ];
 export const CATALOG_GROUPS = [...GROUPS.map(([g]) => g), "その他"];

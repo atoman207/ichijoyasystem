@@ -173,6 +173,11 @@ export interface BomLine {
   materialKind: MaterialKind;
   /** 商品 1 単位あたりの使用量 (半畳の主材料は 0.5 など。材料ごとの係数) */
   qty: number;
+  /**
+   * 既定の材料 (畳床など、種類だけ決まっている行)。品名・製造の予定から仕様を判定できないときにこの材料で計算し、
+   * 「既定の仕様で計算」と表示する (doko.ts)
+   */
+  defaultMaterialId?: string;
   note?: string;
 }
 
@@ -214,8 +219,8 @@ export interface MaterialUsage {
   /** 元の明細 (品名・枚数) */
   productLabel?: string;
   sheets?: number;
-  /** 畳床の製造仕様 */
-  spec?: { dokoType?: string; thickness?: number; size?: string };
+  /** 畳床の製造仕様 (inferred = 品名・製造の予定から判定した・既定の仕様を使ったときの説明) */
+  spec?: { dokoType?: string; thickness?: number; size?: string; inferred?: string };
   needsReview?: boolean;
   reviewNote?: string;
   status: "active" | "superseded" | "reversed";
@@ -259,6 +264,37 @@ export interface StockMove {
   createdAt: string;
   approvedBy?: string;
   approvedAt?: string;
+}
+
+/**
+ * 店舗間の材料移動 (原価の振替)。店舗で仕入れて材料費にした材料 (襖紙・クロスなど。在庫で持たない材料) を別の店舗へ渡したとき、
+ * 渡した店舗の材料費を減らし、受け取った店舗の材料費を増やす (全社の材料費は変わらない)。
+ * 本部の在庫の材料 (畳表・畳縁・畳床) の移動は在庫の移動 (StockMove の transfer) で、使ったときに原価になる
+ */
+export interface MaterialTransfer {
+  id: string;
+  number: string;
+  date: string;
+  /** 渡した店舗 (材料費 −) */
+  fromStoreId: StoreId;
+  /** 受け取った店舗 (材料費 +) */
+  toStoreId: StoreId;
+  /** 材料マスタの材料 (なければ品名だけ) */
+  materialId?: string;
+  name: string;
+  /** 品目 (使い道で決める。例: ベニアを襖に使えば襖、リフォームに使えばリフォーム) */
+  itemCategory: string;
+  /** 数量 (小数 4 桁まで) と単価 (円・税抜。小数 4 桁まで) */
+  qty: number;
+  unitCost: number;
+  /** 円 (税抜)。取消しの行は元の行と同じ金額で、向きを逆にする */
+  amount: number;
+  note?: string;
+  status: "active" | "reversed";
+  reversalOf?: string;
+  reversedBy?: string;
+  createdBy: string;
+  createdAt: string;
 }
 
 /** 仕入明細の費用区分 */

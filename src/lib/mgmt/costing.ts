@@ -3,6 +3,7 @@ import type { OrderFact } from "@/lib/assistant/facts";
 import { qtyTimesCost, round4 } from "./decimal";
 import { ruleAt, prevDay } from "./rules";
 import { ORDER_CATEGORY_TO_ITEM, AMOUNT_TO_CATEGORY } from "./categories";
+import { dokoHints, pickDoko } from "./doko";
 
 /**
  * 材料原価 (材料マスタ・原価単価の履歴・材料構成 (BOM)・材料の使用)
@@ -93,15 +94,18 @@ export interface PlannedUsage extends Omit<MaterialUsage, "id" | "createdBy" | "
   lineKey: string;
   /** 計算の説明 */
   explain: string;
+  /** 既定の材料 (既定の畳床など) で計算した (仕様から決まらなかった) */
+  assumed?: boolean;
 }
 
 /**
  * 明細と材料構成から、使う材料と原価を計算する (保存はしない)。
  * - 材料の単価・副資材の単価は date の日の値
- * - 畳床 (材料の決まっていない行) は spec で選んだ材料を使う。選ばれていなければ要確認 (金額なし)
+ * - 畳床 (材料の決まっていない行) は spec で選んだ材料を使う。選ばれていなければ、品名と hintText (製造の予定の「床」「サイズ」) から
+ *   doko.ts で判定し、決まらなければ材料構成の既定の畳床で計算する (assumed)。どれもなければ要確認 (金額なし)
  * - 材料構成のない畳の明細は要確認 (畳以外の明細で材料構成がないものは、仕入の振り分けで原価を計上するため対象外)
  */
-export function planUsage(db: Database, lines: CostingLine[], date: string, spec: SpecChoice = {}): { usages: PlannedUsage[]; unmatched: CostingLine[] } {
+export function planUsage(db: Database, lines: CostingLine[], date: string, spec: SpecChoice = {}, opts: { hintText?: string } = {}): { usages: PlannedUsage[]; unmatched: CostingLine[] } {
   const materials = new Map((db.materials ?? []).map((m) => [m.id, m]));
   const usages: PlannedUsage[] = [];
   const unmatched: CostingLine[] = [];
@@ -121,9 +125,24 @@ export function planUsage(db: Database, lines: CostingLine[], date: string, spec
         return;
       }
       const chosen = bl.materialId ? undefined : spec[`${line.key}:${idx}`] ?? spec[line.key];
-      const m: Material | undefined = bl.materialId ? materials.get(bl.materialId) : chosen ? materials.get(chosen.materialId) : undefined;
+      let m: Material | undefined = bl.materialId ? materials.get(bl.materialId) : chosen ? materials.get(chosen.materialId) : undefined;
+      // 仕様を選んでいない行: 畳床は品名・製造の予定から判定 → 既定の畳床。ほかの種類は既定の材料
+      let inferred: string | undefined;
+      let assumed = false;
+      if (!m && !bl.materialId) {
+        if (bl.materialKind === "doko") {
+          const pick = pickDoko(db, dokoHints(`${line.label} / ${opts.hintText ?? ""}`), bl.defaultMaterialId);
+          m = pick.material;
+          inferred = pick.reason;
+          assumed = pick.assumed;
+        } else if (bl.defaultMaterialId && materials.get(bl.defaultMaterialId)) {
+          m = materials.get(bl.defaultMaterialId);
+          inferred = `仕様の指定がないため、既定の材料「${m!.name}」で計算`;
+          assumed = true;
+        }
+      }
       if (!m) {
-        usages.push({ ...base, itemCategory: line.itemCategory, needsReview: true, reviewNote: bl.materialId ? "材料構成の材料が材料マスタにありません" : `${MATERIAL_KIND_LABEL[bl.materialKind]}の仕様 (種類・厚み・規格) を選んでください`, explain: "要確認 (原価に入れていません)" });
+        usages.push({ ...base, itemCategory: line.itemCategory, needsReview: true, reviewNote: bl.materialId ? "材料構成の材料が材料マスタにありません" : inferred ?? `${MATERIAL_KIND_LABEL[bl.materialKind]}の仕様 (種類・厚み・規格) を選んでください`, explain: "要確認 (原価に入れていません)" });
         return;
       }
       const c = costAt(db, m.id, date);
@@ -138,12 +157,25 @@ export function planUsage(db: Database, lines: CostingLine[], date: string, spec
         unitCost: c.unitCost,
         costId: c.id,
         amount: qtyTimesCost(qty, c.unitCost),
-        spec: chosen ? { dokoType: chosen.dokoType ?? m.spec, thickness: chosen.thickness ?? m.thickness, size: chosen.size ?? m.size } : undefined,
-        explain: `${m.name} ${c.unitCost.toLocaleString("ja-JP")} 円${c.kind === "provisional" ? " (仮原価)" : ""} × ${qty}${Number(bl.qty) !== 1 ? ` (係数 ${bl.qty})` : ""}`,
+        spec: chosen ? { dokoType: chosen.dokoType ?? m.spec, thickness: chosen.thickness ?? m.thickness, size: chosen.size ?? m.size } : inferred ? { dokoType: m.spec, thickness: m.thickness, size: m.size, inferred } : undefined,
+        assumed: assumed || undefined,
+        explain: `${m.name} ${c.unitCost.toLocaleString("ja-JP")} 円${c.kind === "provisional" ? " (仮原価)" : ""} × ${qty}${Number(bl.qty) !== 1 ? ` (係数 ${bl.qty})` : ""}${inferred ? ` — ${inferred}` : ""}`,
       });
     });
   }
   return { usages, unmatched };
+}
+
+/**
+ * 原価の行を登録していない受注の材料原価を、売上明細の商品・数量と材料構成から自動で計算する (保存はしない。元帳・画面で使う)。
+ * 材料構成が 1 件もない間は計算しない (畳のすべての受注が「要確認」にならないように)。
+ * hintText = 製造の予定のメモ (doko.ts の productionNoteIndex)
+ */
+export function autoUsage(db: Database, order: Pick<Order, "quoteId" | "category" | "total">, fact: Pick<OrderFact, "items" | "itemSource" | "total"> | undefined, date: string, hintText = ""): { usages: PlannedUsage[]; unmatched: CostingLine[] } {
+  if (!(db.boms ?? []).length) return { usages: [], unmatched: [] };
+  const lines = costingLines(db, order, fact);
+  if (!lines.length) return { usages: [], unmatched: [] };
+  return planUsage(db, lines, date, {}, { hintText });
 }
 
 /** 受注の原価に数える使用の行 (一番進んだ段階の、有効な行) */

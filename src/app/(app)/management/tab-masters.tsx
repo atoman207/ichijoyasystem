@@ -144,7 +144,7 @@ export function MastersTab({ ctx }: { ctx: Ctx }) {
               <Tr key={x.id}>
                 <Td>{x.name}</Td>
                 <Td className="text-xs">{x.productId ? `商品: ${db.products.find((p) => p.id === x.productId)?.name ?? x.productId}` : `品名に「${x.matchName}」`}</Td>
-                <Td className="text-xs">{x.lines.map((l) => `${l.materialId ? db.materials.find((m) => m.id === l.materialId)?.name : MATERIAL_KIND_LABEL[l.materialKind] + " (仕様で選ぶ)"} × ${l.qty}`).join(" / ")}</Td>
+                <Td className="text-xs">{x.lines.map((l) => `${l.materialId ? db.materials.find((m) => m.id === l.materialId)?.name : `${MATERIAL_KIND_LABEL[l.materialKind]} (仕様で選ぶ${l.defaultMaterialId ? `・既定 ${db.materials.find((m) => m.id === l.defaultMaterialId)?.name ?? "?"}` : ""})`} × ${l.qty}`).join(" / ")}</Td>
                 <Td className="text-xs">{x.validFrom}〜{x.validTo ?? ""}</Td>
               </Tr>
             ))}
@@ -162,8 +162,8 @@ export function MastersTab({ ctx }: { ctx: Ctx }) {
             </Field>
             <Field label="または品名に含まれる言葉 (移行データの明細)"><Input name="matchName" placeholder="例: 畳 上級" /></Field>
             <Field label="適用開始日"><Input type="date" name="validFrom" defaultValue={ctx.today} /></Field>
-            <Field label="材料の行 (1 行に「材料コード または 種類, 使用量」)" className="@3xl:col-span-2">
-              <Textarea name="lines" rows={4} required placeholder={"OMOTE-A, 1\nHERI-KON, 1\ndoko, 1\nsub, 1"} />
+            <Field label="材料の行 (1 行に「材料コード または 種類, 使用量」。畳床など種類だけの行は「, 既定の材料コード」を足せる)" hint="既定の材料は、品名・製造の予定から仕様を判定できないときに使います (例: doko, 1, DOKO-KENZAI-55)" className="@3xl:col-span-2">
+              <Textarea name="lines" rows={4} required placeholder={"OMOTE-A, 1\nHERI-KON, 1\ndoko, 1, DOKO-KENZAI-55\nsub, 1"} />
             </Field>
             <div><Button type="submit" size="sm">保存 (新しい版)</Button></div>
           </form>

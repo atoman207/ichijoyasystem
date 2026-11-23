@@ -1,9 +1,11 @@
 import type { CostType, Database, Material, Order, PurchaseInvoice, PurchaseLineAlloc, PurchaseSplit, StoreId } from "@/lib/db/types";
 import type { LineItem } from "@/lib/ai/ocr";
+import { salesFacts, type OrderFact } from "@/lib/assistant/facts";
 import { apportion, round4, dec4, divRound, fmtDec4 } from "./decimal";
 import { storeIdOfName } from "./areas";
 import { mainCategory, orderCategorySales } from "./categories";
 import { storeLoc } from "./stock";
+import { defaultExpenseClass } from "./expense-class";
 
 /**
  * 仕入請求書の明細の振り分け (店舗・案件・品目・費用区分)
@@ -29,8 +31,16 @@ export const allocId = (purchaseId: string, itemId: string) => `pla_${purchaseId
 
 /** 使い道で品目が変わる材料 (クロス・襖紙など): 案件の品目で決める */
 const PURPOSE_DEPENDENT: Material["kind"][] = ["cloth", "paper"];
+/**
+ * 材料マスタにない明細でも、使い道で品目が変わる材料と分かる品名 (クロス・壁紙・ベニア・襖紙・サンゲツなどの壁紙の品番 SP/RE/FE/TH + 4 桁以上)。
+ * 例: クロス紙 SP7566 は壁紙の張替に使えばリフォーム材料費、襖紙に使えば襖材料費
+ */
+export const PURPOSE_WORDS = /クロス|壁紙|ベニア|襖紙|ふすま紙|(?<![A-Za-z])(?:SP|RE|FE|TH|LL|LV|BB)-?\d{4,}/i;
 /** 本部で一括仕入して在庫にする材料 */
 const STOCKED: Material["kind"][] = ["omote", "chem_omote", "heri", "doko"];
+
+/** 材料の仕入の勘定科目 (ledger.ts と同じ) */
+const MATERIAL_ACCOUNT = /仕入|材料|原材料|商品/;
 
 const norm = (s: string | undefined) => (s ?? "").normalize("NFKC").replace(/[\s　]/g, "").toLowerCase();
 
@@ -62,6 +72,8 @@ interface Ctx {
   purchase: PurchaseInvoice;
   orders: Order[];
   history: PurchaseLineAlloc[];
+  /** 受注の売上の内訳 (salesFacts。品目の判定に使う) */
+  facts?: Map<string, OrderFact>;
 }
 
 function orderLabel(db: Database, o: Order): string {
@@ -162,13 +174,23 @@ export function classifyLine(ctx: Ctx, line: PurchaseLineAlloc["ocr"]): Classifi
 
   // 5) 品目: 使い道で変わる材料は案件の品目、それ以外は材料の品目 → 過去の振り分け → 案件の品目
   let itemCategory: string | undefined;
-  const orderMain = order ? mainCategory(orderCategorySales(db, order, undefined, order.salesDate ?? order.contractDate), "other") : undefined;
-  if (material && PURPOSE_DEPENDENT.includes(material.kind)) {
-    if (orderMain) {
-      itemCategory = orderMain === "fusuma" || orderMain === "reform" ? orderMain : undefined;
-      if (itemCategory) reasons.push(`「${material.name}」は使い道で品目が変わるため、案件の施工内容 (${orderMain === "fusuma" ? "襖" : "リフォーム"}) で判定`);
-      else review.push(`「${material.name}」の使い道 (襖・リフォーム) が案件から判断できません`);
-    } else review.push(`「${material.name}」は使い道 (襖の張替か壁紙の張替か) で品目が変わるため、案件が必要です`);
+  const orderSales = order ? orderCategorySales(db, order, ctx.facts?.get(order.id), order.salesDate ?? order.contractDate) : undefined;
+  const orderMain = orderSales ? mainCategory(orderSales, "other") : undefined;
+  const purposeName = material ? material.name : `${line.name}${line.code ? ` ${line.code}` : ""}`;
+  const purposeDependent = material ? PURPOSE_DEPENDENT.includes(material.kind) : PURPOSE_WORDS.test(`${line.name} ${line.code ?? ""} ${line.spec ?? ""}`);
+  if (purposeDependent) {
+    // 案件の売上に 襖 と リフォーム のどちらが含まれるかで決める (両方あれば要確認)
+    const fusuma = (orderSales?.fusuma ?? 0) > 0;
+    const reform = (orderSales?.reform ?? 0) > 0;
+    if (!order) review.push(`「${purposeName}」は使い道 (襖の張替か壁紙の張替か) で品目が変わるため、案件が必要です`);
+    else if (fusuma && !reform) {
+      itemCategory = "fusuma";
+      reasons.push(`「${purposeName}」は使い道で品目が変わるため、案件の施工内容 (襖) で判定`);
+    } else if (reform && !fusuma) {
+      itemCategory = "reform";
+      reasons.push(`「${purposeName}」は使い道で品目が変わるため、案件の施工内容 (リフォーム) で判定`);
+    } else if (fusuma && reform) review.push(`「${purposeName}」: 案件に襖とリフォームの両方があるため、どちらに使ったか確認してください (必要なら金額を分けて振り分け)`);
+    else review.push(`「${purposeName}」の使い道 (襖・リフォーム) が案件の施工内容から判断できません`);
   } else if (material) {
     itemCategory = material.itemCategory;
     reasons.push(`材料の品目`);
@@ -189,12 +211,23 @@ export function classifyLine(ctx: Ctx, line: PurchaseLineAlloc["ocr"]): Classifi
   } else if (material && STOCKED.includes(material.kind) && !order && (storeId ?? purchase.storeId) === "hq") {
     costType = "inventory";
     reasons.push("本部の一括仕入の材料 (在庫に受け入れ、使ったときに原価)");
-  } else if (material || order) {
+  } else if (material || order || purposeDependent) {
     costType = "material";
   } else if (pastType) {
     costType = pastType;
     reasons.push(`過去に確定した同じ明細の費用区分 (${past.length} 件)`);
+  } else if (purchase.account && !MATERIAL_ACCOUNT.test(purchase.account)) {
+    // 材料・案件のない経費の明細 (勘定科目が仕入・材料以外): 勘定科目・品名・店舗から案分経費か店舗独自経費か (expense-class.ts)
+    const cls = defaultExpenseClass({ account: purchase.account, storeId: storeId ?? purchase.storeId, description: line.name, vendor: supplier?.name });
+    costType = cls.allocClass === "common" ? "common_expense" : "store_expense";
+    reasons.push(cls.reason);
   }
+  // 案分経費は全社で集約して案分するため、店舗が決まらなければ仕入の登録の店舗 (本部) に置く
+  if (costType === "common_expense" && !storeId) {
+    storeId = purchase.storeId;
+    reasons.push(`案分経費は ${purchase.storeId === "hq" ? "本部" : "仕入の登録の店舗"} に集約`);
+  }
+  if (costType === "common_expense" && !itemCategory) itemCategory = "other";
   if (pastType && costType && pastType !== costType) review.push(`過去の振り分け (${COST_TYPE_LABEL[pastType]}) と今回の判定 (${COST_TYPE_LABEL[costType]}) が違います`);
 
   // 7) 金額の照合
@@ -237,6 +270,7 @@ export function buildLineAllocs(db: Database, purchase: PurchaseInvoice, now: st
   const from = shiftDate(purchase.invoiceDate, -120);
   const orders = db.orders.filter((o) => o.status !== "cancelled" && (o.salesDate ?? o.contractDate) >= from && o.contractDate <= shiftDate(purchase.invoiceDate, 30));
   const history = (db.purchaseLineAllocs ?? []).filter((h) => h.purchaseId !== purchase.id && db.purchases.find((p) => p.id === h.purchaseId)?.supplierId === purchase.supplierId);
+  const facts = salesFacts(db).byId;
   // 読み取りの明細との対応: 行数が同じなら同じ順番、違えば同じ品名の未使用の行
   const usedOcr = new Set<number>();
   const ocrFor = (name: string, k: number): LineItem | undefined => {
@@ -264,7 +298,7 @@ export function buildLineAllocs(db: Database, purchase: PurchaseInvoice, now: st
       note: o?.lineNote,
     };
     if (prev?.status === "confirmed") return { ...prev, ocr: prev.ocr };
-    const c = classifyLine({ db, purchase, orders, history }, ocr);
+    const c = classifyLine({ db, purchase, orders, history, facts }, ocr);
     const ai: PurchaseLineAlloc["ai"] = { storeId: c.storeId, orderId: c.orderId, itemCategory: c.itemCategory, costType: c.costType, materialId: c.materialId, reason: c.reason, refs: c.refs, confidence: c.confidence, needsReview: c.needsReview, candidates: c.candidates, method: "rules", at: now };
     const splits: PurchaseSplit[] = c.storeId && c.itemCategory && c.costType ? [{ storeId: c.storeId, orderId: c.orderId, itemCategory: c.itemCategory, costType: c.costType, materialId: c.materialId, qty: c.materialId ? it.qty : undefined, amount: ocr.amountExTax }] : [];
     return { id, purchaseId: purchase.id, itemId: it.id, lineNo: k + 1, ocr, ai, splits: prev?.splits?.length ? prev.splits : splits, status: c.needsReview || !splits.length ? "needs_review" : "unassigned", updatedAt: now };

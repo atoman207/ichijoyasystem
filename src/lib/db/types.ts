@@ -6,7 +6,7 @@
  * エンティティ同士が ID で関連付き、1 か所の更新が全画面に反映される。
  */
 
-import type { AllocationRun, Bom, ExpenseClass, ItemCategory, Material, MaterialCost, MaterialUsage, MgmtEntry, MgmtRule, OrderAttribution, PeriodClose, PurchaseLineAlloc, SalesAdjustment, SalesArea, StockMove } from "./types-mgmt";
+import type { AllocationRun, Bom, ExpenseClass, ItemCategory, Material, MaterialCost, MaterialTransfer, MaterialUsage, MgmtEntry, MgmtRule, OrderAttribution, PeriodClose, PurchaseLineAlloc, SalesAdjustment, SalesArea, StockMove } from "./types-mgmt";
 export type * from "./types-mgmt";
 import type { JobSpec, ProductionJob, ResourceBooking, ScheduleHold } from "./types-plan";
 export type * from "./types-plan";
@@ -1604,6 +1604,7 @@ export interface Database {
   boms: Bom[];
   materialUsages: MaterialUsage[];
   stockMoves: StockMove[];
+  materialTransfers: MaterialTransfer[];
   purchaseLineAllocs: PurchaseLineAlloc[];
   expenseClasses: ExpenseClass[];
   mgmtEntries: MgmtEntry[];

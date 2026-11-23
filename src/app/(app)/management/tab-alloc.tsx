@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { yen } from "@/lib/format";
 import { confirmedRun, monthRange, previewAllocation, RUN_STATUS_LABEL } from "@/lib/mgmt/allocation";
-import { ruleLabel } from "@/lib/mgmt/rules";
-import { classifyExpense, confirmAllocationAction } from "@/lib/actions/mgmt";
+import { ruleAt, ruleLabel } from "@/lib/mgmt/rules";
+import { defaultExpenseClass } from "@/lib/mgmt/expense-class";
+import { omoteDiffEntries, parseOmoteDiffKey, previewOmoteDiff } from "@/lib/mgmt/omote-diff";
+import { classifyExpense, confirmAllocationAction, confirmOmoteDiffAction, reverseOmoteDiffAction } from "@/lib/actions/mgmt";
 import { Badge, Button, Card, CardHeader, Field, Input, Note, Select, Table, Td, Th, Tr } from "@/components/ui";
 import { Money, PeriodForm, back, storeNameOf, userNameOf, type Ctx } from "./parts";
 
@@ -24,7 +26,7 @@ export function AllocTab({ ctx }: { ctx: Ctx }) {
     <div className="space-y-4">
       <PeriodForm ctx={ctx} monthOnly />
       <Note>
-        共通経費 (共通広告・消耗品・廃棄物処分・システム開発など) を、店舗の<strong>{ruleLabel("alloc.basis", p.rules["alloc.basis"].value)}</strong>で案分します (2025-07〜 粗利比。議事録 2025-09-19)。粗利益 = 管理売上 − 材料費 − 外注費 (案分の結果は基準に入れません)。対象: {ruleLabel("alloc.include_hq", p.rules["alloc.include_hq"].value)}
+        案分経費 (広告宣伝費の大部分・消耗品費のすべて・畳の処分費などの廃棄物処分費・開発費など全店舗共通の経費) を本部に集約し、店舗の<strong>{ruleLabel("alloc.basis", p.rules["alloc.basis"].value)}</strong>で案分します (2025-07〜 粗利比。お客様のご説明 2026-11-23・議事録 2025-09-19)。粗利益 = 管理売上 − 材料費 − 外注費 (案分の結果は基準に入れません)。対象: {ruleLabel("alloc.include_hq", p.rules["alloc.include_hq"].value)}
         {p.rules["alloc.include_hq"].status === "provisional" ? " (暫定)" : ""}。端数: {ruleLabel("alloc.rounding", p.rules["alloc.rounding"].value)}
         {p.rules["alloc.rounding"].status === "provisional" ? " (暫定)" : ""}。粗利益の合計が 0 以下・マイナスの店舗があるときは<strong>保留</strong>し、管理者が比率を指定するまで案分しません。
       </Note>
@@ -119,8 +121,10 @@ export function AllocTab({ ctx }: { ctx: Ctx }) {
         </Card>
       )}
 
+      <OmoteDiffCard ctx={ctx} />
+
       <Card>
-        <CardHeader title={`${month} の経費の区分 (${expenses.length} 件)`} description="区分のない経費は店舗独自経費として数えます。共通広告・消耗品 (ハガキ・タオル)・廃棄物処分などは「共通経費」にすると案分の対象になります" />
+        <CardHeader title={`${month} の経費の区分 (${expenses.length} 件)`} description="区分を登録していない経費は勘定科目から自動で決めます: 消耗品費・廃棄物処分費・広告宣伝費・販促費・開発費、ハガキ・タオル、本部の経費 = 案分経費 / それ以外 = 店舗独自経費。店舗の判断で予算を超えて行った広告宣伝費などは「店舗独自経費」に変えて保存してください" />
         <Table minWidth="min-w-[860px]">
           <thead>
             <tr>
@@ -134,6 +138,7 @@ export function AllocTab({ ctx }: { ctx: Ctx }) {
           <tbody>
             {expenses.map((e) => {
               const c = classes.get(e.id);
+              const auto = defaultExpenseClass(e);
               return (
                 <Tr key={e.id}>
                   <Td><Link className="text-accent hover:underline" href={`/expenses/${e.id}`}>{e.number}</Link><div className="text-xs text-ink-2">{e.date}</div></Td>
@@ -145,17 +150,18 @@ export function AllocTab({ ctx }: { ctx: Ctx }) {
                       <form action={classifyExpense} className="flex flex-wrap gap-1">
                         {b}
                         <input type="hidden" name="expenseId" value={e.id} />
-                        <Select name="allocClass" defaultValue={c?.allocClass ?? "store"}>
+                        <Select name="allocClass" defaultValue={c?.allocClass ?? auto.allocClass}>
                           <option value="store">店舗独自経費</option>
-                          <option value="common">共通経費 (案分)</option>
+                          <option value="common">案分経費 (共通)</option>
                         </Select>
                         <Select name="costKind" defaultValue={c?.costKind ?? (COST_KINDS.find((k) => e.account.includes(k.replace(/費$/, ""))) ?? "その他")}>
                           {COST_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
                         </Select>
                         <Button type="submit" size="sm" variant="secondary">保存</Button>
+                        {!c && <span className="w-full text-xs text-ink-2">未登録: 自動で{auto.allocClass === "common" ? "案分経費" : "店舗独自経費"} ({auto.reason})</span>}
                       </form>
                     ) : (
-                      <span>{c?.allocClass === "common" ? "共通経費" : "店舗独自経費"}</span>
+                      <span>{(c?.allocClass ?? auto.allocClass) === "common" ? "案分経費" : "店舗独自経費"}{!c && <span className="text-xs text-ink-2"> (自動)</span>}</span>
                     )}
                   </Td>
                 </Tr>
@@ -165,5 +171,107 @@ export function AllocTab({ ctx }: { ctx: Ctx }) {
         </Table>
       </Card>
     </div>
+  );
+}
+
+/** 畳表の仮原価と実際の仕入の差額 (期間を選んで、店舗の粗利益の比率で案分) */
+function OmoteDiffCard({ ctx }: { ctx: Ctx }) {
+  const { db } = ctx;
+  // 全店舗の粗利益・仕入を含むため、全店舗を見られる人だけに出す
+  if (ctx.storeIds) return null;
+  const isMonth = (v: string | undefined) => Boolean(v && /^\d{4}-\d{2}$/.test(v));
+  const fromMonth = isMonth(ctx.sp.ofrom) ? ctx.sp.ofrom! : ctx.month;
+  const toMonth = isMonth(ctx.sp.oto) && ctx.sp.oto! >= fromMonth ? ctx.sp.oto! : fromMonth < ctx.month ? ctx.month : fromMonth;
+  const p = previewOmoteDiff(db, fromMonth, toMonth);
+  const method = ruleAt(db, "omote.diff_method", `${toMonth}-28`);
+  const confirmed = new Map<string, { total: number; stores: { storeId: string; amount: number }[]; at: string; by: string }>();
+  for (const e of omoteDiffEntries(db)) {
+    const k = e.metric!;
+    const cur = confirmed.get(k) ?? confirmed.set(k, { total: 0, stores: [], at: e.createdAt, by: e.createdBy }).get(k)!;
+    cur.total += e.amount;
+    cur.stores.push({ storeId: e.storeId, amount: e.amount });
+  }
+  const ppm = (v: number) => `${(v / 10000).toFixed(2)}%`;
+  const b = back(ctx, { ofrom: fromMonth, oto: toMonth });
+  return (
+    <Card id="omote-diff">
+      <CardHeader
+        title="畳表の仮原価と実際の仕入の差額"
+        description={`店舗には畳表を仮原価 × 使用数量で計上し、実際の仕入金額との差額を各店舗の粗利益の比率で案分します。設定: ${ruleLabel("omote.diff_method", method.value)}`}
+      />
+      <form method="get" className="mb-3 flex flex-wrap items-end gap-2">
+        <input type="hidden" name="tab" value="alloc" />
+        <input type="hidden" name="month" value={ctx.month} />
+        <Field label="開始月"><Input type="month" name="ofrom" defaultValue={fromMonth} /></Field>
+        <Field label="終了月"><Input type="month" name="oto" defaultValue={toMonth} /></Field>
+        <Button type="submit" variant="secondary">計算する</Button>
+      </form>
+      <div className="grid grid-cols-1 gap-3 text-sm @3xl:grid-cols-3">
+        <div className="rounded-lg border border-line p-3"><div className="text-xs text-ink-2">実際の仕入 (畳表の在庫の受入 {p.receiveCount} 件)</div><Money v={p.purchases} strong /></div>
+        <div className="rounded-lg border border-line p-3"><div className="text-xs text-ink-2">仮原価で計上した材料費 ({p.bookedCount} 行)</div><Money v={p.booked} strong /></div>
+        <div className="rounded-lg border border-line p-3"><div className="text-xs text-ink-2">差額 (店舗の材料費に足す)</div><Money v={p.diff} strong /></div>
+      </div>
+      {p.status === "ok" ? (
+        <Table minWidth="min-w-[420px]" className="mt-3">
+          <thead>
+            <tr>
+              <Th>店舗</Th>
+              <Th align="right">粗利益 (期間)</Th>
+              <Th align="right">率</Th>
+              <Th align="right">差額の案分</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {p.basis.map((x) => {
+              const r = p.results.find((y) => y.storeId === x.storeId);
+              return (
+                <Tr key={x.storeId}>
+                  <Td>{storeNameOf(db, x.storeId)}</Td>
+                  <Td align="right"><Money v={x.gross} /></Td>
+                  <Td align="right">{r ? ppm(r.ratePpm) : "-"}</Td>
+                  <Td align="right"><Money v={r?.amount ?? null} strong /></Td>
+                </Tr>
+              );
+            })}
+          </tbody>
+        </Table>
+      ) : (
+        <p className="mt-3 text-sm text-ink-2">{p.status === "empty" ? "この期間に畳表の仕入・仮原価の計上がない (または差額が 0) ため、案分する差額はありません。" : p.holdReason}</p>
+      )}
+      {p.overlap && <Note tone="warn">{p.overlap}。</Note>}
+      {ctx.canAdmin && p.status === "ok" && !p.overlap && (
+        <form action={confirmOmoteDiffAction} className="mt-3 flex flex-wrap items-end gap-2">
+          {b}
+          <input type="hidden" name="fromMonth" value={fromMonth} />
+          <input type="hidden" name="toMonth" value={toMonth} />
+          <Button type="submit">この差額を {toMonth} の材料費 (畳) に案分して確定</Button>
+          <span className="text-xs text-ink-2">店舗ごとの「材料の差額調整」として登録します。取消しは逆の行で行います。</span>
+        </form>
+      )}
+      <p className="mt-2 text-xs text-ink-2">
+        実際の仕入は、仕入明細の振り分けで畳表を「在庫」(本部の一括仕入) として確定したものです。仕入と使用の月がずれると 1 か月ごとの差額は大きく振れるため、四半期・決算期など長めの期間で確定してもかまいません。
+      </p>
+      {confirmed.size > 0 && (
+        <div className="mt-3 space-y-2 text-sm">
+          <div className="font-semibold">確定した差額</div>
+          {[...confirmed.entries()].map(([k, v]) => {
+            const per = parseOmoteDiffKey(k)!;
+            return (
+              <div key={k} className="flex flex-wrap items-center gap-2">
+                <span>{per.from}〜{per.to}: {yen(v.total)} ({v.stores.map((x) => `${storeNameOf(db, x.storeId)} ${yen(x.amount)}`).join("・")}) · {v.at.slice(0, 10)} {userNameOf(db, v.by)}</span>
+                {ctx.canAdmin && (
+                  <form action={reverseOmoteDiffAction} className="flex gap-1">
+                    {b}
+                    <input type="hidden" name="key" value={k} />
+                    <Input name="reason" placeholder="取消しの理由" required className="w-36" />
+                    <Button type="submit" size="sm" variant="secondary">取消し</Button>
+                  </form>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
   );
 }

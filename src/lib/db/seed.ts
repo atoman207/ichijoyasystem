@@ -172,6 +172,7 @@ export function createSeed(now = new Date()): Database {
     boms: [],
     materialUsages: [],
     stockMoves: [],
+    materialTransfers: [],
     purchaseLineAllocs: [],
     expenseClasses: [],
     mgmtEntries: [],

@@ -56,7 +56,8 @@ export function attributionOf(db: Database, order: Order, mainCategory: string, 
   const receivedStoreId = saved?.receivedStoreId ?? order.storeId;
   const workStoreId = saved?.workStoreId ?? order.storeId;
   const warnings: string[] = [];
-  if (workStoreId !== order.storeId) warnings.push(`施工店舗 (${storeName(db, workStoreId)}) と売上帰属店舗 (受注の店舗: ${storeName(db, order.storeId)}) が違います。売上は施工店舗に計上するため、受注の店舗を施工店舗に合わせるか、理由を残してください。`);
+  // 本部の売上で作業だけ店舗が行った案件 (本部の特殊配分) は、売上を本部に計上して作業分を配分するため警告しない
+  if (workStoreId !== order.storeId && !(saved?.hqSpecial && order.storeId === "hq")) warnings.push(`施工店舗 (${storeName(db, workStoreId)}) と売上帰属店舗 (受注の店舗: ${storeName(db, order.storeId)}) が違います。売上は施工店舗に計上するため、受注の店舗を施工店舗に合わせるか、理由を残してください。`);
   if (area.status === "ambiguous") warnings.push(`住所が複数の店舗の営業エリアに当てはまります (${area.candidates.map((c) => `${c.town}=${storeName(db, c.storeId)}`).join("・")})。`);
   return {
     orderId: order.id,

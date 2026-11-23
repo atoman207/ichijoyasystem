@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { fmtDate, yen } from "@/lib/format";
 import { salesFacts } from "@/lib/assistant/facts";
-import { costingLines, countedUsages, planUsage, MATERIAL_KIND_LABEL, STAGE_LABEL, SIZE_LABEL } from "@/lib/mgmt/costing";
+import { autoUsage, costingLines, countedUsages, planUsage, MATERIAL_KIND_LABEL, STAGE_LABEL, SIZE_LABEL } from "@/lib/mgmt/costing";
+import { productionNoteIndex, productionNotes } from "@/lib/mgmt/doko";
 import { canRecordUsage } from "@/lib/mgmt/access";
 import { recordOrderCost } from "@/lib/actions/mgmt";
 import { Badge, Button, Card, CardHeader, Field, Input, Note, Select, Table, Td, Th, Tr } from "@/components/ui";
@@ -13,16 +14,29 @@ export function CostTab({ ctx }: { ctx: Ctx }) {
   const visible = (id: string) => !ctx.storeIds || ctx.storeIds.includes(id);
   const orderParam = ctx.sp.order ? db.orders.find((o) => o.id === ctx.sp.order || o.number === ctx.sp.order) : undefined;
   const orders = db.orders.filter((o) => o.status !== "cancelled" && (o.salesDate ?? o.contractDate) >= ctx.from && (o.salesDate ?? o.contractDate) <= ctx.to && visible(o.storeId));
+  const notes = productionNoteIndex(db);
   const rows = orders
     .map((o) => {
       const used = countedUsages(db, o.id);
       const fact = facts.get(o.id);
       const tatami = (fact?.amounts.tatami ?? (o.category === "tatami" ? o.total : 0)) > 0;
-      return { o, used, tatami, legacy: !used.length && Boolean(o.tatamiCost) };
+      const legacy = !used.length && Boolean(o.tatamiCost);
+      // 原価の行がない受注は、材料構成から自動で計算した原価 (店舗別損益にもこの金額が入る)
+      const auto = !used.length && !legacy && tatami ? autoUsage(db, o, fact, o.salesDate ?? ctx.today, notes.get(o.id) ?? "") : undefined;
+      return { o, used, tatami, legacy, auto };
     })
     .filter((r) => r.tatami || r.used.length);
-  const status = (r: (typeof rows)[number]) => (r.used.length ? (r.used.some((u) => u.needsReview) ? "review" : r.used[0].stage) : r.legacy ? "legacy" : "none");
-  const counts = { none: 0, review: 0, estimate: 0, planned: 0, actual: 0, legacy: 0 } as Record<string, number>;
+  const status = (r: (typeof rows)[number]) =>
+    r.used.length
+      ? r.used.some((u) => u.needsReview) ? "review" : r.used[0].stage
+      : r.legacy
+        ? "legacy"
+        : r.auto?.usages.length
+          ? r.auto.usages.some((u) => u.needsReview) || r.auto.unmatched.length ? "review" : "auto"
+          : r.auto?.unmatched.length
+            ? "review"
+            : "none";
+  const counts = { none: 0, review: 0, auto: 0, estimate: 0, planned: 0, actual: 0, legacy: 0 } as Record<string, number>;
   for (const r of rows) counts[status(r)]++;
   const filter = ctx.sp.status ?? "";
   const list = rows.filter((r) => !filter || status(r) === filter);
@@ -32,10 +46,11 @@ export function CostTab({ ctx }: { ctx: Ctx }) {
     <div className="space-y-4">
       <PeriodForm ctx={ctx} />
       <Note>
-        材料原価 = 使用数量 × その日の単価 (材料構成 (BOM) から計算)。半畳は材料ごとの係数、副資材は 1 枚 (半畳も 1 枚) あたりの設定の単価。<strong>畳床は製造仕様 (種類・厚み・規格) を選ぶまで「要確認」</strong>で、推測の金額は入れません。段階は 予想原価 → 使用予定 → 実績 で、受注ごとに一番進んだ段階だけを原価に数えます (二重に数えない)。売上台帳から移行した受注は、移行した畳原価をそのまま使います。
+        材料原価 = 使用数量 × その日の単価。<strong>売上明細の商品・数量と材料構成 (BOM) から自動で計算</strong>し、原価の行を登録していない受注も店舗別損益に入ります (「自動計算」)。半畳は材料ごとの係数 (畳表などは 2 枚で 1 枚分 = 0.5)、副資材は 1 枚 (半畳も 1 枚) あたりの設定の単価。畳表は仮原価で計上し、実際の仕入との差額は共通経費の案分のタブで粗利益の比率で案分します。
+        <strong>畳床</strong>は品名と製造の予定 (予定表の製造の欄の「床」「サイズ」) から 種類・厚み・寸法 を読み、材料マスタの畳床を選びます (寸法が五八以下なら五八間、それより大きければ本間の畳床)。決まらなければ材料構成の既定の畳床で計算して「既定の仕様」と表示し、既定もなければ「要確認」(金額なし) にします。段階は 予想原価 → 使用予定 → 実績 で、受注ごとに一番進んだ段階だけを原価に数えます。売上台帳から移行した受注は、移行した畳原価をそのまま使います。
       </Note>
       <div className="flex flex-wrap gap-2 text-xs">
-        {[["", `すべて (${rows.length})`], ["none", `未計算 (${counts.none})`], ["review", `要確認 (${counts.review})`], ["estimate", `予想 (${counts.estimate})`], ["planned", `使用予定 (${counts.planned})`], ["actual", `実績 (${counts.actual})`], ["legacy", `移行の畳原価 (${counts.legacy})`]].map(([k, l]) => (
+        {[["", `すべて (${rows.length})`], ["auto", `自動計算 (${counts.auto})`], ["none", `材料構成なし (${counts.none})`], ["review", `要確認 (${counts.review})`], ["estimate", `予想 (${counts.estimate})`], ["planned", `使用予定 (${counts.planned})`], ["actual", `実績 (${counts.actual})`], ["legacy", `移行の畳原価 (${counts.legacy})`]].map(([k, l]) => (
           <Link key={k} href={qs(ctx, { status: k || undefined })} className={`rounded-full border px-2.5 py-1 ${filter === k ? "border-accent bg-accent-soft" : "border-line"}`}>
             {l}
           </Link>
@@ -57,7 +72,7 @@ export function CostTab({ ctx }: { ctx: Ctx }) {
         <tbody>
           {list.slice(0, 150).map((r) => {
             const st = status(r);
-            const amount = r.used.length ? r.used.reduce((a, u) => a + (u.amount ?? 0), 0) : r.legacy ? Math.round(r.o.tatamiCost ?? 0) : null;
+            const amount = r.used.length ? r.used.reduce((a, u) => a + (u.amount ?? 0), 0) : r.legacy ? Math.round(r.o.tatamiCost ?? 0) : r.auto?.usages.length ? r.auto.usages.reduce((a, u) => a + (u.amount ?? 0), 0) : null;
             return (
               <Tr key={r.o.id}>
                 <Td>
@@ -68,7 +83,7 @@ export function CostTab({ ctx }: { ctx: Ctx }) {
                 <Td>{db.stores.find((s) => s.id === r.o.storeId)?.shortName}</Td>
                 <Td align="right">{yen(r.o.total)}</Td>
                 <Td>
-                  {st === "review" ? <Badge tone="warn">要確認</Badge> : st === "none" ? <Badge tone="neutral">未計算</Badge> : st === "legacy" ? <Badge tone="info">移行の畳原価</Badge> : <Badge tone={st === "actual" ? "good" : "info"}>{STAGE_LABEL[st as "actual"]}</Badge>}
+                  {st === "review" ? <Badge tone="warn">要確認</Badge> : st === "none" ? <Badge tone="neutral">材料構成なし</Badge> : st === "legacy" ? <Badge tone="info">移行の畳原価</Badge> : st === "auto" ? <Badge tone="info">自動計算{r.auto?.usages.some((u) => u.assumed) ? " (既定の仕様)" : ""}</Badge> : <Badge tone={st === "actual" ? "good" : "info"}>{STAGE_LABEL[st as "actual"]}</Badge>}
                 </Td>
                 <Td align="right"><Money v={amount} /></Td>
                 <Td>
@@ -91,7 +106,8 @@ function OrderCosting({ ctx, orderId, docoIds }: { ctx: Ctx; orderId: string; do
   const fact = salesFacts(db).byId.get(o.id);
   const lines = costingLines(db, o, fact);
   const date = o.salesDate ?? ctx.today;
-  const plan = planUsage(db, lines, date);
+  const hint = productionNotes(db, o.id);
+  const plan = planUsage(db, lines, date, {}, { hintText: hint });
   const all = db.materialUsages.filter((u) => u.orderId === o.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const counted = new Set(countedUsages(db, o.id).map((u) => u.id));
   const docos = db.materials.filter((m) => docoIds.includes(m.id));
@@ -100,6 +116,7 @@ function OrderCosting({ ctx, orderId, docoIds }: { ctx: Ctx; orderId: string; do
     <Card id="costing">
       <CardHeader title={`材料原価: ${o.number} ${o.title}`} description={`明細 ${lines.length} 行 · ${date} 時点の単価で計算${o.tatamiCost ? ` · 移行の畳原価 ${yen(Math.round(o.tatamiCost))}` : ""}`} />
       {lines.length === 0 && <Note tone="warn">原価を計算できる明細がありません (見積の明細・売上台帳の明細がない受注)。</Note>}
+      {hint && <p className="mb-2 text-xs text-ink-2">製造の予定のメモ (畳床の判定に使用): {hint}</p>}
       {plan.unmatched.length > 0 && <Note tone="warn">材料構成のない畳の明細: {plan.unmatched.map((l) => `${l.label} ×${l.qty}`).join("・")} — 材料・単価・材料構成のタブで材料構成を登録してください。</Note>}
       {editable && plan.usages.length > 0 && (
         <form action={recordOrderCost} className="space-y-3">
@@ -122,9 +139,9 @@ function OrderCosting({ ctx, orderId, docoIds }: { ctx: Ctx; orderId: string; do
                   <Td className="text-xs">{u.productLabel} ×{u.sheets}</Td>
                   <Td>
                     {MATERIAL_KIND_LABEL[u.materialKind]}
-                    {u.needsReview && u.materialKind === "doko" && (
+                    {u.materialKind === "doko" && (u.needsReview || u.spec?.inferred) && (
                       <div className="mt-1">
-                        <Select name={`spec:${u.lineKey}`} defaultValue="">
+                        <Select name={`spec:${u.lineKey}`} defaultValue={u.needsReview ? "" : (u.materialId ?? "")}>
                           <option value="">畳床の仕様を選ぶ…</option>
                           {docos.map((m) => (
                             <option key={m.id} value={m.id}>
@@ -152,7 +169,7 @@ function OrderCosting({ ctx, orderId, docoIds }: { ctx: Ctx; orderId: string; do
               </Select>
             </Field>
             <Button type="submit">この内容で登録</Button>
-            <span className="text-xs text-ink-2">畳床の仕様を選んだ行は、その材料の単価で計算し直して登録します。</span>
+            <span className="text-xs text-ink-2">畳床の仕様を選んだ行は、その材料の単価で計算し直して登録します (判定した畳床のままでよければ、そのまま登録)。登録しなくても、店舗別損益には自動計算の原価が入ります。</span>
           </div>
         </form>
       )}

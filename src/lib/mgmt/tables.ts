@@ -2,7 +2,7 @@ import "server-only";
 import { BACKEND } from "@/lib/db/store";
 import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
 
-export const MGMT_TABLES = ["mgmt_rules", "item_categories", "sales_areas", "order_attributions", "sales_adjustments", "materials", "material_costs", "boms", "material_usages", "stock_moves", "purchase_line_allocs", "expense_classes", "mgmt_entries", "allocation_runs", "period_closes"];
+export const MGMT_TABLES = ["mgmt_rules", "item_categories", "sales_areas", "order_attributions", "sales_adjustments", "materials", "material_costs", "boms", "material_usages", "stock_moves", "material_transfers", "purchase_line_allocs", "expense_classes", "mgmt_entries", "allocation_runs", "period_closes"];
 
 /**
  * 管理会計の表が本番のデータベースにあるか (デプロイの npm run build・npm run db:migrate で作る)。

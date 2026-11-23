@@ -481,7 +481,7 @@ section("店舗間の仕事の依頼 (内部受注) の売上の配分");
   eq(odd.table.rows[0].mgmt, 39999, "配分額の端数は切り捨て (199,999 × 20% = 39,999.8 → 39,999)");
   const ex = SP.simulateStoreSplit(db, admin, { fromStore: "tamana", toStore: "nishi", amount: 100000, workKind: "reform", taxIncluded: false });
   eq(ex.table.rows.map((x) => x.mgmt), [5500, 104500], "税抜 100,000 → 税込 110,000 × 5% (リフォーム) = 5,500 円");
-  ok(ex.table.notes.some((n) => n.includes("暫定")), "リフォームの配分率は暫定の設定であることを書く");
+  ok(ex.table.notes.some((n) => n.includes("確認済み")) && !ex.table.notes.some((n) => n.includes("暫定")), "リフォームの配分率 5% はお客様のご説明 (2026-11-23) で確認済み (暫定と書かない)");
   const same = SP.simulateStoreSplit(db, admin, { fromStore: "koshi", toStore: "koshi", amount: 50000 });
   eq(same.table.rows.map((x) => x.mgmt), [50000], "同じ店舗なら配分なし");
   const st = SP.simulateStoreSplit(db, staff, { fromStore: "koshi", toStore: "chuo", amount: 200000 });
