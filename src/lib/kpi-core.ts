@@ -41,6 +41,72 @@ export const isCard = (s: Pick<SurveyResponse, "postcardNo" | "source">): boolea
 /** 集計に入れるクレーム・手直し (記録のみのものを除く) */
 export const countedIssue = (q: Pick<QualityIssue, "counted">): boolean => q.counted !== false;
 
+/** クレームが発生した記録か (クレーム・クレーム＋手直し) */
+export const isClaimIssue = (q: Pick<QualityIssue, "kind">): boolean => q.kind === "claim" || q.kind === "claim_rework";
+/** 手直しが発生した記録か (手直し・クレーム＋手直し) */
+export const isReworkIssue = (q: Pick<QualityIssue, "kind">): boolean => q.kind === "rework" || q.kind === "claim_rework";
+
+/**
+ * 同じ案件の記録をまとめる印。案件 (受注) にひも付いた記録は受注ごと。
+ * ひも付いていない記録 (LINE の報告・スプレッドシートの取込で案件が決まらないもの) は 店舗・発生月・現場名 が同じなら同じ案件、
+ * 現場名もなければ記録ごと
+ */
+export function issueCaseKey(q: Pick<QualityIssue, "id" | "orderId" | "storeId" | "occurredOn" | "siteName">): string {
+  if (q.orderId) return `o:${q.orderId}`;
+  const site = (q.siteName ?? "").normalize("NFKC").replace(/[\s　]+/g, "");
+  return site ? `s:${q.storeId}|${q.occurredOn.slice(0, 7)}|${site}` : `q:${q.id}`;
+}
+
+export interface IssuePoints {
+  /** 上限を当てたあとのポイント (インセンティブ・ポイント率に使う) */
+  points: number;
+  /** 記録の点数の合計 (上限の前) */
+  raw: number;
+  /** 上限で減った案件の数 */
+  cappedCases: number;
+}
+
+/**
+ * クレーム・手直しのポイントの合計 (お客様のご指示 2026-11-24「クレーム 2 点・手直し 1 点・同一案件で両方発生した場合は最大 3 点」)。
+ * 同じ案件 (issueCaseKey) の記録の点数を足し、案件ごとに caseMax 点までにする (0 以下 = 上限なし)。
+ * 単位 (店舗・事務・担当者) ごとに絞った記録を渡す
+ */
+export function issuePoints(issues: Pick<QualityIssue, "id" | "orderId" | "storeId" | "occurredOn" | "siteName" | "points">[], caseMax: number): IssuePoints {
+  const byCase = new Map<string, number>();
+  let raw = 0;
+  for (const q of issues) {
+    raw += q.points;
+    const k = issueCaseKey(q);
+    byCase.set(k, (byCase.get(k) ?? 0) + q.points);
+  }
+  if (!(caseMax > 0)) return { points: raw, raw, cappedCases: 0 };
+  let points = 0;
+  let cappedCases = 0;
+  for (const v of byCase.values()) {
+    if (v > caseMax + 1e-9) cappedCases++;
+    points += Math.min(v, caseMax);
+  }
+  return { points, raw, cappedCases };
+}
+
+/**
+ * 経営管理の指標 (インセンティブのポイントとは別。実数と割合):
+ * クレーム発生件数 = クレーム・クレーム＋手直しの記録 / 手直し発生件数 = 手直し・クレーム＋手直しの記録 /
+ * 合計 = クレーム + 手直し (クレーム＋手直しの記録はそれぞれに 1 件) / 発生した案件 = クレーム・手直しのあった案件 (重複なし)
+ */
+export interface IssueCounts {
+  claims: number;
+  reworks: number;
+  total: number;
+  cases: number;
+}
+
+export function issueCounts(issues: Pick<QualityIssue, "id" | "orderId" | "storeId" | "occurredOn" | "siteName" | "kind">[]): IssueCounts {
+  const claims = issues.filter(isClaimIssue).length;
+  const reworks = issues.filter(isReworkIssue).length;
+  return { claims, reworks, total: claims + reworks, cases: new Set(issues.map(issueCaseKey)).size };
+}
+
 /** 担当職人 (③ の評価対象。複数のことがある)。移行データは担当職人の 1 人 */
 export function deliveryOf(s: Pick<SurveyResponse, "deliveryUserIds" | "craftsmanUserId">): string[] {
   if (s.deliveryUserIds && s.deliveryUserIds.length) return s.deliveryUserIds;

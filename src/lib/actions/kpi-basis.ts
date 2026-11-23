@@ -9,7 +9,7 @@ import type { AuditChange } from "@/lib/db/types";
 import { parseCsv } from "@/lib/csv";
 import { fetchSheetCsv, parseSheetLink } from "@/lib/data-io";
 import { putObject, removeObjects } from "@/lib/storage";
-import { fiscalMonths, kpiBasis, monthKey, writeKpiBasis, type KpiBasis } from "@/lib/kpi-basis";
+import { MAX_REPEAT_DAYS, fiscalMonths, kpiBasis, monthKey, writeKpiBasis, type CasesSource, type KpiBasis } from "@/lib/kpi-basis";
 import { MAX_BASIS_BYTES, applyBasisImport, basisHash, basisSheetsFromFiles, readBasisSheets, type BasisPreview } from "@/lib/kpi-basis-import";
 import { basisPreviewKey, readBasisPreview, saveKpiSheet } from "@/lib/kpi-check";
 import { tabsFromFiles } from "@/lib/survey-workbook/read";
@@ -18,8 +18,8 @@ import { fail, requireActionUser, str, withMsg } from "./guards";
 
 /**
  * KPI → 分母・照合 (src/lib/kpi-basis.ts)
- * - 数え方の設定 (分母の基準・平均・担当者名の未記入・施工件数の自動の値): 管理者 (canManageSettings)
- * - 店舗 × 月の個人件数・施工件数の手入力、年間チラシ計画・アンケートはがきの取込 (確認 → 取り込む)、照合の KPI のタブの読み込み: 本部スタッフ・管理者 (canImportData)
+ * - 数え方の設定 (分母の基準・平均・担当者名の未記入・個人件数の決め方・リピートの日数・全案件数の数え方): 管理者 (canManageSettings)
+ * - 店舗 × 月の個人件数・全案件数の手入力、年間チラシ計画・アンケートはがきの取込 (確認 → 取り込む)、照合の KPI のタブの読み込み: 本部スタッフ・管理者 (canImportData)
  */
 
 const BACK = "/kpi/basis";
@@ -36,11 +36,16 @@ async function start(back = BACK) {
 export async function saveKpiBasisRules(fd: FormData) {
   const user = await requireActionUser();
   if (!canManageSettings(user)) fail(BACK, "数え方の設定は管理者のみ変更できます。");
+  const repeatRaw = str(fd, "repeatDays").normalize("NFKC").replace(/[日\s]/g, "");
+  if (!/^\d{1,3}$/.test(repeatRaw) || Number(repeatRaw) > MAX_REPEAT_DAYS) fail(BACK, `リピートをまとめる日数は 0〜${MAX_REPEAT_DAYS} の整数で入力してください (0 = まとめない)。`);
+  const cases = str(fd, "casesSource");
   const next = {
     denominator: str(fd, "denominator") === "system" ? ("system" as const) : ("sheet" as const),
     average: str(fd, "average") === "answered" ? ("answered" as const) : ("sheet" as const),
     requireStaffNames: fd.get("requireStaffNames") === "on",
-    autoSites: fd.get("autoSites") === "on",
+    individualSource: str(fd, "individualSource") === "auto" ? ("auto" as const) : ("plan" as const),
+    repeatDays: Number(repeatRaw),
+    casesSource: (cases === "deliveries" || cases === "system" ? cases : "cases") as CasesSource,
   };
   await mutate((db) => {
     const cur = kpiBasis(db);
@@ -53,7 +58,7 @@ export async function saveKpiBasisRules(fd: FormData) {
   redirect(withMsg(BACK, "数え方の設定を保存しました。KPI・インセンティブの集計に反映されています。"));
 }
 
-/** 店舗 × 月の個人件数・施工件数 (手入力)。空欄 = 値を消す (個人件数はシステムの件数、施工件数は売上台帳の取込から自動) */
+/** 店舗 × 月の個人件数・全案件数 (手入力)。空欄 = 値を消す (自動の値・年間チラシ計画の取込の値に戻る) */
 export async function saveKpiMonthValues(fd: FormData) {
   const { user } = await start();
   const fyRaw = str(fd, "fy");
@@ -114,10 +119,10 @@ export async function saveKpiMonthValues(fd: FormData) {
     }
     if (!changes.length) fail(back, "変更はありませんでした。");
     writeKpiBasis(db, basis, user.id, now);
-    addAudit(db, { userId: user.id, action: "update", entity: "kpi_basis", entityId: "kpi_basis", entityLabel: `KPI の分母 (${fy}年度)`, summary: `KPI の個人件数・施工件数を手入力 (${fy}年度・${changes.length} 項目)`, storeId: "hq", changes: changes.slice(0, 80) });
+    addAudit(db, { userId: user.id, action: "update", entity: "kpi_basis", entityId: "kpi_basis", entityLabel: `KPI の分母 (${fy}年度)`, summary: `KPI の個人件数・全案件数を手入力 (${fy}年度・${changes.length} 項目)`, storeId: "hq", changes: changes.slice(0, 80) });
   });
   revalidatePath("/kpi", "layout");
-  redirect(withMsg(back, "個人件数・施工件数を保存しました。"));
+  redirect(withMsg(back, "個人件数・全案件数を保存しました。"));
 }
 
 /** 取込の確認 (読み取って保存するだけ。まだ取り込まない) */

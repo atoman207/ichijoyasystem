@@ -1,10 +1,12 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canManageKpi, canReadStoreRecords, canViewStoreFigures } from "@/lib/auth/permissions";
+import { canAccessStore, canManageKpi, canReadStoreRecords, canSeeAllStoreFigures, canViewStoreFigures } from "@/lib/auth/permissions";
 import { policyReader } from "@/lib/access-policy";
 
-import { countedIssue, filterIssues, fmtRate } from "@/lib/kpi";
+import { countedIssue, filterIssues, fmtRate, inPeriod } from "@/lib/kpi";
+import { issueCounts, type IssueCounts } from "@/lib/kpi-core";
+import { CASES_SOURCE_LABEL } from "@/lib/kpi-basis";
 import { computeIncentives } from "@/lib/incentive";
 import { QUALITY_KIND_LABEL, kpiSettings } from "@/lib/kpi-settings";
 import { resolvePeriod } from "@/lib/kpi-period";
@@ -32,6 +34,13 @@ export default async function QualityPage({ searchParams }: { searchParams: Prom
   const paged = paginate(rows, sp.page, 50);
   const result = computeIncentives(db, rp.period, settings);
   const units = [...result.units.filter((u) => canViewStoreFigures(reader, u.unit as never)), result.office];
+  // 経営管理の指標 (件数と割合。インセンティブのポイントとは別): 店舗・事務・全社 (全社は全店舗を見られる人だけ)
+  const allIssues = db.qualityIssues.filter((q) => countedIssue(q) && inPeriod(q.occurredOn, rp.period));
+  const mgmtRows: { key: string; label: React.ReactNode; cases: number; c: IssueCounts; total?: boolean }[] = [
+    ...units.map((u) => ({ key: u.unit, label: u.unit === "office" ? "事務" : <StoreTag store={db.stores.find((s) => s.id === u.unit)} short />, cases: u.orders, c: u.issues })),
+    ...(canSeeAllStoreFigures(reader) ? [{ key: "all", label: "全社", cases: result.office.orders, c: issueCounts(allIssues), total: true }] : []),
+  ];
+  const rate = (n: number, d: number) => fmtRate(d ? (n / d) * 100 : null, 2);
   const staff = db.users.filter((u) => u.active && (canAccessStore(user, u.storeId) || u.storeId === "hq"));
   // LINE の「クレーム・手直し報告」グループに届いた報告 (まだ記録にしていないもの。店舗のグループは見られる店舗だけ)
   const reports = pendingLineReports(db, (storeId) => (storeId ? canAccessStore(user, storeId) : canManageKpi(user))).slice(0, 30);
@@ -62,25 +71,60 @@ export default async function QualityPage({ searchParams }: { searchParams: Prom
       />
 
       <Card padded={false}>
-        <div className="px-5 pt-5"><CardHeader title={`店舗・事務の集計 (${rp.label})`} description={result.basis.denominator === "sheet" ? "ポイント率 = 合計ポイント ÷ 施工件数 (売上台帳の現場名の下の数字。値のない月はシステムの案件数) × 100 / 発生率 = 発生した件数 ÷ 施工件数 × 100。事務の分母は 4 店舗の合計" : "ポイント率 = 合計ポイント ÷ 期間内の総案件数 × 100 / 発生率 = 発生した件数 ÷ 総案件数 × 100。事務の分母は 4 店舗の合計"} /></div>
+        <div className="px-5 pt-5">
+          <CardHeader
+            title={`経営管理の指標 · クレーム・手直しの件数と割合 (${rp.label})`}
+            description={`インセンティブのポイントとは別の指標です。割合 = 件数 ÷ 全案件数 × 100 (全案件数 = ${result.basis.denominator === "sheet" ? CASES_SOURCE_LABEL[result.basis.casesSource] : "期間内の受注"}。事務は 4 店舗の合計)`}
+          />
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[820px] text-sm">
+            <thead>
+              <tr className="bg-subtle text-xs text-ink-2">
+                <th className="px-4 py-2 text-left font-medium">単位</th>
+                <th className="px-2 py-2 text-right font-medium">全案件数</th>
+                <th className="px-2 py-2 text-right font-medium">クレーム<br />件数 / 率</th>
+                <th className="px-2 py-2 text-right font-medium">手直し<br />件数 / 率</th>
+                <th className="px-2 py-2 text-right font-medium">クレーム・手直しの合計<br />件数 / 率</th>
+                <th className="px-4 py-2 text-right font-medium">発生した案件<br />件数 / 率</th>
+              </tr>
+            </thead>
+            <tbody>
+              {mgmtRows.map((r) => (
+                <tr key={r.key} className={`border-t border-line ${r.total ? "bg-accent-soft/30 font-semibold" : ""}`}>
+                  <td className="px-4 py-2">{r.label}</td>
+                  <td className="px-2 py-2 text-right tnum">{r.cases.toLocaleString("ja-JP")}</td>
+                  <td className="px-2 py-2 text-right tnum">{r.c.claims} 件 / {rate(r.c.claims, r.cases)}</td>
+                  <td className="px-2 py-2 text-right tnum">{r.c.reworks} 件 / {rate(r.c.reworks, r.cases)}</td>
+                  <td className="px-2 py-2 text-right tnum">{r.c.total} 件 / {rate(r.c.total, r.cases)}</td>
+                  <td className="px-4 py-2 text-right tnum">{r.c.cases} 件 / {rate(r.c.cases, r.cases)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="px-5 py-3 text-[11px] text-ink-3">クレーム = 区分が「クレーム」「クレーム＋手直し」の記録、手直し = 「手直し」「クレーム＋手直し」の記録 (クレーム＋手直しはそれぞれに 1 件)。合計 = クレーム + 手直し。発生した案件 = クレーム・手直しのあった案件の数 (同じ案件の記録は 1 件)。「記録のみ」は数えません。</p>
+      </Card>
+
+      <Card className="mt-4" padded={false}>
+        <div className="px-5 pt-5"><CardHeader title={`インセンティブ用 · ポイントとポイント率 (${rp.label})`} description={`ポイント率 = 合計ポイント ÷ 全案件数 × 100 (年間インセンティブのクレーム・手直しポイント率と同じ)。クレーム ${settings.qualityPoints.claim} 点・手直し ${settings.qualityPoints.rework} 点・クレーム＋手直し ${settings.qualityPoints.claim_rework} 点${settings.qualityCaseMax > 0 ? `、同じ案件は最大 ${settings.qualityCaseMax} 点` : ""}。事務の分母は 4 店舗の合計`} /></div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-sm">
-            <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-4 py-2 text-left font-medium">単位</th><th className="px-2 py-2 text-right font-medium">施工件数</th><th className="px-2 py-2 text-right font-medium">件数</th><th className="px-2 py-2 text-right font-medium">ポイント</th><th className="px-2 py-2 text-right font-medium">ポイント率</th><th className="px-4 py-2 text-right font-medium">発生率 (件数)</th></tr></thead>
+            <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-4 py-2 text-left font-medium">単位</th><th className="px-2 py-2 text-right font-medium">全案件数</th><th className="px-2 py-2 text-right font-medium">記録の件数</th><th className="px-2 py-2 text-right font-medium">ポイント</th><th className="px-4 py-2 text-right font-medium">ポイント率</th></tr></thead>
             <tbody>
               {units.map((u) => (
                 <tr key={u.unit} className="border-t border-line">
                   <td className="px-4 py-2">{u.unit === "office" ? "事務" : <StoreTag store={db.stores.find((s) => s.id === u.unit)} short />}</td>
                   <td className="px-2 py-2 text-right tnum">{u.orders.toLocaleString("ja-JP")}</td>
                   <td className="px-2 py-2 text-right tnum">{u.qualityCount}</td>
-                  <td className="px-2 py-2 text-right tnum">{u.qualityPoints}</td>
-                  <td className="px-2 py-2 text-right font-semibold tnum">{fmtRate(u.qualityRate, 2)}</td>
-                  <td className="px-4 py-2 text-right tnum">{fmtRate(u.orders ? (u.qualityCount / u.orders) * 100 : null, 2)}</td>
+                  <td className="px-2 py-2 text-right tnum">{u.qualityPoints}{u.qualityPointsRaw !== u.qualityPoints && <span className="block text-[10px] text-ink-3" title="同じ案件のポイントの上限を当てる前">上限の前 {u.qualityPointsRaw} 点</span>}</td>
+                  <td className="px-4 py-2 text-right font-semibold tnum">{fmtRate(u.qualityRate, 2)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p className="px-5 py-3 text-[11px] text-ink-3">手直し {settings.qualityPoints.rework} 点 · クレーム {settings.qualityPoints.claim} 点 · クレーム＋手直し {settings.qualityPoints.claim_rework} 点。「記録のみ」(点検 DM・点検電話から分かったもの、お客様が原因のものなど) は集計に入れません。</p>
+        <p className="px-5 py-3 text-[11px] text-ink-3">同じ案件 (受注。案件のない記録は 店舗・月・現場名) のクレームと手直しは合わせて最大 {settings.qualityCaseMax} 点です (設定 → KPI・インセンティブ で変更)。「記録のみ」(点検 DM・点検電話から分かったもの、お客様が原因のものなど) は集計に入れません。LINE の報告を「記録にする」と、区分に応じたポイントが自動で付き、この表と年間インセンティブに反映されます。</p>
       </Card>
 
       {reports.length > 0 && (

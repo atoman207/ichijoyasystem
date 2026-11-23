@@ -70,6 +70,50 @@ export function AnalysisTab({ db, user, report: r, periodValue, periodLabel, sta
         <Stat label="来店数" value={`${n(t.visitors)} 人`} sub="作業日報の手入力" />
       </div>
 
+      <Card padded={false}>
+        <div className="px-5 pt-5">
+          <CardHeader
+            title="販促 KPI (経営分析用)"
+            description="チラシの反響・個人の売上・客単価などの販促の指標です。経営分析に使う別の指標で、インセンティブの計算には使いません。個人件数は売上の実績どおり 1 件ずつ数えます (アンケート返信率の分母は、約 1 か月以内のリピートを 1 件にまとめた別の数字です)"
+            action={<Csv href={csv("kpi")} />}
+          />
+        </div>
+        <Table minWidth="min-w-[960px]">
+          <thead>
+            <tr>
+              <Th>店舗</Th>
+              <Th align="right">全案件数</Th>
+              <Th align="right">個人件数</Th>
+              <Th align="right">個人の売上 (税込)</Th>
+              <Th align="right">個人客単価</Th>
+              <Th align="right">チラシの部数</Th>
+              <Th align="right">問い合わせ</Th>
+              <Th align="right">チラシの反響 (1,000 部あたり)</Th>
+              <Th align="right">成約 (成約率)</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {r.kpi.map((k) => (
+              <Tr key={k.storeId} className={k.storeId === "all" ? "font-semibold" : ""}>
+                <Td>{k.storeId === "all" ? "合計" : (db.stores.find((s) => s.id === k.storeId)?.name ?? k.storeId)}</Td>
+                <Td align="right">{n(k.cases)}</Td>
+                <Td align="right">
+                  {n(k.individualCases)}
+                  {k.plan && <span className="block text-[10px] font-normal text-ink-3" title="年間チラシ計画「個人件数売上」の本年度実績 (取込・手入力)">年間チラシ計画 {n(k.plan.value)}{k.plan.months < k.plan.of ? ` (${k.plan.months}/${k.plan.of} か月)` : ""}</span>}
+                </Td>
+                <Td align="right">{yen(k.individualSales)}</Td>
+                <Td align="right">{k.unitPrice === null ? "-" : yen(k.unitPrice)}</Td>
+                <Td align="right">{n(k.flyerCopies)}</Td>
+                <Td align="right">{n(k.inquiries)}</Td>
+                <Td align="right">{n(k.flyerInquiries)} 件{k.per1000 !== null && <span className="block text-[10px] font-normal text-ink-3">{k.per1000} 件 / 1,000 部</span>}</Td>
+                <Td align="right">{n(k.won)}<span className="block text-[10px] font-normal text-ink-3">{k.winRate === null ? "-" : `${Math.round(k.winRate * 1000) / 10}%`}</span></Td>
+              </Tr>
+            ))}
+          </tbody>
+        </Table>
+        <p className="px-5 py-3 text-[11px] text-ink-3">全案件数・個人件数・売上 = 売上台帳の現場名の行 + 新システムで完了した受注 (売上計上日 = 施工完了日が期間内)。客単価 = 個人の売上 ÷ 個人件数。チラシの部数 = 販促の記録 (実施済み) + 作業日報の配布。問い合わせは受付日、成約は問い合わせから受注になったもの。</p>
+      </Card>
+
       {t.unclassified > 0 && (
         <Note tone="warn">
           媒体がわからない問い合わせが {n(t.unclassified)} 件あります (移行・自動受付で媒体の入力がなく、見積・受注の媒体欄や顧客の媒体からも読み替えられないもの)。

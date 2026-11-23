@@ -19,7 +19,7 @@ const UNIT_METRICS: { metric: ReconRow["metric"]; label: string }[] = [
   { metric: "reply", label: "返信率" },
   { metric: "finish", label: "④ 工事仕上り" },
   { metric: "qpoints", label: "ポイント合計" },
-  { metric: "sites", label: "施工件数" },
+  { metric: "sites", label: "全案件数" },
   { metric: "qrate", label: "ポイント率" },
 ];
 
@@ -159,7 +159,7 @@ export default async function KpiCheckPage({ searchParams }: { searchParams: Pro
         <ul className="space-y-1 text-xs text-ink-2">
           {basisNotes(basis).map((t, i) => <li key={i}>・{t}</li>)}
           <li>・シートの平均は、ピボットの「合計点 ÷ ハガキ№ の数」です。ハガキ№ の入っていない行 (№ の書き忘れ) の点数は合計にだけ入り、枚数に入りません。システムはその行をはがきとして数えないため、その分だけ ① と ④ がずれます (№ を入れると両方で数えます)</li>
-          <li>・施工件数の自動の値は、移行した売上台帳の行の数です。金額が 0 円の行 (移行で取り込まなかった行) と、移行のあと (11 月 11 日より後) に台帳へ書いた行は入らないため、その月は「分母・照合」で手入力してください</li>
+          <li>・全案件数の自動の値は、移行した売上台帳の行の数 + 新システムで完了した受注 (台帳の取込の最後の日より後) です。金額が 0 円の行 (移行で取り込まなかった行) と、移行のあと (11 月 11 日より後) に台帳へ書いただけの行は入らないため、その月は「分母・照合」で手入力してください</li>
           <li>・はがきは集計月 (アンケートハガキ（回答）の「月」) で数えます。「分母・照合」でアンケートハガキ（回答）を取り込むまでは入力日の月で数えるため、年度の境目で 1 か月ずれます</li>
         </ul>
       </Card>

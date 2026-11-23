@@ -52,6 +52,11 @@ export interface KpiSettings {
   clerkByStore: Partial<Record<StoreId, string>>;
   /** クレーム・手直しのポイント */
   qualityPoints: Record<QualityKind, number>;
+  /**
+   * 同じ案件のクレーム・手直しのポイントの上限 (お客様のご指示 2026-11-24「同一案件で両方発生した場合：最大 3 ポイント」)。
+   * 案件ごとに記録の点数を足し、この点数までにする (0 = 上限なし)
+   */
+  qualityCaseMax: number;
   /** Google 口コミ 1 ポイントあたりの支給額 (円。事務の入力月で集計し、翌月末に現金で支給) */
   reviewYenPerPoint: number;
   /** 年度の開始月 (12 = 12 月 1 日〜翌年 11 月 30 日) */
@@ -85,6 +90,22 @@ export const QUALITY_JUDGE_GUIDE: { label: string; text: string }[] = [
 
 export const QUALITY_CATEGORIES = ["精度", "確認不足", "説明不足", "その他"] as const;
 
+/**
+ * LINE の「クレーム・手直し報告」の文から区分の候補を読む (登録の画面の初期値。決めるのは登録する人)。
+ * 「クレーム」「苦情」「お叱り」→ クレーム、「手直し」「やり直し」「直しに行く」「再施工」「持ち帰り」→ 手直し、両方 → クレーム＋手直し。
+ * 「点検 DM」「点検の電話」がきっかけなら記録のみ (集計しない) の候補
+ */
+export function guessQualityKind(text: string | undefined): { kind?: QualityKind; recordOnly: boolean; reason?: string } {
+  const t = (text ?? "").normalize("NFKC");
+  const claim = /クレーム|苦情|お叱り|お怒り|ご不満|ご指摘/.test(t) && !/クレーム(では|じゃ)な|クレームとしてはカウントしない/.test(t);
+  const rework = /手直し|やり直|直しに(行|伺|いき|いく)|再施工|張り直|貼り直|持ち帰|作り直|再納品|交換に(行|伺)/.test(t);
+  const recordOnly = /点検\s*(DM|ＤＭ|ダイレクトメール|の?電話)/i.test(t);
+  if (claim && rework) return { kind: "claim_rework", recordOnly, reason: "「クレーム」と「手直し」の言葉" };
+  if (claim) return { kind: "claim", recordOnly, reason: "「クレーム」の言葉" };
+  if (rework) return { kind: "rework", recordOnly, reason: "「手直し」の言葉" };
+  return { recordOnly };
+}
+
 export function defaultIncentiveRules(): IncentiveRules {
   return {
     replyRate: [[60, 70000], [50, 30000], [40, 10000], [30, 0]],
@@ -103,6 +124,7 @@ export function defaultKpiSettings(): KpiSettings {
     excludedUserIds: [],
     clerkByStore: {},
     qualityPoints: { rework: 1, claim: 2, claim_rework: 3 },
+    qualityCaseMax: 3,
     reviewYenPerPoint: 1000,
     fiscalStartMonth: 12,
     incentive: defaultIncentiveRules(),
@@ -145,6 +167,7 @@ export function kpiSettings(db: Pick<Database, "settings"> & Partial<Pick<Databa
       claim: num(qp.claim, 0, 100) ?? d.qualityPoints.claim,
       claim_rework: num(qp.claim_rework, 0, 100) ?? d.qualityPoints.claim_rework,
     },
+    qualityCaseMax: num(v.qualityCaseMax, 0, 100) ?? d.qualityCaseMax,
     reviewYenPerPoint: num(v.reviewYenPerPoint, 0, 1_000_000) ?? d.reviewYenPerPoint,
     fiscalStartMonth: Math.round(num(v.fiscalStartMonth, 1, 12) ?? d.fiscalStartMonth),
     incentive: {
@@ -194,6 +217,11 @@ export function tierAtMost(value: number | null, t: Tier[]): number {
   if (value === null || !t.length) return 0;
   const sorted = [...t].sort((a, b) => a[0] - b[0]);
   return sorted.find(([th]) => value <= th + 1e-9)?.[1] ?? sorted[sorted.length - 1][1];
+}
+
+/** 同じ案件のポイントの上限 (KPI の集計・インセンティブで共通。settings がなければ既定) */
+export function qualityCaseMax(db: Partial<Pick<Database, "settings">>): number {
+  return kpiSettings({ settings: db.settings ?? [] }).qualityCaseMax;
 }
 
 /** 支給の対象か (無効・除外の社員を除く) */

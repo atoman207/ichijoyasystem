@@ -3,6 +3,7 @@ import type { Database, StoreId, User } from "@/lib/db/types";
 import { canApprove, canSeeAllStoreFigures, canViewExpense } from "@/lib/auth/permissions";
 import { growth, managementReport, visibleStores } from "@/lib/management";
 import { storeKpi } from "@/lib/kpi";
+import { qualityCaseMax } from "@/lib/kpi-settings";
 import { SCORE_QUESTIONS } from "@/lib/survey";
 import { APPROVAL_TYPE_LABEL, SCHEDULE_KIND } from "@/lib/constants";
 import { addDays, fmtMonth, toDateKey, yen } from "@/lib/format";
@@ -78,8 +79,10 @@ export function businessOverview(db: Database, user: User, opts: { from?: string
   const k = storeKpi(db, { from, to }, store?.id ?? (canSeeAllStoreFigures(user) ? undefined : user.storeId));
   L.push("");
   L.push("## お客様の評価・品質 (KPI と同じ集計)");
-  L.push(`- アンケート ${k.surveys} 枚 (返信率 ${pct(k.replyRate)}) / 平均: ${SCORE_QUESTIONS.map((q) => `${q.no}${q.label} ${num(k.scores[q.key])}`).join("・")} / また利用したい ${k.againAnswered ? pct(k.againYes / k.againAnswered) : "-"}`);
-  L.push(`- クレーム・手直し ${k.reworkCount + k.claimCount + k.claimReworkCount} 件 (手直し ${k.reworkCount}・クレーム ${k.claimCount}・両方 ${k.claimReworkCount}) / クレーム率 ${pct(k.claimRate)} / Google 口コミ ${k.reviews} 件`);
+  // storeKpi の率は % の値 (49.2 = 49.2%)。pct は割合 (0.492) を % にするため 100 で割って渡す
+  const rate = (v: number | null) => pct(v === null ? null : v / 100);
+  L.push(`- アンケート ${k.surveys} 枚 (返信率 ${rate(k.replyRate)} = はがき ÷ 個人件数 ${k.individualOrders}。個人件数は約 1 か月以内のリピートを 1 件) / 平均: ${SCORE_QUESTIONS.map((q) => `${q.no}${q.label} ${num(k.scores[q.key])}`).join("・")} / また利用したい ${k.againAnswered ? pct(k.againYes / k.againAnswered) : "-"}`);
+  L.push(`- クレーム・手直し (経営管理の指標。÷ 全案件数 ${k.orders}): クレーム ${k.issues.claims} 件 (${rate(k.issueRates.claims)})・手直し ${k.issues.reworks} 件 (${rate(k.issueRates.reworks)})・合計 ${k.issues.total} 件 (${rate(k.issueRates.total)}) / インセンティブのポイント ${k.qualityPoints} 点 (ポイント率 ${rate(k.qualityRate)}。同じ案件は最大 ${qualityCaseMax(db)} 点) / Google 口コミ ${k.reviews} 件`);
   // いま対応が要るもの
   const stores = new Set<StoreId>(store ? [store.id] : allowed);
   const pending = db.approvals.filter((a) => a.status === "pending" && stores.has(a.storeId));

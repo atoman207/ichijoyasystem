@@ -4,6 +4,7 @@ import { cleanAddressText, normalizeAddress } from "@/lib/maps/address";
 import { MEDIA_KEYS, MEDIA_LABEL, MEDIA_NONE, MEDIA_SOURCE_LABEL, UNCLASSIFIED, inquiryMedia, matchesMediaFilter, mediaIndex, orderMedia, surveyMediaKeys, type MediaIndex, type MediaSource } from "@/lib/media";
 import { toDateKey } from "@/lib/format";
 import { fiscalRange, fiscalYearOf, kpiSettings } from "@/lib/kpi-settings";
+import { caseUnits, kpiBasis, monthKey, periodMonths } from "@/lib/kpi-basis";
 
 /**
  * 販促と媒体の分析 (F-13)
@@ -263,8 +264,36 @@ export interface PromotionRow {
   per1000: number | null;
 }
 
+/**
+ * 販促 KPI (経営分析用。お客様のご指示 2026-11-24「販促KPIは経営分析に使用するもので、インセンティブの計算には関係ありませんので、別々の指標として管理」)。
+ * 個人件数は売上の実績どおり 1 件ずつ (リピートもまとめない)。アンケート返信率の分母 (リピートを 1 件。kpi-basis.ts) とは別の数字
+ */
+export interface PromoStoreKpi {
+  storeId: StoreId | "all";
+  /** 全案件数 (売上台帳の現場名の行 + 新システムで完了した受注) */
+  cases: number;
+  /** 個人のお客様の案件 (リピートも 1 件ずつ) */
+  individualCases: number;
+  /** 個人のお客様の売上 (税込。案件の受注の金額) */
+  individualSales: number;
+  /** 個人客単価 (税込) */
+  unitPrice: number | null;
+  /** 年間チラシ計画の個人件数 (本年度実績。値のある月の合計) と値のある月の数 */
+  plan?: { value: number; months: number; of: number };
+  flyerCopies: number;
+  inquiries: number;
+  flyerInquiries: number;
+  won: number;
+  /** チラシ 1,000 部あたりのチラシの問い合わせ */
+  per1000: number | null;
+  /** 成約率 (成約 ÷ 問い合わせ) */
+  winRate: number | null;
+}
+
 export interface PromoReport {
   scope: PromoScope;
+  /** 販促 KPI (店舗ごと + 合計。経営分析用・インセンティブには使わない) */
+  kpi: PromoStoreKpi[];
   facts: InquiryFact[];
   totals: { inquiries: number; input: number; estimated: number; unclassified: number; won: number; sales: number; flyerCopies: number; visitors: number };
   media: MediaRow[];
@@ -331,6 +360,74 @@ function monthsBetween(from: string, to: string): string[] {
     }
   }
   return out;
+}
+
+/** 販促 KPI の店舗ごとの行 + 合計 (scope の店舗が 2 つ以上のとき) */
+function promoStoreKpis(db: AnalysisDb, scope: PromoScope, facts: InquiryFact[], drops: FlyerDrop[]): PromoStoreKpi[] {
+  const basis = kpiBasis(db);
+  const cmap = new Map(db.customers.map((c) => [c.id, c]));
+  const months = periodMonths({ from: scope.from, to: scope.to });
+  const full = new Set(months.filter((m) => m.full).map((m) => m.month));
+  const any = new Set(months.map((m) => m.month));
+  const take = (month: string, date: string) => full.has(month) || (any.has(month) && date >= scope.from && date <= scope.to);
+  const orders = new Map(db.orders.map((o) => [o.id, o]));
+  const rows = new Map<string, PromoStoreKpi>();
+  const row = (id: StoreId | "all") => {
+    let r = rows.get(id);
+    if (!r) rows.set(id, (r = { storeId: id, cases: 0, individualCases: 0, individualSales: 0, unitPrice: null, flyerCopies: 0, inquiries: 0, flyerInquiries: 0, won: 0, per1000: null, winRate: null }));
+    return r;
+  };
+  for (const id of scope.storeIds) row(id);
+  const sold = new Map<string, Set<string>>();
+  for (const u of caseUnits(db.orders, basis.repeatDays)) {
+    if (!rows.has(u.storeId) || !take(u.month, u.date)) continue;
+    const r = row(u.storeId);
+    r.cases++;
+    if (cmap.get(u.customerId)?.type === "corporate") continue;
+    r.individualCases++;
+    // 売上は受注ごとに 1 回 (同じ日の追加工事の行をまとめた受注は行が 2 つでも金額は 1 回)
+    const seen = sold.get(u.storeId) ?? new Set<string>();
+    if (!seen.has(u.orderId)) {
+      seen.add(u.orderId);
+      r.individualSales += orders.get(u.orderId)?.total ?? 0;
+    }
+    sold.set(u.storeId, seen);
+  }
+  for (const d of drops) if (rows.has(d.storeId)) row(d.storeId).flyerCopies += d.copies;
+  for (const f of facts) {
+    if (!rows.has(f.storeId)) continue;
+    const r = row(f.storeId);
+    r.inquiries++;
+    if (f.media === "flyer") r.flyerInquiries++;
+    if (f.won) r.won++;
+  }
+  for (const id of scope.storeIds) {
+    const vals = [...full].map((m) => basis.months[monthKey(id, m)]?.individual).filter((v): v is number => v !== undefined);
+    if (vals.length) row(id).plan = { value: vals.reduce((a, b) => a + b, 0), months: vals.length, of: full.size };
+  }
+  const list = scope.storeIds.map((id) => row(id));
+  if (list.length > 1) {
+    const t = row("all");
+    for (const r of list) {
+      t.cases += r.cases;
+      t.individualCases += r.individualCases;
+      t.individualSales += r.individualSales;
+      t.flyerCopies += r.flyerCopies;
+      t.inquiries += r.inquiries;
+      t.flyerInquiries += r.flyerInquiries;
+      t.won += r.won;
+      if (r.plan) t.plan = { value: (t.plan?.value ?? 0) + r.plan.value, months: Math.min(t.plan?.months ?? r.plan.months, r.plan.months), of: r.plan.of };
+    }
+    if (list.some((r) => !r.plan)) delete t.plan;
+    list.push(t);
+  }
+  for (const r of list) {
+    // 客単価 = 個人の売上 ÷ 個人件数 (年間チラシ計画の「個人客単価」と同じ割り方。件数はリピートも 1 件ずつ)
+    r.unitPrice = r.individualCases ? Math.round(r.individualSales / r.individualCases) : null;
+    r.per1000 = per1000(r.flyerInquiries, r.flyerCopies);
+    r.winRate = r.inquiries ? r.won / r.inquiries : null;
+  }
+  return list;
 }
 
 export function promoReport(db: AnalysisDb, user: User, opts: { from: string; to: string; store?: string; years?: number }): PromoReport {
@@ -456,6 +553,7 @@ export function promoReport(db: AnalysisDb, user: User, opts: { from: string; to
 
   return {
     scope,
+    kpi: promoStoreKpis(db, scope, facts, drops),
     facts,
     totals: {
       inquiries: facts.length,
@@ -481,6 +579,7 @@ export function promoReport(db: AnalysisDb, user: User, opts: { from: string; to
 /* ---------------- CSV ---------------- */
 
 export const PROMO_CSV_SECTIONS = {
+  kpi: "販促 KPI (店舗別)",
   media: "媒体別",
   monthly: "月別 (チラシの部数・来店数・問い合わせ)",
   flyers: "チラシの地域別の反応",
@@ -494,6 +593,11 @@ export type PromoCsvSection = keyof typeof PROMO_CSV_SECTIONS;
 
 export function promoCsvRows(r: PromoReport, section: PromoCsvSection, storeName: (id: StoreId) => string): (string | number)[][] {
   switch (section) {
+    case "kpi":
+      return [
+        ["店舗", "全案件数", "個人件数 (1 件ずつ)", "年間チラシ計画の個人件数", "計画の値のある月", "個人の売上 (税込)", "個人客単価 (税込)", "チラシの部数", "問い合わせ", "チラシの問い合わせ", "1,000 部あたり", "成約", "成約率"],
+        ...r.kpi.map((k) => [k.storeId === "all" ? "合計" : storeName(k.storeId), k.cases, k.individualCases, k.plan?.value ?? "", k.plan ? `${k.plan.months}/${k.plan.of}` : "", k.individualSales, k.unitPrice ?? "", k.flyerCopies, k.inquiries, k.flyerInquiries, k.per1000 ?? "", k.won, k.winRate === null ? "" : `${(k.winRate * 100).toFixed(1)}%`]),
+      ];
     case "media":
       return [["媒体", "問い合わせ", "うち入力", "うち読み替え (推定)", "成約", "成約率 (%)", "成約の売上 (税込)", "受注 (契約日が期間内)", "受注金額 (税込)"], ...r.media.map((m) => [m.label, m.inquiries, m.input, m.estimated, m.won, m.inquiries ? Math.round((m.won / m.inquiries) * 1000) / 10 : "", m.sales, m.orders, m.orderAmount]), ["合計", r.totals.inquiries, r.totals.input, r.totals.estimated, r.totals.won, r.totals.inquiries ? Math.round((r.totals.won / r.totals.inquiries) * 1000) / 10 : "", r.totals.sales, r.media.reduce((a, m) => a + m.orders, 0), r.media.reduce((a, m) => a + m.orderAmount, 0)]];
     case "monthly":

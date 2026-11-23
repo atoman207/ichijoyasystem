@@ -2,7 +2,9 @@
  * KPI の分母・数え方 (スプレッドシートの集計基準) と支給前の照合のテスト
  *   node scripts/tests/kpi-import/basis.test.mjs   (npm run test:kpi-import)
  * 1. 設定の既定値 (シートの基準)・期間の月
- * 2. 施工件数の自動の値 (移行した売上台帳の行の数)・分母 (月ごとの値 → なければシステムの案件)
+ * 2. 全案件数の自動の値 (移行した売上台帳の行の数 + 新システムで完了した受注)・分母 (月ごとの値 → なければ自動)
+ * 2b. リピートの調整 (同じお客様の約 1 か月以内の次の案件は個人件数で 1 件)・全案件数の数え方 (案件 / 作業日報の納品 / 受注)・
+ *     クレーム・手直しのポイントの上限 (同じ案件は最大 3 点)・経営管理の指標 (件数と率)・LINE の文から区分の候補・集計表 (店舗の列)・販促 KPI
  * 3. はがきの数え方 (ハガキ№・担当の名前の未記入)・平均 (空欄 = 0 点 / 回答した数)・②③ の行 (2 人目以降の担当の行を含む)
  * 4. storeKpi・年間インセンティブが同じ分母と平均を使う (平均の計算で支給額が変わる例)
  * 5. 年間チラシ計画「個人件数売上」・アンケートハガキ（回答）の読み取りと取込 (手入力は上書きしない・2 回取り込んでも同じ・漏れた担当の行を足す)
@@ -89,6 +91,7 @@ const stores = ["koshi", "chuo", "nishi", "tamana"].map((id) => ({ id, name: id,
 const customers = [
   { id: "c_i", type: "individual", name: "個人様" },
   { id: "c_c", type: "corporate", name: "業者様" },
+  { id: "c_k", type: "individual", name: "中央様" },
 ];
 const ledgerOrder = (id, storeId, date, rows, customerId = "c_i") => ({
   id, number: id, storeId, customerId, status: "paid", source: "import", contractDate: date, salesDate: date, total: 1000, workerIds: [],
@@ -105,7 +108,7 @@ const orders = [
   // 合志 2031-02: 台帳 1 行 (2 月 5 日まで取込)
   ledgerOrder("o5", "koshi", "2031-02-05", [21]),
   // 中央 2031-01: 台帳なし・システムの受注 1 件
-  { id: "o6", number: "O-1", storeId: "chuo", customerId: "c_i", status: "completed", contractDate: "2031-01-20", salesDate: "2031-01-20", total: 1000, workerIds: [], progressNotes: [] },
+  { id: "o6", number: "O-1", storeId: "chuo", customerId: "c_k", status: "completed", contractDate: "2031-01-20", salesDate: "2031-01-20", total: 1000, workerIds: [], progressNotes: [] },
   { id: "o7", number: "O-2", storeId: "chuo", customerId: "c_i", status: "cancelled", contractDate: "2031-01-21", salesDate: "2031-01-21", total: 1000, workerIds: [], progressNotes: [] },
 ];
 const card = (id, o) => ({ id, receivedAt: "2031-02-03T00:00:00.000Z", storeId: "koshi", source: "import", ...o });
@@ -130,7 +133,8 @@ const base = () => ({ users: structuredClone(users), stores: structuredClone(sto
 section("1. 設定の既定値・期間の月");
 {
   const b = B.kpiBasis({ settings: [] });
-  eq([b.denominator, b.requireStaffNames, b.average, b.autoSites], ["sheet", true, "sheet", true], "既定はシートの基準 (分母・担当の名前・平均・施工件数の自動)");
+  eq([b.denominator, b.requireStaffNames, b.average, b.individualSource, b.repeatDays, b.casesSource], ["sheet", true, "sheet", "plan", 31, "cases"], "既定はシートの基準 (分母・担当の名前・平均・年間チラシ計画の個人件数・リピート 31 日・案件の件数)");
+  eq(B.kpiBasis({ settings: [{ id: "kpi_basis", value: { autoSites: false } }] }).casesSource, "system", "以前の設定 (施工件数を台帳から出さない) は「期間内の受注」");
   eq(B.fiscalMonths(2031, 12), ["2030-12", "2031-01", "2031-02", "2031-03", "2031-04", "2031-05", "2031-06", "2031-07", "2031-08", "2031-09", "2031-10", "2031-11"], "年度の 12 か月 (12 月始まり)");
   eq(B.periodMonths({ from: "2031-01-15", to: "2031-03-31" }), [{ month: "2031-01", full: false }, { month: "2031-02", full: true }, { month: "2031-03", full: true }], "期間の月 (月の途中から始まる月は full = false)");
   eq(KC.surveyKpiDate({ countMonth: "2031-01", answeredOn: "2031-02-02", receivedAt: at }), "2031-01-01", "集計月があれば集計月");
@@ -139,31 +143,166 @@ section("1. 設定の既定値・期間の月");
 }
 
 /* ================================================================== */
-section("2. 施工件数の自動の値・分母");
+section("2. 全案件数の自動の値・分母");
 {
   const db = base();
   const lc = B.ledgerCounts(db.orders);
   eq([lc.sites.get("koshi|2031-01"), lc.sites.get("koshi|2031-02"), lc.sites.get("chuo|2031-01")], [3, 1, undefined], "台帳の行の数 (まとめた受注は経過メモの行の数。伝票の受注は数えない)");
   eq(lc.lastDate.get("koshi"), "2031-02-05", "取り込んだ台帳の最後の日");
   const p = { from: "2031-01-01", to: "2031-02-28" };
-  // 値がないとき: 個人件数 = システムの個人のお客様の案件、施工件数 = 台帳 (合志) / システム (中央)
+  // 値がないとき: 個人件数 = 自動 (個人のお客様の案件 − リピート)、全案件数 = 案件の件数 (台帳の行 + 新システムで完了した受注)
   let d = B.kpiDenominators(db, p, "koshi");
-  eq([d.individual.value, d.sites.value], [4, 4], "合志: 個人件数はシステム (o1・o3・o4・o5 = 4)、施工件数は台帳 (3 + 1)");
-  eq(d.sites.parts.map((x) => x.source), ["ledger", "ledger"], "施工件数の内訳は売上台帳");
+  eq([d.individual.value, d.sites.value], [1, 4], "合志: 個人件数は自動 (1 月 10 日の 2 行 = 同じ日の追加工事・2 月 5 日 = 26 日後 はリピート → 1)、全案件数は台帳の行 (3 + 1)。伝票の受注 (o3・o4) は数えない");
+  eq([d.sites.parts.map((x) => x.source), d.individual.parts.map((x) => [x.source, x.raw, x.repeats])], [["cases", "cases"], [["auto", 2, 1], ["auto", 1, 1]]], "内訳: 全案件数は案件の件数・個人件数は自動 (まとめる前の件数とリピート)");
+  eq(B.denomSummary(d.individual), "自動 (リピートを 1 件) 2 か月 (リピート 2 件を除く)", "分母の内訳の要約にリピートの件数");
   d = B.kpiDenominators(db, p, "chuo");
-  eq([d.individual.value, d.sites.value, d.sites.parts[0].source], [1, 1, "system"], "中央: 台帳のない月はシステムの案件 (キャンセルを除く)");
+  eq([d.individual.value, d.sites.value, d.sites.parts[0].source], [1, 1, "cases"], "中央: 台帳のない店舗は新システムで完了した受注 (キャンセルを除く)");
   // 年間チラシ計画の値と手入力
   db.settings.push({ id: "kpi_basis", value: { months: { "koshi|2031-01": { individual: 10, individualSrc: "import" }, "koshi|2031-02": { individual: 6, individualSrc: "manual", sites: 9 } } }, updatedAt: at });
   d = B.kpiDenominators(db, p, "koshi");
   eq([d.individual.value, d.sites.value], [16, 12], "登録した個人件数 (10 + 6)・手入力の施工件数 (2 月 = 9) を使う");
   eq(B.denomSummary(d.individual), "年間チラシ計画 1 か月 + 手入力 1 か月", "分母の内訳の要約");
   d = B.kpiDenominators(db, { from: "2031-01-10", to: "2031-02-28" }, "koshi");
-  eq([d.individual.parts[0].source, d.individual.parts[0].partial, d.individual.value], ["system", true, 3 + 6], "月の途中から始まる期間: その月は期間内のシステムの案件 (1/31 の業者は個人に入れない)");
+  eq([d.individual.parts[0].source, d.individual.parts[0].partial, d.individual.value], ["auto", true, 1 + 6], "月の途中から始まる期間: その月は期間内の案件で自動 (1/10 の 2 行 = 1 件。1/31 の業者は個人に入れない)");
   const all = B.kpiDenominators(db, p);
   eq([all.individual.value, all.sites.value], [17, 13], "全社 = 店舗の合計");
   db.settings[0].value.denominator = "system";
   d = B.kpiDenominators(db, p, "koshi");
   eq([d.mode, d.individual.value, d.sites.value], ["system", 4, 5], "システムの件数: 期間内の案件 (伝票の受注も数える = 従来の動き)");
+}
+
+/* ================================================================== */
+section("2b. リピートの調整・全案件数の数え方・クレームのポイントの上限 (2026-11-24)");
+{
+  // 新システムで完了した受注 (合志)。A = 3/1・3/20 (19 日後 = リピート)・4/5 (35 日後 = はがきを渡す)・4/30 (4/5 から 25 日後 = リピート)
+  // B = 3/10・5/1 (52 日後 = リピートではない)。C (業者) = 3/5・3/6 (個人件数に入れない・全案件数には入る)。D = 未完了 (数えない)
+  const sys = (id, customerId, date, o = {}) => ({ id, number: id, storeId: "koshi", customerId, status: "completed", contractDate: date, salesDate: date, total: 10000, workerIds: [], progressNotes: [], ...o });
+  const mk = () => ({
+    ...base(),
+    customers: [...structuredClone(customers), { id: "c_a", type: "individual", name: "A" }, { id: "c_b", type: "individual", name: "B" }],
+    orders: [
+      sys("a1", "c_a", "2031-03-01"), sys("a2", "c_a", "2031-03-20"), sys("a3", "c_a", "2031-04-05"), sys("a4", "c_a", "2031-04-30"),
+      sys("b1", "c_b", "2031-03-10"), sys("b2", "c_b", "2031-05-01"),
+      sys("c1", "c_c", "2031-03-05"), sys("c2", "c_c", "2031-03-06"),
+      sys("d1", "c_b", "2031-03-12", { status: "in_progress", salesDate: undefined }),
+      sys("x1", "c_a", "2031-03-02", { status: "cancelled" }),
+    ],
+    qualityIssues: [],
+    schedule: [],
+  });
+  const P = (from, to) => ({ from, to });
+  let db = mk();
+  const units = B.caseUnits(db.orders, 31);
+  eq(units.filter((u) => u.repeat).map((u) => u.orderId).sort(), ["a2", "a4", "c2"], "リピート: はがきを渡した案件から 31 日以内の次の案件 (a2 = 19 日・a4 = 4/5 から 25 日)。a3 (35 日) と b2 (52 日) はリピートではない (業者の c2 も印は付くが個人件数には元から入らない)");
+  eq(units.map((u) => u.orderId).sort(), ["a1", "a2", "a3", "a4", "b1", "b2", "c1", "c2"], "案件 = 完了した受注 (未完了・キャンセルは数えない)");
+  let d = B.kpiDenominators(db, P("2031-03-01", "2031-05-31"), "koshi");
+  eq(d.individual.parts.map((x) => [x.month, x.value, x.raw, x.repeats ?? 0]), [["2031-03", 2, 3, 1], ["2031-04", 1, 2, 1], ["2031-05", 1, 1, 0]], "個人件数 (自動) = 個人のお客様の案件 − リピート (3 月 3 − 1・4 月 2 − 1・5 月 1)");
+  eq(d.sites.parts.map((x) => [x.month, x.value, x.source]), [["2031-03", 5, "cases"], ["2031-04", 2, "cases"], ["2031-05", 1, "cases"]], "全案件数 = 案件の件数 (リピート・業者も 1 件ずつ。売上の件数と同じ)");
+  eq([B.denomRepeats(d.individual), d.individual.value, d.sites.value], [2, 4, 8], "期間の合計: 個人件数 4 (リピート 2 件を除く)・全案件数 8");
+  // 日数の設定
+  db.settings.push({ id: "kpi_basis", value: { repeatDays: 15 } });
+  eq(B.kpiDenominators(db, P("2031-03-01", "2031-05-31"), "koshi").individual.value, 6, "15 日にすると a2 (19 日)・a4 (25 日) はリピートではない (6)");
+  db.settings[0].value.repeatDays = 0;
+  eq(B.kpiDenominators(db, P("2031-03-01", "2031-05-31"), "koshi").individual.value, 6, "0 日 = まとめない");
+  db.settings[0].value.repeatDays = 19;
+  eq(B.kpiDenominators(db, P("2031-03-01", "2031-03-31"), "koshi").individual.value, 2, "ちょうど 19 日目もリピート (以内)");
+  // 年間チラシ計画の値 (手計算で調整済み) がある月はその値。いつも自動 の設定では取込の値は使わず、手入力は使う
+  db = mk();
+  db.settings.push({ id: "kpi_basis", value: { months: { "koshi|2031-03": { individual: 10, individualSrc: "import" }, "koshi|2031-04": { individual: 7, individualSrc: "manual" } } } });
+  d = B.kpiDenominators(db, P("2031-03-01", "2031-05-31"), "koshi");
+  eq(d.individual.parts.map((x) => [x.value, x.source]), [[10, "import"], [7, "manual"], [1, "auto"]], "既定 (年間チラシ計画): 取込・手入力の月はその値、ない月は自動");
+  db.settings[0].value.individualSource = "auto";
+  d = B.kpiDenominators(db, P("2031-03-01", "2031-05-31"), "koshi");
+  eq(d.individual.parts.map((x) => [x.value, x.source]), [[2, "auto"], [7, "manual"], [1, "auto"]], "いつも自動: 取込の値は使わず自動、手入力した月は手入力");
+  // 返信率もこの分母
+  db = mk();
+  db.surveys = [card("z1", { postcardNo: "9", countMonth: "2031-03", salesName: "試験", salesUserId: "u_a", craftsmanName: "見本", craftsmanUserId: "u_b", phoneScore: 5 })];
+  const k = K.storeKpi(db, P("2031-03-01", "2031-03-31"), "koshi");
+  eq([k.surveys, k.individualOrders, k.replyRate], [1, 2, 50], "返信率 = はがき 1 ÷ 個人件数 2 (3 月の個人 3 件 − リピート 1)");
+  // 全案件数の数え方: 作業日報の納品件数 (予定表の納品の予定)・期間内の受注
+  db = mk();
+  db.schedule = [
+    { id: "e1", kind: "delivery", storeId: "koshi", date: "2031-03-02", title: "納品" },
+    { id: "e2", kind: "delivery", storeId: "koshi", date: "2031-03-03", title: "納品" },
+    { id: "e3", kind: "delivery", storeId: "koshi", date: "2031-03-03", title: "手直しの納品" },
+    { id: "e4", kind: "pickup", storeId: "koshi", date: "2031-03-03", title: "引き取り" },
+    { id: "e5", kind: "delivery", storeId: "chuo", date: "2031-03-03", title: "納品" },
+  ];
+  db.settings.push({ id: "kpi_basis", value: { casesSource: "deliveries" } });
+  d = B.kpiDenominators(db, P("2031-03-01", "2031-03-31"), "koshi");
+  eq([d.sites.value, d.sites.parts[0].source], [3, "deliveries"], "作業日報の納品件数: 予定表の納品の予定 (引き取り・ほかの店舗は数えない)");
+  db.settings[0].value.casesSource = "system";
+  eq(B.kpiDenominators(db, P("2031-03-01", "2031-03-31"), "koshi").sites.value, 6, "期間内の受注: 未完了の受注も契約日で数える (従来の動き。a1・a2・b1・c1・c2・d1。キャンセルは除く)");
+  db.settings[0].value.casesSource = "cases";
+  db.settings[0].value.months = { "koshi|2031-03": { sites: 40 } };
+  eq(B.kpiDenominators(db, P("2031-03-01", "2031-03-31"), "koshi").sites.parts[0].source, "manual", "手入力の全案件数はどの数え方でも優先");
+  const mf = B.monthFacts(db, P("2031-03-01", "2031-03-31"), undefined, {});
+  eq([mf.get("koshi|2031-03").cases, mf.get("koshi|2031-03").deliveries, mf.get("chuo|2031-03").deliveries], [5, 3, 1], "分母・照合の表の材料 (案件・納品)");
+  // 売上台帳の取込の最後の日までの新システムの受注は台帳の行で数える (二重にしない)
+  db = mk();
+  db.orders.push(ledgerOrder("L1", "koshi", "2031-03-15", [30]));
+  const u2 = B.caseUnits(db.orders, 31);
+  eq(u2.filter((u) => u.origin === "system").map((u) => u.orderId).sort(), ["a2", "a3", "a4", "b2"], "台帳の最後の日 (3/15) までの新システムの受注は数えない (3/20 以降は数える)");
+  // 受注を完了にすると (書き換え) すぐ数える
+  db = mk();
+  B.caseUnits(db.orders, 31);
+  db.orders.find((o) => o.id === "d1").salesDate = "2031-03-12";
+  db.orders.find((o) => o.id === "d1").status = "completed";
+  ok(B.caseUnits(db.orders, 31).some((u) => u.orderId === "d1"), "受注を書き換えても案件の一覧を作り直す (件数だけで判定しない)");
+
+  // クレーム・手直しのポイント: 同じ案件は最大 3 点
+  const qi = (id, kind, points, o = {}) => ({ id, number: id, storeId: "koshi", kind, points, occurredOn: "2031-03-10", attribution: "store", counted: true, responsibleUserIds: ["u_a"], status: "open", description: "", reportedBy: "u_b", createdAt: at, updatedAt: at, ...o });
+  const issues = [
+    qi("q1", "claim", 2, { orderId: "a1" }), qi("q2", "rework", 1, { orderId: "a1" }), qi("q3", "rework", 1, { orderId: "a1" }),
+    qi("q4", "claim_rework", 3, { orderId: "b1" }),
+    qi("q5", "claim", 2, { siteName: "（滑石）坂西邸" }), qi("q6", "claim", 2, { siteName: "（滑石） 坂西邸" }),
+    qi("q7", "rework", 1, { siteName: "（滑石）坂西邸", occurredOn: "2031-04-02" }),
+    qi("q8", "rework", 1),
+    qi("q9", "claim", 2, { orderId: "b2", counted: false }),
+  ];
+  const ip = KC.issuePoints(issues.filter(KC.countedIssue), 3);
+  eq([ip.raw, ip.points, ip.cappedCases], [13, 11, 2], "a1 = 2 + 1 + 1 → 3・b1 = 3・坂西邸 3 月 = 2 + 2 (現場名の空白の違いは同じ) → 3・坂西邸 4 月 = 1・現場名なし = 1 (合計 11 / 上限の前 13。記録のみは数えない)");
+  eq(KC.issuePoints(issues.filter(KC.countedIssue), 0).points, 13, "上限 0 = 上限なし");
+  eq(KC.issueCounts(issues.filter(KC.countedIssue)), { claims: 4, reworks: 5, total: 9, cases: 5 }, "経営管理の指標: クレーム 4 (q1・q4・q5・q6)・手直し 5 (q2・q3・q4・q7・q8)・合計 9・発生した案件 5");
+  db = mk();
+  db.qualityIssues = issues;
+  const sk = K.storeKpi(db, P("2031-03-01", "2031-04-30"), "koshi");
+  eq([sk.qualityPoints, sk.qualityPointsRaw, sk.orders, sk.issues.claims, sk.issues.reworks], [11, 13, 7, 4, 5], "storeKpi: ポイントは上限のあと (11)・全案件数 7 (3 月 5 + 4 月 2)");
+  near(sk.qualityRate, (11 / 7) * 100, "ポイント率 = 11 ÷ 7");
+  near(sk.issueRates.claims, (4 / 7) * 100, "クレーム率 = 4 ÷ 7");
+  near(sk.issueRates.total, (9 / 7) * 100, "合計の率 = 9 ÷ 7");
+  const ks = KS.kpiSettings(db);
+  eq(ks.qualityCaseMax, 3, "設定の既定は 3 点");
+  const inc = I.computeIncentives(db, P("2031-03-01", "2031-04-30"), ks);
+  const ku = inc.units.find((u) => u.unit === "koshi");
+  eq([ku.qualityPoints, ku.qualityPointsRaw, ku.issues.total], [11, 13, 9], "インセンティブの店舗のポイントも同じ上限");
+  ok(/同じ案件の上限 3 点で 13 点から/.test(inc.people.find((x) => x.userId === "u_a").lines.find((l) => l.key === "quality").note ?? ""), "支給の内訳に上限で減った点数を出す");
+  const st = K.staffKpis(db, P("2031-03-01", "2031-04-30")).find((r) => r.userId === "u_a");
+  eq([st.qualityPoints, st.qualityCount], [11, 8], "社員別のポイントも案件ごとに上限");
+  db.settings.push({ id: "kpi", value: { qualityCaseMax: 0 } });
+  eq(K.storeKpi(db, P("2031-03-01", "2031-04-30"), "koshi").qualityPoints, 13, "設定で上限なしにできる");
+
+  // LINE の報告の文から区分の候補
+  eq([KS.guessQualityKind("合志 田中様 クレームの連絡あり").kind, KS.guessQualityKind("襖の手直しに伺います").kind, KS.guessQualityKind("お客様からクレーム。畳の張り直しが必要").kind, KS.guessQualityKind("明日の予定の確認").kind], ["claim", "rework", "claim_rework", undefined], "区分の候補 (クレーム / 手直し / 両方 / なし)");
+  eq([KS.guessQualityKind("点検DMを見て電話。襖の動きが硬い").recordOnly, KS.guessQualityKind("クレームではないが念のため").kind], [true, undefined], "点検 DM は記録のみの候補・「クレームではない」はクレームにしない");
+
+  // 集計表 (店舗の列 = シートの合計の表)
+  const db2 = base();
+  const cards2 = B.kpiCards(db2.surveys, null, B.kpiBasis(db2));
+  const ts = TL.surveyTallyByStore(cards2, [{ id: "koshi", label: "合志" }, { id: "chuo", label: "中央" }]);
+  eq([ts.axis, ts.columns.map((c) => c.label), ts.cards, ts.totalCards], ["store", ["合志", "中央"], [3, 0], 3], "店舗の列: 店舗ごとの枚数");
+  eq(ts.sections.map((x) => x.no), ["①", "②", "③", "④", "⑤", "⑥", "⑦"], "①〜⑦ の設問");
+  eq(ts.sections.find((x) => x.no === "⑦").rows.map((r) => [r.answer, r.byCol[0]]), [["はい", 2], ["わからない", 1], ["いいえ", 0]], "⑦ 次回も依頼したいか");
+  const csvRows = TL.tallyCsvRows(ts, [{ label: "返信率", values: ["50.0%", "-"], total: "50.0%" }]);
+  eq([csvRows[0], csvRows[1], csvRows[2]], [["設問", "回答", "合志", "中央", "合計", "割合"], ["回答数 (はがき)", "", 3, 0, 3, ""], ["返信率", "", "50.0%", "-", "50.0%", ""]], "CSV の見出し・枚数・返信率の行");
+
+  // 販促 KPI (経営分析用。個人件数はリピートも 1 件ずつ)
+  const PA = await imp("lib/ops-reports/promo-analysis.ts");
+  db = { ...mk(), inquiries: [], quotes: [], promotions: [], workReportDays: [], users: structuredClone(users).concat([{ id: "u_adm", name: "管理", storeId: "hq", role: "admin", active: true, email: "z@example.test" }]) };
+  const rep = PA.promoReport(db, db.users.find((u) => u.id === "u_adm"), { from: "2031-03-01", to: "2031-03-31", store: "koshi" });
+  const pk = rep.kpi.find((x) => x.storeId === "koshi");
+  eq([pk.cases, pk.individualCases, pk.individualSales, pk.unitPrice], [5, 3, 30000, 10000], "販促 KPI: 個人件数 3 (リピートの a2 も 1 件)・個人の売上・客単価 (返信率の分母 2 とは別)");
+  ok(PA.promoCsvRows(rep, "kpi", (id) => id)[0][0] === "店舗", "販促 KPI の CSV");
 }
 
 /* ================================================================== */
@@ -211,7 +350,7 @@ section("4. storeKpi と年間インセンティブ (同じ分母・平均)");
   near(r2.companyPhoneAvg, 4.5, "回答した枚数で割ると ① は 4.5");
   ok(phoneSheet === 0 && phoneAns === 30000, `① の支給額が平均の計算で変わる (シート ${phoneSheet} 円 / 回答した数 ${phoneAns} 円)`);
   const qline = r.people.find((x) => x.userId === "u_a").lines.find((l) => l.key === "quality");
-  ok(/施工件数 4 件/.test(qline.note ?? ""), "ポイント率の内訳に施工件数を出す");
+  ok(/全案件数 4 件/.test(qline.note ?? ""), "ポイント率の内訳に全案件数を出す");
 }
 
 /* ================================================================== */
@@ -319,7 +458,7 @@ section("6. KPI のタブとの照合");
   const row = (metric, target) => y.rows.find((r) => r.metric === metric && (!target || r.target === target));
   eq([row("reply").ok, row("reply").system, row("reply").detail?.startsWith("3 枚 ÷ 個人件数 6")], [true, 50, true], "返信率が一致 (内訳: 枚数 ÷ 個人件数)");
   eq([row("phone").ok, row("sales").ok, row("craft").ok, row("finish").ok], [true, true, true, true], "① ② ③ ④ が一致 (空欄は 0 点)");
-  eq([row("qrate").ok, row("qpoints", "合志").ok, row("sites", "合志").ok, row("sites", "事務").ok], [true, true, true, true], "ポイント率・ポイント合計・施工件数 (事務は 4 店舗の合計 = 合志 4 + 中央 1) が一致");
+  eq([row("qrate").ok, row("qpoints", "合志").ok, row("sites", "合志").ok, row("sites", "事務").ok], [true, true, true, true], "ポイント率・ポイント合計・全案件数 (事務は 4 店舗の合計 = 合志 4 + 中央 1) が一致");
   ok(y.differ === 0, `差なし (差 ${y.differ} 件)`);
 }
 
@@ -340,7 +479,7 @@ section("7. ⑤〜⑦ の読み替え・集計表");
   eq([tally.cards, tally.totalCards], [[2, 1], 3], "集計表: 月ごとの枚数 (集計月)");
   const sec = tally.sections.find((s) => s.no === "⑥");
   const rep = sec.rows.find((r) => r.answer === "以前頼んだことがある");
-  eq([rep.byMonth, rep.total, sec.respondents], [[1, 1], 2, 3], "⑥ の行 (月ごと・合計・回答した枚数)");
+  eq([rep.byCol, rep.total, sec.respondents], [[1, 1], 2, 3], "⑥ の行 (月ごと・合計・回答した枚数)");
   near(rep.share, 2 / 3, "割合 = 合計 ÷ 回答した枚数");
   eq(tally.sections.find((s) => s.no === "①").rows.map((r) => r.total), [0, 0, 0, 1, 1], "① の分布 (大変不満〜大変満足。空欄は数えない)");
   eq([FL.fieldLabel("kpi_basis", "individual.koshi.2031-01"), FL.fieldLabel("survey", "countMonth")], ["個人件数 (合志・2031年1月)", "集計月 (KPI)"], "変更履歴の項目名");
@@ -376,16 +515,25 @@ section("8. 画面の操作 (Server Action)");
     for (const [k, v] of Object.entries(obj)) if (v !== undefined) fd.set(k, v instanceof File ? v : String(v));
     return fd;
   };
-  let r = await act(hq, () => actions.saveKpiBasisRules(form({ denominator: "system", average: "sheet", requireStaffNames: "on", autoSites: "on" })));
+  const rules = (o) => form({ denominator: "sheet", average: "sheet", requireStaffNames: "on", individualSource: "plan", repeatDays: "31", casesSource: "cases", ...o });
+  let r = await act(hq, () => actions.saveKpiBasisRules(rules({ denominator: "system" })));
   ok(r.err && B.kpiBasis(db()).denominator === "sheet", "数え方の設定は管理者だけ (本部スタッフは断る)");
-  r = await act(admin, () => actions.saveKpiBasisRules(form({ denominator: "sheet", average: "answered", requireStaffNames: "on", autoSites: "on" })));
+  r = await act(admin, () => actions.saveKpiBasisRules(rules({ average: "answered" })));
   ok(r.msg && B.kpiBasis(db()).average === "answered", "管理者は数え方を変えられる");
+  r = await act(admin, () => actions.saveKpiBasisRules(rules({ average: "answered", individualSource: "auto", repeatDays: "30", casesSource: "deliveries" })));
+  const kb = B.kpiBasis(db());
+  ok(r.msg && kb.individualSource === "auto" && kb.repeatDays === 30 && kb.casesSource === "deliveries", "個人件数の決め方・リピートの日数・全案件数の数え方を保存できる");
+  ok(db().auditLogs.some((l) => l.entity === "kpi_basis" && l.changes?.some((c) => c.field === "repeatDays" && c.before === 31 && c.after === 30)), "リピートの日数の変更も変更履歴に残る");
+  r = await act(admin, () => actions.saveKpiBasisRules(rules({ repeatDays: "999" })));
+  ok(r.err && /0〜120/.test(r.err), "リピートの日数は 0〜120 日 (それ以外は断る)");
+  r = await act(admin, () => actions.saveKpiBasisRules(rules({ average: "answered" })));
+  ok(r.msg && B.kpiBasis(db()).casesSource === "cases", "既定に戻せる");
   ok(db().auditLogs.some((l) => l.entity === "kpi_basis" && l.changes?.some((c) => c.field === "average")), "変更履歴に変更前・変更後");
   r = await act(staff, () => actions.saveKpiMonthValues(form({ fy: "2031", "ind_koshi_2031-01": "12" })));
   ok(r.err, "店舗スタッフは月の値を入れられない");
   r = await act(hq, () => actions.saveKpiMonthValues(form({ fy: "2031", "ind_koshi_2031-01": "12", "sites_koshi_2031-01": "30", "ind_chuo_2031-01": "" })));
   const v = B.kpiBasis(db()).months["koshi|2031-01"];
-  ok(r.msg && v?.individual === 12 && v.individualSrc === "manual" && v.sites === 30, "本部スタッフは個人件数・施工件数を手入力できる (手入力の印)");
+  ok(r.msg && v?.individual === 12 && v.individualSrc === "manual" && v.sites === 30, "本部スタッフは個人件数・全案件数を手入力できる (手入力の印)");
   r = await act(hq, () => actions.saveKpiMonthValues(form({ fy: "2031", "ind_koshi_2031-01": "x" })));
   ok(r.err && /数ではありません/.test(r.err), "数でない値は断る");
   r = await act(hq, () => actions.saveKpiMonthValues(form({ fy: "2031", "ind_koshi_2031-01": "", "sites_koshi_2031-01": "" })));

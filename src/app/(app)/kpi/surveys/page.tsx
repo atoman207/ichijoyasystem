@@ -4,9 +4,9 @@ import { getDb } from "@/lib/db/store";
 import { canReadStoreRecords, canSeeAllStoreFigures } from "@/lib/auth/permissions";
 import { policyReader } from "@/lib/access-policy";
 
-import { answerCounts, deliveryOf, fmtRate, inPeriod, isCard, storeKpi, surveyDate, surveyKpiDate } from "@/lib/kpi";
-import { countsCard, kpiBasis, periodMonths, unnamedCard } from "@/lib/kpi-basis";
-import { surveyTally } from "@/lib/survey-tally";
+import { answerCounts, deliveryOf, fmtRate, storeKpi, surveyDate, surveyKpiDate } from "@/lib/kpi";
+import { unnamedCard } from "@/lib/kpi-basis";
+import { surveyTallyView, surveyView } from "@/lib/survey-tally-view";
 import { kpiSettings } from "@/lib/kpi-settings";
 import { resolvePeriod } from "@/lib/kpi-period";
 import { fmtDate, toDateKey } from "@/lib/format";
@@ -43,26 +43,25 @@ export default async function SurveysPage({ searchParams }: { searchParams: Prom
   const rp = resolvePeriod(sp, settings.fiscalStartMonth, today);
   // はがきの一覧は顧客情報、年度ごとの比較は経営の数字の閲覧の範囲 (src/lib/access-policy.ts)
   const reader = policyReader(db, user);
-  const store = sp.store && canReadStoreRecords(reader, sp.store as never) ? sp.store : "";
-  const q = sp.q?.trim() ?? "";
   const users = new Map(db.users.map((u) => [u.id, u.name]));
   const orders = new Map(db.orders.map((o) => [o.id, o]));
   const customers = new Map(db.customers.map((c) => [c.id, c]));
-  const basis = kpiBasis(db);
-  // はがきは集計月 (スプレッドシートの「月」) で期間を判定する (src/lib/kpi-core.ts の surveyKpiDate)
-  let rows = db.surveys.filter((s) => canReadStoreRecords(reader, s.storeId)).filter((s) => isCard(s) && inPeriod(surveyKpiDate(s), rp.period) && (!store || s.storeId === store));
-  if (sp.link === "linked") rows = rows.filter((s) => s.orderId);
-  if (sp.link === "unlinked") rows = rows.filter((s) => !s.orderId);
-  if (q) rows = rows.filter((s) => [s.postcardNo, s.comment, s.salesName, s.craftsmanName, users.get(s.salesUserId ?? ""), ...deliveryOf(s).map((id) => users.get(id))].some((t) => t?.includes(q)));
+  // はがきは集計月 (スプレッドシートの「月」) で期間を判定する (src/lib/kpi-core.ts の surveyKpiDate)。一覧・集計表・CSV で同じ絞り込み (survey-tally-view.ts)
+  const view = surveyView(db, reader, rp.period, { store: sp.store, link: sp.link, q: sp.q });
+  const { basis, store, unnamed, counted } = view;
   // 担当の名前が未記入のはがき (シートの「ノーカウント」)。集計には入れず、一覧で確かめられるようにする
-  const unnamed = rows.filter((s) => unnamedCard(s, basis));
-  const counted = rows.filter((s) => countsCard(s, basis));
-  if (sp.unnamed === "1") rows = unnamed;
-  rows.sort((a, b) => surveyKpiDate(b).localeCompare(surveyKpiDate(a)) || surveyDate(b).localeCompare(surveyDate(a)));
+  let rows = sp.unnamed === "1" ? unnamed : view.rows;
+  rows = [...rows].sort((a, b) => surveyKpiDate(b).localeCompare(surveyKpiDate(a)) || surveyDate(b).localeCompare(surveyDate(a)));
   const paged = paginate(rows, sp.page, 50);
   const counts = answerCounts(counted);
-  const tallyMonths = rp.period ? periodMonths(rp.period).map((m) => m.month) : [];
-  const tally = tallyMonths.length && tallyMonths.length <= 24 ? surveyTally(counted, tallyMonths) : null;
+  // 集計表: 列 = 月 (店舗ごとの表) / 店舗 (シートの合計の表)。月の列は 24 か月まで
+  const axis = sp.tcol === "store" ? "store" : "month";
+  const tv = surveyTallyView(db, reader, view, rp.period, axis);
+  const tq = (tcol: string) => {
+    const p = new URLSearchParams(Object.entries(sp).filter(([k, v]) => v && k !== "tcol" && k !== "page" && k !== "msg" && k !== "err") as [string, string][]);
+    if (tcol === "store") p.set("tcol", "store");
+    return p.toString();
+  };
   const stores = db.stores.filter((s) => s.kind === "store" && canReadStoreRecords(reader, s.id));
   const cmap = customers;
   const SOURCE: Record<string, string> = { import: "移行", capture: "写真", manual: "手入力" };
@@ -93,7 +92,8 @@ export default async function SurveysPage({ searchParams }: { searchParams: Prom
           <>
             <label className="block"><span className="label">店舗</span><Select name="store" defaultValue={store} className="h-9 py-1 text-sm"><option value="">すべて</option>{db.stores.filter((s) => canReadStoreRecords(reader, s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></label>
             <label className="block"><span className="label">案件の紐づけ</span><Select name="link" defaultValue={sp.link ?? ""} className="h-9 py-1 text-sm"><option value="">すべて</option><option value="linked">紐づけ済み</option><option value="unlinked">未設定</option></Select></label>
-            <label className="block"><span className="label">キーワード</span><input name="q" defaultValue={q} className="field h-9 py-1 text-sm" placeholder="No.・担当者・記述" /></label>
+            <label className="block"><span className="label">キーワード</span><input name="q" defaultValue={sp.q ?? ""} className="field h-9 py-1 text-sm" placeholder="No.・担当者・記述" /></label>
+            {axis === "store" && <input type="hidden" name="tcol" value="store" />}
             <label className="block"><span className="label">はがき</span><Select name="unnamed" defaultValue={sp.unnamed ?? ""} className="h-9 py-1 text-sm"><option value="">すべて</option><option value="1">担当の名前がなく数えないもの</option></Select></label>
           </>
         }
@@ -122,7 +122,19 @@ export default async function SurveysPage({ searchParams }: { searchParams: Prom
         </Card>
       </div>
 
-      {tally && <SurveyTally tally={tally} scopeLabel={`${store ? (db.stores.find((x) => x.id === store)?.name ?? store) : "表示中のはがき"} · ${rp.label}`} />}
+      {tv ? (
+        <SurveyTally
+          tally={tv.tally}
+          extraRows={tv.extraRows}
+          scopeLabel={`${store ? (db.stores.find((x) => x.id === store)?.name ?? store) : "表示中のはがき"} · ${rp.label}`}
+          axisHref={{ month: `/kpi/surveys?${tq("month")}#tally`, store: `/kpi/surveys?${tq("store")}#tally` }}
+          csvHref={`/api/kpi/survey-tally?${tq(axis)}`}
+        />
+      ) : (
+        <p className="mt-4 text-xs text-ink-3">
+          アンケート集計表 (①〜⑦) は、月の列なら期間が 24 か月までのときに表示します。<Link href={`/kpi/surveys?${tq("store")}#tally`} className="text-accent underline">店舗の列で表示する</Link>
+        </p>
+      )}
 
       <SurveyYearCompare cols={compareCols} scopeLabel={compareLabel} />
 

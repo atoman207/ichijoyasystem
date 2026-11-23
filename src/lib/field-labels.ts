@@ -70,13 +70,13 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   product: { unitPrice: "単価 (税抜)", active: "販売中", mgmtCategory: "品目 (管理会計)" },
   doc_draft: { title: "名前", subject: "件名", body: "本文", status: "状態", version: "版", refs: "関係する記録", channel: "送信方法", recipient: "宛先", recipientLabel: "宛先の名前" },
   survey: { postcardNo: "はがき No.", answeredOn: "回答日", countMonth: "集計月 (KPI)", phoneScore: "① 電話対応", salesScore: "② 営業対応", craftsmanScore: "③ 職人対応", finishScore: "④ 工事の仕上がり", priorities: "⑤ 重視したこと", media: "⑥ 依頼のきっかけ", wouldUseAgain: "⑦ 次回も依頼したいか", comment: "⑧ ご意見", clerkUserId: "① の事務担当", salesUserId: "営業担当", deliveryUserIds: "担当職人", orderId: "案件" },
-  kpi_basis: { denominator: "返信率・ポイント率の分母", average: "①〜④ の平均の計算", requireStaffNames: "担当の名前が未記入のはがきを数えない", autoSites: "施工件数を売上台帳の取込から自動で出す" },
+  kpi_basis: { denominator: "返信率・ポイント率の分母", average: "①〜④ の平均の計算", requireStaffNames: "担当の名前が未記入のはがきを数えない", autoSites: "施工件数を売上台帳の取込から自動で出す", individualSource: "個人件数の決め方", repeatDays: "リピートを 1 件にまとめる日数", casesSource: "全案件数の数え方" },
   case_post: { title: "見出し", photoIds: "使う写真", products: "商品名", workContent: "施工内容", area: "地域 (町名まで)", channels: "投稿先", text: "投稿文", hashtags: "ハッシュタグ", consent: "お客様の掲載の了承", status: "状態", postings: "投稿の記録" },
   tidy_check: { date: "チェックした日", storeId: "店舗", checkedBy: "チェックした人", place: "場所", comment: "全体のコメント", photos: "写真", fixStatus: "要改善の対応", dueDate: "直す期限" },
 };
 
 const KPI_STORE_LABEL: Record<string, string> = { koshi: "合志", chuo: "中央", nishi: "西", tamana: "玉名", hq: "本部" };
-const KPI_VALUE_LABEL: Record<string, string> = { individual: "個人件数", sites: "施工件数", note: "メモ" };
+const KPI_VALUE_LABEL: Record<string, string> = { individual: "個人件数", sites: "全案件数", note: "メモ" };
 
 export function fieldLabel(entity: string, field: string): string {
   // 見積・請求書の明細の品目 (管理会計): items.<行>.itemCategory

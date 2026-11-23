@@ -219,7 +219,7 @@ function ReconView({ plan }: { plan: WorkbookPlan }) {
         <CardHeader title="KPI のシートとシステムの集計の照合 (取り込んだ後の値)" description="KPI のタブの手計算と、同じ期間のシステムの値を並べます。月ごとの件数が合っていれば、取り込んだ記録で KPI とインセンティブを計算できます" />
         <ul className="mb-3 space-y-1 text-xs text-ink-3">
           <li>・シートの空欄 (まだ転記していない月) にシステムの値があるのは、シートの転記待ちです</li>
-          <li>・累計 (返信率・①〜④・ポイント率) は年間インセンティブと同じ計算で比べます。分母 (個人件数・施工件数) とはがきの集計月は KPI →「<Link href="/kpi/basis" className="text-accent hover:underline">分母・照合</Link>」で登録・取込します (年度の途中のシートは、月ごとの値のある月までで比べます)</li>
+          <li>・累計 (返信率・①〜④・ポイント率) は年間インセンティブと同じ計算で比べます。分母 (個人件数・全案件数) とはがきの集計月は KPI →「<Link href="/kpi/basis" className="text-accent hover:underline">分母・照合</Link>」で登録・取込します (年度の途中のシートは、月ごとの値のある月までで比べます)</li>
           <li>・取り込んだ後は「<Link href="/kpi/basis/check" className="text-accent hover:underline">支給前の照合</Link>」で、店舗・社員ごとに計算の内訳と並べて確かめられます</li>
         </ul>
       </div>

@@ -561,6 +561,7 @@ export async function updateKpiSettings(formData: FormData) {
       excludedUserIds: [...new Set(formData.getAll("excludedUserIds").map(String).filter((v) => userIds.has(v)))],
       clerkByStore,
       qualityPoints: { rework: numField(formData, "qp_rework"), claim: numField(formData, "qp_claim"), claim_rework: numField(formData, "qp_claim_rework") },
+      qualityCaseMax: formData.has("qp_caseMax") ? numField(formData, "qp_caseMax") : cur.qualityCaseMax,
       reviewYenPerPoint: numField(formData, "reviewYenPerPoint"),
       fiscalStartMonth: numField(formData, "fiscalStartMonth") || cur.fiscalStartMonth,
       incentive,

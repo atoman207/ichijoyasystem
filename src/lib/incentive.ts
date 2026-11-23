@@ -1,5 +1,5 @@
 import type { Customer, Database, StoreId } from "@/lib/db/types";
-import { countedIssue, inPeriod, type Period } from "@/lib/kpi-core";
+import { countedIssue, inPeriod, issueCounts, issuePoints, type IssueCounts, type Period } from "@/lib/kpi-core";
 import { kpiBasis, kpiCards, kpiDenominators, personScores, scoreAverage, type Denominators, type KpiBasis } from "@/lib/kpi-basis";
 import { isPayable, tierAtLeast, tierAtMost, type KpiSettings } from "@/lib/kpi-settings";
 
@@ -12,19 +12,19 @@ import { isPayable, tierAtLeast, tierAtMost, type KpiSettings } from "@/lib/kpi-
  *  - ② 営業対応 (本人の平均)  → 営業担当 (見積り)
  *  - ③ 職人対応 (本人の平均)  → 担当職人 (複数名なら全員に同じ点)
  *  - ④ 工事仕上り (店舗の平均) → 店舗の職人
- *  - クレーム・手直しポイント率 → 店舗の職人 / 事務 (マイナスあり)
+ *  - クレーム・手直しポイント率 → 店舗の職人 / 事務 (マイナスあり)。クレーム 2 点・手直し 1 点、同じ案件は最大 3 点 (設定 qualityCaseMax)。分母は全案件数
  *  - MVP: ②③ の順位、返信率 1 位・④ 1 位の店舗、口コミ件数の順位、クレーム・手直しの件数最少・率最低
  *  - 合計がマイナスの人は 0 (マイナスにはならない)
  * 順位は同点を同じ順位にし、次の順位を飛ばす (2 位が 2 人なら 3 位はなし)。
  * 年度の途中で店舗を移った社員の月割りは自動では行わない (調整額で入力する)。
- * 分母 (個人件数・施工件数)・はがきの数え方・平均の計算は KPI の画面と同じ (src/lib/kpi-basis.ts。シートの基準が既定)
+ * 分母 (個人件数・全案件数)・はがきの数え方・平均の計算は KPI の画面と同じ (src/lib/kpi-basis.ts。シートの基準が既定)
  */
 
 export const SCORED_STORES: StoreId[] = ["koshi", "chuo", "nishi", "tamana"];
 
 export interface UnitResult {
   unit: StoreId | "office";
-  /** 施工件数 (ポイント率の分母) */
+  /** 全案件数 (ポイント率の分母) */
   orders: number;
   /** 個人件数 (返信率の分母) */
   individual: number;
@@ -33,12 +33,17 @@ export interface UnitResult {
   finishCount: number;
   replyRate: number | null;
   finishAvg: number | null;
+  /** ポイント (同じ案件は上限まで) */
   qualityPoints: number;
+  /** 上限を当てる前のポイント */
+  qualityPointsRaw: number;
   qualityCount: number;
   qualityRate: number | null;
+  /** 経営管理の指標の件数 (クレーム・手直し・合計・発生した案件) */
+  issues: IssueCounts;
   /** 返信率が基準未満 (はがきの項目を支給しない) */
   gated: boolean;
-  /** 分母の内訳 (事務は 4 店舗の施工件数の合計のため空) */
+  /** 分母の内訳 (事務は 4 店舗の全案件数の合計のため空) */
   denominators?: Denominators;
 }
 
@@ -99,6 +104,7 @@ export function computeIncentives(db: Pick<Database, "orders" | "customers" | "s
   const customers = new Map<string, Customer>(db.customers.map((c) => [c.id, c]));
   const cards = kpiCards(db.surveys, p, basis);
   const issues = db.qualityIssues.filter((q) => countedIssue(q) && inPeriod(q.occurredOn, p));
+  const caseMax = s.qualityCaseMax;
 
   const units: UnitResult[] = scoredStores.map((storeId) => {
     const den = kpiDenominators(db, p, storeId, { customers, basis });
@@ -107,7 +113,8 @@ export function computeIncentives(db: Pick<Database, "orders" | "customers" | "s
     const storeCards = cards.filter((c) => c.storeId === storeId);
     const finish = scoreAverage(storeCards.map((c) => c.finishScore), basis.average);
     const mine = issues.filter((q) => q.storeId === storeId && q.attribution !== "office");
-    const qualityPoints = mine.reduce((a, q) => a + q.points, 0);
+    const qp = issuePoints(mine, caseMax);
+    const qualityPoints = qp.points;
     const replyRate = individual ? (storeCards.length / individual) * 100 : null;
     return {
       unit: storeId,
@@ -118,16 +125,19 @@ export function computeIncentives(db: Pick<Database, "orders" | "customers" | "s
       replyRate,
       finishAvg: finish.avg,
       qualityPoints,
+      qualityPointsRaw: qp.raw,
       qualityCount: mine.length,
       qualityRate: sites ? (qualityPoints / sites) * 100 : null,
+      issues: issueCounts(mine),
       gated: replyRate !== null && replyRate < rules.replyGate,
       denominators: den,
     };
   });
-  // 事務: 分母は 4 店舗の施工件数の合計 (シートの「事務は全件施工件数が分母」)
+  // 事務: 分母は 4 店舗の全案件数の合計 (シートの「事務は全件施工件数が分母」)
   const officeIssues = issues.filter((q) => q.attribution === "office");
   const officeOrders = units.reduce((a, u) => a + u.orders, 0);
-  const officePoints = officeIssues.reduce((a, q) => a + q.points, 0);
+  const officeQp = issuePoints(officeIssues, caseMax);
+  const officePoints = officeQp.points;
   const office: UnitResult = {
     unit: "office",
     orders: officeOrders,
@@ -137,8 +147,10 @@ export function computeIncentives(db: Pick<Database, "orders" | "customers" | "s
     replyRate: null,
     finishAvg: null,
     qualityPoints: officePoints,
+    qualityPointsRaw: officeQp.raw,
     qualityCount: officeIssues.length,
     qualityRate: officeOrders ? (officePoints / officeOrders) * 100 : null,
+    issues: issueCounts(officeIssues),
     gated: false,
   };
   // ① 電話対応: 全社のはがき (シートは 合計点 ÷ 返信はがきの枚数)
@@ -209,7 +221,7 @@ export function computeIncentives(db: Pick<Database, "orders" | "customers" | "s
     const qUnit = clerk ? office : unit;
     if (qUnit) {
       const table = clerk ? rules.officeQuality : rules.storeQuality;
-      add("quality", `クレーム・手直しポイント率 (${clerk ? "事務" : "店舗"})`, qUnit.orders ? tierAtMost(qUnit.qualityRate, table) : 0, qUnit.qualityRate === null ? "施工件数なし" : `${qUnit.qualityPoints} 点 ÷ 施工件数 ${qUnit.orders} 件 = ${qUnit.qualityRate.toFixed(2)}%`);
+      add("quality", `クレーム・手直しポイント率 (${clerk ? "事務" : "店舗"})`, qUnit.orders ? tierAtMost(qUnit.qualityRate, table) : 0, qUnit.qualityRate === null ? "全案件数なし" : `${qUnit.qualityPoints} 点${qUnit.qualityPointsRaw !== qUnit.qualityPoints ? ` (同じ案件の上限 ${caseMax} 点で ${qUnit.qualityPointsRaw} 点から)` : ""} ÷ 全案件数 ${qUnit.orders} 件 = ${qUnit.qualityRate.toFixed(2)}%`);
       add("fewestMvp", "クレーム・手直し件数 MVP (最少)", fewestRank.get(qUnit) === 1 ? rules.mvp.fewestQuality : 0, `${qUnit.qualityCount} 件`);
       if (!clerk) add("rateMvp", "クレーム・手直し率 MVP (最低の店舗)", rateRank.get(qUnit) === 1 ? rules.mvp.lowestQualityRate : 0);
     }

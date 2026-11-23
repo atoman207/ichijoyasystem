@@ -42,10 +42,11 @@ export function KpiSettingsCard({ db, admin }: { db: Database; admin: boolean })
               ))}
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-6">
+          <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-4 @5xl:grid-cols-7">
             <Field label="手直し (点)"><Input type="number" step="0.5" name="qp_rework" defaultValue={s.qualityPoints.rework} /></Field>
             <Field label="クレーム (点)"><Input type="number" step="0.5" name="qp_claim" defaultValue={s.qualityPoints.claim} /></Field>
             <Field label="クレーム＋手直し (点)"><Input type="number" step="0.5" name="qp_claim_rework" defaultValue={s.qualityPoints.claim_rework} /></Field>
+            <Field label="同じ案件の上限 (点)" hint="0 = 上限なし"><Input type="number" step="0.5" min={0} name="qp_caseMax" defaultValue={s.qualityCaseMax} /></Field>
             <Field label="口コミ 1 点 (円)"><Input type="number" name="reviewYenPerPoint" defaultValue={s.reviewYenPerPoint} /></Field>
             <Field label="年度の開始月"><Input type="number" min={1} max={12} name="fiscalStartMonth" defaultValue={s.fiscalStartMonth} /></Field>
             <Field label="返信率の下限 (%)" hint="未満の店舗ははがきの項目なし"><Input type="number" name="replyGate" defaultValue={i.replyGate} /></Field>

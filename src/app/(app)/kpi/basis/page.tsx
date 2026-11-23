@@ -2,8 +2,7 @@ import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canImportData, canManageSettings } from "@/lib/auth/permissions";
-import { countedOrder, orderDate } from "@/lib/kpi-core";
-import { AVERAGE_LABEL, DENOMINATOR_LABEL, DENOM_SOURCE_LABEL, basisNotes, fiscalMonths, kpiBasis, kpiDenominators, ledgerCounts, monthKey, type KpiBasis } from "@/lib/kpi-basis";
+import { AVERAGE_LABEL, CASES_SOURCE_LABEL, DENOMINATOR_LABEL, DENOM_SOURCE_LABEL, INDIVIDUAL_SOURCE_LABEL, MAX_REPEAT_DAYS, basisNotes, denomRepeats, fiscalMonths, kpiBasis, kpiDenominators, ledgerCounts, monthFacts, monthKey, type KpiBasis } from "@/lib/kpi-basis";
 import { BASIS_SOURCE_LABEL, planBasisImport, type BasisPlan, type BasisPreview } from "@/lib/kpi-basis-import";
 import { readBasisPreview } from "@/lib/kpi-check";
 import { fiscalRange, fiscalYearOf, kpiSettings } from "@/lib/kpi-settings";
@@ -46,7 +45,7 @@ export default async function KpiBasisPage({ searchParams }: { searchParams: Pro
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader
         title="KPI · 分母・照合"
-        description="返信率・クレーム手直しポイント率の分母 (店舗 × 月の個人件数・施工件数) と、はがきの数え方。スプレッドシート「お客様アンケート集計表」の KPI シートの集計基準に合わせています"
+        description="返信率・クレーム手直しポイント率の分母 (店舗 × 月の個人件数・全案件数) と、はがきの数え方。スプレッドシート「お客様アンケート集計表」の KPI シートの集計基準に合わせ、手計算していたリピートの調整も自動で行います"
         actions={<LinkButton href={`/kpi/basis/check`} size="sm">支給前の照合 (KPI シートとの比較)</LinkButton>}
       />
       <KpiTabs current="/kpi/basis" sp={sp} user={user} />
@@ -98,11 +97,23 @@ function RulesCard({ basis, admin }: { basis: KpiBasis; admin: boolean }) {
                 {(Object.keys(AVERAGE_LABEL) as (keyof typeof AVERAGE_LABEL)[]).map((k) => <option key={k} value={k}>{AVERAGE_LABEL[k]}{k === "sheet" ? " (既定)" : ""}</option>)}
               </Select>
             </Field>
+            <Field label="個人件数 (返信率の分母) の決め方">
+              <Select name="individualSource" defaultValue={basis.individualSource}>
+                {(Object.keys(INDIVIDUAL_SOURCE_LABEL) as (keyof typeof INDIVIDUAL_SOURCE_LABEL)[]).map((k) => <option key={k} value={k}>{INDIVIDUAL_SOURCE_LABEL[k]}{k === "plan" ? " (既定)" : ""}</option>)}
+              </Select>
+            </Field>
+            <Field label="リピートを 1 件にまとめる日数" hint={`同じお客様の、はがきを渡した案件から この日数以内の次の案件は個人件数に数えません (売上は 1 件ずつ)。既定 31 日 (約 1 か月)。0 = まとめない`}>
+              <input type="number" name="repeatDays" min={0} max={MAX_REPEAT_DAYS} step={1} defaultValue={basis.repeatDays} className="field" />
+            </Field>
+            <Field label="全案件数 (クレーム・手直し率の分母) の数え方">
+              <Select name="casesSource" defaultValue={basis.casesSource}>
+                {(Object.keys(CASES_SOURCE_LABEL) as (keyof typeof CASES_SOURCE_LABEL)[]).map((k) => <option key={k} value={k}>{CASES_SOURCE_LABEL[k]}{k === "cases" ? " (既定)" : ""}</option>)}
+              </Select>
+            </Field>
           </div>
           <label className="flex items-start gap-2 text-sm text-ink-2"><input type="checkbox" name="requireStaffNames" defaultChecked={basis.requireStaffNames} className="mt-0.5 h-4 w-4" /> 担当 (営業担当・担当職人) の名前が一つでも未記入のはがきは数えない (シートの「担当の名前が一つでも未記入の場合ノーカウント」。既定)</label>
-          <label className="flex items-start gap-2 text-sm text-ink-2"><input type="checkbox" name="autoSites" defaultChecked={basis.autoSites} className="mt-0.5 h-4 w-4" /> 施工件数を、移行した売上台帳の行の数 (現場名の下の数字と同じ) から自動で出す (既定。手入力した月は手入力の値)</label>
           <Button type="submit" size="sm" variant="secondary">数え方を保存する</Button>
-          <p className="text-[11px] text-ink-3">平均の計算は支給額に直結します (例: ① 電話対応の平均が 4.4 をまたぐと、事務 1 人あたりの金額が変わります)。変更は変更履歴に残ります。</p>
+          <p className="text-[11px] text-ink-3">平均の計算・分母の決め方は支給額に直結します (例: ① 電話対応の平均が 4.4 をまたぐと、事務 1 人あたりの金額が変わります)。変更は変更履歴に残ります。全案件数の既定 (案件の件数) は KPI シートの「売上の現場名下の数字」と同じ数で、作業日報の納品件数 (手直しの納品・1 件の工事の分けた納品も 1 件ずつ) より少し少なくなります。</p>
         </form>
       ) : (
         <p className="mt-3 text-[11px] text-ink-3">数え方の変更は管理者が行えます。</p>
@@ -113,26 +124,20 @@ function RulesCard({ basis, admin }: { basis: KpiBasis; admin: boolean }) {
 
 function MonthTable({ db, basis, fy, months, stores, fyOptions, startMonth }: { db: Database; basis: KpiBasis; fy: number; months: string[]; stores: Store[]; fyOptions: number[]; startMonth: number }) {
   const range = { from: `${months[0]}-01`, to: fiscalRangeEnd(months) };
-  // システムの案件 (店舗|月): 値のない月の分母
-  const sys = new Map<string, { all: number; individual: number }>();
   const cmap = new Map(db.customers.map((c) => [c.id, c]));
-  for (const o of db.orders) {
-    if (!countedOrder(o)) continue;
-    const d = orderDate(o);
-    if (d < range.from || d > range.to) continue;
-    const k = monthKey(o.storeId, d.slice(0, 7));
-    const e = sys.get(k) ?? { all: 0, individual: 0 };
-    e.all++;
-    if (cmap.get(o.customerId)?.type !== "corporate") e.individual++;
-    sys.set(k, e);
-  }
+  // 店舗|月 の件数 (案件・個人・リピート・作業日報の納品・期間内の受注)
+  const facts = monthFacts(db, range, undefined, { customers: cmap, basis });
   const ledger = ledgerCounts(db.orders);
   const totals = new Map(stores.map((s) => [s.id, kpiDenominators(db, range, s.id, { customers: cmap, basis })]));
   const src = (s: keyof typeof DENOM_SOURCE_LABEL) => DENOM_SOURCE_LABEL[s];
+  const n = (v: number) => v.toLocaleString("ja-JP");
   return (
     <Card className="mt-4" padded={false}>
       <div className="px-5 pt-5">
-        <CardHeader title={`店舗 × 月の個人件数・施工件数 (${fy}年度 ${range.from.replace(/-/g, "/")}〜${range.to.replace(/-/g, "/")})`} description="個人件数 = 返信率の分母 (年間チラシ計画の本年度実績)。施工件数 = クレーム・手直しポイント率の分母 (売上台帳の現場名の下の数字)。空欄の月はシステムの案件の件数を使います" />
+        <CardHeader
+          title={`店舗 × 月の個人件数・全案件数 (${fy}年度 ${range.from.replace(/-/g, "/")}〜${range.to.replace(/-/g, "/")})`}
+          description={`個人件数 = 返信率の分母 (年間チラシ計画の本年度実績。空欄の月は自動 = 個人のお客様の案件 − ${basis.repeatDays > 0 ? `同じお客様の ${basis.repeatDays} 日以内のリピート` : "リピート (まとめない設定)"})。全案件数 = クレーム・手直し率の分母 (${CASES_SOURCE_LABEL[basis.casesSource]})。入力欄の下に、自動の値・作業日報の納品件数を出しています`}
+        />
         <form method="get" action="/kpi/basis" className="mb-3 flex flex-wrap items-end gap-2">
           <label className="block"><span className="label">年度</span><select name="fy" defaultValue={String(fy)} className="field h-9 py-1 text-sm">{[...new Set([fy, ...fyOptions])].sort((a, b) => b - a).map((y) => { const r = fiscalRange(y, startMonth); return <option key={y} value={y}>{y}年度 ({r.from.slice(0, 7)}〜{r.to.slice(0, 7)})</option>; })}</select></label>
           <button type="submit" className="inline-flex h-9 items-center rounded-lg border border-line bg-panel px-3 text-sm font-medium text-ink hover:bg-subtle">表示</button>
@@ -141,7 +146,7 @@ function MonthTable({ db, basis, fy, months, stores, fyOptions, startMonth }: { 
       <form action={saveKpiMonthValues}>
         <input type="hidden" name="fy" value={fy} />
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px] text-xs">
+          <table className="w-full min-w-[1040px] text-xs">
             <thead>
               <tr className="bg-subtle text-ink-2">
                 <th rowSpan={2} className="px-3 py-2 text-left font-medium">月</th>
@@ -150,7 +155,7 @@ function MonthTable({ db, basis, fy, months, stores, fyOptions, startMonth }: { 
               <tr className="bg-subtle text-ink-2">
                 {stores.map((s) => (
                   <th key={s.id} colSpan={2} className="border-l border-line px-2 pb-1.5 font-normal">
-                    <span className="grid grid-cols-2 gap-1"><span>個人件数</span><span>施工件数</span></span>
+                    <span className="grid grid-cols-2 gap-1"><span>個人件数</span><span>全案件数</span></span>
                   </th>
                 ))}
               </tr>
@@ -162,20 +167,29 @@ function MonthTable({ db, basis, fy, months, stores, fyOptions, startMonth }: { 
                   {stores.map((s) => {
                     const k = monthKey(s.id, m);
                     const v = basis.months[k];
-                    const sy = sys.get(k);
-                    const lv = basis.autoSites ? ledger.sites.get(k) : undefined;
+                    const f = facts.get(k);
+                    const auto = f && f.cases > 0 ? f.individual - f.repeats : undefined;
+                    const autoText = auto !== undefined ? `自動 ${n(auto)}${f!.repeats ? ` (リピート ${f!.repeats} を除く)` : ""}` : `システム ${n(f?.systemIndividual ?? 0)}`;
+                    const planUsed = v?.individual !== undefined && (basis.individualSource === "plan" || v.individualSrc === "manual");
+                    const casesVal = f && f.cases > 0 ? f.cases : undefined;
+                    const autoSites = basis.casesSource === "deliveries" ? (f?.deliveries ?? 0) : basis.casesSource === "cases" && casesVal !== undefined ? casesVal : (f?.systemAll ?? 0);
                     const last = ledger.lastDate.get(s.id);
-                    const partialLedger = lv !== undefined && last && last.slice(0, 7) === m && last < monthEndOf(m);
+                    const ledgerEnds = last && last.slice(0, 7) === m && last < monthEndOf(m);
                     return (
                       <td key={s.id} colSpan={2} className="border-l border-line px-2 py-1.5">
                         <span className="grid grid-cols-2 gap-1">
                           <span>
-                            <input name={`ind_${s.id}_${m}`} defaultValue={v?.individual ?? ""} inputMode="numeric" placeholder={sy ? String(sy.individual) : ""} className="field h-7 w-full py-0.5 text-right text-xs tnum" aria-label={`${s.shortName} ${monthLabel(m)} の個人件数`} />
-                            <span className="mt-0.5 block text-[10px] text-ink-3">{v?.individual !== undefined ? src(v.individualSrc ?? "import") : `空欄 → システム ${sy?.individual ?? 0}`}</span>
+                            <input name={`ind_${s.id}_${m}`} defaultValue={v?.individual ?? ""} inputMode="numeric" placeholder={String(auto ?? f?.systemIndividual ?? "")} className="field h-7 w-full py-0.5 text-right text-xs tnum" aria-label={`${s.shortName} ${monthLabel(m)} の個人件数`} />
+                            <span className={`mt-0.5 block text-[10px] ${v?.individual !== undefined && !planUsed ? "text-warn-ink" : "text-ink-3"}`}>
+                              {v?.individual !== undefined ? `${src(v.individualSrc ?? "import")}${planUsed ? "" : " (使わない)"} · ${autoText}` : `空欄 → ${autoText}`}
+                            </span>
                           </span>
                           <span>
-                            <input name={`sites_${s.id}_${m}`} defaultValue={v?.sites ?? ""} inputMode="numeric" placeholder={lv !== undefined ? String(lv) : sy ? String(sy.all) : ""} className="field h-7 w-full py-0.5 text-right text-xs tnum" aria-label={`${s.shortName} ${monthLabel(m)} の施工件数`} />
-                            <span className={`mt-0.5 block text-[10px] ${partialLedger ? "text-warn-ink" : "text-ink-3"}`}>{v?.sites !== undefined ? `手入力 (台帳 ${lv ?? "-"})` : lv !== undefined ? (partialLedger ? `台帳 ${lv} (${Number(last!.slice(5, 7))}/${Number(last!.slice(8, 10))} まで)` : `空欄 → 台帳 ${lv}`) : `空欄 → システム ${sy?.all ?? 0}`}</span>
+                            <input name={`sites_${s.id}_${m}`} defaultValue={v?.sites ?? ""} inputMode="numeric" placeholder={String(autoSites)} className="field h-7 w-full py-0.5 text-right text-xs tnum" aria-label={`${s.shortName} ${monthLabel(m)} の全案件数`} />
+                            <span className={`mt-0.5 block text-[10px] ${ledgerEnds ? "text-warn-ink" : "text-ink-3"}`}>
+                              {v?.sites !== undefined ? "手入力 · " : "空欄 → "}案件 {casesVal !== undefined ? n(casesVal) : "-"} · 納品 {n(f?.deliveries ?? 0)}
+                              {ledgerEnds && <> · 台帳 {Number(last!.slice(5, 7))}/{Number(last!.slice(8, 10))} まで + 新システム</>}
+                            </span>
                           </span>
                         </span>
                       </td>
@@ -187,9 +201,13 @@ function MonthTable({ db, basis, fy, months, stores, fyOptions, startMonth }: { 
                 <td className="px-3 py-2">年度の合計</td>
                 {stores.map((s) => {
                   const d = totals.get(s.id)!;
+                  const rep = denomRepeats(d.individual);
                   return (
                     <td key={s.id} colSpan={2} className="border-l border-line px-2 py-2">
-                      <span className="grid grid-cols-2 gap-1 text-right tnum"><span>{d.individual.value.toLocaleString("ja-JP")}</span><span>{d.sites.value.toLocaleString("ja-JP")}</span></span>
+                      <span className="grid grid-cols-2 gap-1 text-right tnum">
+                        <span>{n(d.individual.value)}{rep > 0 && <span className="block text-[10px] font-normal text-ink-3">リピート {rep} 件を除く</span>}</span>
+                        <span>{n(d.sites.value)}</span>
+                      </span>
                     </td>
                   );
                 })}
@@ -198,8 +216,8 @@ function MonthTable({ db, basis, fy, months, stores, fyOptions, startMonth }: { 
           </table>
         </div>
         <div className="flex flex-wrap items-center gap-3 px-5 py-3">
-          <Button type="submit" size="sm" variant="secondary">個人件数・施工件数を保存</Button>
-          <span className="text-[11px] text-ink-3">入れた値は「手入力」になり、取り込みで上書きしません。空欄にするとシートの取込・自動の値に戻ります。年間チラシ計画は「内部受注があっても店長は無視して記入、事務が修正する」ため、修正した値は手入力してください。</span>
+          <Button type="submit" size="sm" variant="secondary">個人件数・全案件数を保存</Button>
+          <span className="text-[11px] text-ink-3">入れた値は「手入力」になり、取り込みで上書きしません。空欄にすると年間チラシ計画の取込・自動の値に戻ります。自動の個人件数は、案件 (売上台帳の現場名の行 + 新システムで完了した受注) のうち個人のお客様の件数から、同じお客様の {basis.repeatDays} 日以内のリピートを除いた数です (はがきを渡した案件から数えます)。「案件」= 全案件数の自動の値、「納品」= 作業日報の納品件数 (予定表の納品の予定) です。</span>
         </div>
       </form>
       {basis.denominator === "system" && <div className="px-5 pb-4"><Note tone="warn">いまの設定は「{DENOMINATOR_LABEL.system}」のため、この表の値は集計に使っていません。</Note></div>}

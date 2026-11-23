@@ -5,7 +5,7 @@ import { policyReader } from "@/lib/access-policy";
 
 import { fmtRate, fmtScore, staffKpis, storeKpi, type StoreKpi } from "@/lib/kpi";
 import { kpiSettings } from "@/lib/kpi-settings";
-import { basisNotes, denomSummary, kpiBasis } from "@/lib/kpi-basis";
+import { basisNotes, denomRepeats, denomSummary, kpiBasis } from "@/lib/kpi-basis";
 import { resolvePeriod } from "@/lib/kpi-period";
 import { toDateKey } from "@/lib/format";
 import { SCORE_QUESTIONS } from "@/lib/survey";
@@ -56,20 +56,21 @@ export default async function KpiPage({ searchParams }: { searchParams: Promise<
       <PeriodSelect action="/kpi" value={rp.value} startMonth={settings.fiscalStartMonth} today={today} />
 
       <Card padded={false}>
-        <div className="px-5 pt-5"><CardHeader title={`店舗別・全社 (${rp.label})`} description="施工件数・個人件数は月ごとの値 (分母・照合)、アンケートははがきの集計月、クレーム・手直しは発生日、口コミは投稿日で期間を判定します" /></div>
+        <div className="px-5 pt-5"><CardHeader title={`店舗別・全社 (${rp.label})`} description="全案件数・個人件数は月ごとの値 (分母・照合)、アンケートははがきの集計月、クレーム・手直しは発生日、口コミは投稿日で期間を判定します" /></div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px] text-sm">
+          <table className="w-full min-w-[1060px] text-sm">
             <thead>
               <tr className="bg-subtle text-xs text-ink-2">
                 <th className="px-4 py-2 text-left font-medium">店舗</th>
-                <th className="px-2 py-2 text-right font-medium">施工件数</th>
+                <th className="px-2 py-2 text-right font-medium">全案件数</th>
                 <th className="px-2 py-2 text-right font-medium">個人件数</th>
                 <th className="px-2 py-2 text-right font-medium">返信</th>
                 <th className="px-2 py-2 text-right font-medium">返信率</th>
                 {SCORE_QUESTIONS.map((q) => <th key={q.key} className="px-2 py-2 text-right font-medium">{q.no}{q.label.replace("について", "")}</th>)}
                 <th className="px-2 py-2 text-right font-medium">次回も依頼</th>
-                <th className="px-2 py-2 text-right font-medium">クレーム・手直し<br />点 / 率</th>
-                <th className="px-2 py-2 text-right font-medium">クレーム発生<br />案件 / 率</th>
+                <th className="px-2 py-2 text-right font-medium">クレーム・手直し<br />点 / 率 (インセンティブ)</th>
+                <th className="px-2 py-2 text-right font-medium">クレーム<br />件 / 率</th>
+                <th className="px-2 py-2 text-right font-medium">手直し<br />件 / 率</th>
                 <th className="px-4 py-2 text-right font-medium">口コミ<br />件 / 点</th>
               </tr>
             </thead>
@@ -78,7 +79,7 @@ export default async function KpiPage({ searchParams }: { searchParams: Promise<
                 <tr key={i} className={`border-t border-line ${r.total ? "bg-accent-soft/30 font-semibold" : ""}`}>
                   <td className="px-4 py-2">{r.label}</td>
                   <td className="px-2 py-2 text-right tnum" title={denomSummary(r.k.denominators.sites)}>{r.k.orders.toLocaleString("ja-JP")}</td>
-                  <td className="px-2 py-2 text-right tnum" title={denomSummary(r.k.denominators.individual)}>{r.k.individualOrders.toLocaleString("ja-JP")}</td>
+                  <td className="px-2 py-2 text-right tnum" title={denomSummary(r.k.denominators.individual)}>{r.k.individualOrders.toLocaleString("ja-JP")}{denomRepeats(r.k.denominators.individual) > 0 && <span className="block text-[10px] font-normal text-ink-3">リピート {denomRepeats(r.k.denominators.individual)} 件を除く</span>}</td>
                   <td className="px-2 py-2 text-right tnum">{r.k.surveys.toLocaleString("ja-JP")}{r.k.unnamedCards > 0 && <span className="block text-[10px] font-normal text-warn-ink" title="担当の名前が未記入のため数えないはがき">ほか {r.k.unnamedCards} 枚は数えない</span>}</td>
                   <td className="px-2 py-2 text-right tnum">{fmtRate(r.k.replyRate)}</td>
                   {SCORE_QUESTIONS.map((q) => (
@@ -86,7 +87,8 @@ export default async function KpiPage({ searchParams }: { searchParams: Promise<
                   ))}
                   <td className="px-2 py-2 text-right tnum">{r.k.againAnswered ? fmtRate((r.k.againYes / r.k.againAnswered) * 100, 0) : "-"}</td>
                   <td className="px-2 py-2 text-right tnum">{r.k.qualityPoints} / {fmtRate(r.k.qualityRate, 2)}</td>
-                  <td className="px-2 py-2 text-right tnum">{r.k.claimCases} / {fmtRate(r.k.claimRate, 2)}</td>
+                  <td className="px-2 py-2 text-right tnum">{r.k.issues.claims} / {fmtRate(r.k.issueRates.claims, 2)}</td>
+                  <td className="px-2 py-2 text-right tnum">{r.k.issues.reworks} / {fmtRate(r.k.issueRates.reworks, 2)}</td>
                   <td className="px-4 py-2 text-right tnum">{r.k.reviews} / {r.k.reviewPoints}</td>
                 </tr>
               ))}
@@ -96,8 +98,8 @@ export default async function KpiPage({ searchParams }: { searchParams: Promise<
         <ul className="space-y-0.5 px-5 py-3 text-[11px] text-ink-3">
           {basisNotes(basis).map((t, i) => <li key={i}>・{t}</li>)}
           <li>・①〜④ は 5 段階評価の平均 (括弧内は平均の分母)。① は全社 (事務)、② は営業担当 (見積り)、③ は担当職人、④ は店舗の評価です。⑤⑥⑦ は「アンケート」タブで集計しています</li>
-          <li>・クレーム・手直しのポイント: 手直し {settings.qualityPoints.rework} / クレーム {settings.qualityPoints.claim} / クレーム＋手直し {settings.qualityPoints.claim_rework} 点。クレーム発生率 = クレーム (クレーム＋手直しを含む) が発生した案件数 ÷ 施工件数 × 100</li>
-          <li>・施工件数・個人件数の数字にカーソルを置くと、どの月がシートの値 (年間チラシ計画・売上台帳・手入力) かを表示します</li>
+          <li>・クレーム・手直しのポイント (インセンティブ): 手直し {settings.qualityPoints.rework} / クレーム {settings.qualityPoints.claim} / クレーム＋手直し {settings.qualityPoints.claim_rework} 点{settings.qualityCaseMax > 0 ? `、同じ案件は最大 ${settings.qualityCaseMax} 点` : ""}。クレーム・手直しの件数と率 (経営管理の指標) = 件数 ÷ 全案件数 × 100 (クレーム＋手直しはそれぞれに 1 件)。合計・発生した案件は「クレーム・手直し」タブ</li>
+          <li>・全案件数・個人件数の数字にカーソルを置くと、どの月が年間チラシ計画・手入力・自動の値かを表示します。販促の KPI (チラシの反響・個人の売上・客単価) は経営分析用のため、インセンティブには入れず「販促と媒体の分析」で見ます</li>
         </ul>
       </Card>
 
