@@ -139,6 +139,35 @@ section("まとめる (applyReconcile)");
   eq(m, { month: "2030-07", total: 156700, ledger: 156700, slipOnly: 0, ledgerOnly: 0, orders: 1 }, "月ごとの表");
 }
 
+section("売上の照合 (src/lib/sales-check.ts: 店舗別・月別・台帳だけの売上・旧システムの数字)");
+{
+  const SC = await jiti.import(path.join(root, "src/lib/sales-check.ts"));
+  const db = sampleDb();
+  db.stores = [{ id: "koshi", name: "合志店", shortName: "合志" }, { id: "chuo", name: "中央店", shortName: "中央" }, { id: "nishi", name: "西店", shortName: "西" }, { id: "tamana", name: "玉名店", shortName: "玉名" }, { id: "hq", name: "本社", shortName: "本社" }];
+  // 新システムの受注 (12 月) と、照合の相手の数字
+  db.orders.push({ ...ledgerOrder("o_new1", "c_aaaaaaaaaaa1", "koshi", "2030-07-15", 50000), id: "o_new1", source: undefined, sourceRef: undefined });
+  db.settings = [{ id: "sales_reference", value: { label: "販売管理ソフト", rows: [{ month: "2030-07", storeId: "koshi", amount: 206700 }, { month: "2030-08", storeId: "koshi", amount: 29000 }] } }];
+  const all = ["koshi", "chuo", "nishi", "tamana", "hq"];
+  const c = SC.salesCheck(db, { from: "2030-01", to: "2030-12", stores: all });
+  const jul = c.months.find((m) => m.month === "2030-07");
+  eq([jul.byStore.koshi.ledger, jul.byStore.koshi.system, jul.byStore.chuo.duplicate], [156700, 50000, 156700], "7 月: 合志店の台帳 156,700・新システム 50,000、中央店の伝票は二重計上 (まとめると消える)");
+  eq(jul.byStore.koshi.diff, 0, "まとめたあとの合志店 7 月 = 旧システムの数字 → 差 0 (一致)");
+  eq(c.months.find((m) => m.month === "2030-08").byStore.koshi.diff, 1000, "8 月は 1,000 円の差");
+  eq(c.totals.after, c.totals.current - c.totals.duplicate, "まとめたあと = いまの売上 − 二重計上");
+  eq(c.ledgerOnly.map((o) => o.id).sort(), ["o_l4", "o_l6"], "台帳だけの売上 = 組にならなかった台帳の受注 (④・⑥)");
+  eq(c.referenceLabel, "販売管理ソフト", "照合の相手の名前");
+  const only = SC.salesCheck(db, { from: "2030-01", to: "2030-12", stores: ["chuo"] });
+  ok(!only.months.some((m) => m.byStore.koshi), "店舗で絞ると、ほかの店舗の行は入らない");
+  const csv = SC.salesCheckCsv(c, "ledger-only", db, all);
+  eq(csv.length, 3, "台帳だけの売上の CSV (見出し + 2 行)");
+  ok(SC.salesCheckCsv(c, "stores", db, all).at(-1)[0] === "合計", "店舗別の CSV に合計の行");
+  const p = SC.parseSalesReference("月,店舗,金額\n2030-12,合志店,1,234,567\n2030/12\t中央\t¥2,000\n2030-13,西,1\n2030-12,どこか,1", db.stores);
+  eq(p.rows.map((r) => [r.month, r.storeId, r.amount]), [["2030-12", "chuo", 2000], ["2030-12", "koshi", 1234567]], "カンマ区切りの金額 1,234,567・タブ区切り・短い店舗名・¥ を読む");
+  eq(p.errors.length, 2, "読めない行 (存在しない月・店舗) は理由を返す");
+  eq(SC.salesCheckPeriod({ year: "2029" }).from, "2029-01", "期間: 年");
+  eq(SC.salesCheckPeriod({ from: "2030-12", to: "2030-01" }).from, "2030-01", "期間: 逆に入れても並べ替える");
+}
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   for (const f of fails) console.log("  ✗", f);

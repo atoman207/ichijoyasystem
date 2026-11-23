@@ -16,6 +16,7 @@ import { HistoryCard, RecordStamp } from "@/components/features/History";
 import { ContactList } from "@/components/features/Contacts";
 import { SendDocumentCard } from "@/components/features/SendDocument";
 import { RecordDocDrafts } from "@/components/features/DocDrafts";
+import { allocatePaid, isBatchInvoice } from "@/lib/billing";
 
 /** PDF を作ってメールで送る (送信の応答を待つ) ため */
 export const maxDuration = 60;
@@ -36,7 +37,10 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
   const status = (inv.status === "issued" || inv.status === "partially_paid") && inv.dueDate < today ? "overdue" : inv.status;
   const customer = db.customers.find((c) => c.id === inv.customerId);
   const order = db.orders.find((o) => o.id === inv.orderId);
-  const quote = order ? db.quotes.find((q) => q.id === order.quoteId) : undefined;
+  // まとめ請求 (締め日ごとに複数の案件を 1 枚に。src/lib/billing.ts): 案件ごとの行と、入金の割り当て (売上計上日の古い順)
+  const batch = isBatchInvoice(inv);
+  const batchAlloc = batch ? allocatePaid(inv, inv.paidAmount) : undefined;
+  const quote = order && !batch ? db.quotes.find((q) => q.id === order.quoteId) : undefined;
   const payments = db.payments.filter((p) => p.invoiceId === inv.id).sort((a, b) => b.date.localeCompare(a.date));
   const remaining = inv.total - inv.paidAmount;
   const comms = db.commLogs.filter((c) => c.relatedType === "invoice" && c.relatedId === inv.id);
@@ -49,7 +53,7 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
       <PageHeader
         title={`${inv.number} ${customerName(inv.customerId)} 様`}
         badge={<StatusBadge value={status} map={INVOICE_STATUS} />}
-        description={<span className="inline-flex flex-wrap items-center gap-2"><StoreTag store={db.stores.find((s) => s.id === inv.storeId)} /> · 発行 {fmtDate(inv.issueDate)} · 支払期限 {fmtDate(inv.dueDate)} · 発行者 {userName(inv.createdBy)}</span>}
+        description={<span className="inline-flex flex-wrap items-center gap-2"><StoreTag store={db.stores.find((s) => s.id === inv.storeId)} /> · 発行 {fmtDate(inv.issueDate)} · 支払期限 {fmtDate(inv.dueDate)}{batch ? ` · まとめ請求 (${inv.periodFrom ? `${fmtDate(inv.periodFrom)}〜` : ""}${fmtDate(inv.periodTo)} 締め)` : order?.salesDate ? ` · 売上計上日 ${fmtDate(order.salesDate)} (施工完了日)` : ""} · 発行者 {userName(inv.createdBy)}</span>}
         back={{ href: "/invoices", label: "請求・入金一覧" }}
         actions={
           viewOnly ? undefined : <>
@@ -67,8 +71,15 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
         <div className="space-y-4 @3xl:col-span-2">
           <Card>
             <CardHeader title="請求内容" />
-            <Dl columns={3} items={[["件名", inv.title ?? order?.title], ["小計 (税抜)", yen(inv.subtotal)], ["消費税", yen(inv.tax)], ["請求額 (税込)", <span key="t" className="font-semibold">{yen(inv.total)}</span>], ["入金額", yen(inv.paidAmount)], ["残高", <span key="r" className={remaining > 0 ? "font-semibold text-critical" : "font-semibold text-good-ink"}>{yen(remaining)}</span>], ["送付方法", inv.sentVia ? CHANNEL_LABEL[inv.sentVia] : "-"], ["受注", order ? <Link key="o" href={`/orders/${order.id}`} className="text-accent hover:underline">{order.number}</Link> : "-"], ["見積", quote ? <Link key="q" href={`/quotes/${quote.id}`} className="text-accent hover:underline">{quote.number}</Link> : "-"], ["入金予定", inv.expectedDate ? `${fmtDate(inv.expectedDate)} · ${yen(inv.expectedAmount ?? remaining)}${inv.expectedNote ? ` · ${inv.expectedNote}` : ""}` : "-"], ["領収書の宛名", order?.receiptName ? <span key="rn">{order.receiptName} <Link href={`/orders/${order.id}`} className="text-xs text-accent hover:underline">変更</Link></span> : <span key="rn">お客様名 {order && <Link href={`/orders/${order.id}`} className="text-xs text-accent hover:underline">(受注で変更)</Link>}</span>]]} />
-            {(inv.items ?? quote?.items) && (
+            <Dl columns={3} items={[["件名", inv.title ?? order?.title], ["小計 (税抜)", yen(inv.subtotal)], ["消費税", yen(inv.tax)], ["請求額 (税込)", <span key="t" className="font-semibold">{yen(inv.total)}</span>], ["入金額", yen(inv.paidAmount)], ["残高", <span key="r" className={remaining > 0 ? "font-semibold text-critical" : "font-semibold text-good-ink"}>{yen(remaining)}</span>], ["送付方法", inv.sentVia ? CHANNEL_LABEL[inv.sentVia] : "-"], ["受注", batch ? `${inv.orderIds?.length ?? 1} 件 (下の一覧)` : order ? <Link key="o" href={`/orders/${order.id}`} className="text-accent hover:underline">{order.number}</Link> : "-"], ["売上計上日", batch ? "案件ごとの施工完了日" : order?.salesDate ? fmtDate(order.salesDate) : "-"], ["見積", quote ? <Link key="q" href={`/quotes/${quote.id}`} className="text-accent hover:underline">{quote.number}</Link> : "-"], ["入金予定", inv.expectedDate ? `${fmtDate(inv.expectedDate)} · ${yen(inv.expectedAmount ?? remaining)}${inv.expectedNote ? ` · ${inv.expectedNote}` : ""}` : "-"], ["領収書の宛名", batch ? "お客様名 (まとめ請求)" : order?.receiptName ? <span key="rn">{order.receiptName} <Link href={`/orders/${order.id}`} className="text-xs text-accent hover:underline">変更</Link></span> : <span key="rn">お客様名 {order && <Link href={`/orders/${order.id}`} className="text-xs text-accent hover:underline">(受注で変更)</Link>}</span>]]} />
+            {batch && inv.orderLines?.length ? (
+              <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[560px] text-sm">
+                <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-3 py-1.5 text-left font-medium">受注番号</th><th className="px-3 py-1.5 text-left font-medium">件名・現場</th><th className="px-3 py-1.5 text-left font-medium">施工完了日</th><th className="px-3 py-1.5 text-right font-medium">金額 (税込)</th><th className="px-3 py-1.5 text-right font-medium">入金の割り当て</th></tr></thead>
+                <tbody>{inv.orderLines.map((l) => <tr key={l.orderId} className="border-t border-line"><td className="px-3 py-1.5 font-mono text-xs"><Link href={`/orders/${l.orderId}`} className="text-accent hover:underline">{l.number}</Link></td><td className="px-3 py-1.5">{l.title}{l.site ? <span className="block text-[11px] text-ink-3">現場: {l.site}</span> : null}{l.noTax ? <span className="block text-[11px] text-ink-3">消費税の対象外</span> : null}</td><td className="px-3 py-1.5 text-xs tnum">{fmtDate(l.salesDate ?? l.completedAt)}</td><td className="px-3 py-1.5 text-right tnum">{yen(l.amount)}</td><td className="px-3 py-1.5 text-right text-xs tnum text-ink-2">{yen(batchAlloc?.get(l.orderId) ?? 0)}</td></tr>)}</tbody>
+              </table>
+              </div>
+            ) : (inv.items ?? quote?.items) && (
               <table className="mt-4 w-full text-sm">
                 <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-3 py-1.5 text-left font-medium">品名</th><th className="px-3 py-1.5 text-right font-medium">数量</th><th className="px-3 py-1.5 text-right font-medium">金額 (税抜)</th></tr></thead>
                 <tbody>{(inv.items ?? quote?.items ?? []).map((i) => <tr key={i.id} className="border-t border-line"><td className="px-3 py-1.5">{i.name}{i.spec ? <span className="ml-1 text-xs text-ink-3">{i.spec}</span> : null}</td><td className="px-3 py-1.5 text-right tnum">{i.qty} {i.unit}</td><td className="px-3 py-1.5 text-right tnum">{yen(i.amount)}</td></tr>)}</tbody>

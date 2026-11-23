@@ -1,6 +1,7 @@
 import type { Customer, Database, Inquiry, Invoice, Order, Payment, Quote, StoreId } from "@/lib/db/types";
 import { siteInfoText } from "@/lib/site-info";
 import { customerPhonesText } from "@/lib/customer-contacts";
+import { allocatePaid, invoiceOrderIds, usesBatchBilling } from "@/lib/billing";
 
 /**
  * 案件の状態 (進捗・見積と仕様・工事日程・請求・入金・事務処理を分けて持つ)
@@ -113,7 +114,8 @@ export interface CaseIndex {
 
 export function caseIndex(db: Pick<Database, "customers" | "quotes" | "invoices" | "payments" | "schedule">): CaseIndex {
   const invoicesByOrder = new Map<string, Invoice[]>();
-  for (const i of db.invoices) if (i.status !== "void") invoicesByOrder.set(i.orderId, [...(invoicesByOrder.get(i.orderId) ?? []), i]);
+  // まとめ請求の請求書は、対象の受注すべてにつなぐ (src/lib/billing.ts)
+  for (const i of db.invoices) if (i.status !== "void") for (const id of invoiceOrderIds(i)) invoicesByOrder.set(id, [...(invoicesByOrder.get(id) ?? []), i]);
   const paymentsByInvoice = new Map<string, Payment[]>();
   for (const p of db.payments) paymentsByInvoice.set(p.invoiceId, [...(paymentsByInvoice.get(p.invoiceId) ?? []), p]);
   const visitsByInquiry = new Map<string, string[]>();
@@ -128,7 +130,9 @@ export function orderCase(o: Order, ix: CaseIndex, today: string): CaseRow {
   const quote = o.quoteId ? ix.quotesById.get(o.quoteId) : undefined;
   const invoices = ix.invoicesByOrder.get(o.id) ?? [];
   const payments = invoices.flatMap((i) => ix.paymentsByInvoice.get(i.id) ?? []);
-  const paid = payments.reduce((a, p) => a + p.amount, 0);
+  // まとめ請求の入金は、案件に売上計上日の古い順に割り当てた額 (1 件の請求書は全額)
+  const paid = invoices.reduce((a, i) => a + (allocatePaid(i, (ix.paymentsByInvoice.get(i.id) ?? []).reduce((x, p) => x + p.amount, 0)).get(o.id) ?? 0), 0);
+  const batch = usesBatchBilling(customer);
   const pendingSettle = payments.some((p) => isDeferredMethod(p.method) && !p.settledOn);
   const required = billingRequired(o, customer);
   const imported = o.source === "import";
@@ -149,7 +153,7 @@ export function orderCase(o: Order, ix: CaseIndex, today: string): CaseRow {
     if (!done && spec === "pending") tasks.push("仕様の確定");
     if (!done && schedule !== "fixed") tasks.push(schedule === "adjusting" ? "工事日程の調整" : "工事日程の決定");
     if (done && !o.salesDate) tasks.push("売上計上");
-    if (billing === "unbilled") tasks.push("請求書の発行");
+    if (billing === "unbilled") tasks.push(batch ? "締め日のまとめ請求" : "請求書の発行");
     if (done && (payment === "unpaid" || payment === "partial")) tasks.push(payment === "partial" ? "残金の入金確認" : "入金確認");
     if (payment === "settlement_pending") tasks.push("カード・電子決済の入金確認");
     if (done && payment === "paid" && billing !== "unbilled") tasks.push("全処理完了の登録");
@@ -162,7 +166,7 @@ export function orderCase(o: Order, ix: CaseIndex, today: string): CaseRow {
   else if (payment === "paid") detail = `完了・入金済${billing === "unbilled" ? " (請求書未発行)" : " (事務処理あり)"}`;
   else if (payment === "settlement_pending") detail = `完了・${paymentMethod ?? "カード・電子決済"}の入金待ち`;
   else if (payment === "partial") detail = "完了・一部入金";
-  else if (billing === "unbilled") detail = "完了・請求書発行待ち";
+  else if (billing === "unbilled") detail = batch ? "完了・締め日にまとめて請求" : "完了・請求書発行待ち";
   else if (billing === "billed") detail = "完了・請求済・入金待ち";
   else detail = `完了・後日入金予定${paymentMethod ? ` (${paymentMethod})` : ""}`;
   const date = (o.completedAt ?? o.salesDate ?? o.scheduledStart ?? o.contractDate).slice(0, 10);

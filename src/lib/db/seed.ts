@@ -190,6 +190,8 @@ export function createSeed(now = new Date()): Database {
     workReportDays: [],
     promotions: [],
     docDrafts: [],
+    casePosts: [],
+    tidyChecks: [],
     surveyHistory: [],
   };
   const ctx: Ctx = { now, today, rand, db, counters: {}, busy: new Map() };

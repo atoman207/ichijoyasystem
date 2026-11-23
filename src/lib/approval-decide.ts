@@ -7,6 +7,7 @@ import { removeUpcomingOrderEvents, syncOrderEvent } from "@/lib/db/schedule";
 import { fieldLabel, fieldValue } from "@/lib/field-labels";
 import { fail } from "@/lib/actions/guards";
 import { propagateCustomerAddress } from "@/lib/maps/store";
+import { closedReason } from "@/lib/mgmt/close";
 
 /**
  * 承認の反映 (承認・差戻し・却下で申請の対象を変える処理)
@@ -178,6 +179,14 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
         if (a.changes?.some((c) => c.field === "total")) {
           if (o.quoteId) fail(back, "見積から作った受注の金額は、見積の金額変更で直します。この申請は却下してください。");
           if (db.invoices.some((i) => i.id === o.invoiceId && i.status !== "void")) fail(back, "請求書を発行済みの案件のため、契約金額を変更できません。入金前であれば請求書を無効化してから承認してください。");
+        }
+        // 売上計上日の変更: 申請のあとに管理会計で月次確定した月にはかけない (src/lib/mgmt/close.ts)
+        const sales = a.changes?.find((c) => c.field === "salesDate");
+        if (sales) {
+          for (const d of [sales.before, sales.after]) {
+            const closed = typeof d === "string" ? closedReason(db, d, "売上計上日の変更") : null;
+            if (closed) fail(back, closed);
+          }
         }
         applyChanges(o as unknown as Record<string, unknown>, a.changes ?? []);
         o.updatedAt = now;

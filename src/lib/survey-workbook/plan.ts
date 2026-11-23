@@ -111,7 +111,7 @@ const claimFields = (q: Pick<QualityIssue, "occurredOn" | "storeId" | "attributi
 
 const reviewFields = (r: Pick<GoogleReview, "postedOn" | "userId" | "points" | "reviewerName" | "note">) => JSON.stringify([r.postedOn, r.userId, r.points, r.reviewerName ?? "", r.note ?? ""]);
 
-type PlanDb = Pick<Database, "orders" | "customers" | "users" | "qualityIssues" | "reviews" | "surveys" | "settings" | "surveyHistory">;
+type PlanDb = Pick<Database, "orders" | "customers" | "users" | "qualityIssues" | "reviews" | "surveys" | "settings" | "surveyHistory"> & Partial<Pick<Database, "stores">>;
 
 export function planWorkbook(db: PlanDb, tabs: WorkbookTab[], opts: { today: string; startYear?: number; importedAt?: string }): WorkbookPlan {
   const settings = workbookSettings(db);
@@ -238,7 +238,7 @@ function previewDb(db: PlanDb, plan: WorkbookPlan): Parameters<typeof reconcileK
     return i && i.action === "update" ? { ...r, ...reviewFromRecord(i.rec) } : r;
   });
   for (const i of plan.reviews.items.filter((x) => x.action === "create")) reviews.push({ ...reviewFromRecord(i.rec), id: `preview_${i.rec.key}`, createdBy: "system", createdAt: "", updatedAt: "" } as GoogleReview);
-  return { orders: db.orders, customers: db.customers, surveys: db.surveys, users: db.users, qualityIssues: issues, reviews };
+  return { orders: db.orders, customers: db.customers, surveys: db.surveys, users: db.users, qualityIssues: issues, reviews, settings: db.settings, stores: db.stores };
 }
 
 function claimFromRecord(rec: ClaimRecord, qp: Record<QualityIssue["kind"], number>): Pick<QualityIssue, "occurredOn" | "storeId" | "attribution" | "kind" | "points" | "category" | "description" | "cause" | "countermeasure" | "siteName" | "origin" | "counted" | "sourceRef"> {

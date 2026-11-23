@@ -31,19 +31,19 @@ const COMMON: Record<string, string> = {
 };
 
 const BY_ENTITY: Record<string, Record<string, string>> = {
-  customer: { name: "氏名", kana: "フリガナ", type: "顧客区分", lineId: "LINE ID", area: "地区", assignedUserId: "担当者", preferredChannel: "希望連絡手段", tags: "タグ", notes: "メモ", contacts: "ほかの連絡先", tradeStopped: "取引停止", tradeStopNote: "取引停止の理由" },
+  customer: { name: "氏名", kana: "フリガナ", type: "顧客区分", lineId: "LINE ID", area: "地区", assignedUserId: "担当者", preferredChannel: "希望連絡手段", tags: "タグ", notes: "メモ", contacts: "ほかの連絡先", tradeStopped: "取引停止", tradeStopNote: "取引停止の理由", "billingTerms.batch": "まとめ請求", "billingTerms.closingDay": "請求の締め日", "billingTerms.payMonthOffset": "支払期限の月", "billingTerms.payDay": "支払期限の日", "billingTerms.note": "請求のメモ" },
   inquiry: { contactName: "お客様名", contactPhone: "電話", channel: "受付経路", summary: "要件", detail: "詳細", assignedUserId: "担当者", nextAction: "次の対応", nextActionDue: "次の対応の期限", receivedAt: "受付日時", customerId: "顧客", media: "媒体 (当社を知ったきっかけ)", promotionId: "きっかけの販促" },
   quote: { total: "見積金額 (税込)", title: "件名", items: "明細", validUntil: "有効期限", workDetails: "施工内容", siteAddress: "施工場所", receiptName: "領収書の宛名" },
-  order: { total: "契約金額 (税込)", contractDate: "契約日", siteAddress: "施工場所 (現場住所)", receiptName: "領収書の宛名", workDetails: "施工内容", scheduledStart: "施工開始日", scheduledEnd: "施工終了日", workerIds: "施工担当", billing: "請求書の発行", plannedPayment: "入金の予定方法", specStatus: "仕様", scheduleStatus: "工事日程" },
-  invoice: { dueDate: "支払期限", expectedDate: "入金予定日", expectedAmount: "入金予定額", expectedNote: "入金予定のメモ", title: "件名", notes: "備考" },
+  order: { total: "契約金額 (税込)", contractDate: "契約日", siteAddress: "施工場所 (現場住所)", receiptName: "領収書の宛名", workDetails: "施工内容", scheduledStart: "施工開始日", scheduledEnd: "施工終了日", workerIds: "施工担当", billing: "請求書の発行", plannedPayment: "入金の予定方法", specStatus: "仕様", scheduleStatus: "工事日程", completedAt: "施工完了日", salesDate: "売上計上日 (施工完了日)" },
+  invoice: { dueDate: "支払期限", expectedDate: "入金予定日", expectedAmount: "入金予定額", expectedNote: "入金予定のメモ", title: "件名", notes: "備考", orderIds: "対象の案件", periodFrom: "締めの期間 (から)", periodTo: "締め日" },
   expense: { vendor: "支払先", date: "日付", amount: "金額 (税込)", taxAmount: "うち消費税", account: "勘定科目", paymentMethod: "支払方法", description: "内容・用途" },
   purchase: { supplierId: "仕入先", invoiceDate: "請求日", dueDate: "支払期限", scheduledPayDate: "支払予定日", amount: "金額 (税込)", taxAmount: "うち消費税", account: "勘定科目", items: "仕入内容", orderId: "案件", supplierInvoiceNo: "請求書番号", payMethod: "支払方法", payReference: "支払の記録" },
   ai: { question: "質問", answer: "回答", disabled: "無効" },
   knowledge: { body: "内容", category: "分類", tags: "タグ", active: "AI に使う", visibility: "見られる人", recordDate: "日付", ownerId: "担当者", reviewDue: "次に確かめる日", reviewIntervalDays: "確かめる間隔 (日)", reviewedAt: "最後に確かめた日時", reviewedBy: "最後に確かめた人", url: "シートの URL", label: "名前", reviewIntervals: "分類ごとの確かめる間隔", defaultOwnerId: "既定の担当者", soonDays: "期限が近いとみなす日数", defaultDays: "既定の間隔 (日)" },
   registry: { action: "扱い", visibility: "見られる人", category: "分類", note: "メモ" },
   quality: { kind: "区分", points: "点数", occurredOn: "発生日", description: "内容", cause: "原因", countermeasure: "対策", status: "状態", responsible: "担当者", attribution: "ポイントの単位", category: "カテゴリー", counted: "集計の対象", order: "案件", siteName: "現場名", origin: "発生のきっかけ", sheet: "スプレッドシートの内容" },
-  settings: { lineGroup: "LINE グループのひも付け (受注 / 協力業者 / 呼び名)", linePurpose: "LINE グループの用途 (用途 / 店舗 / 問い合わせを知らせる / 呼び名)", sheetUrl: "スプレッドシートの URL", tabUrls: "タブごとの共有リンクの数", autoSync: "定期の同期", startYear: "口コミの最初の行の年", aliases: "担当者の名前の対応", mode: "AI アシスタントの閲覧範囲 (permission = 権限どおり / all_stores = 全店舗)", until: "全店舗にする最終日", hiredOn: "雇い入れ日", baseDate: "有給の基準日", weeklyDays: "週の所定労働日数", compLimit: "振休のため込みの上限", consumeOrder: "有給の消化の順番", fiscalStartMonth: "年度の始まりの月", closingDay: "勤怠の締め日", amStart: "午前休の開始", amEnd: "午前休の終了", pmStart: "午後休の開始", pmEnd: "午後休の終了", condolenceViewers: "慶弔リストを見られる人 (all = 全社員 / office = 事務担当・本部・管理者)", "accessPolicy.figures": "閲覧の範囲: 経営の数字 (all = 全社員 / store = 自店舗・店長以上)", "accessPolicy.customers": "閲覧の範囲: 顧客情報 (all = 全社員 / approval = 承認制 / open = 進行中の案件だけ)", "accessPolicy.grantDays": "閲覧の申請の承認のあと見られる日数" },
-  supplier: { kind: "区分", category: "取扱品目", contactName: "担当者", fax: "FAX", paymentTerms: "支払条件 (文章)", closingDay: "締め日", payMonthOffset: "支払月", payDay: "支払日", bankInfo: "振込先", registrationNumber: "登録番号", lineId: "LINE ユーザー ID", chatworkRoomId: "Chatwork ルーム ID", active: "取引中" },
+  settings: { reviewerIds: "施工事例の投稿を確認する人", tidyItems: "整理整頓チェックの項目", linePhotos: "LINE の写真", lineGroup: "LINE グループのひも付け (受注 / 協力業者 / 呼び名)", linePurpose: "LINE グループの用途 (用途 / 店舗 / 問い合わせを知らせる / 呼び名)", sheetUrl: "スプレッドシートの URL", tabUrls: "タブごとの共有リンクの数", autoSync: "定期の同期", startYear: "口コミの最初の行の年", aliases: "担当者の名前の対応", mode: "AI アシスタントの閲覧範囲 (permission = 権限どおり / all_stores = 全店舗)", until: "全店舗にする最終日", hiredOn: "雇い入れ日", baseDate: "有給の基準日", weeklyDays: "週の所定労働日数", compLimit: "振休のため込みの上限", consumeOrder: "有給の消化の順番", fiscalStartMonth: "年度の始まりの月", closingDay: "勤怠の締め日", amStart: "午前休の開始", amEnd: "午前休の終了", pmStart: "午後休の開始", pmEnd: "午後休の終了", condolenceViewers: "慶弔リストを見られる人 (all = 全社員 / office = 事務担当・本部・管理者)", "accessPolicy.figures": "閲覧の範囲: 経営の数字 (all = 全社員 / store = 自店舗・店長以上)", "accessPolicy.customers": "閲覧の範囲: 顧客情報 (all = 全社員 / approval = 承認制 / open = 進行中の案件だけ)", "accessPolicy.grantDays": "閲覧の申請の承認のあと見られる日数", paymentMethods: "会計データに出す仕入の支払の方法", nonBulkPurchases: "ほかの方法で払う仕入の計上を会計データに出す" },
+  supplier: { kind: "区分", category: "取扱品目", contactName: "担当者", fax: "FAX", paymentTerms: "支払条件 (文章)", closingDay: "締め日", payMonthOffset: "支払月", payDay: "支払日", bankInfo: "振込先", registrationNumber: "登録番号", lineId: "LINE ユーザー ID", chatworkRoomId: "Chatwork ルーム ID", active: "取引中", payMethod: "いつもの支払方法" },
   cash: { direction: "入出金", account: "科目", counterparty: "相手", description: "摘要" },
   schedule: { kind: "種別", startTime: "開始時刻", endTime: "終了時刻", endDate: "終了日", assigneeIds: "担当者", location: "場所", memo: "メモ" },
   user: { role: "ロール", title: "役職", active: "有効", notifyEmail: "通知用メール", notifyByEmail: "メール通知", chatworkAccountId: "Chatwork アカウント ID", email: "ログイン ID", kana: "フリガナ", phone: "電話", avatarKey: "顔写真", signupStatus: "新規登録の申請" },
@@ -66,12 +66,16 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   stock_move: { status: "状態" },
   product: { unitPrice: "単価 (税抜)", active: "販売中", mgmtCategory: "品目 (管理会計)" },
   doc_draft: { title: "名前", subject: "件名", body: "本文", status: "状態", version: "版", refs: "関係する記録", channel: "送信方法", recipient: "宛先", recipientLabel: "宛先の名前" },
+  case_post: { title: "見出し", photoIds: "使う写真", products: "商品名", workContent: "施工内容", area: "地域 (町名まで)", channels: "投稿先", text: "投稿文", hashtags: "ハッシュタグ", consent: "お客様の掲載の了承", status: "状態", postings: "投稿の記録" },
+  tidy_check: { date: "チェックした日", storeId: "店舗", checkedBy: "チェックした人", place: "場所", comment: "全体のコメント", photos: "写真", fixStatus: "要改善の対応", dueDate: "直す期限" },
 };
 
 export function fieldLabel(entity: string, field: string): string {
   // 見積・請求書の明細の品目 (管理会計): items.<行>.itemCategory
   const line = field.match(/^items\.(\d+)\.(itemCategory|dokoMaterialId)$/);
   if (line) return `明細 ${line[1]} 行目の${line[2] === "itemCategory" ? "品目" : "畳床"} (管理会計)`;
+  // 整理整頓チェックの項目ごとの結果: item:<項目の名前>
+  if (entity === "tidy_check" && field.startsWith("item:")) return `項目「${field.slice(5)}」`;
   return BY_ENTITY[entity]?.[field] ?? COMMON[field] ?? field;
 }
 
@@ -94,6 +98,9 @@ const VALUE_LABEL: Record<string, Record<string, string>> = {
   leaveType: { paid: "有給休暇", comp: "振休", special: "特別休暇" },
   slot: { day: "終日", am: "午前", pm: "午後" },
   media: MEDIA_LABEL,
+  // 施工事例の投稿: 投稿先・お客様の掲載の了承 (src/lib/case-posts.ts)
+  channels: { instagram: "Instagram", website: "ホームページ", google: "Google ビジネスプロフィール", facebook: "Facebook", line: "LINE 公式アカウント", other: "その他" },
+  consent: { unconfirmed: "未確認", obtained: "了承をいただいた", not_needed: "不要" },
   usePurpose: { internal: "社内の資料 (内部利用)", official: "官公署への届出", contractor: "工事関係者への配布", neighbors: "近隣住民への説明" },
 };
 

@@ -152,6 +152,22 @@ const planFile = path.join(out, "carryover-plan.json");
   ok(true, "作ったあとに書き換えた計画は使わない");
 }
 {
+  // 画面の判断 (テスト用のデータベースの settings carryover_review): 引き継がない・引き継ぐ (練習の印があっても)・設定・期間
+  {
+    const t2 = structuredClone(test);
+    t2.settings.push({ id: "carryover_review", value: { exclude: ["inq_new0002"], include: ["inq_prac001"], settings: ["operations"], since: "2026-11-23", until: "2026-11-23", decidedAt: t3, decidedBy: "u_adm" }, updatedAt: t3 });
+    const f2 = path.join(testDir, "testweek-db-review.json");
+    fs.writeFileSync(f2, JSON.stringify(t2));
+    const pr = await makePlan({ test: f2, base: baseFile, out: path.join(dir, "plan-review"), files: path.join(testDir, "uploads") });
+    const gs = (id) => pr.plan.groups.find((g) => g.id === id);
+    ok(!gs("inq_new0002").selected && gs("inq_new0002").reason.includes("画面"), "画面で「引き継がない」にしたまとまりは引き継がない");
+    ok(gs("inq_prac001").selected, "画面で「引き継ぐ」にしたものは練習の印があっても引き継ぐ");
+    ok(!gs("inq_next001").selected, "画面で決めた期間 (11/23) の外は引き継がない");
+    ok(pr.plan.rows.settings?.upsert.map((x) => x.id).join() === "operations", "画面で選んだ設定を引き継ぐ (判断の設定そのものは引き継がない)");
+    ok(pr.plan.review.decidedAt === t3, "最終判断の日時を計画に残す");
+    const pi = await makePlan({ test: f2, base: baseFile, out: path.join(dir, "plan-ignore"), files: path.join(testDir, "uploads"), "ignore-review": true });
+    ok(pi.plan.groups.find((g) => g.id === "inq_new0002").selected, "--ignore-review なら画面の判断を使わない");
+  }
   // 練習の印 (名前に「練習」) は指定しなくても除く
   const pp = await makePlan({ test: testFile, base: baseFile, out: path.join(dir, "plan-practice"), since: "2026-11-23 12:00", until: "2026-11-23" });
   ok(pp.plan.groups.find((g) => g.id === "inq_prac001")?.reason.includes("練習") && !pp.plan.groups.find((g) => g.id === "inq_prac001").selected, "名前に「練習」とある問い合わせは指定しなくても除く");
@@ -169,6 +185,29 @@ const planFile = path.join(out, "carryover-plan.json");
   fs.writeFileSync(other, zlib.gzipSync(`${JSON.stringify({ v: 1, revision: 1, savedAt: "2026-01-01T00:00:00.000Z" })}\n`));
   await assert.rejects(makePlan({ test: testFile, base: other, out: path.join(dir, "plan-x") }), /控え/);
   ok(true, "テスト用のデータベースの元と違う控えは使わない");
+}
+
+console.log("画面 (/data/carryover) の計算 = 道具の計算");
+{
+  const { createJiti } = await import("jiti");
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../..");
+  const jiti = createJiti(import.meta.url, { alias: { "@": path.join(root, "src"), "server-only": path.join(root, "scripts/tests/maps/empty.cjs") }, moduleCache: false });
+  process.env.CARRYOVER_BASELINE = baseFile;
+  process.env.FILE_STORAGE_DIR = path.join(testDir, "uploads");
+  const CS = await jiti.import(path.join(root, "src/lib/carryover-server.ts"));
+  const t3db = structuredClone(test);
+  t3db.meta.testWeek = true;
+  t3db.settings.push({ id: "carryover_review", value: { exclude: ["INQ-NOPE"], include: [], settings: ["operations"], since: "2026-11-23 12:00", until: "2026-11-23" }, updatedAt: t3 });
+  ok(CS.isTestWeekDb(t3db) && !CS.isTestWeekDb(base), "試験期間のデータベースだけ (meta.testWeek)");
+  const v = await CS.carryoverView(t3db);
+  const cli = await makePlan({ test: (() => { const f = path.join(testDir, "testweek-db-screen.json"); fs.writeFileSync(f, JSON.stringify(t3db)); return f; })(), base: baseFile, out: path.join(dir, "plan-screen"), files: path.join(testDir, "uploads") });
+  const sel = (gs) => gs.filter((g) => g.selected).map((g) => g.id).sort().join();
+  ok(!("error" in v) && sel(v.plan.groups) === sel(cli.plan.groups), `画面と道具で引き継ぐまとまりが同じ (${sel(v.plan.groups)})`);
+  ok(!("error" in v) && v.files === 1 && !v.mismatch, "画面: 写真のファイル 1 件・控えはテスト用のデータベースの元と同じ");
+  const v2 = await CS.carryoverView(t3db);
+  ok(v2 === v, "データが変わらなければ計算を使い回す");
+  process.env.CARRYOVER_BASELINE = path.join(dir, "none.ndjson.gz");
+  ok("error" in (await CS.carryoverView({ ...t3db, auditLogs: [...t3db.auditLogs, { id: "log_x" }] })), "控えがなければ分かる言葉で知らせる");
 }
 
 fs.rmSync(dir, { recursive: true, force: true });

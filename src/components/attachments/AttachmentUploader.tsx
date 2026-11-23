@@ -18,7 +18,7 @@ interface Row {
  * 写真・資料の登録 (スマートフォン・タブレットのカメラ / アルバム / ファイル)。
  * 写真は縮小してから 1 枚ずつ送り、すべて終わったら画面を更新する
  */
-export function AttachmentUploader({ parentType, parentId, accept }: { parentType: string; parentId: string; accept: string }) {
+export function AttachmentUploader({ parentType, parentId, accept, endpoint = "/api/attachments", note }: { parentType: string; parentId: string; accept: string; endpoint?: string; note?: string }) {
   const router = useRouter();
   const cameraRef = useRef<HTMLInputElement>(null);
   const pickRef = useRef<HTMLInputElement>(null);
@@ -51,7 +51,7 @@ export function AttachmentUploader({ parentType, parentId, accept }: { parentTyp
         if (p.height) fd.set("height", String(p.height));
         if (p.takenAt) fd.set("takenAt", p.takenAt);
         if (caption.trim()) fd.set("caption", caption.trim());
-        const res = await fetch("/api/attachments", { method: "POST", body: fd });
+        const res = await fetch(endpoint, { method: "POST", body: fd });
         const body = res.headers.get("content-type")?.includes("application/json") ? ((await res.json()) as { ok: boolean; error?: string }) : null;
         if (!body) throw new Error(res.status === 413 ? "ファイルが大きすぎます (1 ファイル 4 MB まで)。" : "ログインの有効期限が切れた可能性があります。ログインし直してください。");
         if (!body.ok) throw new Error(body.error ?? "登録できませんでした。");
@@ -97,7 +97,7 @@ export function AttachmentUploader({ parentType, parentId, accept }: { parentTyp
           disabled={busy}
         />
       </div>
-      <p className="mt-2 text-[11px] leading-relaxed text-ink-3">写真は自動で縮小して送ります (撮影日時・登録者を記録)。PDF・Excel・Word などは 1 ファイル 4 MB まで。1 回に {MAX_FILES} 件まで選べます。</p>
+      <p className="mt-2 text-[11px] leading-relaxed text-ink-3">{note ?? `写真は自動で縮小して送ります (撮影日時・登録者を記録)。PDF・Excel・Word などは 1 ファイル 4 MB まで。1 回に ${MAX_FILES} 件まで選べます。`}</p>
       {rows.length > 0 && (
         <div className="mt-3 rounded-lg bg-panel p-2 text-xs" aria-live="polite">
           <div className="mb-1 font-medium text-ink">{busy ? `登録中… ${done} / ${rows.length}` : `${done} / ${rows.length} 件を登録しました`}</div>

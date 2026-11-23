@@ -1,21 +1,27 @@
-import type { CashEntry, Database, StoreId } from "@/lib/db/types";
+import type { CashEntry, Database, PurchasePayMethod, StoreId } from "@/lib/db/types";
 import { CASH_IN_ACCOUNTS, CASH_OUT_ACCOUNTS, EXPENSE_ACCOUNTS, EXPENSE_METHOD_LABEL, PAYMENT_METHOD_LABEL, PURCHASE_PAY_METHOD_LABEL } from "@/lib/constants";
 import { encodeShiftJis } from "@/lib/sjis";
+import { invoiceOrderIds, isRecognizedSale, liveInvoicesOfOrder, orderTaxIndex } from "@/lib/billing";
+import { purchaseMethodOf } from "@/lib/ar-ap";
 
 /**
  * 会計処理用のデータ (仕訳・明細) の出力
  * ------------------------------------------------------------
  * システムに記録した取引から、期間 (日付) を指定して仕訳を作る。
- *   売上   請求書の発行日        借方 売掛金          / 貸方 売上高
- *   入金   入金日                借方 現金・普通預金・未収入金 (カード・電子決済) / 貸方 売掛金
+ *   売上   受注の売上計上日 (= 施工完了日。個人・法人とも)   借方 売掛金 / 貸方 売上高
+ *          (2026-11-23 お客様のご指示「■4」: 経営ダッシュボードと同じ日付。請求書の発行日 (まとめ請求の締め日など) とは別)
+ *          受注で計上できない請求書 (受注が見つからない・移行データの受注の請求書) だけは、従来どおり請求書の発行日
+ *   入金   入金日                借方 現金・普通預金・未収入金 (カード・電子決済) / 貸方 売掛金 (まとめ請求の入金も 1 件ずつ)
  *   決済   決済会社からの入金日  借方 普通預金        / 貸方 未収入金
  *   経費   経費の日付 (承認済み・精算済み)   借方 経費の勘定科目 / 貸方 未払金 (立替・カード)
  *   精算   精算日 (現金・振込の経費)         借方 未払金 / 貸方 現金・普通預金
  *   仕入   請求日 (却下を除く)   借方 仕入の勘定科目  / 貸方 買掛金
- *   支払   支払日                借方 買掛金          / 貸方 普通預金・現金・未払金
+ *   支払   支払日                借方 買掛金          / 貸方 普通預金・現金・未払金。
+ *          出す支払方法は設定 (accounting_scope。既定は 総合振込と現金): お客様は総合振込以外 (口座振替・都度振込など) を通帳から仕訳している (2026-11-23「■5」)
  *   現金出納 手入力の入出金 (銀行預入・小口現金の補充など)。入金・精算・仕入の支払から自動で記帳した行は上の仕訳と重なるため除く
  * 勘定科目名と税区分は 設定 → 会計データ で会計ソフトの設定に合わせる (settings の id = "accounting")。
- * 部門には店舗名を入れる (設定で止められる)。売上台帳から移行した過去の売上 (請求書のない受注) は含めない
+ * 部門には店舗名を入れる (設定で止められる)。販売管理ソフトから移行した過去の売上 (source = import の受注。入金済み・請求書なし) は、
+ * 移行前の会計で処理済みのため含めない (過去の期間の仕訳は変わらない)
  */
 
 export interface AccountingSettings {
@@ -85,6 +91,47 @@ export function accountingSettings(db: Pick<Database, "settings">): AccountingSe
   return out;
 }
 
+/* ---------------- 会計データに出す範囲 (仕入の支払) ---------------- */
+
+export const ACCOUNTING_SCOPE_ID = "accounting_scope";
+
+export interface AccountingScope {
+  /** 仕入の支払 (買掛金 / 預金・現金) の仕訳を出す支払方法。ほかの方法は通帳から仕訳する (会計データに出さない) */
+  paymentMethods: PurchasePayMethod[];
+  /** 上の方法以外で払う仕入の計上 (仕入 / 買掛金) を出すか。exclude = 出さない (通帳から 仕入 / 普通預金 で仕訳しているとき) */
+  nonBulkPurchases: "include" | "exclude";
+}
+
+/**
+ * 既定: 総合振込と現金の支払だけを出す。お客様は総合振込以外 (口座振替・都度振込・カードなど) を各銀行口座の通帳から仕訳しているため (2026-11-23)。
+ * 現金は通帳に出ないため出す (現金出納帳の自動の行は仕訳に重ねない)。仕入の計上 (仕入 / 買掛金) はすべて出す
+ */
+export const DEFAULT_ACCOUNTING_SCOPE: AccountingScope = { paymentMethods: ["bulk_transfer", "cash"], nonBulkPurchases: "include" };
+
+export function accountingScope(db: Pick<Database, "settings">): AccountingScope {
+  const v = (db.settings ?? []).find((s) => s.id === ACCOUNTING_SCOPE_ID)?.value ?? {};
+  const all = Object.keys(PURCHASE_PAY_METHOD_LABEL) as PurchasePayMethod[];
+  const methods = Array.isArray(v.paymentMethods) ? (v.paymentMethods as unknown[]).filter((m): m is PurchasePayMethod => typeof m === "string" && (all as string[]).includes(m)) : DEFAULT_ACCOUNTING_SCOPE.paymentMethods;
+  return { paymentMethods: methods, nonBulkPurchases: v.nonBulkPurchases === "exclude" ? "exclude" : "include" };
+}
+
+/** 会計データに出さない仕入の支払 (通帳から仕訳するもの) の件数・金額 (画面の確認用) */
+export function excludedPayments(db: Database, q: JournalQuery): { count: number; amount: number; byMethod: { method: PurchasePayMethod; count: number; amount: number }[] } {
+  const scope = accountingScope(db);
+  const by = new Map<PurchasePayMethod, { count: number; amount: number }>();
+  for (const p of db.purchases) {
+    if (p.status !== "paid" || !inRange(p.paidAt, q) || (q.storeId && p.storeId !== q.storeId)) continue;
+    const m = p.payMethod ?? "transfer";
+    if (scope.paymentMethods.includes(m)) continue;
+    const r = by.get(m) ?? { count: 0, amount: 0 };
+    r.count += 1;
+    r.amount += p.amount;
+    by.set(m, r);
+  }
+  const byMethod = [...by.entries()].map(([method, v]) => ({ method, ...v }));
+  return { count: byMethod.reduce((a, r) => a + r.count, 0), amount: byMethod.reduce((a, r) => a + r.amount, 0), byMethod };
+}
+
 export type JournalKind = "sales" | "receipt" | "settle" | "expense" | "reimburse" | "purchase" | "payment" | "cash";
 
 export const JOURNAL_KIND_LABEL: Record<JournalKind, string> = {
@@ -138,10 +185,19 @@ export function buildJournal(db: Database, q: JournalQuery): JournalRow[] {
   const rows: JournalRow[] = [];
   const side = (account: string, tax: string, amount: number, storeId: StoreId, taxAmount?: number, sub?: string): JournalSide => ({ account, sub, dept: dept(storeId), tax, amount: Math.round(amount), taxAmount: taxAmount === undefined ? undefined : Math.round(taxAmount) });
 
-  const invoices = db.invoices.filter((i) => i.status !== "void" && storeOk(i.storeId));
+  // 売上: 受注の売上計上日 (= 施工完了日)。請求書の発行日とは別 (まとめ請求の締め日に発行しても、売上は案件ごとの完了日)
+  const recognized = new Set(db.orders.filter(isRecognizedSale).map((o) => o.id));
   if (want("sales")) {
-    for (const i of invoices) {
-      if (!inRange(i.issueDate, q) || !(i.total > 0)) continue;
+    const taxOf = orderTaxIndex(db);
+    for (const o of db.orders) {
+      if (!recognized.has(o.id) || !storeOk(o.storeId) || !inRange(o.salesDate, q)) continue;
+      const name = customer(o.customerId);
+      const inv = liveInvoicesOfOrder(db.invoices, o)[0];
+      rows.push({ date: o.salesDate!, kind: "sales", ref: o.number, partner: name, memo: `${o.number} ${name} 様 ${o.title}${inv ? ` (請求 ${inv.number})` : ""}`.trim(), debit: side(s.receivable, s.taxNone, o.total, o.storeId), credit: side(s.sales, s.taxSales, o.total, o.storeId, taxOf(o)) });
+    }
+    // 受注で計上できない請求書 (受注が見つからない・移行データの受注の請求書): 従来どおり請求書の発行日
+    for (const i of db.invoices) {
+      if (i.status === "void" || !storeOk(i.storeId) || !inRange(i.issueDate, q) || !(i.total > 0) || invoiceOrderIds(i).some((id) => recognized.has(id))) continue;
       const name = customer(i.customerId);
       rows.push({ date: i.issueDate, kind: "sales", ref: i.number, partner: name, memo: `${i.number} ${name} 様 ${i.title ?? ""}`.trim(), debit: side(s.receivable, s.taxNone, i.total, i.storeId), credit: side(s.sales, s.taxSales, i.total, i.storeId, i.tax) });
     }
@@ -170,13 +226,18 @@ export function buildJournal(db: Database, q: JournalQuery): JournalRow[] {
       if (inRange(date, q)) rows.push({ date, kind: "reimburse", ref: e.number, partner: e.vendor, memo: `${e.number} 経費の精算 (${EXPENSE_METHOD_LABEL[e.paymentMethod]})`, debit: side(s.accrued, s.taxNone, e.amount, e.storeId), credit: side(e.paymentMethod === "cash" ? s.cash : s.bank, s.taxNone, e.amount, e.storeId) });
     }
   }
+  const scope = accountingScope(db);
+  const supplierById = new Map(db.suppliers.map((x) => [x.id, x]));
   for (const p of db.purchases) {
     if (!storeOk(p.storeId) || p.status === "rejected") continue;
     const name = supplier(p.supplierId);
-    if (want("purchase") && inRange(p.invoiceDate, q)) {
+    // 支払の仕訳を出さない方法 (通帳から仕訳) で払う仕入の計上も出さない設定のとき。支払方法が分からない仕入は出す
+    const method = purchaseMethodOf(p, supplierById.get(p.supplierId));
+    const skipPurchase = scope.nonBulkPurchases === "exclude" && method !== undefined && !scope.paymentMethods.includes(method);
+    if (want("purchase") && inRange(p.invoiceDate, q) && !skipPurchase) {
       rows.push({ date: p.invoiceDate, kind: "purchase", ref: p.number, partner: name, memo: `${p.number} ${name} ${p.description}`.trim(), debit: side(p.account || s.purchaseDefault, s.taxPurchase, p.amount, p.storeId, p.taxAmount), credit: side(s.payable, s.taxNone, p.amount, p.storeId) });
     }
-    if (want("payment") && p.status === "paid" && inRange(p.paidAt, q)) {
+    if (want("payment") && p.status === "paid" && inRange(p.paidAt, q) && scope.paymentMethods.includes(p.payMethod ?? "transfer")) {
       const method = p.payMethod ?? "transfer";
       const cr = method === "cash" ? s.cash : method === "card" ? s.accrued : method === "other" ? s.suspenseOut : s.bank;
       rows.push({ date: p.paidAt!, kind: "payment", ref: p.number, partner: name, memo: `${p.number} ${name} 支払 (${PURCHASE_PAY_METHOD_LABEL[method]})${p.payReference ? ` ${p.payReference}` : ""}`, debit: side(s.payable, s.taxNone, p.amount, p.storeId), credit: side(cr, s.taxNone, p.amount, p.storeId) });

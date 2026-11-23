@@ -294,12 +294,14 @@ OS のセキュリティ更新は自動 (unattended-upgrades) です。カーネ
 - まとまり: 期間中に増えた・変わった・消えた行を、ID の参照でつながる「まとまり」(お客様 → 問い合わせ → 見積 → 承認・写真・やりとり・変更履歴) に分け、最初の操作の日時 (受付日などの業務の日付ではなく、システムが付けた日時) が `--since`〜`--until` (日本時間) のものを引き継ぐ。除くのは `--exclude <番号・ID>`、指定したものだけは `--only`。お客様名・件名・要約に「練習」「テスト」とあるものは練習として引き継がない。ログイン・閲覧だけの変更履歴は引き継がない。引き継ぐ行が参照する期間中に増えた行 (新しい仕入先など) は一緒に引き継ぐ。社員はプロフィールの項目 (ログイン ID・通知先・顔写真など。パスワードは期間中は変更を止めている) だけ。設定・店舗の変更は `--settings <ID>` で指定したものだけ (例: 運用の設定 `operations`)
 - 本番への書き込み: 1 つのトランザクションで、行を読む (for update) → 期間中に本番の側で変わった行・番号の重複 (12/1 以降に本番で登録した記録など)・ファイルの重複があれば何も書かずに中止 → 追加・更新・削除 → 読み直して計画と照合 → `record_changes` (動いているサーバーは変わった行だけを取り直す) → commit。写真・資料のファイルは `/srv/ichijoya/data/uploads` へ写す (上書きしない)。2 回実行しても同じ (同じ内容は飛ばす)
 
+お客様の判断 (2026-11-23): 11/23 の店長会議から 11/30 まで本番同様に使い、11/30 に引き継ぎの最終判断をする。判断は画面 データ入出力 →「本番への引き継ぎ」(`/data/carryover`。テスト用のサーバーで、管理者・本部が まとまりごとに「引き継ぐ・引き継がない」・期間・引き継ぐ設定を決め、管理者が最終判断) でテスト用のデータベースの settings `carryover_review` に残り、`plan` はそれを読む (引数の指定が優先。`--ignore-review` で使わない)。`plan` は最終判断の有無を表示する。
+
 手順 (12/1 の朝、本番で登録を始める前に。番号が重ならないように):
 
 ```bash
 cd /home/ichijoya/Documents/ichijoyasistem
 # 1. 計画と一覧 (期間中はいつでも作れる。テスト用のデータベースは読むだけ。12/1 以降は期間の終わりの控えを読む)
-node scripts/ops/testweek-carryover.mjs plan --since 2026-11-23 --until 2026-11-23 --settings operations [--exclude INQ-2026-0604,...]
+node scripts/ops/testweek-carryover.mjs plan            # 画面の判断 (期間・引き継ぐ/引き継がない・設定) のまま。上書きは --since/--until/--settings/--exclude/--only
 #    → /var/backups/ichijoya/carryover/<日時>/carryover-list.csv (お客様に確かめていただく一覧) と carryover-plan.json
 # 2. 本番と突き合わせ (読むだけ) → 予行 (書いて照合してから取り消す) → 書く
 node scripts/ops/testweek-carryover.mjs check --plan <…>/carryover-plan.json

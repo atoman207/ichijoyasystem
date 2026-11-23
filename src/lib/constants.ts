@@ -182,7 +182,8 @@ export const FAX_NUMBER_KIND_LABEL: Record<FaxNumberKind, string> = {
 };
 
 export const PURCHASE_PAY_METHOD_LABEL: Record<PurchasePayMethod, string> = {
-  transfer: "銀行振込",
+  bulk_transfer: "総合振込",
+  transfer: "都度振込",
   cash: "現金",
   card: "法人カード",
   debit: "口座振替",
@@ -400,6 +401,8 @@ export const ENTITY_LABEL: Record<string, string> = {
   material: "材料マスタ (縁の品番など)",
   stock_move: "在庫の移動 (縁在庫・材料)",
   doc_draft: "文書の下書き",
+  case_post: "施工事例の投稿",
+  tidy_check: "整理整頓チェック",
 };
 
 /** 勘定科目 (仕入) */

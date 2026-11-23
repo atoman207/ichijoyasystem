@@ -84,9 +84,9 @@ export interface ReconcileReport {
   remaining: { ledgerOnly: { n: number; total: number }; slipOnly: { n: number; total: number } };
 }
 
-const isSlipOrder = (o: Order) => o.source === "import" && o.id.startsWith("o_s") && (o.sourceRef ?? "").startsWith("売上明細");
+export const isSlipOrder = (o: Order) => o.source === "import" && o.id.startsWith("o_s") && (o.sourceRef ?? "").startsWith("売上明細");
 const hasSlipNote = (o: Order) => o.progressNotes.some((n) => SLIP_NOTE.test(n.id));
-const isLedgerOnly = (o: Order) => o.source === "import" && !o.id.startsWith("o_s") && !(o.sourceRef ?? "").startsWith("売上明細") && !hasSlipNote(o) && Boolean(o.salesDate);
+export const isLedgerOnly = (o: Order) => o.source === "import" && !o.id.startsWith("o_s") && !(o.sourceRef ?? "").startsWith("売上明細") && !hasSlipNote(o) && Boolean(o.salesDate);
 
 /** 照合だけ (データは変えない) */
 export function planReconcile(db: Database): ReconcilePair[] {

@@ -100,6 +100,8 @@ export function quotePdfData(db: Database, q: Quote, version?: number): QuotePdf
 
 /** 請求書の明細 (発行時の明細。古い請求書は見積・受注から組み立てる)。明細の合計 − 請求書の小計 = 値引き */
 function invoiceLines(db: Database, inv: Invoice): PdfLine[] {
+  // まとめ請求: 案件ごとに 1 行 (受注番号・件名 / 現場・施工完了日 / 税込の金額)
+  if (inv.orderLines?.length) return inv.orderLines.map((l) => ({ name: `${l.number} ${l.title}`, spec: [l.site ? `現場: ${l.site}` : "", l.salesDate || l.completedAt ? `施工完了 ${(l.salesDate ?? l.completedAt)!.replace(/-/g, "/")}` : "", l.noTax ? "消費税対象外" : ""].filter(Boolean).join(" / ") || undefined, qty: 1, unit: "式", unitPrice: l.amount, amount: l.amount }));
   if (inv.items?.length) return lines(inv.items);
   const order = db.orders.find((o) => o.id === inv.orderId);
   const quote = order?.quoteId ? db.quotes.find((q) => q.id === order.quoteId) : undefined;
@@ -116,17 +118,20 @@ export function invoicePdfData(db: Database, inv: Invoice): InvoicePdfData {
   const sum = items.reduce((a, i) => a + i.amount, 0);
   const quote = order?.quoteId ? db.quotes.find((q) => q.id === order.quoteId) : undefined;
   const taxIncluded = inv.taxIncluded ?? (!inv.items?.length && quote && quote.total === inv.total ? quote.taxIncluded : undefined);
+  const batch = Boolean(inv.orderLines?.length);
   return {
     number: inv.number,
     issuedOn: inv.issueDate,
     dueDate: inv.dueDate,
-    transactionDate: order?.salesDate ?? day(order?.completedAt),
+    // 取引年月日 = 売上計上日 (施工完了日)。まとめ請求は締めの期間 (案件ごとの施工完了日は明細に)
+    transactionDate: batch ? undefined : order?.salesDate ?? day(order?.completedAt),
+    transactionPeriod: batch && inv.periodTo ? { from: inv.periodFrom, to: inv.periodTo } : undefined,
     customerName: customer?.name ?? "お客様",
     honorific: honorific(customer),
     customerAddress: customer?.address || undefined,
-    siteAddress: order?.siteAddress && order.siteAddress !== customer?.address ? order.siteAddress : undefined,
+    siteAddress: !batch && order?.siteAddress && order.siteAddress !== customer?.address ? order.siteAddress : undefined,
     title: inv.title ?? order?.title ?? "工事代金",
-    orderNumber: order?.number,
+    orderNumber: batch ? `${inv.orderLines!.length} 件 (明細のとおり)` : order?.number,
     items,
     subtotal: sum,
     // 値引き = 明細の合計 − (税抜: 請求の税抜額 / 税込: 請求の合計)
@@ -154,11 +159,12 @@ export function receiptPdfData(db: Database, inv: Invoice): ReceiptPdfData | nul
     number: inv.number.replace(/^INV/, "RCPT"),
     issuedOn: payments.at(-1)?.date ?? inv.issueDate,
     // 領収書の宛名は案件ごとに変えられる (個人のお客様の依頼で会社名義の領収書など)
-    ...(({ name, honorific: h }) => ({ customerName: name, honorific: h }))(receiptAddressee(customer, order?.receiptName)),
+    // まとめ請求は案件ごとの宛名ではなく、お客様名
+    ...(({ name, honorific: h }) => ({ customerName: name, honorific: h }))(receiptAddressee(customer, inv.orderLines?.length ? undefined : order?.receiptName)),
     amount: inv.paidAmount,
     taxable: inv.paidAmount - tax,
     tax,
-    purpose: `${(inv.title ?? order?.title ?? "工事").replace(/代$/, "")}代として`,
+    purpose: inv.orderLines?.length ? `工事代 (${inv.periodTo ? `${inv.periodTo.slice(5, 7).replace(/^0/, "")}月${inv.periodTo.slice(8, 10).replace(/^0/, "")}日締め · ` : ""}${inv.orderLines.length} 件) として` : `${(inv.title ?? order?.title ?? "工事").replace(/代$/, "")}代として`,
     paymentMethod: methods.join("・") || undefined,
     invoiceNumber: inv.number,
     company: pdfCompany(db, inv.storeId),

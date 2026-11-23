@@ -62,11 +62,14 @@ export function RecordStamp({ db, targets, created, approved }: { db: Database; 
 /** 変更履歴 (変更前 → 変更後)。閲覧できない履歴 (ほかの社員のログインなど) は出さない */
 export function HistoryCard({ db, user, targets, title = "変更履歴", description, limit = 60 }: { db: Database; user: User; targets: Target[]; title?: string; description?: string; limit?: number }) {
   const names = new Map<string, string>([...db.users.map((u) => [u.id, u.name] as [string, string]), ...db.suppliers.map((s) => [s.id, s.name] as [string, string])]);
-  const logs = logsFor(db, targets).filter((l) => canViewAuditEntry(user, l));
+  const all = logsFor(db, targets).filter((l) => canViewAuditEntry(user, l));
+  // 閲覧の記録 (自店舗・ほかの店舗。1 人・1 件・1 日に 1 回) は変更の記録と分けて出す
+  const logs = all.filter((l) => l.action !== "view");
+  const views = all.filter((l) => l.action === "view").reverse();
   const shown = logs.slice(-limit).reverse();
   return (
     <Card>
-      <CardHeader title={title} description={description ?? "登録・変更・承認・送付と、ほかの店舗からの閲覧の記録 (変更した項目は変更前と変更後の値を残しています)"} />
+      <CardHeader title={title} description={description ?? "登録・変更・承認・送付の記録 (変更した項目は変更前と変更後の値を残しています) と、閲覧の記録"} />
       {shown.length === 0 ? (
         <p className="text-xs text-ink-3">記録はありません (移行データ)</p>
       ) : (
@@ -95,6 +98,20 @@ export function HistoryCard({ db, user, targets, title = "変更履歴", descrip
             </li>
           ))}
         </ul>
+      )}
+      {views.length > 0 && (
+        <details className="mt-3 border-t border-line pt-2 text-xs">
+          <summary className="cursor-pointer text-ink-2">閲覧の記録 {views.length} 件 (1 人・1 日に 1 回)</summary>
+          <ul className="mt-1.5 max-h-60 space-y-1 overflow-y-auto">
+            {views.slice(0, 100).map((l) => (
+              <li key={l.id} className="flex flex-wrap gap-x-2 text-ink-3">
+                <span className="tnum">{fmtDateTime(l.at)}</span>
+                <span className="text-ink-2">{userName(l.userId)}</span>
+                <span>{l.summary}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </Card>
   );

@@ -3,13 +3,16 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canExportAccounting } from "@/lib/auth/permissions";
 import { fmtDate, toDateKey, yen } from "@/lib/format";
-import { ACCOUNTING_LABEL, JOURNAL_KIND_LABEL, accountingSettings, buildJournal, journalTotals, type JournalKind } from "@/lib/accounting";
+import { ACCOUNTING_LABEL, JOURNAL_KIND_LABEL, accountingScope, accountingSettings, buildJournal, excludedPayments, journalTotals, type JournalKind } from "@/lib/accounting";
 import { updateAccountingSettings } from "@/lib/actions/settings-ops";
+import { updateAccountingScope } from "@/lib/actions/billing";
+import { PURCHASE_PAY_METHOD_LABEL } from "@/lib/constants";
 import type { StoreId } from "@/lib/db/types";
 import { Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select, Table, Td, Th, Tr } from "@/components/ui";
 
 const DETAILS: [string, string][] = [
-  ["sales", "売上 (請求書) の明細"],
+  ["sales", "売上の明細 (売上計上日 = 施工完了日)"],
+  ["invoices", "請求書の明細 (発行日)"],
   ["payments", "入金の明細"],
   ["expenses", "経費の明細"],
   ["purchases", "仕入の明細"],
@@ -31,6 +34,9 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
   const rows = from <= to ? buildJournal(db, { from, to, storeId: store }) : [];
   const totals = journalTotals(rows);
   const settings = accountingSettings(db);
+  // 会計データに出す仕入の支払 (既定: 総合振込と現金。ほかは通帳から仕訳。src/lib/accounting.ts の accountingScope)
+  const scope = accountingScope(db);
+  const excluded = from <= to ? excludedPayments(db, { from, to, storeId: store }) : { count: 0, amount: 0, byMethod: [] };
   const qs = (extra: Record<string, string>) => new URLSearchParams({ from, to, ...(store ? { store } : {}), ...extra }).toString();
   const base = "/accounting";
 
@@ -38,7 +44,7 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
     <div>
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader title="会計データの出力" description="期間を指定して、会計ソフト・税理士事務所へ渡す仕訳と明細を CSV で出力します。出力はすべて変更履歴に残ります" />
-      <LinkTabs current={`${base}?tab=${tab}`} items={[{ href: `${base}?tab=export`, label: "出力" }, { href: `${base}?tab=settings`, label: "科目名・税区分の設定" }]} />
+      <LinkTabs current={`${base}?tab=${tab}`} items={[{ href: `${base}?tab=export`, label: "出力" }, { href: `${base}?tab=settings`, label: "科目名・税区分・出す支払の設定" }]} />
 
       {tab === "export" && (
         <div className="space-y-4">
@@ -109,13 +115,45 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
               </Card>
             </div>
           </div>
+          {excluded.count > 0 && (
+            <Note tone="warn">
+              この期間の仕入の支払のうち {excluded.count} 件 ({yen(excluded.amount)}: {excluded.byMethod.map((m) => `${PURCHASE_PAY_METHOD_LABEL[m.method]} ${m.count} 件`).join("・")}) は、通帳から仕訳する支払のため仕訳に出していません (設定: {scope.paymentMethods.map((m) => PURCHASE_PAY_METHOD_LABEL[m]).join("・") || "なし"} の支払だけを出す)。
+            </Note>
+          )}
           <Note>
-            仕訳の作り方: 売上は請求書の発行日 (売掛金 / 売上高)、入金は入金日 (現金・普通預金・未収入金 / 売掛金)、経費は経費の日付で承認済み・精算済みのもの (勘定科目 / 未払金) と精算日 (未払金 / 現金・普通預金)、仕入は請求日 (勘定科目 / 買掛金) と支払日 (買掛金 / 普通預金・現金)、現金出納帳は手入力の入出金 (銀行預入など) です。売上台帳から移行した過去の売上 (請求書のない受注) は含めません。
+            仕訳の作り方: 売上は受注の売上計上日 (= 施工完了日。個人・法人とも。経営ダッシュボードと同じ日付) に計上します (売掛金 / 売上高)。請求書の発行日 (法人のまとめ請求の締め日など) とは別です。受注が見つからない請求書だけは発行日で計上します。
+            入金は入金日 (現金・普通預金・未収入金 / 売掛金)、経費は経費の日付で承認済み・精算済みのもの (勘定科目 / 未払金) と精算日 (未払金 / 現金・普通預金)、仕入は請求日 (勘定科目 / 買掛金)、仕入の支払は支払日 (買掛金 / 普通預金・現金。設定した支払方法だけ)、現金出納帳は手入力の入出金 (銀行預入など) です。
+            販売管理ソフトから移行した過去の売上 (移行データの受注。入金済み・請求書なし) は、移行前の会計で処理済みのため含めません (過去の期間の仕訳は変わりません)。
           </Note>
         </div>
       )}
 
       {tab === "settings" && (
+        <div className="space-y-4">
+        <Card>
+          <CardHeader title="会計データに出す仕入の支払" description="総合振込以外の支払 (口座振替・都度振込・カードなど) は各銀行口座の通帳から仕訳している、というお客様の運用に合わせています (既定: 総合振込と現金を出す)。変更は次の出力から使われ、変更履歴に残ります" />
+          <form action={updateAccountingScope} className="space-y-3">
+            <fieldset>
+              <legend className="label">支払の仕訳 (買掛金 / 預金・現金) を出す支払方法</legend>
+              <div className="flex flex-wrap gap-3">
+                {(Object.keys(PURCHASE_PAY_METHOD_LABEL) as (keyof typeof PURCHASE_PAY_METHOD_LABEL)[]).map((m) => (
+                  <label key={m} className="flex items-center gap-1.5 text-sm"><input type="checkbox" name="paymentMethods" value={m} defaultChecked={scope.paymentMethods.includes(m)} className="h-4 w-4" /> {PURCHASE_PAY_METHOD_LABEL[m]}</label>
+                ))}
+              </div>
+            </fieldset>
+            <Field label="上の方法以外で払う仕入の計上 (仕入 / 買掛金)">
+              <Select name="nonBulkPurchases" defaultValue={scope.nonBulkPurchases}>
+                <option value="include">出す (通帳からは 買掛金 / 普通預金 で支払だけを仕訳する)</option>
+                <option value="exclude">出さない (通帳から 仕入 / 普通預金 で仕訳する)</option>
+              </Select>
+            </Field>
+            <Button type="submit" size="sm">保存</Button>
+          </form>
+          <p className="mt-3 text-[11px] leading-relaxed text-ink-3">
+            現金の支払は通帳に出ないため、既定で出します (現金出納帳に自動で記帳した行は仕訳に重ねません)。カード払いの仕入は、引き落としの通帳から仕訳します。
+            仕入の計上を「出す」のままで通帳から 仕入 / 普通預金 と仕訳すると、仕入が二重になります。税理士事務所の仕訳の仕方に合わせてください。支払方法は仕入先の「いつもの支払方法」と、支払完了のときの方法です。
+          </p>
+        </Card>
         <Card>
           <CardHeader title="科目名・税区分" description="会計ソフトの勘定科目名・税区分の名前に合わせます。変更は次の出力から使われ、変更履歴に残ります" />
           <form action={updateAccountingSettings} className="space-y-3">
@@ -128,6 +166,7 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
             <Button type="submit" size="sm">保存</Button>
           </form>
         </Card>
+        </div>
       )}
     </div>
   );

@@ -37,73 +37,16 @@ import readline from "node:readline";
 import zlib from "node:zlib";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { TABLES, isTimestamp, snake } from "../../src/lib/db/schema.ts";
+import { TABLES, snake } from "../../src/lib/db/schema.ts";
+import { KIND_JA, SPECIAL_JA, USER_FIELDS, canonField, canonRow, carryoverCsv, diffRows, groupPlan, jst, normValue, parseWhen, readCarryoverReview, stable } from "../../src/lib/carryover.ts";
+
+export { USER_FIELDS, canonRow, parseWhen };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const BACKUPS = "/var/backups/ichijoya";
 const LIVE_TEST = "/srv/ichijoya/testweek/data/testweek-db.json";
-const TZ_OFFSET = "+09:00";
-
-/** まとまりの間をつながない表 (マスタ・社員・設定)。参照されても まとまりは分けたまま (期間中に増えた行は依存として一緒に引き継ぐ) */
-const NO_LINK = new Set(["stores", "users", "settings", "products", "holidays", "suppliers", "materials", "materialCosts", "boms", "itemCategories", "salesAreas", "mgmtRules", "expenseClasses", "faxNumbers", "knowledge"]);
-/** 行ごとには引き継がず、別の扱いにする表 */
-const SPECIAL = new Set(["users", "settings", "stores"]);
-/** 社員の行で引き継ぐ項目 (パスワードの再設定・本人のプロフィール。アカウントの変更は期間中は止めている) */
-export const USER_FIELDS = ["email", "passwordHash", "avatarKey", "avatarUpdatedAt", "kana", "phone", "notifyEmail", "notifyByEmail", "chatworkAccountId"];
-/** 引き継がない設定 (サーバーの動きの記録。本番の側の値を残す) */
-const RUNTIME_SETTINGS = new Set(["knowledge_sync_state", "line_groups", "survey_workbook_state"]);
-/** 練習の記録の印 (お客様名・件名・要約に書いてもらう)。--keep-practice で印があっても引き継ぐ */
-const PRACTICE = /練習|テスト/;
-/** まとまりの名前に使う記録の優先順 */
-const ROOT_ORDER = ["customers", "inquiries", "quotes", "orders", "invoices", "payments", "schedule", "expenses", "purchases", "purchaseOrders", "leaveRequests", "qualityIssues", "documents", "commLogs", "threads", "approvals", "attachments"];
 
 const DEFS = new Map(TABLES.map((t) => [t.collection, t]));
-
-// ---------------------------------------------------------------- 値の比べ方
-
-/** 列の型にそろえた値 (Supabase から読んだ値と JSON の値を同じ形で比べる。null・未設定は「なし」) */
-function normValue(spec, v) {
-  if (v === undefined || v === null) return undefined;
-  if (isTimestamp(spec) && typeof v === "string") {
-    const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? v : d.toISOString();
-  }
-  if (/^date\b/.test(spec) && typeof v === "string") return v.slice(0, 10);
-  if (/^(numeric|bigint|integer)\b/.test(spec) && typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) return Number(v);
-  if (/^text\b(?!\[)/.test(spec) && (typeof v === "number" || typeof v === "boolean")) return String(v);
-  if (/^jsonb\b/.test(spec)) return JSON.parse(JSON.stringify(v));
-  return v;
-}
-
-function stable(v) {
-  if (Array.isArray(v)) return `[${v.map((x) => (x === undefined ? "null" : stable(x))).join(",")}]`;
-  if (v && typeof v === "object") {
-    return `{${Object.keys(v)
-      .filter((k) => v[k] !== undefined)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${stable(v[k])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(v);
-}
-
-/** 行をデータベースの列だけにして正規化した文字列 (列にない項目は Supabase に入らないので比べない) */
-export function canonRow(def, row) {
-  if (!row) return null;
-  const o = {};
-  for (const [f, spec] of def.columns) {
-    const v = normValue(spec, row[f]);
-    if (v !== undefined) o[f] = v;
-  }
-  return stable(o);
-}
-
-function canonField(def, field, v) {
-  const spec = def.columns.find(([f]) => f === field)?.[1] ?? "text";
-  const n = normValue(spec, v);
-  return n === undefined ? "null" : stable(n);
-}
-
 const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
 
 // ---------------------------------------------------------------- 引数・読み込み
@@ -113,13 +56,13 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const s = argv[i];
     if (!s.startsWith("--")) a._.push(s);
-    else if (["--yes", "--no-users", "--json", "--quiet", "--keep-practice"].includes(s)) a[s.slice(2)] = true;
+    else if (["--yes", "--no-users", "--json", "--quiet", "--keep-practice", "--ignore-review"].includes(s)) a[s.slice(2)] = true;
     else a[s.slice(2)] = argv[++i];
   }
   return a;
 }
 
-const list = (s) => (s ? String(s).split(/[,\s]+/).map((x) => x.trim()).filter(Boolean) : []);
+const list = (s) => (Array.isArray(s) ? s : s ? String(s).split(/[,\s]+/).map((x) => x.trim()).filter(Boolean) : []);
 
 function newest(dir, re) {
   if (!fs.existsSync(dir)) return null;
@@ -127,33 +70,22 @@ function newest(dir, re) {
   return f ? path.join(dir, f) : null;
 }
 
-/** 日本時間の日付 (2026-11-23) か日時 → ISO。until の日付はその日の終わり */
-export function parseWhen(s, end = false) {
-  if (!s) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(`${s}T${end ? "23:59:59.999" : "00:00:00.000"}${TZ_OFFSET}`).toISOString();
-  const d = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(s) ? s : `${s.replace(" ", "T")}${TZ_OFFSET}`);
-  if (Number.isNaN(d.getTime())) throw new Error(`日時を読めません: ${s}`);
-  return d.toISOString();
-}
-
-/** 期間の始まりの控え (ndjson.gz: 1 行目が見出し、2 行目から「コレクション<TAB>行の JSON」) を表ごとの Map で読む */
-async function readBase(file) {
-  const out = new Map();
-  let head = null;
+/** 期間の始まりの控え (ndjson.gz: 1 行目が見出し、2 行目から「コレクション<TAB>行の JSON」) の見出しと、行を 1 行ずつ返すもの */
+export async function openBase(file) {
   const rl = readline.createInterface({ input: fs.createReadStream(file).pipe(zlib.createGunzip()), crlfDelay: Infinity });
-  for await (const line of rl) {
-    if (!line) continue;
-    if (!head) {
-      head = JSON.parse(line);
-      continue;
+  const it = rl[Symbol.asyncIterator]();
+  const first = await it.next();
+  const head = first.done ? {} : JSON.parse(first.value);
+  async function* lines() {
+    for (;;) {
+      const n = await it.next();
+      if (n.done) return;
+      if (!n.value) continue;
+      const t = n.value.indexOf("\t");
+      yield [n.value.slice(0, t), JSON.parse(n.value.slice(t + 1))];
     }
-    const t = line.indexOf("\t");
-    const k = line.slice(0, t);
-    const r = JSON.parse(line.slice(t + 1));
-    if (!out.has(k)) out.set(k, new Map());
-    out.get(k).set(r.id, r);
   }
-  return { head, rows: out };
+  return { head, lines: lines() };
 }
 
 /** テスト用のデータベース: JSON か、期間の終わりの控え (tar.gz。testweek-db.json と uploads/) */
@@ -171,32 +103,6 @@ function readTest(file, workDir) {
 
 // ---------------------------------------------------------------- plan
 
-function* strings(v) {
-  if (typeof v === "string") yield v;
-  else if (Array.isArray(v)) for (const x of v) yield* strings(x);
-  else if (v && typeof v === "object") for (const x of Object.values(v)) yield* strings(x);
-}
-
-/** 行の「操作の日時」(業務の日付 = 受付日・見積日などは使わない。システムが付けた日時だけ) */
-function activityAt(node) {
-  const r = node.row;
-  if (node.coll === "auditLogs") return r.at ?? null;
-  if (node.kind === "add") return r.createdAt ?? r.uploadedAt ?? r.requestedAt ?? r.updatedAt ?? null;
-  if (node.kind === "mod" && r.updatedAt && r.updatedAt !== node.base?.updatedAt) return r.updatedAt;
-  return null;
-}
-
-function rowLabel(db, node) {
-  const r = node.row;
-  const def = DEFS.get(node.coll);
-  const num = r.number ?? r.code ?? "";
-  const name = r.name ?? r.contactName ?? r.title ?? r.subject ?? r.summary ?? r.fileName ?? r.entityLabel ?? "";
-  const found = r.customerId && node.coll !== "customers" ? db.customers?.find((c) => c.id === r.customerId)?.name : null;
-  const cust = found && found !== name ? found : null;
-  const verb = node.kind === "add" ? "" : node.kind === "mod" ? " (変更)" : " (削除)";
-  return `${def?.label ?? node.coll} ${num} ${String(name).slice(0, 40)}${cust ? ` / ${cust} 様` : ""}${verb}`.replace(/\s+/g, " ").trim();
-}
-
 export async function makePlan(opts) {
   const workDir = opts.out;
   fs.mkdirSync(workDir, { recursive: true, mode: 0o700 });
@@ -204,175 +110,28 @@ export async function makePlan(opts) {
   if (!baseFile || !fs.existsSync(baseFile)) throw new Error("期間の始まりの控え (--base) が見つかりません");
   const testFile = opts.test ?? (fs.existsSync(LIVE_TEST) ? LIVE_TEST : newest(BACKUPS, /^testweek-final-.*\.tar\.gz$/));
   if (!testFile || !fs.existsSync(testFile)) throw new Error("テスト用のデータベース (--test) が見つかりません");
-  const { head, rows: base } = await readBase(baseFile);
   const { db: test, files: filesDir, sha: testSha } = readTest(testFile, workDir);
+  const { head, lines } = await openBase(baseFile);
   const filesFrom = opts.files ?? filesDir;
   const meta = test.meta ?? {};
   if (!opts.anyBase && meta.copyOfSavedAt && head.savedAt && meta.copyOfSavedAt !== head.savedAt) {
     throw new Error(`テスト用のデータベースの元 (${meta.copyOfSavedAt}) と控え (${head.savedAt}) が違います。別の控えを --base で指定してください`);
   }
-  const since = parseWhen(opts.since) ?? (meta.copiedAt ? new Date(meta.copiedAt).toISOString() : null);
-  const until = parseWhen(opts.until, true);
-
-  // 1. 行ごとの違い
-  const nodes = [];
-  const special = { users: [], settings: [] };
-  for (const def of TABLES) {
-    const b = base.get(def.collection) ?? new Map();
-    const t = new Map((test[def.collection] ?? []).map((r) => [r.id, r]));
-    const push = (kind, row, baseRow) => {
-      if (SPECIAL.has(def.collection)) (def.collection === "users" ? special.users : special.settings).push({ coll: def.collection, kind, row, base: baseRow });
-      else nodes.push({ coll: def.collection, id: row.id, kind, row, base: baseRow ?? null });
-    };
-    for (const [id, r] of t) {
-      const br = b.get(id);
-      if (!br) push("add", r, null);
-      else if (canonRow(def, br) !== canonRow(def, r)) push("mod", r, br);
-    }
-    for (const [id, br] of b) if (!t.has(id)) push("del", br, br);
-  }
-
-  // 2. つながり (ID の参照) でまとまりに分ける
-  const byId = new Map();
-  nodes.forEach((n, i) => {
-    if (!byId.has(n.id)) byId.set(n.id, []);
-    byId.get(n.id).push(i);
-  });
-  const parent = nodes.map((_, i) => i);
-  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  const union = (a, b) => {
-    const x = find(a), y = find(b);
-    if (x !== y) parent[Math.max(x, y)] = Math.min(x, y);
-  };
-  const deps = nodes.map(() => new Set());
-  nodes.forEach((n, i) => {
-    for (const s of strings(n.row)) {
-      if (s === n.id || s.length < 4) continue;
-      for (const j of byId.get(s) ?? []) {
-        if (j === i) continue;
-        if (nodes[j].kind === "add") deps[i].add(j);
-        // 変更履歴は、その記録 (entityId) のまとまりに入れる (マスタの変更の履歴も)
-        if ((!NO_LINK.has(nodes[j].coll) && !NO_LINK.has(n.coll)) || (n.coll === "auditLogs" && s === n.row.entityId)) union(i, j);
-      }
-    }
-  });
-  const groupsMap = new Map();
-  nodes.forEach((n, i) => {
-    const g = find(i);
-    if (!groupsMap.has(g)) groupsMap.set(g, []);
-    groupsMap.get(g).push(i);
-  });
-
-  const users = new Map((test.users ?? []).map((u) => [u.id, u.name]));
-  const exclude = list(opts.exclude), only = list(opts.only);
-  const matches = (idxs, tokens) => tokens.some((tok) => idxs.some((i) => nodes[i].id === tok || nodes[i].row.number === tok || nodes[i].row.code === tok));
-  const groups = [];
-  for (const idxs of groupsMap.values()) {
-    const rank = (i) => {
-      const r = ROOT_ORDER.indexOf(nodes[i].coll);
-      return (r < 0 ? 99 : r) + (nodes[i].kind === "add" ? 0 : 100);
-    };
-    const root = [...idxs].sort((a, b) => rank(a) - rank(b) || a - b)[0];
-    const times = idxs.map((i) => activityAt(nodes[i])).filter(Boolean).sort();
-    const first = times[0] ?? null, last = times[times.length - 1] ?? null;
-    const actors = new Set();
-    for (const i of idxs) for (const k of ["createdBy", "userId", "uploadedBy", "requestedBy", "updatedBy", "decidedBy"]) if (nodes[i].row[k] && users.has(nodes[i].row[k]) && (nodes[i].kind !== "mod" || k === "updatedBy" || nodes[i].coll === "auditLogs")) actors.add(users.get(nodes[i].row[k]));
-    const counts = {};
-    for (const i of idxs) {
-      const c = (counts[nodes[i].coll] ??= { add: 0, mod: 0, del: 0 });
-      c[nodes[i].kind]++;
-    }
-    const store = idxs.map((i) => nodes[i].row.storeId).find(Boolean) ?? "";
-    let selected = true, reason = "";
-    if (idxs.every((i) => nodes[i].coll === "auditLogs")) (selected = false), (reason = "変更履歴だけ (ログイン・閲覧など)");
-    else if (only.length && !matches(idxs, only)) (selected = false), (reason = "--only の指定にない");
-    else if (exclude.length && matches(idxs, exclude)) (selected = false), (reason = "--exclude で除外");
-    else if (!opts["keep-practice"] && !matches(idxs, only) && idxs.some((i) => nodes[i].kind === "add" && PRACTICE.test([nodes[i].row.name, nodes[i].row.contactName, nodes[i].row.title, nodes[i].row.summary].filter(Boolean).join(" "))))
-      (selected = false), (reason = "名前・件名に「練習」「テスト」(練習の記録。引き継ぐなら --only で指定)");
-    else if (!first && (since || until)) (selected = false), (reason = "操作の日時が分からない");
-    else if (since && first < since) (selected = false), (reason = `期間より前 (${jst(first)})`);
-    else if (until && first > until) (selected = false), (reason = `期間より後 (${jst(first)})`);
-    groups.push({ id: nodes[root].id, label: rowLabel(test, nodes[root]), store, first, last, actors: [...actors], counts, idxs, selected, reason, pulled: [] });
-  }
-  groups.sort((a, b) => String(a.first ?? "~").localeCompare(String(b.first ?? "~")) || a.label.localeCompare(b.label));
-
-  // 3. 引き継ぐ行 + 依存 (引き継ぐ行が参照する、期間中に増えた行)
-  const chosen = new Set(groups.filter((g) => g.selected).flatMap((g) => g.idxs));
-  const groupOf = new Map(groups.flatMap((g) => g.idxs.map((i) => [i, g])));
-  const auditOf = new Map();
-  nodes.forEach((n, i) => {
-    if (n.coll !== "auditLogs" || !n.row.entityId) return;
-    if (!auditOf.has(n.row.entityId)) auditOf.set(n.row.entityId, []);
-    auditOf.get(n.row.entityId).push(i);
-  });
-  const queue = [...chosen];
-  while (queue.length) {
-    const i = queue.pop();
-    for (const j of deps[i]) {
-      if (chosen.has(j)) continue;
-      chosen.add(j);
-      queue.push(j);
-      const g = groupOf.get(j);
-      g.pulled.push(rowLabel(test, nodes[j]));
-      // 一緒に引き継ぐ行の変更履歴も
-      for (const k of auditOf.get(nodes[j].id) ?? []) if (!chosen.has(k)) chosen.add(k);
-    }
-  }
-
-  // 4. 社員 (パスワード・プロフィール) と設定
-  const userPatches = [];
-  if (!opts["no-users"]) {
-    for (const s of special.users) {
-      if (s.kind !== "mod") continue;
-      const fields = {};
-      for (const f of USER_FIELDS) {
-        if (canonField(DEFS.get("users"), f, s.row[f]) !== canonField(DEFS.get("users"), f, s.base[f])) fields[f] = { before: s.base[f] ?? null, after: s.row[f] ?? null };
-      }
-      if (Object.keys(fields).length) userPatches.push({ id: s.row.id, name: s.row.name, fields });
-    }
-  }
-  const wantSettings = new Set(list(opts.settings));
-  const settingRows = [];
-  const settingList = [];
-  // 期間中に増えた社員 (新規登録の申請) は、設定と同じく --settings users:<ID> で指定したものだけ
-  for (const s of [...special.settings, ...special.users.filter((u) => u.kind === "add")]) {
-    const key = `${s.coll}:${s.row.id}`;
-    const want = (wantSettings.has(s.row.id) || wantSettings.has(key)) && !RUNTIME_SETTINGS.has(s.row.id);
-    settingList.push({ coll: s.coll, id: s.row.id, kind: s.kind, selected: want, reason: want ? "" : RUNTIME_SETTINGS.has(s.row.id) ? "サーバーの動きの記録 (引き継がない)" : "--settings で指定したものだけ" });
-    if (want && s.kind !== "del") {
-      settingRows.push({ coll: s.coll, id: s.row.id, row: s.row, base: s.base ?? null });
-      // 引き継ぐ設定の変更履歴も
-      for (const k of auditOf.get(s.row.id) ?? []) {
-        if (chosen.has(k)) continue;
-        chosen.add(k);
-        groupOf.get(k)?.pulled.push(`${SPECIAL_JA[s.coll] ?? s.coll} ${s.row.id} の変更履歴`);
-      }
-    }
-  }
-
-  // 5. 計画 (書く行・元の行・ファイル)
-  const rows = {};
-  for (const i of [...chosen].sort((a, b) => a - b)) {
-    const n = nodes[i];
-    const r = (rows[n.coll] ??= { upsert: [], delete: [] });
-    if (n.kind === "del") r.delete.push({ id: n.id, base: n.base });
-    else r.upsert.push({ id: n.id, row: n.row, base: n.base });
-  }
-  for (const s of settingRows) (rows[s.coll] ??= { upsert: [], delete: [] }).upsert.push({ id: s.id, row: s.row, base: s.base });
+  // 画面 (データ入出力 → 本番への引き継ぎ) の判断。引数の指定が優先 (--ignore-review で使わない)
+  const review = opts["ignore-review"] ? { include: [], exclude: [], settings: [] } : readCarryoverReview(test);
+  const since = parseWhen(opts.since ?? review.since) ?? (meta.copiedAt ? new Date(meta.copiedAt).toISOString() : null);
+  const until = parseWhen(opts.until ?? review.until, true);
+  const wantSettings = [...new Set([...list(opts.settings), ...review.settings])];
+  const diff = await diffRows(TABLES, lines, test);
+  const g = groupPlan(TABLES, diff, test, { since, until, exclude: list(opts.exclude), only: list(opts.only), settings: wantSettings, noUsers: Boolean(opts["no-users"]), keepPractice: Boolean(opts["keep-practice"]), review });
   const files = [];
-  const seen = new Set();
-  const fileCandidates = [...Object.values(rows).flatMap((r) => r.upsert.map((u) => u.row)), ...userPatches.map((p) => Object.fromEntries(Object.entries(p.fields).map(([k, v]) => [k, v.after])))];
-  for (const row of fileCandidates) {
-    for (const s of strings(row)) {
-      if (seen.has(s) || !/^[\w.-]+(\/[\w.-]+)+$/.test(s) || s.includes("..")) continue;
-      const p = path.join(filesFrom, s);
-      if (!fs.existsSync(p) || !fs.statSync(p).isFile()) continue;
-      seen.add(s);
-      const buf = fs.readFileSync(p);
-      files.push({ key: s, size: buf.length, sha256: sha256(buf) });
-    }
+  for (const s of g.fileCandidates) {
+    const p = path.join(filesFrom, s);
+    if (!fs.existsSync(p) || !fs.statSync(p).isFile()) continue;
+    const buf = fs.readFileSync(p);
+    files.push({ key: s, size: buf.length, sha256: sha256(buf) });
   }
-  const body = { rows, users: userPatches, files };
+  const body = { rows: g.rows, users: g.users, files };
   const plan = {
     kind: "ichijoya-testweek-carryover",
     version: 1,
@@ -380,37 +139,18 @@ export async function makePlan(opts) {
     test: { path: testFile, sha256: testSha, files: filesFrom, copiedAt: meta.copiedAt ?? null },
     base: { path: baseFile, savedAt: head.savedAt, revision: head.revision },
     window: { since, until },
-    options: { exclude, only, settings: [...wantSettings], users: !opts["no-users"] },
-    groups: groups.map(({ idxs: _i, ...g }) => g),
-    settings: settingList,
+    options: { exclude: list(opts.exclude), only: list(opts.only), settings: wantSettings, users: !opts["no-users"] },
+    review: { include: review.include.length, exclude: review.exclude.length, decidedAt: review.decidedAt ?? null, decidedBy: review.decidedBy ?? null },
+    groups: g.groups.map(({ idxs: _i, ...x }) => x),
+    settings: g.settings,
     ...body,
     hash: sha256(stable(body)),
   };
   const planFile = path.join(workDir, "carryover-plan.json");
   fs.writeFileSync(planFile, JSON.stringify(plan, null, 1), { mode: 0o600 });
   const csvFile = path.join(workDir, "carryover-list.csv");
-  fs.writeFileSync(csvFile, "﻿" + csvOf(plan), { mode: 0o600 });
+  fs.writeFileSync(csvFile, "﻿" + carryoverCsv(TABLES, plan), { mode: 0o600 });
   return { plan, planFile, csvFile };
-}
-
-function jst(iso) {
-  if (!iso) return "";
-  return new Date(new Date(iso).getTime() + 9 * 3600e3).toISOString().slice(0, 16).replace("T", " ");
-}
-
-const KIND_JA = { add: "追加", mod: "変更", del: "削除" };
-const SPECIAL_JA = { stores: "店舗", settings: "設定", users: "社員 (新規)" };
-function csvOf(plan) {
-  const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const lines = [["引き継ぐ", "まとまりの ID", "内容", "店舗", "最初の操作 (日本時間)", "最後の操作", "操作した人", "行の内訳", "理由・注意"].map(q).join(",")];
-  for (const g of plan.groups) {
-    const detail = Object.entries(g.counts).map(([c, n]) => `${DEFS.get(c)?.label ?? c} ${Object.entries(n).filter(([, v]) => v).map(([k, v]) => `${KIND_JA[k]}${v}`).join("・")}`).join(" / ");
-    const note = [g.reason, g.pulled.length ? `ほかのまとまりが参照するため一緒に引き継ぐ: ${g.pulled.join("、")}` : ""].filter(Boolean).join(" / ");
-    lines.push([g.selected ? "○" : g.pulled.length ? "△ (一部)" : "×", g.id, g.label, g.store, jst(g.first), jst(g.last), g.actors.join("・"), detail, note].map(q).join(","));
-  }
-  for (const u of plan.users) lines.push(["○", u.id, `社員 ${u.name} (${Object.keys(u.fields).map((f) => (f === "passwordHash" ? "パスワード" : f)).join("・")})`, "", "", "", "", "社員 変更", "パスワードの再設定・本人のプロフィール"].map(q).join(","));
-  for (const s of plan.settings) lines.push([s.selected ? "○" : "×", s.id, `${SPECIAL_JA[s.coll] ?? s.coll} ${s.id} (${KIND_JA[s.kind]})`, "", "", "", "", "", s.reason].map(q).join(","));
-  return lines.join("\r\n") + "\r\n";
 }
 
 // ---------------------------------------------------------------- 書き込み先 (本番の PostgreSQL / JSON)
@@ -725,6 +465,8 @@ async function main() {
     const sel = plan.groups.filter((g) => g.selected);
     const rowsN = Object.values(plan.rows).reduce((n, r) => n + r.upsert.length + r.delete.length, 0);
     console.log(`期間: ${plan.window.since ? jst(plan.window.since) : "はじめ"} 〜 ${plan.window.until ? jst(plan.window.until) : "いま"} (日本時間)`);
+    const rv = plan.review;
+    console.log(`画面の判断: 引き継がない ${rv.exclude} 件・引き継ぐ ${rv.include} 件 / 最終判断 ${rv.decidedAt ? `${jst(rv.decidedAt)} (${rv.decidedBy ?? ""})` : "まだ (データ入出力 → 本番への引き継ぎ)"}`);
     console.log(`まとまり ${plan.groups.length} 件のうち 引き継ぐ ${sel.length} 件 (行 ${rowsN}・社員 ${plan.users.length} 名・ファイル ${plan.files.length} 件)`);
     const shown = plan.groups.filter((g) => g.selected || g.pulled.length || !g.reason.startsWith("変更履歴だけ"));
     for (const g of shown.slice(0, a.json ? 0 : 80)) console.log(`  ${g.selected ? "○" : g.pulled.length ? "△" : "×"} ${jst(g.first)} ${g.label}${g.reason ? ` … ${g.reason}` : ""}${g.pulled.length ? ` … 一部を一緒に引き継ぐ (${g.pulled.join("、")})` : ""}`);

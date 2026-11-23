@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import { Download, FileSpreadsheet, Receipt } from "lucide-react";
+import { ArrowRightLeft, Download, FileSpreadsheet, Receipt } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canExportData, canImportData } from "@/lib/auth/permissions";
+import { canExportData, canImportData, canReviewCarryover } from "@/lib/auth/permissions";
 import { IMPORT_SPEC, type ImportTarget } from "@/lib/data-io-spec";
 import { fmtDateTime } from "@/lib/format";
 import { userName } from "@/lib/db/queries";
@@ -11,6 +11,8 @@ import { Badge, Card, CardHeader, Note, PageHeader, Select } from "@/components/
 import { ImportWizard } from "@/components/features/ImportWizard";
 import { googleSheetsStatus } from "@/lib/google/sheets";
 import { SalesLedgerImport } from "@/components/features/SalesLedgerImport";
+import Link from "@/components/ui/Link";
+import { isTestWeekDb } from "@/lib/carryover-server";
 import { SalesReconcile } from "@/components/features/SalesReconcile";
 
 export const metadata: Metadata = { title: "データ入出力" };
@@ -46,6 +48,13 @@ export default async function DataIoPage({ searchParams }: { searchParams: Promi
         description="CSV ファイル・Google スプレッドシートからの取込と、CSV での書き出し。取込・書き出しは変更履歴に記録されます"
       />
 
+      {isTestWeekDb(db) && canReviewCarryover(user) && (
+        <Card className="mb-4">
+          <CardHeader title="本番への引き継ぎ (試験期間 11/23〜11/30)" icon={<ArrowRightLeft />} description="試験期間に登録した問い合わせ・見積などのうち、12 月 1 日以降の本番に引き継ぐものを確かめて、11/30 に最終判断します" />
+          <Link href="/data/carryover" className="text-sm text-accent hover:underline">引き継ぐ記録の一覧を開く</Link>
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-3">
         <div className="space-y-4 @4xl:col-span-2">
           <Card>
@@ -65,6 +74,10 @@ export default async function DataIoPage({ searchParams }: { searchParams: Promi
           <Card>
             <CardHeader title="売上台帳と売上明細の二重計上をまとめる" icon={<Receipt />} description="移行した売上のうち、同じ売上が売上台帳の受注と伝票の受注の 2 件になっているものを 1 件にします" />
             {canImportData(user) ? <SalesReconcile /> : <Note>管理者・本部スタッフが行います。</Note>}
+            <p className="mt-3 text-xs text-ink-2">
+              店舗別・月別の売上 (売上台帳・伝票・新システム) と、売上台帳だけにある売上の一覧は{" "}
+              <Link href="/data/sales-check" className="text-accent hover:underline">売上の照合</Link> で確かめられます (旧システムの数字との差も)。
+            </p>
           </Card>
 
           {(Object.keys(IMPORT_SPEC) as ImportTarget[]).map((t) => (

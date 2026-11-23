@@ -18,7 +18,7 @@ export function LineGroupsCard({ db, admin }: { db: Database; admin: boolean }) 
       <div className="px-5 pt-5">
         <CardHeader
           title="LINE グループ (現場・業者のグループと、店舗別・クレーム報告などの社内のグループ)"
-          description="会社の LINE 公式アカウントをグループに招待すると、ここに表示されます (LINE Official Account Manager の アカウント設定 →「グループ・複数人チャットへの参加を許可する」をオン)。現場・業者のグループは受注番号や協力業者をひも付けると、メッセージを案件のやりとり履歴に、写真・資料を現場写真・資料に残し、受注の画面からグループへ送れます (ひも付ける前のメッセージは 50 件まで保留)。社内のグループは「用途」を選ぶと、店舗別グループ = 新しい問い合わせをそのグループに知らせる (LINE の送信の通数を使います)・クレーム・手直し報告 = 報告を KPI → クレーム・手直し に並べて記録にする・施工事例写真・整理整頓の確認・その他 = メッセージを 300 件まで残します"
+          description="会社の LINE 公式アカウントをグループに招待すると、ここに表示されます (LINE Official Account Manager の アカウント設定 →「グループ・複数人チャットへの参加を許可する」をオン)。現場・業者のグループは受注番号や協力業者をひも付けると、メッセージを案件のやりとり履歴に、写真・資料を現場写真・資料に残し、受注の画面からグループへ送れます (ひも付ける前のメッセージは 50 件まで保留)。社内のグループは「用途」を選ぶと、店舗別グループ = 新しい問い合わせをそのグループに知らせる (LINE の送信の通数を使います)・クレーム・手直し報告 = 報告を KPI → クレーム・手直し に並べて記録にする・施工事例写真・整理整頓の確認 = 写真をこのサーバーに保存し、資料・写真 → 施工事例の投稿 (案件に付ける) / KPI → 整理整頓 (チェックに付ける) で使う・その他 = メッセージを 300 件まで残します"
         />
       </div>
       <div className="overflow-x-auto">
@@ -50,7 +50,7 @@ export function LineGroupsCard({ db, admin }: { db: Database; admin: boolean }) 
                     {purpose && g.storeId && <div className="mt-1 text-ink-2">{db.stores.find((s) => s.id === g.storeId)?.name}{g.notifyInquiries ? " · 新しい問い合わせを知らせる" : ""}</div>}
                     <div className="mt-1 text-ink-3">参加 {fmtDateTime(g.joinedAt)}</div>
                     {g.lastMessageAt && <div className="text-ink-3">最後のメッセージ {fmtDateTime(g.lastMessageAt)} · 計 {g.messageCount} 件</div>}
-                    {g.pending.length > 0 && (purpose ? <div className="text-ink-3">残しているメッセージ {g.pending.length} / {pendingLimit(g)} 件{g.purpose === "quality" && unhandled ? <> · <Link href="/kpi/quality" className="text-brand hover:underline">記録にしていない報告 {unhandled} 件</Link></> : null}</div> : <div className="text-warn-ink">保留中のメッセージ {g.pending.length} 件</div>)}
+                    {g.pending.length > 0 && (purpose ? <div className="text-ink-3">残しているメッセージ {g.pending.length} / {pendingLimit(g)} 件{g.purpose === "quality" && unhandled ? <> · <Link href="/kpi/quality" className="text-brand hover:underline">記録にしていない報告 {unhandled} 件</Link></> : null}{(g.purpose === "photos" || g.purpose === "tidy") && g.pending.some((m) => m.type === "image" && !m.handledAt) ? <> · <Link href={g.purpose === "photos" ? "/materials/cases/line" : "/kpi/tidy/new"} className="text-brand hover:underline">{g.purpose === "photos" ? "案件に付けていない写真" : "チェックに付けていない写真"} {g.pending.filter((m) => m.type === "image" && !m.handledAt).length} 枚</Link></> : null}</div> : <div className="text-warn-ink">保留中のメッセージ {g.pending.length} 件</div>)}
                   </td>
                   <td className="px-3 py-2 text-xs">
                     {order && <div><Link href={`/orders/${order.id}`} className="text-brand hover:underline">受注 {order.number}</Link></div>}

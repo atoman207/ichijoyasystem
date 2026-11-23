@@ -117,7 +117,7 @@ export default async function PurchaseDetailPage({ params, searchParams }: { par
               <form action={markPurchasePaid.bind(null, p.id)} className="grid grid-cols-1 gap-3 @xl:grid-cols-4">
                 <Field label="支払日"><Input type="date" name="paidAt" defaultValue={today} /></Field>
                 <Field label="支払方法">
-                  <Select name="payMethod" defaultValue="transfer">
+                  <Select name="payMethod" defaultValue={db.suppliers.find((x) => x.id === p.supplierId)?.payMethod ?? "transfer"}>
                     {(Object.keys(PURCHASE_PAY_METHOD_LABEL) as (keyof typeof PURCHASE_PAY_METHOD_LABEL)[]).map((m) => <option key={m} value={m}>{PURCHASE_PAY_METHOD_LABEL[m]}</option>)}
                   </Select>
                 </Field>

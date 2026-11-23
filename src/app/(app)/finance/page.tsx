@@ -1,7 +1,9 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canPay, canRegisterPurchase, canViewExpense, canViewPurchase, scopeByStore } from "@/lib/auth/permissions";
+import { canPay, canRegisterPurchase, canViewExpense, canViewPayables, canViewPurchase, canViewReceivables, scopeByStore } from "@/lib/auth/permissions";
+import { ReceivablesTab } from "./tab-ar";
+import { PayablesTab } from "./tab-ap";
 import { customerName, supplierName, userName } from "@/lib/db/queries";
 import { addDays, fmtDate, toDateKey, yen } from "@/lib/format";
 import { EXPENSE_METHOD_LABEL, PAYMENT_METHOD_LABEL, PURCHASE_STATUS } from "@/lib/constants";
@@ -17,7 +19,10 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const week = addDays(today, 7);
   const storeMap = new Map(db.stores.map((s) => [s.id, s]));
   const showPayables = canRegisterPurchase(user) || canPay(user);
-  const tab = sp.tab === "payables" && showPayables ? "payables" : sp.tab === "settlement" ? "settlement" : "receivables";
+  // 売掛一覧・買掛一覧 (基準日の残高。税理士事務所へ渡す一覧と CSV。src/lib/ar-ap.ts)
+  const showAr = canViewReceivables(user);
+  const showAp = canViewPayables(user);
+  const tab = sp.tab === "payables" && showPayables ? "payables" : sp.tab === "settlement" ? "settlement" : sp.tab === "ar" && showAr ? "ar" : sp.tab === "ap" && showAp ? "ap" : "receivables";
 
   // 未入金
   const unpaid = scopeByStore(user, db.invoices)
@@ -41,7 +46,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title="入出金の予定" description="お客様からの未入金 (入金予定日・支払期限の順) と、仕入の支払・経費の精算の支払待ちをまとめて確認します" />
+      <PageHeader title="入出金の予定" description="お客様からの未入金 (入金予定日・支払期限の順) と、仕入の支払・経費の精算の支払待ちをまとめて確認します。売掛一覧・買掛一覧は基準日の残高 (税理士事務所へ渡す一覧と CSV) です" />
       <div className="mb-6 grid grid-cols-2 gap-3 @3xl:grid-cols-4">
         <Stat label="未入金 (売掛金残高)" value={yen(unpaid.reduce((a, r) => a + r.remaining, 0))} sub={`${unpaid.length} 件`} href={`${base}?tab=receivables`} />
         <Stat label="支払期限を過ぎた未入金" value={yen(unpaid.filter((r) => r.overdue).reduce((a, r) => a + r.remaining, 0))} sub={`${unpaid.filter((r) => r.overdue).length} 件 · 督促が必要`} tone={unpaid.some((r) => r.overdue) ? "critical" : undefined} />
@@ -58,8 +63,13 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
           { href: `${base}?tab=receivables`, label: "未入金", count: unpaid.length },
           { href: `${base}?tab=settlement`, label: "決済会社からの入金待ち", count: settlements.length },
           ...(showPayables ? [{ href: `${base}?tab=payables`, label: "支払待ち・支払依頼中", count: purchases.length + expenses.length }] : []),
+          ...(showAr ? [{ href: `${base}?tab=ar`, label: "売掛一覧 (基準日)" }] : []),
+          ...(showAp ? [{ href: `${base}?tab=ap`, label: "買掛一覧 (基準日)" }] : []),
         ]}
       />
+
+      {tab === "ar" && <ReceivablesTab db={db} user={user} sp={sp} />}
+      {tab === "ap" && <PayablesTab db={db} user={user} sp={sp} />}
 
       {tab === "receivables" && (
         <Table minWidth="min-w-[860px]">

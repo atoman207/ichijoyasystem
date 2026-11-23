@@ -5,11 +5,11 @@ import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Supplier } from "@/lib/db/types";
 import { canEditSuppliers } from "@/lib/auth/permissions";
-import { SUPPLIER_KIND_LABEL } from "@/lib/constants";
+import { PURCHASE_PAY_METHOD_LABEL, SUPPLIER_KIND_LABEL } from "@/lib/constants";
 import { fieldLabel } from "@/lib/field-labels";
 import { choice, fail, numField, requireActionUser, str, withMsg } from "./guards";
 
-const FIELDS: (keyof Supplier)[] = ["name", "kana", "kind", "category", "contactName", "phone", "fax", "email", "postalCode", "address", "paymentTerms", "closingDay", "payMonthOffset", "payDay", "bankInfo", "registrationNumber", "lineId", "chatworkRoomId", "notes", "active"];
+const FIELDS: (keyof Supplier)[] = ["name", "kana", "kind", "category", "contactName", "phone", "fax", "email", "postalCode", "address", "paymentTerms", "closingDay", "payMonthOffset", "payDay", "bankInfo", "registrationNumber", "lineId", "chatworkRoomId", "notes", "active", "payMethod"];
 
 /** フォームの取引先の項目 */
 function readSupplier(formData: FormData, back: string): Omit<Supplier, "id" | "createdAt" | "updatedAt"> {
@@ -53,6 +53,8 @@ function readSupplier(formData: FormData, back: string): Omit<Supplier, "id" | "
     lineId: lineId || undefined,
     chatworkRoomId: room || undefined,
     notes: str(formData, "notes") || undefined,
+    // いつもの支払方法 (総合振込・都度振込・口座振替など。空 = 未設定)。買掛一覧の絞り込みと会計データの出力に使う
+    payMethod: (str(formData, "payMethod") && Object.prototype.hasOwnProperty.call(PURCHASE_PAY_METHOD_LABEL, str(formData, "payMethod")) ? str(formData, "payMethod") : undefined) as Supplier["payMethod"],
     // チェックボックス (on) と、外したときの hidden (off) の両方が届く。on があれば取引中
     active: formData.has("active") ? formData.getAll("active").map(String).includes("on") : true,
   };

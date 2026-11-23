@@ -285,6 +285,20 @@ section("権限一覧 (設定どおりの表)");
   eq(PT.PERMISSION_TABLE.length, PT.permissionTable(AP.DEFAULT_ACCESS_POLICY).length, "チャットボットの資料の表 = 初期設定の表");
 }
 
+section("閲覧の記録 (自店舗の記録も。1 人・1 件・1 日に 1 回)");
+{
+  const RV = await jiti.import(path.join(root, "src/lib/record-views.ts"));
+  eq(RV.viewSummary({ access: "edit" }, { entity: "customer" }), "顧客を閲覧", "自店舗の記録も閲覧を残す (理由なし)");
+  eq(RV.viewSummary({ access: "view", basis: "all" }, { entity: "order" }), "受注を閲覧 (ほかの店舗の記録)", "ほかの店舗の記録は理由つき");
+  const now = new Date("2026-11-23T03:00:00.000Z");
+  ok(RV.shouldLogRecordView("u_rv1", { entity: "customer", id: "c_rv1" }, [], now), "その日の最初の閲覧は残す");
+  ok(!RV.shouldLogRecordView("u_rv1", { entity: "customer", id: "c_rv1" }, [], now), "同じ人・同じ記録・同じ日の 2 回目は残さない");
+  ok(RV.shouldLogRecordView("u_rv2", { entity: "customer", id: "c_rv1" }, [], now), "ほかの人の閲覧は残す");
+  const existing = [{ userId: "u_rv3", action: "view", entity: "quote", entityId: "q_rv1", at: "2026-11-23T01:00:00.000Z" }];
+  ok(!RV.shouldLogRecordView("u_rv3", { entity: "quote", id: "q_rv1" }, existing, now), "ほかのサーバーがその日に書いた閲覧があれば残さない");
+  ok(RV.shouldLogRecordView("u_rv3", { entity: "quote", id: "q_rv1" }, existing, new Date("2026-11-24T03:00:00.000Z")), "次の日はまた残す");
+}
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   for (const f of fails) console.log("  ✗", f);

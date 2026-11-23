@@ -4,7 +4,8 @@ import { getDb, mutate, syncDb } from "@/lib/db/store";
 import { MAX_ATTACHMENT_BYTES, discardStored, resolveParent, storeFile } from "@/lib/attachments";
 import { findLineGroup, touchLineGroups } from "@/lib/line-groups";
 import { lineConfig, lineDataBase, lineWebhookUrl } from "./config";
-import { LINE_MEDIA_APP, LINE_MEDIA_SAVED, LINE_MEDIA_SAVING, SYSTEM_USER, type LineMediaJob } from "./inbound";
+import { LINE_MEDIA_APP, LINE_MEDIA_SAVED, LINE_MEDIA_SAVING, SYSTEM_USER, type LineHeldJob, type LineMediaJob } from "./inbound";
+import { putObject } from "@/lib/storage";
 
 /**
  * LINE Messaging API の呼び出し (受信のあとの処理・接続の確認・Webhook URL の設定)
@@ -114,9 +115,55 @@ export async function fetchLineGroupNames(ids: string[]): Promise<void> {
   }
 }
 
+/**
+ * 施工事例写真・整理整頓の確認のグループの写真を LINE から取得し、このサーバーに保存する (案件・チェックに付けるまでの置き場所。src/lib/line-photos.ts)。
+ * 保存したら保留のメッセージに場所 (fileKey) を、取得できなければ理由 (fileError) を書く
+ */
+export async function saveHeldLinePhotos(jobs: LineHeldJob[]): Promise<{ saved: number; failed: number }> {
+  let saved = 0;
+  let failed = 0;
+  for (const job of jobs) {
+    const got = await downloadLineContent(job.messageId);
+    let fileKey: string | undefined;
+    let error = "error" in got ? got.error : undefined;
+    if (!("error" in got)) {
+      const ext = /png/.test(got.contentType) ? "png" : "jpg";
+      const key = `line/${new Date().toISOString().slice(0, 7)}/${job.messageId}.${ext}`;
+      try {
+        await putObject(key, got.bytes);
+        fileKey = key;
+      } catch (err) {
+        error = (err as Error).message.slice(0, 120);
+      }
+      if (fileKey) {
+        const ok = await mutate((db) => {
+          const m = findLineGroup(db, job.groupId)?.pending.find((x) => x.id === job.messageId);
+          if (!m) return false;
+          Object.assign(m, { fileKey, contentType: got.contentType || "image/jpeg", size: got.bytes.length, fileError: undefined });
+          touchLineGroups(db, SYSTEM_USER);
+          return true;
+        }).catch(() => false);
+        if (ok) {
+          saved++;
+          continue;
+        }
+        error = "記録の保存に失敗しました";
+      }
+    }
+    failed++;
+    console.warn("[line] held photo failed:", job.messageId, error);
+    await mutate((db) => {
+      const m = findLineGroup(db, job.groupId)?.pending.find((x) => x.id === job.messageId);
+      if (m && !m.fileKey) m.fileError = (error ?? "取得できませんでした").slice(0, 120);
+    }).catch(() => undefined);
+  }
+  return { saved, failed };
+}
+
 /** 応答のあとの処理 (写真・資料の保存とグループ名の取得)。失敗しても受信の登録は残る */
-export async function afterLineWebhook(media: LineMediaJob[], groups: string[]): Promise<void> {
+export async function afterLineWebhook(media: LineMediaJob[], groups: string[], held: LineHeldJob[] = []): Promise<void> {
   if (media.length) await saveLineMedia(media).catch((err) => console.warn("[line] media:", (err as Error).message));
+  if (held.length) await saveHeldLinePhotos(held).catch((err) => console.warn("[line] held:", (err as Error).message));
   if (groups.length) await fetchLineGroupNames(groups).catch((err) => console.warn("[line] groups:", (err as Error).message));
 }
 

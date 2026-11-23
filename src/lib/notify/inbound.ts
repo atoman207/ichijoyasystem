@@ -61,6 +61,15 @@ export interface LineInboundResult {
   media: LineMediaJob[];
   /** 名前を LINE から取得するグループ */
   groupsToName: string[];
+  /** 施工事例写真・整理整頓の確認のグループの写真 (受信のあとでこのサーバーに保存する。src/lib/line-photos.ts) */
+  held: LineHeldJob[];
+}
+
+/** 用途のグループ (施工事例写真・整理整頓の確認) の写真を、受信のあとで取得してこのサーバーに保存する依頼 */
+export interface LineHeldJob {
+  groupId: string;
+  messageId: string;
+  fileName: string;
 }
 
 export const LINE_MEDIA_SAVING = "(写真・資料に保存しています)";
@@ -87,7 +96,7 @@ function lineText(m: { type?: string; text?: string; fileName?: string }, saving
  * - 写真・ファイルは media に入れ、ルートが応答のあとで取得して添付ファイルに保存する
  */
 export function recordLineEvents(db: Database, events: LineEvent[]): LineInboundResult {
-  const res: LineInboundResult = { recorded: 0, media: [], groupsToName: [] };
+  const res: LineInboundResult = { recorded: 0, media: [], groupsToName: [], held: [] };
   for (const ev of events) {
     const at = new Date(Number.isFinite(ev.timestamp) ? Number(ev.timestamp) : Date.now()).toISOString();
     const groupId = ev.source?.type === "group" ? ev.source.groupId : ev.source?.type === "room" ? ev.source.roomId : undefined;
@@ -139,6 +148,8 @@ export function recordLineEvents(db: Database, events: LineEvent[]): LineInbound
         // ひも付け前・用途のグループ (店舗別・クレーム報告など) はグループのメッセージとして残す
         g.pending.push(pm);
         trimPending(g);
+        // 施工事例写真・整理整頓の確認のグループの写真は、LINE のサーバーに一定期間しか残らないため受信のあとでこのサーバーに保存する
+        if ((g.purpose === "photos" || g.purpose === "tidy") && pm.type === "image" && fileName) res.held.push({ groupId, messageId: msgId, fileName });
         res.recorded++;
         continue;
       }

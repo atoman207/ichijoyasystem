@@ -6,7 +6,7 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canSeeAllStores } from "@/lib/auth/permissions";
+import { canAccessStore, canSeeAllStores, canViewAuditEntry } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
 import { handoffInquiry, linkInquiryToCustomer, registerCustomerFromInquiry, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
 import { findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
@@ -48,7 +48,10 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const isIntakeLog = (c: { channel: string; subject: string; relatedId?: string }) => c.relatedId === inq.id && (isAiChannel(c.channel) || (Boolean(receptionId) && c.subject.startsWith("受付:")));
   // AI 受付の会話の記録は下の「…の記録」に出すので、やりとりの一覧には重ねない
   const comms = customer ? db.commLogs.filter((c) => c.customerId === customer.id && (c.relatedId === inq.id || !c.relatedId) && !isIntakeLog(c)).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 10) : [];
-  const logs = db.auditLogs.filter((l) => l.entity === "inquiry" && l.entityId === inq.id).reverse();
+  const allLogs = db.auditLogs.filter((l) => l.entity === "inquiry" && l.entityId === inq.id && canViewAuditEntry(user, l)).reverse();
+  // 閲覧の記録 (1 人・1 日に 1 回) は変更の記録と分けて件数だけ出す
+  const logs = allLogs.filter((l) => l.action !== "view");
+  const views = allLogs.filter((l) => l.action === "view");
   const events = caseEvents(db, { inquiryId: inq.id, quoteId: quote?.id, orderId: order?.id });
   const caseParam = order ? `orderId=${order.id}` : quote ? `quoteId=${quote.id}` : `inquiryId=${inq.id}`;
   const open = !["lost", "closed"].includes(inq.status);
@@ -332,6 +335,16 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                 <li key={l.id}><span className="text-ink-3 tnum">{fmtDateTime(l.at)}</span> <span className="text-ink">{l.summary}</span> <span className="text-ink-3">({userName(l.userId)})</span></li>
               ))}
             </ul>
+            {views.length > 0 && (
+              <details className="mt-3 border-t border-line pt-2 text-xs">
+                <summary className="cursor-pointer text-ink-2">閲覧の記録 {views.length} 件 (1 人・1 日に 1 回)</summary>
+                <ul className="mt-1.5 max-h-60 space-y-1 overflow-y-auto text-ink-3">
+                  {views.slice(0, 100).map((l) => (
+                    <li key={l.id}><span className="tnum">{fmtDateTime(l.at)}</span> {userName(l.userId)} {l.summary}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </Card>
         </div>
       </div>

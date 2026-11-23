@@ -3,6 +3,7 @@ import { canAccessStore, canEditCompletedCase, canReadStoreRecords, canRequestRe
 import { accessPolicy, policyReader, type AccessPolicy } from "@/lib/access-policy";
 import { caseIndex, inquiryCase, orderCase, quoteCase, type CaseIndex, type CaseRow } from "@/lib/case-status";
 import { toDateKey } from "@/lib/format";
+import { invoiceOrderIds } from "@/lib/billing";
 
 /**
  * 案件の閲覧の範囲と、完了した案件の変更の制限
@@ -16,7 +17,7 @@ import { toDateKey } from "@/lib/format";
  *    (canEditCompletedCase。変更は変更履歴に残る)。進捗・やりとりの記録・写真の追加は続けられる
  * 3. 閲覧の範囲の設定 (src/lib/access-policy.ts) で、ほかの店舗の完了した案件も見られるようにできる:
  *    all = 全社員 (既定) / approval = 店長以上は全店舗、店舗スタッフは上司が承認した顧客 (承認の type = record_view、承認から grantDays 日) / open = 1. だけ。
- *    どの場合も、ほかの店舗の記録は閲覧のみ (edit にはならない)。閲覧は変更履歴に記録する (src/lib/record-views.ts)
+ *    どの場合も、ほかの店舗の記録は閲覧のみ (edit にはならない)。閲覧は自店舗の記録も含めて変更履歴に記録する (src/lib/record-views.ts)
  */
 
 export type RecordAccess = "edit" | "view" | "none";
@@ -59,8 +60,11 @@ export function isOpenInquiry(db: Database, i: Inquiry, ix?: CaseIndex): boolean
 }
 
 export function isOpenInvoice(db: Database, inv: Invoice, ix?: CaseIndex): boolean {
-  const o = db.orders.find((x) => x.id === inv.orderId);
-  return Boolean(o && inv.status !== "void" && isOpenOrder(db, o, ix));
+  if (inv.status === "void") return false;
+  // まとめ請求は、対象の案件のどれかが進行中なら進行中
+  const ids = new Set(invoiceOrderIds(inv));
+  const x = ix ?? (ids.size > 1 ? index(db) : undefined);
+  return db.orders.some((o) => ids.has(o.id) && isOpenOrder(db, o, x));
 }
 
 /** お客様に進行中の案件があるか */

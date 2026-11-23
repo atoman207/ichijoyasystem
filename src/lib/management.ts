@@ -4,6 +4,8 @@ import { addDays, fmtMonth, toDateKey, toMonthKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, ROLE_LABEL } from "@/lib/constants";
 import { NAME_KEY_PREFIX, orderStaffIndex } from "@/lib/order-staff";
 import { orderDate, storeKpi } from "@/lib/kpi";
+import { adjustmentDate, adjustmentLines } from "@/lib/mgmt/attribution";
+import { taxRate } from "@/lib/sales-ledger";
 import { SCORE_QUESTIONS, type ScoreKey } from "@/lib/survey";
 
 /**
@@ -17,6 +19,9 @@ import { SCORE_QUESTIONS, type ScoreKey } from "@/lib/survey";
  * - 仕入: 請求日が期間内のもの (支払却下を除く)
  * - 畳原価: 売上に数えた受注の畳原価 (販売管理ソフトの売上台帳から移行した値)
  * - 簡易粗利 = 売上 − 畳原価 − 仕入 − 経費 (税込のまま。会計上の利益ではない。AI アシスタントの simple_gross と同じ)
+ * - 店舗間の売上の配分 (お客様のご要望 2026-11-23「■3」: 内部受注の配分を経営ダッシュボードにも): 売上は施工店舗に付け、
+ *   内部受注・本部の特殊配分・手入力の調整 (管理会計の sales_adjustments) を「配分」として依頼元 +・施工店舗 − で別に示す
+ *   (配分後の売上・配分後の簡易粗利。全店では 0。計上日と金額は管理会計の元帳と同じ。担当者で絞ったときは数えない)
  * - 未入金残高・期日超過は「今日時点」の値 (期間に関係しない)
  * - 前年同期: 期間を 1 年前にずらす。期間の終わりが今日より後なら今日までにそろえる (今年の途中と昨年の同じ日までを比べる)
  * - 移行データ (販売管理ソフトから移行した受注。source = import): 状態はすべて「入金済」、契約日 = 売上計上日で、見積・請求書・入金の記録はない。
@@ -182,6 +187,15 @@ export interface MgmtTotals {
   tatamiCost: number;
   /** 簡易粗利 = 売上 − 畳原価 − 仕入 − 経費 */
   gross: number;
+  /**
+   * 内部受注・本部の特殊配分・手入力の売上調整による店舗間の売上の配分 (税込。管理会計の sales_adjustments と同じ行。
+   * 依頼元の店舗 +・施工店舗 −、全店では 0。担当者で絞ったときは数えない)
+   */
+  allocation: number;
+  /** 配分後の売上 = 売上 (施工店舗) + 配分 */
+  salesAllocated: number;
+  /** 配分後の簡易粗利 = 配分後の売上 − 畳原価 − 仕入 − 経費 */
+  grossAllocated: number;
 }
 
 export interface MgmtMonth {
@@ -195,6 +209,9 @@ export interface MgmtMonth {
   tatamiCost: number;
   expenses: number;
   purchases: number;
+  /** 店舗間の売上の配分 (内部受注など。全店では 0) と店舗ごとの配分 */
+  allocation: number;
+  allocByStore: Record<string, number>;
 }
 
 export interface PipelineRow {
@@ -320,6 +337,9 @@ function emptyTotals(): MgmtTotals {
     purchaseCount: 0,
     tatamiCost: 0,
     gross: 0,
+    allocation: 0,
+    salesAllocated: 0,
+    grossAllocated: 0,
   };
 }
 
@@ -386,6 +406,19 @@ export function managementReport(db: Database, user: User, filter: MgmtFilter, n
   const expenses = db.expenses.filter((e) => inStores.has(e.storeId) && (!staff || e.submittedBy === staff));
   const purchases = db.purchases.filter((p) => inStores.has(p.storeId) && p.status !== "rejected" && (!staff || p.registeredBy === staff));
 
+  // ---- 店舗間の売上の配分 (内部受注・本部の特殊配分・手入力の調整。管理会計の元帳 src/lib/mgmt/ledger.ts と同じ行・同じ計上日) ----
+  // 計上日 = 調整の日付、なければ受注の売上計上日 (施工完了前は未計上)。取消しの行は負の金額で打ち消す。
+  // 本部の特殊配分で「原価のみ計上」の行は売上を動かさない。税抜で計算した行は計上日の税率で税込にそろえる (この画面の売上は税込)。
+  // 担当者で絞ったときは数えない (店舗の単位の配分のため)
+  const adjs = staff ? [] : (db.salesAdjustments ?? []).filter((a) => !(a.kind === "hq_special" && a.treatment === "cost_only"));
+  const orderIndex = adjs.length ? new Map(db.orders.map((o) => [o.id, o])) : undefined;
+  const allocations = adjs.flatMap((a) => {
+    const date = adjustmentDate(db, a, orderIndex);
+    if (!date) return [];
+    const amount = a.base === "tax_excluded" ? Math.round(a.amount * (1 + taxRate(date))) : a.amount;
+    return [{ date, lines: adjustmentLines({ fromStoreId: a.fromStoreId, toStoreId: a.toStoreId, amount }) }];
+  });
+
   // ---- 合計 ----
   const totalsFor = (sid: StoreId | undefined, f: Range): MgmtTotals => {
     const t = emptyTotals();
@@ -446,6 +479,12 @@ export function managementReport(db: Database, user: User, filter: MgmtFilter, n
       t.purchaseCount++;
     }
     t.gross = t.sales - t.tatamiCost - t.purchases - t.expenses;
+    for (const a of allocations) {
+      if (!inRange(a.date, f)) continue;
+      for (const line of a.lines) if (inStores.has(line.storeId) && (!sid || line.storeId === sid)) t.allocation += line.amount;
+    }
+    t.salesAllocated = t.sales + t.allocation;
+    t.grossAllocated = t.gross + t.allocation;
     return t;
   };
   const totals = totalsFor(undefined, range);
@@ -454,7 +493,7 @@ export function managementReport(db: Database, user: User, filter: MgmtFilter, n
 
   // ---- 月次 ----
   const monthKeys = monthsBetween(filter.from, filter.to);
-  const monthMap = new Map<string, MgmtMonth>(monthKeys.map((k) => [k, { month: k, sales: 0, byStore: Object.fromEntries(storeIds.map((s) => [s, 0])), prevSales: 0, orderAmount: 0, received: 0, tatamiCost: 0, expenses: 0, purchases: 0 }]));
+  const monthMap = new Map<string, MgmtMonth>(monthKeys.map((k) => [k, { month: k, sales: 0, byStore: Object.fromEntries(storeIds.map((s) => [s, 0])), prevSales: 0, orderAmount: 0, received: 0, tatamiCost: 0, expenses: 0, purchases: 0, allocation: 0, allocByStore: Object.fromEntries(storeIds.map((s) => [s, 0])) }]));
   const bump = (d: string | undefined, fn: (row: MgmtMonth) => void) => {
     if (!inRange(d, range)) return;
     const row = monthMap.get(d!.slice(0, 7));
@@ -477,6 +516,15 @@ export function managementReport(db: Database, user: User, filter: MgmtFilter, n
   for (const p of payments) bump(p.date, (r) => (r.received += p.amount));
   for (const e of expenses) if (COUNTED_EXPENSE.includes(e.status)) bump(e.date, (r) => (r.expenses += e.amount));
   for (const p of purchases) bump(p.invoiceDate, (r) => (r.purchases += p.amount));
+  for (const a of allocations) {
+    bump(a.date, (r) => {
+      for (const line of a.lines) {
+        if (!inStores.has(line.storeId)) continue;
+        r.allocation += line.amount;
+        r.allocByStore[line.storeId] = (r.allocByStore[line.storeId] ?? 0) + line.amount;
+      }
+    });
+  }
 
   // ---- 受注の進み具合 (契約日が期間内。システムで登録した受注だけ。移行データは別に数える) ----
   const periodOrders = orders.filter((o) => inRange(o.contractDate, range));
@@ -649,6 +697,8 @@ export type MgmtCsvSection = keyof typeof MGMT_CSV_SECTIONS;
 
 const TOTAL_COLUMNS: [keyof MgmtTotals, string][] = [
   ["sales", "売上 (税込)"],
+  ["allocation", "内部受注などの配分"],
+  ["salesAllocated", "配分後の売上"],
   ["salesCount", "売上件数"],
   ["importedSales", "うち移行データの売上"],
   ["orderCount", "受注件数"],
@@ -666,6 +716,7 @@ const TOTAL_COLUMNS: [keyof MgmtTotals, string][] = [
   ["expenses", "経費 (承認済・精算済)"],
   ["expensesPending", "経費 (承認待ち)"],
   ["gross", "簡易粗利 (売上−畳原価−仕入−経費)"],
+  ["grossAllocated", "配分後の簡易粗利"],
 ];
 
 /** 今日時点の値 (前年同期と比べない) */
@@ -680,8 +731,8 @@ export function mgmtCsvRows(r: MgmtReport, section: MgmtCsvSection, periodLabel:
       return [["項目", "値", "前年同期"], ["期間", periodLabel, r.previous.label], ...TOTAL_COLUMNS.map(([k, label]) => [label, r.totals[k], POINT_IN_TIME.has(k) ? "" : r.previous.totals[k]])];
     case "monthly":
       return [
-        ["月", "売上", ...r.stores.map((s) => `売上 ${s.name}`), "前年同月の売上", "受注金額", "入金額", "畳原価", "仕入", "経費", "簡易粗利"],
-        ...r.months.map((m) => [fmtMonth(m.month), m.sales, ...r.stores.map((s) => m.byStore[s.id] ?? 0), m.prevSales, m.orderAmount, m.received, m.tatamiCost, m.purchases, m.expenses, m.sales - m.tatamiCost - m.purchases - m.expenses]),
+        ["月", "売上", ...r.stores.map((s) => `売上 ${s.name}`), ...r.stores.map((s) => `配分後の売上 ${s.name}`), "前年同月の売上", "受注金額", "入金額", "畳原価", "仕入", "経費", "簡易粗利"],
+        ...r.months.map((m) => [fmtMonth(m.month), m.sales, ...r.stores.map((s) => m.byStore[s.id] ?? 0), ...r.stores.map((s) => (m.byStore[s.id] ?? 0) + (m.allocByStore[s.id] ?? 0)), m.prevSales, m.orderAmount, m.received, m.tatamiCost, m.purchases, m.expenses, m.sales - m.tatamiCost - m.purchases - m.expenses]),
       ];
     case "stores":
       return [["店舗", ...TOTAL_COLUMNS.map(([, l]) => l), "成約率 (%)", "平均受注単価", "前年同期の売上", "前年同期比 (%)"], ...r.storeRows.map((s) => [s.storeName, ...TOTAL_COLUMNS.map(([k]) => s[k]), percent1(s.winRate), s.avgOrder, s.prevSales, percent1(s.salesGrowth)])];

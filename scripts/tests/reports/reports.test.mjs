@@ -173,6 +173,33 @@ eq(Object.fromEntries(r.staffRows.filter((s) => s.sales).map((s) => [S.compactNa
 const g = AN.runAnalysis(db, admin, { subject: "sales", metrics: ["simple_gross"], group_by: [], ...FILTER }, NOW);
 eq(g.rows?.[0]?.simple_gross, t.gross, "AI の簡易粗利 = 経営ダッシュボードの簡易粗利");
 
+section("内部受注などの店舗間の配分 (お客様のご要望 2026-11-23 ■3)");
+{
+  const d2 = structuredClone(db);
+  // o8 (中央店が施工・6/10 完了) を合志店が依頼した内部受注: 税込 6,600 円を合志店へ。税抜で計算した本部の特殊配分 1,000 円 (5/20) は 1,100 円。原価のみ計上は売上を動かさない
+  d2.salesAdjustments = [
+    { id: "adj1", number: "SA-2031-0001", kind: "internal_order", orderId: "o8", fromStoreId: "koshi", toStoreId: "chuo", base: "tax_included", amount: 6600, provisional: false, status: "active", createdBy: "u_admin", createdAt: at },
+    { id: "adj2", number: "SA-2031-0002", kind: "hq_special", date: "2031-05-20", fromStoreId: "chuo", toStoreId: "hq", base: "tax_excluded", amount: 1000, treatment: "sales_transfer", provisional: false, status: "active", createdBy: "u_admin", createdAt: at },
+    { id: "adj3", number: "SA-2031-0003", kind: "hq_special", date: "2031-05-21", fromStoreId: "koshi", toStoreId: "hq", base: "tax_included", amount: 9999, treatment: "cost_only", provisional: false, status: "active", createdBy: "u_admin", createdAt: at },
+    { id: "adj4", number: "SA-2031-0004", kind: "manual", date: "2031-07-05", fromStoreId: "koshi", toStoreId: "chuo", base: "tax_included", amount: 5000, provisional: false, status: "active", createdBy: "u_admin", createdAt: at },
+  ];
+  const ra = M.managementReport(d2, admin, FILTER, NOW);
+  const row = (sid) => ra.storeRows.find((x) => x.storeId === sid);
+  eq(row("koshi").allocation, 6600, "依頼元 (合志店) に +6,600 (受注の売上計上日に計上)");
+  eq(row("chuo").allocation, -6600 + 1100, "施工店舗 (中央店) は −6,600、本部へ渡した側として税抜 1,000 → 税込 +1,100");
+  eq(row("koshi").salesAllocated, row("koshi").sales + 6600, "配分後の売上 = 売上 + 配分");
+  eq(ra.totals.allocation, ra.storeRows.reduce((a, x) => a + x.allocation, 0), "全店の配分 = 店舗の配分の合計");
+  eq(ra.totals.sales, r.totals.sales, "外部の売上 (全店) は配分で変わらない");
+  ok(!ra.storeRows.some((x) => x.allocation === 9999 || x.allocation === -9999), "本部の特殊配分の「原価のみ計上」は売上を動かさない");
+  eq(ra.months.reduce((a, m) => a + (m.allocByStore.koshi ?? 0), 0), 6600, "月次の店舗別の配分 (期間外の 7/5 の行は入らない)");
+  const rs = M.managementReport(d2, admin, { ...FILTER, staffId: "u_mgr_c" }, NOW);
+  eq(rs.totals.allocation, 0, "担当者で絞ったときは配分を数えない");
+  const rk = M.managementReport(d2, mgrK, FILTER, NOW);
+  eq(rk.totals.allocation, rk.storeRows.find((x) => x.storeId === "koshi")?.allocation ?? 6600, "店舗のロールは自店舗の配分だけ");
+  const csvRows = M.mgmtCsvRows(ra, "stores", "期間");
+  ok(csvRows[0].includes("内部受注などの配分") && csvRows[0].includes("配分後の売上"), "CSV にも配分と配分後の売上");
+}
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   console.log("FAILED:\n - " + fails.join("\n - "));

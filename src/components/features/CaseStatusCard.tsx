@@ -6,6 +6,7 @@ import { PAYMENT_METHOD_LABEL } from "@/lib/constants";
 import { fmtDate, toDateKey, yen } from "@/lib/format";
 import { userName } from "@/lib/db/queries";
 import { Badge, Button, Card, CardHeader, Field, Input, Select } from "@/components/ui";
+import { isBatchInvoice, liveInvoicesOfOrder, usesBatchBilling } from "@/lib/billing";
 
 /** 受注・施工の画面: 案件の状態 (進捗・仕様・日程・請求・入金・事務処理) */
 /** locked: 入金完了の案件 (src/lib/case-access.ts の completedCaseLock)。状態の設定だけを止め、全処理完了の登録・再開は残す */
@@ -13,7 +14,9 @@ export function CaseStatusCard({ db, order: o, user, locked = false }: { db: Dat
   const today = toDateKey(new Date());
   const row = orderCase(o, caseIndex(db), today);
   const customer = db.customers.find((c) => c.id === o.customerId);
-  const invoices = db.invoices.filter((i) => i.orderId === o.id && i.status !== "void");
+  // まとめ請求の請求書も含める (src/lib/billing.ts)
+  const invoices = liveInvoicesOfOrder(db.invoices, o);
+  const batchInvoice = invoices.find((i) => isBatchInvoice(i));
   const payments = db.payments.filter((p) => invoices.some((i) => i.id === p.invoiceId)).sort((a, b) => a.date.localeCompare(b.date));
   const paidOn = row.payment === "paid" || row.payment === "settlement_pending" ? payments.at(-1)?.date : undefined;
   const settledOn = row.payment === "paid" ? (payments.filter((p) => p.method === "card" || p.method === "paypay").map((p) => p.settledOn).sort().at(-1) ?? paidOn) : undefined;
@@ -23,8 +26,8 @@ export function CaseStatusCard({ db, order: o, user, locked = false }: { db: Dat
   const manage = canManageFinance(user) || isManagerOrAbove(user);
   const milestones: [string, string | undefined, string?][] = [
     ["工事完了", o.completedAt ? fmtDate(o.completedAt) : undefined],
-    ["売上計上", o.salesDate ? fmtDate(o.salesDate) : undefined],
-    ["請求完了", !required ? "請求不要" : invoices[0] ? fmtDate(invoices[0].issueDate) : undefined],
+    ["売上計上 (施工完了日)", o.salesDate ? fmtDate(o.salesDate) : undefined],
+    ["請求完了 (請求書の発行日)", !required ? "請求不要" : invoices[0] ? fmtDate(invoices[0].issueDate) : undefined, usesBatchBilling(customer) ? "締め日にまとめて請求" : undefined],
     ["入金完了", settledOn ? fmtDate(settledOn) : row.payment === "settlement_pending" ? undefined : undefined, row.payment === "settlement_pending" ? "決済の入金待ち" : row.payment === "partial" ? "一部入金" : undefined],
     ["全処理完了", o.closedAt ? fmtDate(o.closedAt) : undefined],
   ];
@@ -89,7 +92,10 @@ export function CaseStatusCard({ db, order: o, user, locked = false }: { db: Dat
         </details>
       )}
 
-      {done && remaining > 0 && !o.closedAt && (
+      {batchInvoice && remaining > 0 && !o.closedAt && (
+        <p className="mt-3 rounded-lg bg-subtle px-3 py-2 text-xs text-ink-2">この案件はまとめ請求書 {batchInvoice.number} ({batchInvoice.orderIds?.length ?? 1} 件) で請求しています。入金は請求書の画面で登録してください (入金は売上計上日の古い案件から順に割り当てます)。</p>
+      )}
+      {done && remaining > 0 && !o.closedAt && !batchInvoice && (
         <details className="mt-3 rounded-lg border border-line px-3 py-2" open={!required && invoices.length === 0}>
           <summary className="cursor-pointer text-sm font-medium text-accent">納品時の集金・決済を記録する</summary>
           <form action={recordCollection.bind(null, o.id)} className="mt-3 grid grid-cols-1 items-end gap-3 @xl:grid-cols-4">

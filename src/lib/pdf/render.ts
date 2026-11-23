@@ -564,6 +564,12 @@ export async function renderInvoicePdf(data: InvoicePdfData): Promise<Uint8Array
   ];
   if (data.dueDate) meta.push(["お支払期限", fmtJpDate(data.dueDate)]);
   if (data.transactionDate) meta.push(["取引年月日", fmtJpDate(data.transactionDate)]);
+  if (data.transactionPeriod) {
+    // まとめ請求: 締め日と締めの期間 (案件ごとの施工完了日は明細に)
+    const md = (d: string) => `${Number(d.slice(5, 7))}月${Number(d.slice(8, 10))}日`;
+    meta.push(["締め日", fmtJpDate(data.transactionPeriod.to)]);
+    if (data.transactionPeriod.from) meta.push(["取引期間", `${md(data.transactionPeriod.from)}〜${md(data.transactionPeriod.to)}`]);
+  }
 
   const total = num(data.total);
   const paid = num(data.paidAmount);

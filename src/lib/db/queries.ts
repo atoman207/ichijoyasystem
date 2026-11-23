@@ -14,6 +14,7 @@ import { addDays, toDateKey, toMonthKey } from "@/lib/format";
 import { analyzeConflicts, compareEvents, lastDay, occursOn, periodLabel } from "@/lib/calendar";
 import { caseEvents } from "./schedule";
 import { customerPhoneIncludes } from "@/lib/customer-contacts";
+import { invoiceOfOrder } from "@/lib/billing";
 
 /* ---------------- lookups ---------------- */
 
@@ -289,7 +290,7 @@ export function customerTimeline(db: Database, customerId: string) {
 export function quoteChain(db: Database, quote: Quote) {
   const inquiry = db.inquiries.find((i) => i.id === quote.inquiryId);
   const order = db.orders.find((o) => o.quoteId === quote.id);
-  const invoice = order ? db.invoices.find((i) => i.orderId === order.id) : undefined;
+  const invoice = order ? invoiceOfOrder(db.invoices, order) : undefined;
   const payments = invoice ? db.payments.filter((p) => p.invoiceId === invoice.id) : [];
   const approvals = db.approvals.filter((a) => a.targetId === quote.id || (order && a.targetId === order.id));
   return { inquiry, order, invoice, payments, approvals };
@@ -298,7 +299,8 @@ export function quoteChain(db: Database, quote: Quote) {
 export function orderChain(db: Database, order: Order) {
   const quote = db.quotes.find((q) => q.id === order.quoteId);
   const inquiry = quote ? db.inquiries.find((i) => i.id === quote.inquiryId) : undefined;
-  const invoice = db.invoices.find((i) => i.orderId === order.id);
+  // まとめ請求の請求書も含めて、受注が指している請求書を優先する (src/lib/billing.ts)。入金はまとめ請求なら請求書全体の入金
+  const invoice = invoiceOfOrder(db.invoices, order);
   const payments = invoice ? db.payments.filter((p) => p.invoiceId === invoice.id) : [];
   const events = caseEvents(db, { orderId: order.id, quoteId: quote?.id, inquiryId: inquiry?.id }).sort(compareEvents);
   const approvals = db.approvals.filter((a) => a.targetId === order.id || (quote && a.targetId === quote.id));

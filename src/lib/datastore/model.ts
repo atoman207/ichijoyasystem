@@ -115,7 +115,8 @@ export const CODE_COLUMNS: Record<string, Record<string, string>> = {
   invoices: { status: "invoice_status" },
   payments: { method: "payment_method" },
   expenses: { status: "expense_status", payment_method: "expense_method" },
-  purchases: { status: "purchase_status" },
+  purchases: { status: "purchase_status", pay_method: "purchase_pay_method" },
+  suppliers: { pay_method: "purchase_pay_method" },
   purchase_orders: { status: "purchase_order_status" },
   approvals: { status: "approval_status", type: "approval_type", required_role: "required_role" },
   schedule_events: { kind: "schedule_kind" },
@@ -640,6 +641,9 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
     v("knowledge", `select * from main.knowledge where active = 1 and (visibility is null or visibility in ${knowledgeVis[user.role]})`),
     // 文書の下書き (permissions.ts の canViewDocDraft と同じ: 所属店舗の文書と自分が作った文書)
     v("doc_drafts", `select * from main.doc_drafts where store_id = ${store} or created_by = ${me}`),
+    // 施工事例の投稿 (canViewCasePost: 案件の店舗と自分が作った投稿)・整理整頓チェック (canViewTidyCheck: 店長は全店舗、店舗スタッフは自店舗)
+    v("case_posts", `select * from main.case_posts where store_id = ${store} or created_by = ${me}`),
+    ...(manager ? [] : [byStore("tidy_checks")]),
     // 社員: 名前・ロール・所属だけ
     v("users", "select id, name, kana, role, store_id, title, active from main.users"),
     // FAX: 自店舗の送信・仕分け済みの受信、担当・登録したもの

@@ -32,9 +32,9 @@ export interface CatalogTable {
 }
 
 const GROUPS: [string, RegExp][] = [
-  ["営業・施工", /^(customers|inquiries|quotes|orders|schedule|surveys|surveyHistory|qualityIssues|reviews|commLogs|photoAlbums|scheduleHolds|jobSpecs|productionJobs|resourceBookings|workReportDays|promotions|products)$/],
+  ["営業・施工", /^(customers|inquiries|quotes|orders|schedule|surveys|surveyHistory|qualityIssues|reviews|commLogs|photoAlbums|scheduleHolds|jobSpecs|productionJobs|resourceBookings|workReportDays|promotions|products|casePosts)$/],
   ["経理", /^(invoices|payments|expenses|purchases|suppliers|purchaseOrders|cashEntries)$/],
-  ["社内・事務", /^(users|stores|threads|messages|approvals|knowledge|attachments|documents|holidays|leaveRequests|leaveGrants|holidayWorks|officeImprovements|condolences|docDrafts)$/],
+  ["社内・事務", /^(users|stores|threads|messages|approvals|knowledge|attachments|documents|holidays|leaveRequests|leaveGrants|holidayWorks|officeImprovements|condolences|docDrafts|tidyChecks)$/],
   ["FAX・地図", /^(faxMessages|faxNumbers|map.*)$/],
   ["管理会計", /^(materials|materialCosts|boms|materialUsages|stockMoves|materialTransfers|mgmt.*|salesAdjustments|orderAttributions|expenseClasses|allocationRuns|periodCloses|purchaseLineAllocs|itemCategories|salesAreas)$/],
   ["システム", /^(auditLogs|deliveries|settings|sourceFiles)$/],

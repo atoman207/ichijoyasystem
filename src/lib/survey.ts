@@ -42,11 +42,54 @@ export function normPostcardNo(v: string | undefined | null): string {
   return (v ?? "").normalize("NFKC").replace(/^No\.?/i, "").replace(/[\s\-ー－]/g, "").toUpperCase();
 }
 
-/** 古い集計表の文字 (例: "価格, 評判") を選択肢の配列にする */
+/**
+ * 移行データ (スプレッドシートの回答)・古い集計表の書き方 → ⑥ の選択肢。
+ * フォームでは「R」= リピーター (以前頼んだことがある)、「DM」「Googleマップ」「HP」と書いていた
+ */
+const MEDIA_ALIASES: [RegExp, (typeof MEDIA_OPTIONS)[number]][] = [
+  [/^R$|^リピ|^以前|^前回/i, "以前頼んだことがある"],
+  [/^DM$|ダイレクトメール/i, "ダイレクトメール"],
+  [/(google|グーグル).*(map|マップ)|^google$|^グーグル$/i, "グーグルマップ"],
+  [/^HP$|ホームページ|^ネット|インターネット/i, "ホームページ"],
+  [/^CM$|^TV$|テレビ/i, "CM"],
+  [/クチコミ|口コミ/, "口コミ"],
+  [/^紹介|^知人|^友人/, "紹介"],
+  [/^SNS$|インスタ|instagram|facebook/i, "SNS"],
+];
+
+function optionOf(part: string, options: readonly string[]): string | undefined {
+  const p = part.normalize("NFKC").trim();
+  const direct = options.find((o) => p === o || p.includes(o) || (p.length >= 2 && o.includes(p)));
+  if (direct) return direct;
+  if (options.includes("以前頼んだことがある")) return MEDIA_ALIASES.find(([re]) => re.test(p))?.[1];
+  return undefined;
+}
+
+const splitParts = (v: string) => v.split(/[,、，・\n/]+/).map((x) => x.trim()).filter(Boolean);
+
+/** 古い集計表の文字 (例: "価格, 評判") を選択肢の配列にする (選択肢にない書き方はそのまま残す) */
 export function splitAnswers(v: string | undefined, options: readonly string[]): string[] {
   if (!v) return [];
-  const parts = v.split(/[,、，・\n/]+/).map((x) => x.trim()).filter(Boolean);
-  return parts.map((p) => options.find((o) => p.includes(o) || o.includes(p)) ?? p);
+  return splitParts(v).map((p) => optionOf(p, options) ?? p);
+}
+
+/**
+ * 集計用: 回答 (文字・配列) → 選択肢 (重複なし)。選択肢にない書き方 (自由記述) は「その他」に数え、元の文字は others に残す。
+ * スプレッドシートの集計表 (H26〜R4 集計) も選択肢にない回答は「その他」に数えていた
+ */
+export function tallyAnswers(v: string | string[] | undefined, options: readonly string[]): { options: string[]; others: string[] } {
+  const parts = Array.isArray(v) ? v : v ? splitParts(v) : [];
+  const out = new Set<string>();
+  const others: string[] = [];
+  for (const raw of parts) {
+    const o = optionOf(raw, options);
+    if (o) out.add(o);
+    else if (raw.trim()) {
+      out.add("その他");
+      others.push(raw.trim().slice(0, 40));
+    }
+  }
+  return { options: [...out], others };
 }
 
 /** ⑧ の分類 (AI を使わないとき・移行データ用の簡易ルール) */

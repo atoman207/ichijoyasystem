@@ -1,5 +1,5 @@
 import type { Supplier } from "@/lib/db/types";
-import { SUPPLIER_KIND_LABEL } from "@/lib/constants";
+import { PURCHASE_PAY_METHOD_LABEL, SUPPLIER_KIND_LABEL } from "@/lib/constants";
 import { Field, Input, Select, Textarea } from "@/components/ui";
 
 /** 仕入先・協力業者の入力欄 (登録・変更で共通) */
@@ -37,6 +37,12 @@ export function SupplierFields({ s }: { s?: Partial<Supplier> }) {
           </Field>
           <Field label="支払日" hint="31 = 末日"><Input name="payDay" type="number" min={1} max={31} defaultValue={s?.payDay} /></Field>
           <Field label="支払条件 (文章)" hint="例: 月末締め 翌月末払い / 都度払い"><Input name="paymentTerms" defaultValue={s?.paymentTerms} /></Field>
+          <Field label="いつもの支払方法" hint="総合振込の仕入先は、税理士に渡す買掛一覧と会計データの支払の仕訳に入ります" className="col-span-2 @xl:col-span-4">
+            <Select name="payMethod" defaultValue={s?.payMethod ?? ""}>
+              <option value="">(未設定)</option>
+              {(Object.keys(PURCHASE_PAY_METHOD_LABEL) as (keyof typeof PURCHASE_PAY_METHOD_LABEL)[]).map((m) => <option key={m} value={m}>{PURCHASE_PAY_METHOD_LABEL[m]}</option>)}
+            </Select>
+          </Field>
         </div>
       </fieldset>
       <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">

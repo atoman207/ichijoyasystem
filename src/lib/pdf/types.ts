@@ -33,6 +33,7 @@ export interface QuotePdfData {
 
 export interface InvoicePdfData {
   number: string; issuedOn: string; dueDate?: string; /** 取引年月日 (work completion / sales date) */ transactionDate?: string;
+  /** まとめ請求の締めの期間 (取引年月日の代わりに「取引期間」) */ transactionPeriod?: { from?: string; to: string };
   customerName: string; honorific: "様" | "御中"; customerAddress?: string; siteAddress?: string;
   title: string; orderNumber?: string; items: PdfLine[];
   subtotal: number; discount: number; tax: number; total: number; paidAmount?: number;

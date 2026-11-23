@@ -1,53 +1,35 @@
-import type { Customer, Database, GoogleReview, Order, QualityIssue, StoreId, SurveyResponse } from "@/lib/db/types";
-import { MEDIA_OPTIONS, PRIORITY_OPTIONS, SCORE_QUESTIONS, splitAnswers, type ScoreKey } from "@/lib/survey";
+import type { Customer, Database, GoogleReview, QualityIssue, StoreId, SurveyResponse } from "@/lib/db/types";
+import { MEDIA_OPTIONS, PRIORITY_OPTIONS, SCORE_QUESTIONS, tallyAnswers, type ScoreKey } from "@/lib/survey";
+import { countedIssue, deliveryOf, inPeriod, periodOrders, surveyKpiDate, type Period } from "./kpi-core";
+import { kpiBasis, kpiCards, kpiDenominators, personScores, scoreAverage, unnamedCard, type Denominators, type KpiBasis } from "./kpi-basis";
 
 /**
  * KPI の集計 (アンケート・クレーム・手直し・Google 口コミ)
  * ------------------------------------------------------------
- * - 返信率 = 返信されたはがきの件数 ÷ 個人のお客様の案件数 × 100 (はがきは個人のお客様にだけ渡す)
+ * 分母と数え方は「お客様アンケート集計表」の KPI シートの基準 (src/lib/kpi-basis.ts。設定 → KPI → 分母・集計の基準 で切り替え):
+ * - 返信率 = 返信されたはがきの枚数 ÷ 個人件数 × 100 (個人件数 = 年間チラシ計画の本年度実績。値のない月はシステムの個人のお客様の案件数)
  * - アンケートの評価 = ①〜④ の平均 (5 段階)。① は全社 (事務)、② は営業担当 (見積り)、③ は担当職人 (複数名なら全員に同じ点)、④ は店舗の評価
- *   (未回答は平均に含めない。スプレッドシートでは空欄が 0 点として分母に入っていた)
- * - クレーム・手直し率 = クレーム・手直しの合計ポイント ÷ 期間内の総案件数 (個人・業者を問わない) × 100
- * - クレーム発生率 = クレームが発生した案件数 ÷ 期間内の総案件数 × 100 (手直しのみの案件は含めない)
+ *   (シートと同じく 合計点 ÷ 返信はがきの枚数 = 空欄は 0 点。設定で「回答した枚数で割る」にもできる)
+ * - クレーム・手直し率 = クレーム・手直しの合計ポイント ÷ 施工件数 × 100 (施工件数 = 売上台帳の現場名の行数。値のない月はシステムの総案件数)
+ * - クレーム発生率 = クレームが発生した案件数 ÷ 施工件数 × 100 (手直しのみの案件は含めない)
  * - Google 口コミ = 担当者ごと・月ごとのポイント × 1 ポイントあたりの支給額
- * 案件の日付は 売上計上日 → 完了日 → 契約日 の順に使う。アンケートは はがきの回答日 → 登録日
+ * 案件の日付は 売上計上日 → 完了日 → 契約日 の順に使う。アンケートは 集計月 → はがきの回答日 → 登録日 (surveyKpiDate)
  */
 
-export interface Period {
-  from: string;
-  to: string;
-}
+export { countedIssue, countedOrder, deliveryOf, inPeriod, isCard, orderDate, periodOrders, surveyDate, surveyKpiDate, type Period } from "./kpi-core";
 
-/** はがき 1 枚分の回答か (旧フォームの「2 人目以降の職人」だけの行は、③ の個人評価にだけ使う) */
-export const isCard = (s: SurveyResponse): boolean =>
-  Boolean(s.postcardNo) || s.source === "capture" || s.source === "manual" || [s.phoneScore, s.salesScore, s.finishScore].some((x) => typeof x === "number");
-
-/** 集計に入れるクレーム・手直し (記録のみのものを除く) */
-export const countedIssue = (q: QualityIssue): boolean => q.counted !== false;
-
-export const inPeriod = (date: string | undefined, p: Period | null): boolean => Boolean(date) && (!p || (date! >= p.from && date! <= p.to));
-
-export const orderDate = (o: Pick<Order, "salesDate" | "completedAt" | "contractDate">): string => (o.salesDate ?? o.completedAt?.slice(0, 10) ?? o.contractDate).slice(0, 10);
-export const surveyDate = (s: Pick<SurveyResponse, "answeredOn" | "receivedAt">): string => (s.answeredOn ?? s.receivedAt).slice(0, 10);
-
-/** 集計の対象になる案件 (キャンセルを除く) */
-export function periodOrders(db: Pick<Database, "orders">, p: Period | null, storeId?: StoreId): Order[] {
-  return db.orders.filter((o) => o.status !== "cancelled" && o.status !== "pending_approval" && o.status !== "returned" && (!storeId || o.storeId === storeId) && inPeriod(orderDate(o), p));
-}
-
-const avg = (xs: (number | undefined)[]): number | null => {
-  const v = xs.filter((x): x is number => typeof x === "number");
-  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
-};
 const pct = (n: number, d: number): number | null => (d > 0 ? (n / d) * 100 : null);
 
 export interface StoreKpi {
   storeId: StoreId | "all";
+  /** 施工件数 (クレーム・手直し率の分母。シートの基準なら売上台帳の現場名の行数) */
   orders: number;
+  /** 個人件数 (返信率の分母。シートの基準なら年間チラシ計画の本年度実績) */
   individualOrders: number;
   surveys: number;
   replyRate: number | null;
   scores: Record<ScoreKey, number | null>;
+  /** 平均の分母 (シートの基準ははがきの枚数。回答した枚数で割る設定なら回答数) */
   scoreCounts: Record<ScoreKey, number>;
   againYes: number;
   againAnswered: number;
@@ -60,29 +42,35 @@ export interface StoreKpi {
   claimReworkCount: number;
   reviews: number;
   reviewPoints: number;
+  /** 担当の名前が未記入のため数えないはがき */
+  unnamedCards: number;
+  /** 分母の内訳 (どの月が シート の値か) */
+  denominators: Denominators;
 }
 
-function customerType(customers: Map<string, Customer>, id: string): Customer["type"] | undefined {
-  return customers.get(id)?.type;
-}
+type KpiDb = Pick<Database, "orders" | "customers" | "surveys" | "qualityIssues" | "reviews"> & Partial<Pick<Database, "settings" | "stores">>;
 
-export function storeKpi(db: Pick<Database, "orders" | "customers" | "surveys" | "qualityIssues" | "reviews">, p: Period | null, storeId?: StoreId, customers?: Map<string, Customer>): StoreKpi {
+export function storeKpi(db: KpiDb, p: Period | null, storeId?: StoreId, customers?: Map<string, Customer>, basisIn?: KpiBasis): StoreKpi {
+  const basis = basisIn ?? kpiBasis(db);
   const cmap = customers ?? new Map(db.customers.map((c) => [c.id, c]));
-  const orders = periodOrders(db, p, storeId);
-  const individual = orders.filter((o) => customerType(cmap, o.customerId) !== "corporate").length;
-  const surveys = db.surveys.filter((s) => isCard(s) && (!storeId || s.storeId === storeId) && inPeriod(surveyDate(s), p));
+  const den = kpiDenominators(db, p, storeId, { customers: cmap, basis });
+  const surveys = kpiCards(db.surveys, p, basis, storeId);
+  const unnamed = db.surveys.filter((s) => (!storeId || s.storeId === storeId) && inPeriod(surveyKpiDate(s), p) && unnamedCard(s, basis)).length;
   // 店舗の行は店舗に付いたポイント (原因が事務のものは事務の単位)。全社は全部
   const issues = db.qualityIssues.filter((q) => countedIssue(q) && (!storeId || (q.storeId === storeId && q.attribution !== "office")) && inPeriod(q.occurredOn, p));
   const reviews = db.reviews.filter((r) => (!storeId || r.storeId === storeId) && inPeriod(r.postedOn, p));
-  const scores = Object.fromEntries(SCORE_QUESTIONS.map((q) => [q.key, avg(surveys.map((s) => s[q.key]))])) as Record<ScoreKey, number | null>;
-  const scoreCounts = Object.fromEntries(SCORE_QUESTIONS.map((q) => [q.key, surveys.filter((s) => typeof s[q.key] === "number").length])) as Record<ScoreKey, number>;
+  const avgs = Object.fromEntries(SCORE_QUESTIONS.map((q) => [q.key, scoreAverage(surveys.map((s) => s[q.key]), basis.average)])) as Record<ScoreKey, ReturnType<typeof scoreAverage>>;
+  const scores = Object.fromEntries(SCORE_QUESTIONS.map((q) => [q.key, avgs[q.key].avg])) as Record<ScoreKey, number | null>;
+  const scoreCounts = Object.fromEntries(SCORE_QUESTIONS.map((q) => [q.key, avgs[q.key].n])) as Record<ScoreKey, number>;
   const qualityPoints = issues.reduce((a, q) => a + q.points, 0);
   // 案件ごとに 1 件 (案件にひも付いていない記録 = スプレッドシートの取込・LINE の報告は 1 件ずつ)
   const claimCases = new Set(issues.filter((q) => q.kind !== "rework").map((q) => q.orderId ?? `qc:${q.id}`)).size;
-  const answered = surveys.filter((s) => s.wouldUseAgain === "はい" || s.wouldUseAgain === "いいえ" || /はい|いいえ/.test(s.wouldUseAgain ?? ""));
+  const answered = surveys.filter((s) => /はい|いいえ/.test(s.wouldUseAgain ?? ""));
+  const sites = den.sites.value;
+  const individual = den.individual.value;
   return {
     storeId: storeId ?? "all",
-    orders: orders.length,
+    orders: sites,
     individualOrders: individual,
     surveys: surveys.length,
     replyRate: pct(surveys.length, individual),
@@ -91,14 +79,16 @@ export function storeKpi(db: Pick<Database, "orders" | "customers" | "surveys" |
     againYes: answered.filter((s) => /はい/.test(s.wouldUseAgain ?? "")).length,
     againAnswered: answered.length,
     qualityPoints,
-    qualityRate: pct(qualityPoints, orders.length),
+    qualityRate: pct(qualityPoints, sites),
     claimCases,
-    claimRate: pct(claimCases, orders.length),
+    claimRate: pct(claimCases, sites),
     reworkCount: issues.filter((q) => q.kind === "rework").length,
     claimCount: issues.filter((q) => q.kind === "claim").length,
     claimReworkCount: issues.filter((q) => q.kind === "claim_rework").length,
     reviews: reviews.length,
     reviewPoints: reviews.reduce((a, r) => a + r.points, 0),
+    unnamedCards: unnamed,
+    denominators: den,
   };
 }
 
@@ -132,39 +122,34 @@ export interface StaffKpi {
   reviewPoints: number;
 }
 
-/** 担当職人 (③ の評価対象。複数のことがある)。移行データは担当職人の 1 人 */
-export function deliveryOf(s: Pick<SurveyResponse, "deliveryUserIds" | "craftsmanUserId">): string[] {
-  if (s.deliveryUserIds && s.deliveryUserIds.length) return s.deliveryUserIds;
-  return s.craftsmanUserId ? [s.craftsmanUserId] : [];
-}
-
-export function staffKpis(db: Pick<Database, "orders" | "surveys" | "qualityIssues" | "reviews" | "users">, p: Period | null, storeId?: StoreId): StaffKpi[] {
+export function staffKpis(db: Pick<Database, "orders" | "surveys" | "qualityIssues" | "reviews" | "users"> & Partial<Pick<Database, "settings">>, p: Period | null, storeId?: StoreId, basisIn?: KpiBasis): StaffKpi[] {
+  const basis = basisIn ?? kpiBasis(db);
   const orders = periodOrders(db, p);
-  const surveys = db.surveys.filter((s) => inPeriod(surveyDate(s), p));
-  const cards = surveys.filter(isCard);
+  const cards = kpiCards(db.surveys, p, basis);
+  const people = personScores(db.surveys, p, basis);
   const issues = db.qualityIssues.filter((q) => countedIssue(q) && inPeriod(q.occurredOn, p));
   const reviews = db.reviews.filter((r) => inPeriod(r.postedOn, p));
   const rows: StaffKpi[] = [];
   for (const u of db.users) {
     if (storeId && u.storeId !== storeId) continue;
     const asClerk = cards.filter((s) => s.clerkUserId === u.id);
-    const asSales = cards.filter((s) => s.salesUserId === u.id);
-    const asCraft = surveys.filter((s) => deliveryOf(s).includes(u.id));
-    const asDelivery = [...new Set([...asSales, ...asCraft])];
+    const phone = scoreAverage(asClerk.map((s) => s.phoneScore), basis.average);
+    const ps = people.get(u.id);
     const myOrders = orders.filter((o) => o.workerIds.includes(u.id)).length;
     const myIssues = issues.filter((q) => q.responsibleUserIds.includes(u.id));
     const myReviews = reviews.filter((r) => r.userId === u.id);
     const qualityPoints = myIssues.reduce((a, q) => a + q.points, 0);
-    if (!u.active && !asClerk.length && !asDelivery.length && !myIssues.length && !myReviews.length) continue;
+    const deliveryCount = new Set(cards.filter((s) => s.salesUserId === u.id || deliveryOf(s).includes(u.id)).map((s) => s.id)).size;
+    if (!u.active && !asClerk.length && !ps && !myIssues.length && !myReviews.length) continue;
     rows.push({
       userId: u.id,
-      phoneCount: asClerk.filter((s) => typeof s.phoneScore === "number").length,
-      phoneAvg: avg(asClerk.map((s) => s.phoneScore)),
-      salesCount: asSales.filter((s) => typeof s.salesScore === "number").length,
-      salesAvg: avg(asSales.map((s) => s.salesScore)),
-      craftsmanCount: asCraft.filter((s) => typeof s.craftsmanScore === "number").length,
-      craftsmanAvg: avg(asCraft.map((s) => s.craftsmanScore)),
-      deliveryCount: asDelivery.length,
+      phoneCount: phone.n,
+      phoneAvg: phone.avg,
+      salesCount: ps?.sales.n ?? 0,
+      salesAvg: ps?.sales.avg ?? null,
+      craftsmanCount: ps?.craft.n ?? 0,
+      craftsmanAvg: ps?.craft.avg ?? null,
+      deliveryCount,
       orders: myOrders,
       qualityCount: myIssues.length,
       qualityPoints,
@@ -182,21 +167,43 @@ export function staffKpis(db: Pick<Database, "orders" | "surveys" | "qualityIssu
 /* ⑤⑥⑦ の集計 (インセンティブとは別)                                     */
 /* ------------------------------------------------------------------ */
 
-export function answerCounts(all: SurveyResponse[]): { priorities: [string, number][]; media: [string, number][]; again: { yes: number; no: number } } {
+/**
+ * ⑤ 重視したこと・⑥ 依頼のきっかけ (複数回答)・⑦ 次回も依頼したいか の件数。
+ * 選択肢にない書き方 (移行データの「R」= 以前頼んだことがある・DM・Googleマップ など) は選択肢に読み替え、自由記述は「その他」に数える (survey.ts の tallyAnswers)。
+ * respondents = その設問に答えたはがきの枚数 (割合の分母。シートの集計表の多くの表と同じ)
+ */
+export function answerCounts(cards: SurveyResponse[]): {
+  priorities: [string, number][];
+  media: [string, number][];
+  again: { yes: number; no: number; unknown: number };
+  respondents: { priorities: number; media: number; again: number };
+  others: { priorities: [string, number][]; media: [string, number][] };
+} {
   const pri = new Map<string, number>(PRIORITY_OPTIONS.map((o) => [o, 0]));
   const med = new Map<string, number>(MEDIA_OPTIONS.map((o) => [o, 0]));
+  const priOther = new Map<string, number>();
+  const medOther = new Map<string, number>();
   let yes = 0;
   let no = 0;
-  for (const s of all.filter(isCard)) {
-    const p = s.priorityList?.length ? s.priorityList : splitAnswers(s.priorities, PRIORITY_OPTIONS);
-    const m = s.mediaList?.length ? s.mediaList : splitAnswers(s.media, MEDIA_OPTIONS);
-    for (const x of new Set(p)) pri.set(x, (pri.get(x) ?? 0) + 1);
-    for (const x of new Set(m)) med.set(x, (med.get(x) ?? 0) + 1);
-    if (/はい/.test(s.wouldUseAgain ?? "")) yes++;
-    else if (/いいえ/.test(s.wouldUseAgain ?? "")) no++;
+  let unknown = 0;
+  let pr = 0;
+  let mr = 0;
+  for (const s of cards) {
+    const p = tallyAnswers(s.priorityList?.length ? s.priorityList : s.priorities, PRIORITY_OPTIONS);
+    const m = tallyAnswers(s.mediaList?.length ? s.mediaList : s.media, MEDIA_OPTIONS);
+    if (p.options.length) pr++;
+    if (m.options.length) mr++;
+    for (const x of p.options) pri.set(x, (pri.get(x) ?? 0) + 1);
+    for (const x of m.options) med.set(x, (med.get(x) ?? 0) + 1);
+    for (const x of p.others) priOther.set(x, (priOther.get(x) ?? 0) + 1);
+    for (const x of m.others) medOther.set(x, (medOther.get(x) ?? 0) + 1);
+    const again = s.wouldUseAgain ?? "";
+    if (/はい/.test(again)) yes++;
+    else if (/いいえ/.test(again)) no++;
+    else if (/わから/.test(again)) unknown++;
   }
   const sort = (m: Map<string, number>) => [...m.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
-  return { priorities: sort(pri), media: sort(med), again: { yes, no } };
+  return { priorities: sort(pri), media: sort(med), again: { yes, no, unknown }, respondents: { priorities: pr, media: mr, again: yes + no + unknown }, others: { priorities: sort(priOther).slice(0, 20), media: sort(medOther).slice(0, 20) } };
 }
 
 /* ------------------------------------------------------------------ */

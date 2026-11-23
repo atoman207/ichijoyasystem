@@ -14,6 +14,7 @@ import { PLANNED_PAYMENT_LABEL, caseIndex, orderCase } from "@/lib/case-status";
 import { postCash } from "@/lib/cashbook";
 import { completedCaseLock, completedLockMessage, quoteCompletedLock } from "@/lib/case-access";
 import { assertStore, choice, fail, numField, requireActionUser, safeReturn, str, withMsg } from "./guards";
+import { isBatchInvoice } from "@/lib/billing";
 
 /* ------------------------------------------------------------------ */
 /* 現場情報・引継ぎ事項 (見積・受注)                                     */
@@ -159,6 +160,7 @@ export async function recordCollection(orderId: string, formData: FormData) {
     if (!["completed", "invoiced", "paid"].includes(o.status)) fail(back, "施工完了を登録してから集金を記録してください。");
     const now = nowIso();
     let inv = db.invoices.find((i) => i.id === o.invoiceId && i.status !== "void");
+    if (inv && isBatchInvoice(inv)) fail(back, `この案件はまとめ請求書 ${inv.number} で請求しています。入金は請求書の画面で登録してください。`);
     if (!inv) {
       const q = db.quotes.find((x) => x.id === o.quoteId);
       const net = q && q.total === o.total ? netAmount(q) : Math.round(o.total / 1.1);

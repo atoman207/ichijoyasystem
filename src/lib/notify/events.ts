@@ -16,7 +16,7 @@ import type { Outgoing } from "./send";
  * 画面のヘッダーの通知 (お知らせ) は従来どおり常に表示する
  */
 
-export type NotifyEvent = "approval_request" | "approval_result" | "mention" | "task" | "schedule_hold" | "leave" | "doc_draft" | "knowledge";
+export type NotifyEvent = "approval_request" | "approval_result" | "mention" | "task" | "schedule_hold" | "leave" | "doc_draft" | "knowledge" | "case_post";
 
 export const NOTIFY_EVENT_LABEL: Record<NotifyEvent, string> = {
   approval_request: "承認の依頼 (承認者へ)",
@@ -27,6 +27,7 @@ export const NOTIFY_EVENT_LABEL: Record<NotifyEvent, string> = {
   leave: "休暇の申請 (承認者へ) と承認・却下の結果 (本人へ)",
   doc_draft: "文書の下書きの承認の依頼 (承認者へ) と承認・差し戻しの結果 (作成者へ)",
   knowledge: "社内資料の確認期限切れ (担当者へ) とスプレッドシートの同期の失敗・復旧 (担当者・本部・管理者へ)",
+  case_post: "施工事例の投稿の確認の依頼 (確認する人へ) と承認・差し戻しの結果 (作成者へ)",
 };
 
 export interface NotifySettings {
@@ -213,6 +214,23 @@ export function docDraftResultNotices(db: Database, d: Pick<DocDraft, "id" | "nu
   const label = what === "approved" ? "承認されました" : "差し戻されました";
   const next = what === "approved" ? "\n文書の画面から送信してください (郵送・手渡しのときは記録だけ残せます)。" : "\n文面を直して、もう一度「内容を確認した」を押してください。";
   return build(db, "doc_draft", creator, `文書が${label}: ${d.number} ${d.title}`, `文書が${label} (${nameOf(db, actorId)} さん)。\n文書: ${d.number} ${d.title}${comment ? `\nコメント: ${comment}` : ""}${next}`, `/ai/drafts/${d.id}`, {});
+}
+
+/* ---------------- 施工事例の投稿 (src/lib/case-posts.ts) ---------------- */
+
+/** 確認の依頼: 確認する人へ (依頼した本人を除く) */
+export function casePostReviewNotices(db: Database, p: { id: string; number: string; title: string; requestedBy?: string }, reviewers: User[]): Outgoing[] {
+  const to = reviewers.filter((u) => u.id !== p.requestedBy);
+  return build(db, "case_post", to, `施工事例の投稿の確認依頼: ${p.number} ${p.title}`, `${nameOf(db, p.requestedBy)} さんから施工事例の投稿の確認の依頼があります。投稿文と写真を確かめて、承認するか差し戻してください。\n投稿: ${p.number} ${p.title}`, `/materials/cases/${p.id}`, {});
+}
+
+/** 承認・差し戻しの結果: 作成者・依頼した人へ (自分で操作したときは送らない) */
+export function casePostResultNotices(db: Database, p: { id: string; number: string; title: string; createdBy: string; requestedBy?: string }, actorId: string, what: "approved" | "returned", comment?: string): Outgoing[] {
+  const ids = [...new Set([p.createdBy, p.requestedBy].filter((x): x is string => Boolean(x) && x !== actorId))];
+  const to = db.users.filter((u) => ids.includes(u.id));
+  const label = what === "approved" ? "承認されました" : "差し戻されました";
+  const next = what === "approved" ? "\n投稿の画面で文面をコピー・写真を保存して投稿し、投稿したら「投稿を記録する」を押してください。" : "\n理由を確かめて直し、もう一度「確認を依頼する」を押してください。";
+  return build(db, "case_post", to, `施工事例の投稿が${label}: ${p.number} ${p.title}`, `施工事例の投稿が${label} (${nameOf(db, actorId)} さん)。\n投稿: ${p.number} ${p.title}${comment ? `\nコメント: ${comment}` : ""}${next}`, `/materials/cases/${p.id}`, {});
 }
 
 /* ---------------- 社内資料 (src/lib/knowledge-sync.ts) ---------------- */

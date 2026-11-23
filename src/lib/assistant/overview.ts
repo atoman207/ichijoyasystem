@@ -51,7 +51,7 @@ export function businessOverview(db: Database, user: User, opts: { from?: string
   if (r.storeRows.length > 1) {
     L.push("");
     L.push("## 店舗別");
-    for (const s of r.storeRows) L.push(`- ${s.storeName}: 売上 ${yen(s.sales)} (${s.salesCount} 件・前年比 ${s.salesGrowth === null ? "-" : `${s.salesGrowth >= 0 ? "+" : ""}${pct(s.salesGrowth)}`}) / 受注 ${yen(s.orderAmount)} (${s.orderCount} 件) / 成約率 ${pct(s.winRate)} / 平均単価 ${yen(s.avgOrder)} / 未入金 ${yen(s.receivables)} / 畳原価 ${yen(s.tatamiCost)} / 経費 ${yen(s.expenses)} / 簡易粗利 ${yen(s.gross)}`);
+    for (const s of r.storeRows) L.push(`- ${s.storeName}: 売上 ${yen(s.sales)} (${s.salesCount} 件・前年比 ${s.salesGrowth === null ? "-" : `${s.salesGrowth >= 0 ? "+" : ""}${pct(s.salesGrowth)}`}) / 受注 ${yen(s.orderAmount)} (${s.orderCount} 件) / 成約率 ${pct(s.winRate)} / 平均単価 ${yen(s.avgOrder)} / 未入金 ${yen(s.receivables)} / 畳原価 ${yen(s.tatamiCost)} / 経費 ${yen(s.expenses)} / 簡易粗利 ${yen(s.gross)}${s.allocation ? ` / 内部受注などの配分 ${s.allocation > 0 ? "+" : ""}${yen(s.allocation)} (配分後の売上 ${yen(s.salesAllocated)}・配分後の簡易粗利 ${yen(s.grossAllocated)})` : ""}`);
   }
   if (r.categories.length) {
     L.push("");

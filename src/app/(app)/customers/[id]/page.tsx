@@ -24,6 +24,8 @@ import { contactLabel, phoneDigits } from "@/lib/customer-contacts";
 import { MapInfoCard } from "@/components/maps/MapInfoCard";
 import { customerMedia, mediaIndex } from "@/lib/media";
 import { MediaTag } from "@/components/ops-reports/MediaFields";
+import { BillingTermsCard } from "@/components/finance/BillingTermsCard";
+import { invoiceOfOrder } from "@/lib/billing";
 
 export default async function CustomerDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -165,6 +167,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
               </ul>
             )}
           </Card>
+          {!viewOnly && <BillingTermsCard customer={c} user={user} />}
           <AiSummary kind="customer" id={c.id} label="AI で履歴を要約" />
           <RecordDocDrafts db={db} user={user} type="customer" id={c.id} number={c.code} />
           <RecordStamp db={db} targets={[{ entity: "customer", id: c.id }]} created={{ at: c.createdAt }} />
@@ -183,7 +186,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
                 .map((inq) => {
                   const quote = t.quotes.find((q) => q.id === inq.quoteId);
                   const order = quote ? t.orders.find((o) => o.quoteId === quote.id) : undefined;
-                  const invoice = order ? t.invoices.find((i) => i.orderId === order.id) : undefined;
+                  const invoice = order ? invoiceOfOrder(t.invoices, order) : undefined;
                   return (
                     <div key={inq.id} className="rounded-lg border border-line p-3">
                       <div className="flex flex-wrap items-center gap-2 text-sm">

@@ -1,6 +1,7 @@
 import type { Database, StoreId, SurveyResponse } from "@/lib/db/types";
-import { MEDIA_OPTIONS, PRIORITY_OPTIONS, splitAnswers } from "@/lib/survey";
-import { isCard, surveyDate } from "@/lib/kpi";
+import { MEDIA_OPTIONS, PRIORITY_OPTIONS, tallyAnswers } from "@/lib/survey";
+import { surveyKpiDate } from "@/lib/kpi-core";
+import { countsCard, kpiBasis, scoreAverage, type AverageMode } from "@/lib/kpi-basis";
 import { fiscalYearOf } from "@/lib/kpi-settings";
 import { historyColumn, type HistoryColumn } from "./history";
 import { nkTight } from "./tabs";
@@ -26,21 +27,19 @@ export interface CompareColumn extends HistoryColumn {
   note?: string;
 }
 
-function systemColumn(fy: number, cards: SurveyResponse[]): CompareColumn {
+function systemColumn(fy: number, cards: SurveyResponse[], average: AverageMode): CompareColumn {
   const answers: Record<string, Record<string, number>> = { 重視したこと: {}, 情報媒体: {}, 次回: {} };
   const add = (q: string, a: string) => (answers[q][a] = (answers[q][a] ?? 0) + 1);
   for (const s of cards) {
-    for (const p of new Set(s.priorityList?.length ? s.priorityList : splitAnswers(s.priorities, PRIORITY_OPTIONS))) add("重視したこと", p);
-    for (const m of new Set(s.mediaList?.length ? s.mediaList : splitAnswers(s.media, MEDIA_OPTIONS))) add("情報媒体", m);
+    // 選択肢にない書き方 (「R」= 以前頼んだことがある・DM など) は読み替え、自由記述は「その他」(survey.ts の tallyAnswers)
+    for (const p of tallyAnswers(s.priorityList?.length ? s.priorityList : s.priorities, PRIORITY_OPTIONS).options) add("重視したこと", p);
+    for (const m of tallyAnswers(s.mediaList?.length ? s.mediaList : s.media, MEDIA_OPTIONS).options) add("情報媒体", m);
     const again = s.wouldUseAgain ?? "";
     if (/はい/.test(again)) add("次回", "はい");
     else if (/いいえ/.test(again)) add("次回", "いいえ");
     else if (/わから/.test(again)) add("次回", "わからない");
   }
-  const avg = (xs: (number | undefined)[]) => {
-    const v = xs.filter((x): x is number => typeof x === "number");
-    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
-  };
+  const avg = (xs: (number | undefined)[]) => scoreAverage(xs, average).avg;
   return {
     key: `sys:${fy}`,
     sortKey: `${fy - 1}-12`,
@@ -56,7 +55,8 @@ function systemColumn(fy: number, cards: SurveyResponse[]): CompareColumn {
  * storeId を指定すると その店舗の表 (令和の店舗別の表) とその店舗のはがき。指定しなければ 全社 (平成の全社の表 + 令和の店舗の表の合計) と全店舗のはがき。
  * 店舗のロールには必ず自店舗を指定する (全社・ほかの店舗の数字を見せない)
  */
-export function surveyYearComparison(db: Pick<Database, "surveys" | "surveyHistory">, opts: { storeId?: StoreId; fiscalStartMonth: number }): CompareColumn[] {
+export function surveyYearComparison(db: Pick<Database, "surveys" | "surveyHistory"> & Partial<Pick<Database, "settings">>, opts: { storeId?: StoreId; fiscalStartMonth: number }): CompareColumn[] {
+  const basis = kpiBasis(db);
   const cols: CompareColumn[] = [];
   const hist = (db.surveyHistory ?? []).filter((h) => !opts.storeId || h.storeId === opts.storeId);
   const groups = new Map<string, typeof hist>();
@@ -68,11 +68,11 @@ export function surveyYearComparison(db: Pick<Database, "surveys" | "surveyHisto
   // システムのはがき (年度ごと)
   const byFy = new Map<number, SurveyResponse[]>();
   for (const s of db.surveys) {
-    if (!isCard(s) || (opts.storeId && s.storeId !== opts.storeId)) continue;
-    const fy = fiscalYearOf(surveyDate(s), opts.fiscalStartMonth);
+    if (!countsCard(s, basis) || (opts.storeId && s.storeId !== opts.storeId)) continue;
+    const fy = fiscalYearOf(surveyKpiDate(s), opts.fiscalStartMonth);
     byFy.set(fy, [...(byFy.get(fy) ?? []), s]);
   }
-  for (const [fy, list] of byFy) cols.push(systemColumn(fy, list));
+  for (const [fy, list] of byFy) cols.push(systemColumn(fy, list, basis.average));
   return cols.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
 }
 

@@ -36,6 +36,8 @@ import { MgmtOrderCard } from "@/components/features/MgmtOrderCard";
 import { CaseViewBanner, CompletedLockBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
 import { completedCaseLock, completedCaseReason, orderAccessInfo, deniedHref } from "@/lib/case-access";
 import { logRecordView } from "@/lib/record-views";
+import { OrderCasePostsCard } from "@/components/case-posts/CasePostParts";
+import { batchTerms, closingDateCovering, isBatchInvoice, termsText } from "@/lib/billing";
 
 const STEPS = ["pending_approval", "confirmed", "scheduled", "in_progress", "completed", "invoiced", "paid"] as const;
 
@@ -55,6 +57,11 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   logRecordView(user, info, { entity: "order", id: o.id, label: o.number, storeId: o.storeId }, db.auditLogs);
   const lock = completedCaseLock(db, user, o);
   const customer = db.customers.find((c) => c.id === o.customerId);
+  // まとめ請求のお客様 (締め日ごとに 1 枚の請求書。src/lib/billing.ts)
+  const bTerms = batchTerms(customer);
+  const batchBilling = Boolean(bTerms);
+  const batchTermsLabel = bTerms ? termsText(bTerms) : "";
+  const batchMonth = bTerms && o.salesDate ? closingDateCovering(o.salesDate, bTerms.closingDay).slice(0, 7) : toDateKey(new Date()).slice(0, 7);
   const store = db.stores.find((s) => s.id === o.storeId);
   const chain = orderChain(db, o);
   const pending = chain.approvals.find((a) => a.status === "pending" && a.type === "order");
@@ -85,13 +92,29 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const staffChoices = db.users.filter((u) => u.active && (u.storeId === o.storeId || o.workerIds.includes(u.id))).sort((a, b) => Number(o.workerIds.includes(b.id)) - Number(o.workerIds.includes(a.id)));
   const AMOUNT_LABEL: [keyof NonNullable<typeof o.amounts>, string][] = [["tatami", "畳"], ["fusuma", "襖"], ["shoji", "障子"], ["amido", "網戸"], ["curtain", "カーテン"], ["cloth", "クロス・工事"], ["own", "自社商品"], ["misc", "諸経費"], ["discount", "値引"]];
 
+  // 案件ごとの請求書の発行 (まとめ請求のお客様は折りたたんで出す)
+  const perOrderInvoice = canManageFinance(user) || isManagerOrAbove(user) ? (
+    <form action={createInvoiceFromOrder.bind(null, o.id)} className="flex flex-wrap items-end gap-2">
+      <Field label="支払期限 (日後)"><Input type="number" name="dueDays" defaultValue={customer?.type === "corporate" ? 30 : 14} className="w-28" /></Field>
+      <Field label="送付方法">
+        <Select name="sentVia" defaultValue={customer?.type === "corporate" ? "email" : customer?.preferredChannel === "line" ? "line" : "mail"}>
+          {(["mail", "email", "line", "chatwork", "visit"] as const).map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}
+        </Select>
+      </Field>
+      <Field label="備考 (請求書に印字・任意)" className="w-full"><Input name="notes" placeholder="例: 11月分の施工代金です" /></Field>
+      <Button type="submit">請求書を発行 ({yen(o.total)})</Button>
+    </form>
+  ) : (
+    <Note>請求書の発行は店長・本部スタッフ・管理者が行います。本部へ連絡してください。</Note>
+  );
+
   return (
     <div>
       <Flash msg={msg} err={err} />
       <PageHeader
         title={`${o.number} ${customer?.name} 様 · ${o.title}`}
         badge={<StatusBadge value={o.status} map={ORDER_STATUS} />}
-        description={<span className="inline-flex flex-wrap items-center gap-2">{CATEGORY_LABEL[o.category]} · <StoreTag store={store} /> · 契約日 {fmtDate(o.contractDate)} · 金額 {yen(o.total)} (税込)</span>}
+        description={<span className="inline-flex flex-wrap items-center gap-2">{CATEGORY_LABEL[o.category]} · <StoreTag store={store} /> · 契約日 {fmtDate(o.contractDate)} · 金額 {yen(o.total)} (税込){o.salesDate ? ` · 売上計上日 ${fmtDate(o.salesDate)}` : ""}{chain.invoice && chain.invoice.status !== "void" ? ` · 請求書の発行日 ${fmtDate(chain.invoice.issueDate)}` : ""}</span>}
         back={{ href: "/orders", label: "受注・施工一覧" }}
         actions={
           <>
@@ -343,6 +366,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           )}
 
           <AttachmentsCard db={db} user={user} parent={{ type: "order", id: o.id }} returnTo={returnTo} title="現場写真・資料" description="施工前・施工中・完了の写真や図面を、スマートフォンのカメラ・アルバムから複数枚まとめて登録できます。この店舗の担当者・本部・管理者だけが表示できます" />
+          <OrderCasePostsCard db={db} user={user} order={o} />
 
           <Card>
             <CardHeader title="進捗の記録" description="現場からスマートフォンで記録。写真は上の「現場写真・資料」に登録します" />
@@ -437,9 +461,9 @@ export default async function OrderDetailPage({ params, searchParams }: { params
 
           {active && (
             <Card>
-              <CardHeader title="施工完了 → 売上計上" description="完了を登録すると売上に計上され、請求書を発行できるようになります" />
+              <CardHeader title="施工完了 → 売上計上" description={`完了を登録すると、施工完了日を売上計上日として売上に計上します (経営ダッシュボード・会計データとも)。${batchBilling ? "このお客様はまとめ請求のため、請求書は締め日にまとめて発行します" : "続けて請求書を発行できます (請求書の発行日は別に持ちます)"}`} />
               <form action={completeOrder.bind(null, o.id)} className="flex flex-wrap items-end gap-2">
-                <Field label="完了日"><Input type="date" name="completedAt" defaultValue={toDateKey(new Date())} /></Field>
+                <Field label="施工完了日 (= 売上計上日)"><Input type="date" name="completedAt" defaultValue={toDateKey(new Date())} /></Field>
                 <Field label="メモ" className="w-full @xl:w-72"><Input name="body" placeholder="施工完了。お客様確認済み。" /></Field>
                 <Button type="submit">施工完了を登録</Button>
               </form>
@@ -452,22 +476,24 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             </Card>
           )}
 
+          {o.status === "completed" && batchBilling && (
+            <Card>
+              <CardHeader title="締め日にまとめて請求" description={`このお客様はまとめ請求 (${batchTermsLabel}) です。締め日に、ほかの完了した案件と 1 枚の請求書にまとめて発行します。売上計上日は施工完了日 (${fmtDate(o.salesDate)}) のままです`} action={<LinkButton href={`/invoices/batch?month=${batchMonth}`} variant="secondary" size="sm">まとめ請求の画面</LinkButton>} />
+            </Card>
+          )}
           {o.status === "completed" && (
             <Card>
-              <CardHeader title="請求書を発行" description="見積の内訳から自動作成。送付方法はお客様の希望に合わせて" />
-              {canManageFinance(user) || isManagerOrAbove(user) ? (
-                <form action={createInvoiceFromOrder.bind(null, o.id)} className="flex flex-wrap items-end gap-2">
-                  <Field label="支払期限 (日後)"><Input type="number" name="dueDays" defaultValue={customer?.type === "corporate" ? 30 : 14} className="w-28" /></Field>
-                  <Field label="送付方法">
-                    <Select name="sentVia" defaultValue={customer?.type === "corporate" ? "email" : customer?.preferredChannel === "line" ? "line" : "mail"}>
-                      {(["mail", "email", "line", "chatwork", "visit"] as const).map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}
-                    </Select>
-                  </Field>
-                  <Field label="備考 (請求書に印字・任意)" className="w-full"><Input name="notes" placeholder="例: 11月分の施工代金です" /></Field>
-                  <Button type="submit">請求書を発行 ({yen(o.total)})</Button>
-                </form>
+              {batchBilling ? (
+                <details>
+                  <summary className="cursor-pointer text-sm font-medium text-accent">この案件だけ請求書を発行する (必要なときだけ)</summary>
+                  <p className="mb-3 mt-1 text-xs text-ink-3">まとめ請求のお客様ですが、この案件だけ別に請求するときに使います。発行すると締め日のまとめ請求には入りません</p>
+                  {perOrderInvoice}
+                </details>
               ) : (
-                <Note>請求書の発行は店長・本部スタッフ・管理者が行います。本部へ連絡してください。</Note>
+                <>
+                  <CardHeader title="請求書を発行" description="見積の内訳から自動作成。送付方法はお客様の希望に合わせて。請求書の発行日は今日 (売上計上日とは別)" />
+                  {perOrderInvoice}
+                </>
               )}
             </Card>
           )}
@@ -508,18 +534,24 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             <ul className="space-y-2 text-sm">
               <li>問い合わせ: {chain.inquiry ? <Link href={`/inquiries/${chain.inquiry.id}`} className="text-accent hover:underline">{chain.inquiry.number}</Link> : <span className="text-ink-3">-</span>}</li>
               <li>見積: {chain.quote ? <><Link href={`/quotes/${chain.quote.id}`} className="text-accent hover:underline">{chain.quote.number}</Link> <StatusBadge value={chain.quote.status} map={QUOTE_STATUS} /></> : "-"}</li>
-              <li>請求: {chain.invoice ? <><Link href={`/invoices/${chain.invoice.id}`} className="text-accent hover:underline">{chain.invoice.number}</Link> <StatusBadge value={chain.invoice.status} map={INVOICE_STATUS} /></> : <span className="text-ink-3">未発行</span>}</li>
-              <li>入金: {chain.payments.length > 0 ? `${yen(chain.payments.reduce((a, p) => a + p.amount, 0))} (${chain.payments.length} 件)` : <span className="text-ink-3">-</span>}</li>
+              <li>請求: {chain.invoice ? <><Link href={`/invoices/${chain.invoice.id}`} className="text-accent hover:underline">{chain.invoice.number}</Link> <StatusBadge value={chain.invoice.status} map={INVOICE_STATUS} /> <span className="text-xs text-ink-3">発行 {fmtDate(chain.invoice.issueDate)}{isBatchInvoice(chain.invoice) ? ` · まとめ請求 ${chain.invoice.orderIds?.length ?? 1} 件` : ""}</span></> : <span className="text-ink-3">{batchBilling && o.status === "completed" ? "未発行 (締め日にまとめて請求)" : "未発行"}</span>}</li>
+              <li>入金: {chain.payments.length > 0 ? `${yen(chain.payments.reduce((a, p) => a + p.amount, 0))} (${chain.payments.length} 件${chain.invoice && isBatchInvoice(chain.invoice) ? "・請求書全体" : ""})` : <span className="text-ink-3">-</span>}</li>
             </ul>
           </Card>
 
           {o.status !== "cancelled" && !pendingChange && !lock.locked && (
             <Card>
-              <CardHeader title={own ? "契約内容の変更 (管理者は承認不要)" : "契約内容の変更 (承認が必要)"} description={chain.quote ? "契約日を変更できます。金額は見積の画面の「変更を申請」で直します (版として残ります)" : "契約日・契約金額の変更を申請します。承認されると反映し、変更前後を履歴に残します"} />
+              <CardHeader title={own ? "契約内容の変更 (管理者は承認不要)" : "契約内容の変更 (承認が必要)"} description={`${chain.quote ? "契約日を変更できます。金額は見積の画面の「変更を申請」で直します (版として残ります)" : "契約日・契約金額の変更を申請します。承認されると反映し、変更前後を履歴に残します"}${o.completedAt ? "。施工完了日・売上計上日の入力の誤りもここで直します (会計データ・経営ダッシュボードの月が変わります)" : ""}`} />
               <form action={requestOrderChange.bind(null, o.id)} className="space-y-2">
                 <div className="grid grid-cols-2 gap-2">
                   <Field label="契約日"><Input type="date" name="contractDate" defaultValue={o.contractDate} /></Field>
                   {!chain.quote && <Field label="契約金額 (税込)"><Input type="number" name="total" defaultValue={o.total} min={1} /></Field>}
+                  {o.completedAt && ["completed", "invoiced", "paid"].includes(o.status) && (
+                    <>
+                      <Field label="施工完了日" hint="直すと売上計上日も合わせます"><Input type="date" name="completedAt" defaultValue={o.completedAt} /></Field>
+                      <Field label="売上計上日" hint="原則は施工完了日。請求書の発行日は変わりません"><Input type="date" name="salesDate" defaultValue={o.salesDate} /></Field>
+                    </>
+                  )}
                 </div>
                 <Field label="変更の理由" required><Input name="reason" required placeholder="例: お客様のご要望で追加工事" /></Field>
                 <Button type="submit" size="sm" variant="secondary">{own ? "契約内容を変更する (承認不要)" : "変更を申請する"}</Button>

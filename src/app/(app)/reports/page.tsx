@@ -83,6 +83,8 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const pipelineMax = Math.max(...r.pipeline.map((p) => p.count), 1);
   const noCostRecords = t.purchaseCount + t.expenseCount === 0;
   const hasMigrated = t.importedSalesCount > 0 || r.migrated.count > 0;
+  // 内部受注・本部の特殊配分などの店舗間の配分 (管理会計の売上の調整) が期間内にあれば、店舗別に「配分」「配分後」の列を出す
+  const hasAlloc = r.storeRows.some((s) => s.allocation !== 0);
 
   const staffName = staffFilter ? people.find((u) => u.key === staffFilter)?.name : undefined;
   const scopeText = [storeFilter ? storeMap.get(storeFilter)?.name : allStores ? "全店舗" : storeMap.get(user.storeId)?.name, staffName ? `担当 ${staffName}` : ""].filter(Boolean).join(" · ");
@@ -216,13 +218,15 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
         <div className="px-5 pt-5"><CardHeader title="店舗別" description={`期間内の集計 (未入金残高は今日時点・前年比は ${r.previous.label} の売上と比較)`} action={<CsvLink href={csv("stores")} />} /></div>
         <Table className="rounded-none rounded-b-2xl border-0 shadow-none" minWidth="min-w-[1080px]">
           <thead>
-            <tr><Th className="pl-5">店舗</Th><Th align="right">売上</Th><Th align="right">受注</Th><Th align="right">平均単価</Th><Th align="right">問い合わせ</Th><Th align="right">見積</Th><Th align="right">成約率</Th><Th align="right">施工完了</Th><Th align="right">入金</Th><Th align="right">未入金残</Th><Th align="right">畳原価</Th><Th align="right">仕入</Th><Th align="right">経費</Th><Th align="right" className="pr-5">簡易粗利</Th></tr>
+            <tr><Th className="pl-5">店舗</Th><Th align="right">売上</Th>{hasAlloc && <Th align="right">内部受注などの配分</Th>}{hasAlloc && <Th align="right">配分後の売上</Th>}<Th align="right">受注</Th><Th align="right">平均単価</Th><Th align="right">問い合わせ</Th><Th align="right">見積</Th><Th align="right">成約率</Th><Th align="right">施工完了</Th><Th align="right">入金</Th><Th align="right">未入金残</Th><Th align="right">畳原価</Th><Th align="right">仕入</Th><Th align="right">経費</Th><Th align="right" className={hasAlloc ? "" : "pr-5"}>簡易粗利</Th>{hasAlloc && <Th align="right" className="pr-5">配分後の簡易粗利</Th>}</tr>
           </thead>
           <tbody>
             {r.storeRows.map((s) => (
               <Tr key={s.storeId}>
                 <Td className="pl-5"><StoreTag store={storeMap.get(s.storeId)} short /></Td>
                 <Td align="right"><span className="font-semibold">{yen(s.sales)}</span><GrowthTag g={s.salesGrowth} /></Td>
+                {hasAlloc && <Td align="right" className={s.allocation < 0 ? "text-critical-ink" : s.allocation > 0 ? "text-good-ink" : "text-ink-3"}>{s.allocation > 0 ? "+" : ""}{yen(s.allocation)}</Td>}
+                {hasAlloc && <Td align="right" className="font-semibold">{yen(s.salesAllocated)}</Td>}
                 <Td align="right">{s.orderCount} 件<br /><span className="text-[11px] text-ink-3">{yen(s.orderAmount)}</span></Td>
                 <Td align="right">{yen(s.avgOrder)}</Td>
                 <Td align="right">{s.inquiries}</Td>
@@ -234,11 +238,17 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
                 <Td align="right">{yen(s.tatamiCost)}</Td>
                 <Td align="right">{yen(s.purchases)}</Td>
                 <Td align="right">{yen(s.expenses)}</Td>
-                <Td align="right" className={`pr-5 ${s.gross < 0 ? "text-critical-ink" : ""}`}>{yen(s.gross)}</Td>
+                <Td align="right" className={`${hasAlloc ? "" : "pr-5"} ${s.gross < 0 ? "text-critical-ink" : ""}`}>{yen(s.gross)}</Td>
+                {hasAlloc && <Td align="right" className={`pr-5 ${s.grossAllocated < 0 ? "text-critical-ink" : ""}`}>{yen(s.grossAllocated)}</Td>}
               </Tr>
             ))}
           </tbody>
         </Table>
+        <p className="px-5 py-3 text-[11px] text-ink-3">
+          売上は施工した店舗に付けています。{hasAlloc ? "内部受注・本部の特殊配分などの店舗間の配分 (依頼元の店舗に +、施工した店舗に −。全店では 0) を「配分」として分けて示し、「配分後」は配分を足した店舗の業績です。" : "期間内に内部受注などの店舗間の配分はありません。"}
+          配分は <Link href="/management?tab=sales" className="text-accent hover:underline">管理会計 → 売上配分 (内部受注)</Link> と同じ記録・同じ計上日です{staffFilter ? " (担当者で絞っているときは配分を数えません)" : ""}。
+          旧システム (売上台帳・販売管理ソフト) との店舗別・月別の照合は <Link href="/data/sales-check" className="text-accent hover:underline">売上の照合</Link>。
+        </p>
       </Card>
 
       <Card padded={false} className="mb-4">

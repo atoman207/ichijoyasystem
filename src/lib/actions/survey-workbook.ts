@@ -11,6 +11,7 @@ import { WORKBOOK_NAME, WORKBOOK_SETTINGS_ID, applyWorkbook, tabsHash, workbookS
 import { readPreview, removePreview, savePreview, workbookTablesMissing } from "@/lib/survey-workbook/preview";
 import { formatAliasLines, parseAliasLines } from "@/lib/survey-workbook/staff";
 import type { WorkbookTab } from "@/lib/survey-workbook/tabs";
+import { keepKpiSheetFromTabs } from "@/lib/kpi-check";
 import { fail, requireActionUser, str, withMsg } from "./guards";
 
 /**
@@ -82,6 +83,8 @@ export async function applySurveyWorkbook(fd: FormData) {
       writeWorkbookSettings(db, s, user.id);
     }
   });
+  // KPI のタブは「支給前の照合」(KPI → 分母・照合) に使うので残す (データには取り込まない)
+  await keepKpiSheetFromTabs(p.tabs, p.label, user.id, nowIso());
   await removePreview(hash);
   revalidatePath("/kpi");
   revalidatePath("/kpi/quality");

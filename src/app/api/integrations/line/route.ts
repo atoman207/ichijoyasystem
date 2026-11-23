@@ -30,6 +30,6 @@ export async function POST(req: Request) {
   if (!events.length) return NextResponse.json({ ok: true, recorded: 0 });
   await syncDb();
   const result = await mutate((db) => recordLineEvents(db, events));
-  if (result.media.length || result.groupsToName.length) after(() => afterLineWebhook(result.media, result.groupsToName));
+  if (result.media.length || result.groupsToName.length || result.held.length) after(() => afterLineWebhook(result.media, result.groupsToName, result.held));
   return NextResponse.json({ ok: true, recorded: result.recorded });
 }

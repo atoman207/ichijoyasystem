@@ -46,6 +46,15 @@ export interface PendingLineMessage {
   handledBy?: string;
   /** 対応で作った記録 (quality:<ID> など) */
   recordRef?: string;
+  /**
+   * 施工事例写真・整理整頓の確認のグループの写真: 受信のあとでこのサーバーに保存した本体 (storage.ts のキー。src/lib/line-photos.ts)。
+   * 案件・チェックに付けると、そちらへ写して消す
+   */
+  fileKey?: string;
+  contentType?: string;
+  size?: number;
+  /** 本体を LINE から取得できなかった理由 (付けるときにもう一度取得する) */
+  fileError?: string;
 }
 
 export interface LineGroup {

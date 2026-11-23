@@ -18,6 +18,8 @@ import type { MediaKey, Promotion, WorkReportDay } from "./types-ops";
 export type * from "./types-ops";
 import type { DocDraft } from "./types-drafts";
 export type * from "./types-drafts";
+import type { CasePost, TidyCheck } from "./types-posts";
+export type * from "./types-posts";
 
 export type Role = "admin" | "store_manager" | "store_staff" | "hq_staff";
 
@@ -144,6 +146,17 @@ export interface Customer {
   /** 取引停止 (見積・受注の登録時に警告する) と、その理由 */
   tradeStopped?: boolean;
   tradeStopNote?: string;
+  /** 請求の締め (法人のお客様のまとめ請求。src/lib/billing.ts)。未設定・batch = false は案件ごとの請求 */
+  billingTerms?: CustomerBillingTerms;
+}
+
+/** まとめ請求の条件: 締め日 (31 = 末日) ごとに、完了した案件を 1 枚の請求書にまとめる。支払期限は 締め日の月 + payMonthOffset か月の payDay 日 (31 = 末日) */
+export interface CustomerBillingTerms {
+  batch: boolean;
+  closingDay: number;
+  payMonthOffset: number;
+  payDay: number;
+  note?: string;
 }
 
 export type ServiceCategory =
@@ -537,6 +550,27 @@ export interface Invoice {
   expectedAmount?: number;
   /** 入金予定のメモ (例: 月末に振込予定と電話あり) */
   expectedNote?: string;
+  /**
+   * まとめ請求 (締め日ごとに複数の案件を 1 枚にまとめた請求書。src/lib/billing.ts): 対象の受注すべて (orderId はその 1 件目)・締めの期間・案件ごとの行。
+   * 案件の行は items には入れない (items は案件の明細として売上の分析・管理会計が使うため)
+   */
+  orderIds?: string[];
+  periodFrom?: string;
+  periodTo?: string;
+  orderLines?: InvoiceOrderLine[];
+}
+
+/** まとめ請求の案件ごとの行 (発行時の内容。金額は税込 = 受注の金額) */
+export interface InvoiceOrderLine {
+  orderId: string;
+  number: string;
+  title: string;
+  site?: string;
+  completedAt?: string;
+  salesDate?: string;
+  amount: number;
+  /** 消費税の対象外の案件 (見積・請求の消費税が 0) */
+  noTax?: boolean;
 }
 
 export type PaymentMethod = "cash" | "transfer" | "card" | "paypay" | "other";
@@ -627,6 +661,8 @@ export interface Supplier {
   active?: boolean;
   createdAt?: string;
   updatedAt?: string;
+  /** いつもの支払方法 (総合振込・都度振込・口座振替など)。支払完了の既定と買掛一覧の絞り込み・会計データの出力に使う */
+  payMethod?: PurchasePayMethod;
 }
 
 /** rejected = 支払の却下 / disputed = 照会中 (差戻し。内容を確認して再申請できる) */
@@ -649,7 +685,8 @@ export interface PurchaseItem {
   amount: number;
 }
 
-export type PurchasePayMethod = "transfer" | "cash" | "card" | "debit" | "other";
+/** transfer = 都度振込 (その都度の銀行振込。以前の「銀行振込」) / bulk_transfer = 総合振込 (月に 1 回まとめて振り込む分。税理士に渡す買掛一覧の対象) */
+export type PurchasePayMethod = "transfer" | "bulk_transfer" | "cash" | "card" | "debit" | "other";
 
 export interface PurchaseInvoice {
   id: string;
@@ -1082,6 +1119,8 @@ export interface SurveyResponse {
   sourceRef?: string;
   /** はがきに書かれた回答日 */
   answeredOn?: string;
+  /** KPI の集計月 (YYYY-MM。スプレッドシートの「月」の列 = はがきを集計した月)。空 = 回答日 → 登録日の月 (src/lib/kpi-core.ts の surveyKpiDate) */
+  countMonth?: string;
   /** ① 電話対応の評価対象 (事務担当) */
   clerkUserId?: string;
   /** ②③ の評価対象 (納品担当。複数のことがある。salesUserId・craftsmanUserId を含む) */
@@ -1640,6 +1679,9 @@ export interface Database {
   condolences: Condolence[];
   /* 文書の下書き (types-drafts.ts。AI アシスタントの「文書の作成」の保存・確認・承認・送信) */
   docDrafts: DocDraft[];
+  /* 施工事例の投稿・整理整頓チェック (types-posts.ts。src/lib/case-posts.ts・src/lib/tidy.ts) */
+  casePosts: CasePost[];
+  tidyChecks: TidyCheck[];
 }
 
 export type CollectionName = Exclude<keyof Database, "meta">;

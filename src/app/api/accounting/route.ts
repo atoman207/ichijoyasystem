@@ -5,6 +5,7 @@ import { canExportAccounting } from "@/lib/auth/permissions";
 import { toCsv } from "@/lib/csv";
 import { buildJournal, genericRows, plainCsv, yayoiRows, type JournalKind } from "@/lib/accounting";
 import { signed, sortCash } from "@/lib/cashbook";
+import { invoiceOfOrder, invoiceOrderIds } from "@/lib/billing";
 import { CASH_SOURCE_LABEL, EXPENSE_METHOD_LABEL, EXPENSE_STATUS, INVOICE_STATUS, PAYMENT_METHOD_LABEL, PURCHASE_PAY_METHOD_LABEL, PURCHASE_STATUS } from "@/lib/constants";
 import type { StoreId } from "@/lib/db/types";
 
@@ -14,7 +15,8 @@ export const maxDuration = 60;
 
 const KIND_LABEL: Record<string, string> = {
   journal: "仕訳",
-  sales: "売上 (請求書) の明細",
+  sales: "売上の明細 (売上計上日)",
+  invoices: "請求書の明細",
   payments: "入金の明細",
   expenses: "経費の明細",
   purchases: "仕入の明細",
@@ -25,7 +27,8 @@ const isDate = (v: string | null): v is string => Boolean(v && /^\d{4}-\d{2}-\d{
 
 /**
  * 会計処理用のデータの出力 (本部スタッフ・管理者)
- * /api/accounting?kind=journal|sales|payments|expenses|purchases|cashbook&from=YYYY-MM-DD&to=YYYY-MM-DD[&store=koshi]
+ * /api/accounting?kind=journal|sales|invoices|payments|expenses|purchases|cashbook&from=YYYY-MM-DD&to=YYYY-MM-DD[&store=koshi]
+ *   sales = 売上計上日 (施工完了日) の売上 (仕訳の売上と同じ範囲) / invoices = 請求書の発行日の一覧 (以前の sales)
  *   kind=journal: &format=generic (汎用・BOM 付き UTF-8 / &encoding=sjis で Shift_JIS) | yayoi (弥生会計のインポート形式・Shift_JIS) [&journal=sales,receipt,…]
  * 書き出しは変更履歴に残す
  */
@@ -78,9 +81,21 @@ export async function GET(req: Request) {
     return file(plainCsv(genericRows(rows), sjis ? "sjis" : "utf8"), `仕訳_${stamp}.csv`, sjis ? "shift_jis" : "utf-8");
   }
   if (kind === "sales") {
-    const rows: (string | number)[][] = [["発行日", "請求番号", "お客様", "店舗", "件名", "税抜", "消費税", "税込", "入金済", "残高", "状態", "支払期限", "入金予定日", "入金予定額"]];
-    for (const i of db.invoices) if (inRange(i.issueDate) && storeOk(i.storeId)) rows.push([i.issueDate, i.number, customer(i.customerId), storeName(i.storeId), i.title ?? "", i.subtotal, i.tax, i.total, i.paidAmount, i.status === "void" ? 0 : i.total - i.paidAmount, INVOICE_STATUS[i.status].label, i.dueDate, i.expectedDate ?? "", i.expectedAmount ?? ""]);
+    // 仕訳の「売上」と同じ行 (受注の売上計上日 = 施工完了日。受注で計上できない請求書は発行日)
+    const rows: (string | number)[][] = [["売上計上日", "受注番号", "お客様", "店舗", "件名", "税抜", "消費税", "税込", "請求番号", "請求書の発行日", "請求の状態"]];
+    for (const r of buildJournal(db, { from, to, storeId: store, kinds: ["sales"] })) {
+      const o = db.orders.find((x) => x.number === r.ref);
+      const inv = o ? invoiceOfOrder(db.invoices, o) : db.invoices.find((i) => i.number === r.ref);
+      const live = inv && inv.status !== "void" ? inv : undefined;
+      const tax = r.credit.taxAmount ?? 0;
+      rows.push([r.date, o?.number ?? "", r.partner ?? "", r.credit.dept ?? storeName((o ?? inv)?.storeId ?? "hq"), o?.title ?? inv?.title ?? "", r.credit.amount - tax, tax, r.credit.amount, live?.number ?? "", live?.issueDate ?? "", live ? INVOICE_STATUS[live.status].label : "未請求"]);
+    }
     return file(toCsv(rows), `売上明細_${stamp}.csv`, "utf-8");
+  }
+  if (kind === "invoices") {
+    const rows: (string | number)[][] = [["発行日", "請求番号", "お客様", "店舗", "件名", "税抜", "消費税", "税込", "入金済", "残高", "状態", "支払期限", "入金予定日", "入金予定額", "対象の受注", "締め日"]];
+    for (const i of db.invoices) if (inRange(i.issueDate) && storeOk(i.storeId)) rows.push([i.issueDate, i.number, customer(i.customerId), storeName(i.storeId), i.title ?? "", i.subtotal, i.tax, i.total, i.paidAmount, i.status === "void" ? 0 : i.total - i.paidAmount, INVOICE_STATUS[i.status].label, i.dueDate, i.expectedDate ?? "", i.expectedAmount ?? "", invoiceOrderIds(i).map((id) => db.orders.find((o) => o.id === id)?.number ?? id).join(" "), i.periodTo ?? ""]);
+    return file(toCsv(rows), `請求書明細_${stamp}.csv`, "utf-8");
   }
   if (kind === "payments") {
     const rows: (string | number)[][] = [["入金日", "請求番号", "お客様", "店舗", "方法", "金額", "決済会社からの入金日", "メモ", "登録者"]];

@@ -1,4 +1,5 @@
 import type { Approval, Attachment, AuditLog, CashEntry, DocDraft, Expense, FaxMessage, KnowledgeEntry, KnowledgeVisibility, MapDocument, PurchaseInvoice, PurchaseOrder, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
+import type { CasePost, TidyCheck } from "@/lib/db/types";
 
 /**
  * 権限ルール
@@ -289,6 +290,16 @@ export function canImportData(user: User): boolean {
   return canSeeAllStores(user);
 }
 
+/** 試験期間のデータの本番への引き継ぎ: 対象の一覧を見て「引き継ぐ・引き継がない」を決める (管理者・本部スタッフ) */
+export function canReviewCarryover(user: User): boolean {
+  return canSeeAllStores(user);
+}
+
+/** 試験期間のデータの本番への引き継ぎ: 最終判断 (この内容で引き継ぐと決める) は管理者だけ */
+export function canDecideCarryover(user: User): boolean {
+  return user.role === "admin";
+}
+
 export const ROLE_ORDER: Role[] =["admin", "store_manager", "store_staff", "hq_staff"];
 
 /** 経費を閲覧・申請・削除できるか (店舗スタッフは自分の経費のみ) */
@@ -385,6 +396,21 @@ export function canEditCashEntry(user: User, c: Pick<CashEntry, "storeId" | "rec
 /** 会計データ (仕訳・明細) の出力と、会計の設定: 本部スタッフ・管理者 */
 export function canExportAccounting(user: User): boolean {
   return canManageFinance(user);
+}
+
+/** 請求書の発行 (案件ごと・締め日のまとめ請求) と、お客様の請求の締め (まとめ請求の条件) の設定: 店長・本部スタッフ・管理者 (店長は自店舗。src/lib/billing.ts) */
+export function canIssueInvoices(user: User): boolean {
+  return canManageFinance(user) || isManagerOrAbove(user);
+}
+
+/** 売掛一覧 (基準日の売掛残高・年齢・CSV): 本部スタッフ・管理者は全店舗、店長は自店舗 (src/lib/ar-ap.ts) */
+export function canViewReceivables(user: User): boolean {
+  return canManageFinance(user) || user.role === "store_manager";
+}
+
+/** 買掛一覧 (基準日の買掛残高・支払方法別・CSV): 仕入請求書を見られる人 (本部スタッフ・管理者は全件、店長は自店舗。canViewPurchase) */
+export function canViewPayables(user: User): boolean {
+  return canRegisterPurchase(user);
 }
 
 /** 店舗スタッフが自店舗の履歴を見られる対象 (案件・顧客・予定・請求など。経費・承認・設定などは見ない) */
@@ -813,4 +839,113 @@ export function canManageLeaveGrants(user: User): boolean {
 /** 有給・振休のルール (振休のため込みの上限・有給の消化の順番・年度・締め日・半日の時間帯) の変更: 管理者 */
 export function canManageLeaveSettings(user: User): boolean {
   return user.role === "admin";
+}
+
+/* ---------------- 施工事例の投稿 (src/lib/case-posts.ts。資料・写真 → 施工事例の投稿) ---------------- */
+
+type PostRef = Pick<CasePost, "storeId" | "createdBy" | "status">;
+
+/** 投稿文を確認する人 (設定 → 資料・写真 → 施工事例の投稿 の「確認する人」。既定は本部の管理者) */
+export function isCasePostReviewer(user: User, reviewerIds: readonly string[]): boolean {
+  return user.active && reviewerIds.includes(user.id);
+}
+
+/** 案件の店舗の担当者 (店舗のロールは自店舗、本部・管理者は全店舗) と作成者 */
+function isPostMember(user: User, p: Pick<CasePost, "storeId" | "createdBy">): boolean {
+  return user.active && (p.createdBy === user.id || canAccessStore(user, p.storeId));
+}
+
+/** 施工事例の投稿を作る: その案件の店舗の担当者 (店舗スタッフも可) */
+export function canCreateCasePost(user: User, storeId: StoreId): boolean {
+  return user.active && canAccessStore(user, storeId);
+}
+
+/** 投稿を見る: 作成者・案件の店舗の担当者・確認する人 */
+export function canViewCasePost(user: User, p: Pick<CasePost, "storeId" | "createdBy">, reviewerIds: readonly string[]): boolean {
+  return isPostMember(user, p) || isCasePostReviewer(user, reviewerIds);
+}
+
+/**
+ * 写真・商品名・施工内容・投稿文を直す: 下書き・差し戻しは担当者と確認する人、確認依頼の間は確認する人だけ、
+ * 承認済みは担当者と確認する人 (確認する人以外が直すと下書きに戻る = 承認した文面だけを投稿する)。投稿済み・取りやめは直さない
+ */
+export function canEditCasePost(user: User, p: PostRef, reviewerIds: readonly string[]): boolean {
+  const reviewer = isCasePostReviewer(user, reviewerIds);
+  if (p.status === "review") return reviewer;
+  if (p.status === "draft" || p.status === "returned" || p.status === "approved") return reviewer || isPostMember(user, p);
+  return false;
+}
+
+/** 確認を頼む (下書き・差し戻し → 確認依頼): 担当者と確認する人 */
+export function canRequestCasePostReview(user: User, p: PostRef, reviewerIds: readonly string[]): boolean {
+  return (p.status === "draft" || p.status === "returned") && (isPostMember(user, p) || isCasePostReviewer(user, reviewerIds));
+}
+
+/** 承認 (確認依頼 → 承認済み): 確認する人。自分が作った投稿は承認できない (管理者 = 社長は省略できる skipsApproval) */
+export function canApproveCasePost(user: User, p: PostRef, reviewerIds: readonly string[]): boolean {
+  return p.status === "review" && isCasePostReviewer(user, reviewerIds) && (p.createdBy !== user.id || skipsApproval(user));
+}
+
+/** 差し戻し (確認依頼・承認済み → 差し戻し。理由が必要): 確認する人 */
+export function canReturnCasePost(user: User, p: PostRef, reviewerIds: readonly string[]): boolean {
+  return (p.status === "review" || p.status === "approved") && isCasePostReviewer(user, reviewerIds);
+}
+
+/** 確認依頼の取り下げ (確認依頼 → 下書き): 担当者 */
+export function canWithdrawCasePost(user: User, p: PostRef): boolean {
+  return p.status === "review" && isPostMember(user, p);
+}
+
+/** 投稿したことの記録 (投稿先・日・URL): 承認済み・投稿済みの投稿を、担当者と確認する人 */
+export function canRecordCasePosting(user: User, p: PostRef, reviewerIds: readonly string[]): boolean {
+  return (p.status === "approved" || p.status === "posted") && (isPostMember(user, p) || isCasePostReviewer(user, reviewerIds));
+}
+
+/** 取りやめ (投稿前) と、取りやめた投稿を下書きに戻す: 担当者と確認する人 */
+export function canDiscardCasePost(user: User, p: PostRef, reviewerIds: readonly string[]): boolean {
+  return p.status !== "posted" && (isPostMember(user, p) || isCasePostReviewer(user, reviewerIds));
+}
+
+/** 確認する人の設定・LINE の施工事例写真の「対象外」: 管理者 (対象外は写真を見られる人も可。src/lib/line-photos.ts) */
+export function canManageCasePostSettings(user: User): boolean {
+  return user.role === "admin";
+}
+
+/* ---------------- 整理整頓チェック (src/lib/tidy.ts。KPI → 整理整頓) ---------------- */
+
+/** チェックを記録する: その店舗のメンバー (店舗スタッフも自店舗を記録できる)・本部・管理者 */
+export function canRecordTidyCheck(user: User, storeId: StoreId): boolean {
+  return user.active && canAccessStore(user, storeId);
+}
+
+/** 全店舗のチェックを見る: 店長・本部・管理者 (店舗スタッフは自店舗) */
+export function canViewAllTidyChecks(user: User): boolean {
+  return canSeeAllStores(user) || user.role === "store_manager";
+}
+
+export function canViewTidyCheck(user: User, c: Pick<TidyCheck, "storeId">): boolean {
+  return canViewAllTidyChecks(user) || c.storeId === user.storeId;
+}
+
+/** チェックの修正・写真の追加・要改善の対応の記録: その店舗のメンバー・本部・管理者 */
+export function canEditTidyCheck(user: User, c: Pick<TidyCheck, "storeId">): boolean {
+  return user.active && canAccessStore(user, c.storeId);
+}
+
+/** チェックの削除: チェックした人・登録した人・その店舗の店長・本部・管理者 */
+export function canDeleteTidyCheck(user: User, c: Pick<TidyCheck, "storeId" | "checkedBy" | "createdBy">): boolean {
+  if (!user.active) return false;
+  if (canSeeAllStores(user)) return true;
+  if (user.role === "store_manager" && user.storeId === c.storeId) return true;
+  return canAccessStore(user, c.storeId) && (c.checkedBy === user.id || c.createdBy === user.id);
+}
+
+/** チェック項目の変更 (まとめて差し替え): 管理者 */
+export function canManageTidyItems(user: User): boolean {
+  return user.role === "admin";
+}
+
+/** LINE の「施工事例写真」「整理整頓の確認」グループの写真を見る・案件やチェックに付ける: グループの店舗のメンバー (店舗のないグループは全社員) */
+export function canUseLineGroupPhotos(user: User, groupStoreId: StoreId | undefined): boolean {
+  return user.active && (groupStoreId ? canAccessStore(user, groupStoreId) : true);
 }

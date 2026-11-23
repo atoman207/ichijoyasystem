@@ -16,6 +16,8 @@ import { orderEditable, removeUpcomingOrderEvents, syncHandoverMemo, syncOrderEv
 import { assertStore, choice, fail, requireActionUser, str, withMsg } from "./guards";
 import { propagateOrderSite } from "@/lib/maps/store";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
+import { closedReason } from "@/lib/mgmt/close";
+import { usesBatchBilling } from "@/lib/billing";
 
 /** 施工予定 (施工期間・時間帯・施工担当・現場住所) を設定し、予定表の「施工」の予定と連動させる */
 export async function updateOrderSchedule(id: string, formData: FormData) {
@@ -94,16 +96,22 @@ export async function addProgress(id: string, formData: FormData) {
   redirect(withMsg(back, "進捗を記録しました。"));
 }
 
-/** 施工完了 → 売上計上 */
+/** 施工完了 → 売上計上 (売上計上日 = 施工完了日。個人・法人とも。請求書の発行日とは別に持つ) */
 export async function completeOrder(id: string, formData: FormData) {
   const user = await requireActionUser();
   const back = `/orders/${id}`;
+  let batch = false;
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
     assertStore(user, o.storeId, back);
     if (!["confirmed", "scheduled", "in_progress"].includes(o.status)) fail(back, "この状態の案件は完了にできません。");
     const date = str(formData, "completedAt") || toDateKey(new Date());
+    if (!isDateKey(date)) fail(back, "施工完了日を正しく入力してください。");
+    // 管理会計で月次確定した月には売上を入れない (src/lib/mgmt/close.ts)
+    const closed = closedReason(db, date, "施工完了 (売上計上)");
+    if (closed) fail(back, closed);
+    batch = usesBatchBilling(db.customers.find((c) => c.id === o.customerId));
     o.status = "completed";
     o.completedAt = date;
     o.salesDate = date;
@@ -113,7 +121,7 @@ export async function completeOrder(id: string, formData: FormData) {
   });
   revalidatePath(back);
   revalidatePath("/");
-  redirect(withMsg(back, "施工完了を登録し、売上に計上しました。続けて請求書を発行できます。"));
+  redirect(withMsg(back, batch ? "施工完了を登録し、売上に計上しました (売上計上日 = 施工完了日)。このお客様はまとめ請求のため、請求書は締め日にまとめて発行します。" : "施工完了を登録し、売上に計上しました (売上計上日 = 施工完了日)。続けて請求書を発行できます。"));
 }
 
 export async function createInvoiceFromOrder(id: string, formData: FormData) {
@@ -251,6 +259,23 @@ export async function requestOrderChange(id: string, formData: FormData) {
     if (contractDate && contractDate !== o.contractDate) {
       if (!isDateKey(contractDate)) fail(back, "契約日を正しく入力してください。");
       changes.push({ field: "contractDate", before: o.contractDate, after: contractDate });
+    }
+    // 施工完了日・売上計上日の訂正 (例: 完了日の入力の誤り)。売上計上日は施工完了日に合わせる (別の日にするときは売上計上日も入力する)。請求書の発行日は変えない
+    const completedAt = str(formData, "completedAt");
+    const salesDateRaw = str(formData, "salesDate");
+    if ((completedAt && completedAt !== o.completedAt) || (salesDateRaw && salesDateRaw !== o.salesDate)) {
+      if (!o.completedAt || !["completed", "invoiced", "paid"].includes(o.status)) fail(back, "施工完了日・売上計上日は、施工完了を登録した案件で直せます。");
+      if ((completedAt && !isDateKey(completedAt)) || (salesDateRaw && !isDateKey(salesDateRaw))) fail(back, "施工完了日・売上計上日を正しく入力してください。");
+      const nextCompleted = completedAt || o.completedAt;
+      // 売上計上日を入力していない (または元のまま) で完了日だけ直したときは、売上計上日も完了日に合わせる
+      const nextSales = salesDateRaw && salesDateRaw !== o.salesDate ? salesDateRaw : o.salesDate === o.completedAt || !o.salesDate ? nextCompleted : o.salesDate;
+      if (nextSales < (contractDate || o.contractDate) && nextSales !== o.salesDate) fail(back, "売上計上日は契約日以降の日付にしてください。");
+      for (const d of [o.salesDate, nextSales]) {
+        const closed = closedReason(db, d, "売上計上日の変更");
+        if (closed && nextSales !== o.salesDate) fail(back, closed);
+      }
+      if (nextCompleted !== o.completedAt) changes.push({ field: "completedAt", before: o.completedAt, after: nextCompleted });
+      if (nextSales !== o.salesDate) changes.push({ field: "salesDate", before: o.salesDate, after: nextSales });
     }
     const totalRaw = str(formData, "total").replace(/[,¥\s]/g, "");
     if (totalRaw) {

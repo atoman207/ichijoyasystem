@@ -69,7 +69,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title="請求・入金" actions={<LinkButton href="/finance" variant="secondary">入出金の予定</LinkButton>} />
+      <PageHeader title="請求・入金" actions={<><LinkButton href="/invoices/batch" variant="secondary">締め日のまとめ請求</LinkButton><LinkButton href="/finance" variant="secondary">入出金の予定</LinkButton></>} />
       <div className="mb-6 grid grid-cols-2 gap-3 @3xl:grid-cols-4">
         <Stat label="売掛残高 (未入金)" value={yen(receivable)} sub={`${unpaid.length} 件`} />
         <Stat label="期日超過" value={yen(overdue)} tone={overdue > 0 ? "critical" : undefined} sub={`${scoped.filter((i) => i.status === "overdue").length} 件 · 督促が必要`} href={`${base}?status=overdue`} />

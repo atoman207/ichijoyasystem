@@ -7,6 +7,8 @@ import { canAccessStore, canViewSourceFiles, scopeByStore } from "@/lib/auth/per
 import type { SourceFile } from "@/lib/db/types";
 import { fmtDate } from "@/lib/format";
 import { Badge, Card, CardHeader, EmptyState, Flash, Input, LinkTabs, PageHeader, Pager, Select, StoreTag, Table, Td, Th, Tr, paginate } from "@/components/ui";
+import { CasePostsTab } from "@/components/case-posts/CasePostParts";
+import { visibleCasePosts } from "@/lib/case-posts";
 
 export const metadata: Metadata = { title: "資料・写真" };
 
@@ -33,7 +35,7 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
   const user = await requireUser();
   const db = getDb();
   const filesAllowed = canViewSourceFiles(user);
-  const tab = sp.tab === "files" && filesAllowed ? "files" : sp.tab === "summary" && filesAllowed ? "summary" : "photos";
+  const tab = sp.tab === "files" && filesAllowed ? "files" : sp.tab === "summary" && filesAllowed ? "summary" : sp.tab === "cases" ? "cases" : "photos";
   const storeMap = new Map(db.stores.map((s) => [s.id, s]));
   const customerMap = new Map(db.customers.map((c) => [c.id, c]));
   // 写真台帳はお客様の情報を含むため、店舗ロールは自店舗分のみ
@@ -41,6 +43,8 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
 
   const tabs = [
     { href: "/materials", label: "現場写真台帳", count: albums.length },
+    // 施工事例の投稿 (src/lib/case-posts.ts): 案件の写真から AI で投稿文 → 確認 → 投稿の記録
+    { href: "/materials?tab=cases", label: "施工事例の投稿", count: visibleCasePosts(db, user).filter((p) => p.status !== "discarded").length },
     ...(filesAllowed
       ? [
           { href: "/materials?tab=files", label: "資料台帳", count: db.sourceFiles.length },
@@ -77,6 +81,8 @@ export default async function MaterialsPage({ searchParams }: { searchParams: Pr
         description="Google ドライブで共有されている業務資料と現場写真の台帳です。画像・資料の本体はドライブに置いたまま、どのデータに取り込んだかを記録しています"
       />
       <LinkTabs items={tabs} current={current} />
+
+      {tab === "cases" && <CasePostsTab db={db} user={user} sp={sp} />}
 
       {tab === "photos" &&
         (albums.length === 0 ? (

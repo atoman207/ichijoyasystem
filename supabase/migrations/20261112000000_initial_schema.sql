@@ -92,7 +92,8 @@ create table if not exists customers (
   updated_at timestamptz not null,
   contacts jsonb,
   trade_stopped boolean,
-  trade_stop_note text
+  trade_stop_note text,
+  billing_terms jsonb
 );
 comment on table customers is '顧客';
 
@@ -250,7 +251,11 @@ create table if not exists invoices (
   notes text,
   expected_date date,
   expected_amount numeric,
-  expected_note text
+  expected_note text,
+  order_ids text[],
+  period_from date,
+  period_to date,
+  order_lines jsonb
 );
 comment on table invoices is '請求書';
 
@@ -292,7 +297,8 @@ create table if not exists suppliers (
   notes text,
   active boolean,
   created_at timestamptz,
-  updated_at timestamptz
+  updated_at timestamptz,
+  pay_method text
 );
 comment on table suppliers is '仕入先';
 
@@ -515,6 +521,7 @@ create table if not exists survey_responses (
   would_use_again text,
   source_ref text,
   answered_on date,
+  count_month text,
   clerk_user_id text,
   delivery_user_ids jsonb,
   priority_list jsonb,
@@ -1487,6 +1494,61 @@ create table if not exists doc_drafts (
 );
 comment on table doc_drafts is '文書の下書き (AI アシスタントで作った文面の保存・版の履歴・確認・承認・送信)';
 
+-- 施工事例の投稿 (案件の写真・商品名・施工内容と AI の投稿文の下書き → 確認 → 投稿の記録)
+create table if not exists case_posts (
+  id text primary key,
+  number text not null unique,
+  order_id text not null,
+  store_id text not null references stores(id),
+  title text not null default '',
+  photo_ids jsonb not null default '[]',
+  products text not null default '',
+  work_content text not null default '',
+  area text,
+  channels jsonb not null default '[]',
+  ai_text text,
+  text text not null default '',
+  hashtags text not null default '',
+  provider text not null default 'rules',
+  consent text not null default 'unconfirmed' check (consent in ('unconfirmed','obtained','not_needed')),
+  status text not null check (status in ('draft','review','approved','returned','posted','discarded')),
+  requested_by text,
+  requested_at timestamptz,
+  approved_by text,
+  approved_at timestamptz,
+  posted_at timestamptz,
+  postings jsonb not null default '[]',
+  events jsonb not null default '[]',
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz not null
+);
+comment on table case_posts is '施工事例の投稿 (案件の写真・商品名・施工内容と AI の投稿文の下書き → 確認 → 投稿の記録)';
+
+-- 整理整頓チェック (店舗 × 日。項目ごとの 良い・要改善・対象外、写真、要改善の対応)
+create table if not exists tidy_checks (
+  id text primary key,
+  number text not null unique,
+  store_id text not null references stores(id),
+  date date not null,
+  checked_by text not null,
+  place text,
+  items jsonb not null default '[]',
+  score numeric,
+  ok_count integer not null default 0,
+  ng_count integer not null default 0,
+  na_count integer not null default 0,
+  comment text,
+  photos jsonb not null default '[]',
+  provisional boolean,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz not null
+);
+comment on table tidy_checks is '整理整頓チェック (店舗 × 日。項目ごとの 良い・要改善・対象外、写真、要改善の対応)';
+
 -- クライアント資料のファイルとフォルダー (source/。画像・動画・フォルダーは場所だけ)
 create table if not exists source_items (
   id text primary key,
@@ -1598,6 +1660,7 @@ alter table customers add column if not exists updated_at timestamptz not null;
 alter table customers add column if not exists contacts jsonb;
 alter table customers add column if not exists trade_stopped boolean;
 alter table customers add column if not exists trade_stop_note text;
+alter table customers add column if not exists billing_terms jsonb;
 alter table inquiries add column if not exists number text not null unique;
 alter table inquiries add column if not exists customer_id text references customers(id) on delete set null;
 alter table inquiries add column if not exists contact_name text not null;
@@ -1726,6 +1789,10 @@ alter table invoices add column if not exists notes text;
 alter table invoices add column if not exists expected_date date;
 alter table invoices add column if not exists expected_amount numeric;
 alter table invoices add column if not exists expected_note text;
+alter table invoices add column if not exists order_ids text[];
+alter table invoices add column if not exists period_from date;
+alter table invoices add column if not exists period_to date;
+alter table invoices add column if not exists order_lines jsonb;
 alter table payments add column if not exists invoice_id text not null references invoices(id);
 alter table payments add column if not exists date date not null;
 alter table payments add column if not exists amount numeric not null;
@@ -1756,6 +1823,7 @@ alter table suppliers add column if not exists notes text;
 alter table suppliers add column if not exists active boolean;
 alter table suppliers add column if not exists created_at timestamptz;
 alter table suppliers add column if not exists updated_at timestamptz;
+alter table suppliers add column if not exists pay_method text;
 alter table purchases add column if not exists number text not null unique;
 alter table purchases add column if not exists supplier_id text not null references suppliers(id);
 alter table purchases add column if not exists store_id text not null references stores(id);
@@ -1912,6 +1980,7 @@ alter table survey_responses add column if not exists media text;
 alter table survey_responses add column if not exists would_use_again text;
 alter table survey_responses add column if not exists source_ref text;
 alter table survey_responses add column if not exists answered_on date;
+alter table survey_responses add column if not exists count_month text;
 alter table survey_responses add column if not exists clerk_user_id text;
 alter table survey_responses add column if not exists delivery_user_ids jsonb;
 alter table survey_responses add column if not exists priority_list jsonb;
@@ -2611,6 +2680,49 @@ alter table doc_drafts add column if not exists recipient_label text;
 alter table doc_drafts add column if not exists delivery_ids jsonb not null default '[]';
 alter table doc_drafts add column if not exists comm_log_id text;
 alter table doc_drafts add column if not exists copied_from text;
+alter table case_posts add column if not exists number text not null unique;
+alter table case_posts add column if not exists order_id text not null;
+alter table case_posts add column if not exists store_id text not null references stores(id);
+alter table case_posts add column if not exists title text not null default '';
+alter table case_posts add column if not exists photo_ids jsonb not null default '[]';
+alter table case_posts add column if not exists products text not null default '';
+alter table case_posts add column if not exists work_content text not null default '';
+alter table case_posts add column if not exists area text;
+alter table case_posts add column if not exists channels jsonb not null default '[]';
+alter table case_posts add column if not exists ai_text text;
+alter table case_posts add column if not exists text text not null default '';
+alter table case_posts add column if not exists hashtags text not null default '';
+alter table case_posts add column if not exists provider text not null default 'rules';
+alter table case_posts add column if not exists consent text not null default 'unconfirmed' check (consent in ('unconfirmed','obtained','not_needed'));
+alter table case_posts add column if not exists status text not null check (status in ('draft','review','approved','returned','posted','discarded'));
+alter table case_posts add column if not exists requested_by text;
+alter table case_posts add column if not exists requested_at timestamptz;
+alter table case_posts add column if not exists approved_by text;
+alter table case_posts add column if not exists approved_at timestamptz;
+alter table case_posts add column if not exists posted_at timestamptz;
+alter table case_posts add column if not exists postings jsonb not null default '[]';
+alter table case_posts add column if not exists events jsonb not null default '[]';
+alter table case_posts add column if not exists created_by text not null;
+alter table case_posts add column if not exists created_at timestamptz not null;
+alter table case_posts add column if not exists updated_by text;
+alter table case_posts add column if not exists updated_at timestamptz not null;
+alter table tidy_checks add column if not exists number text not null unique;
+alter table tidy_checks add column if not exists store_id text not null references stores(id);
+alter table tidy_checks add column if not exists date date not null;
+alter table tidy_checks add column if not exists checked_by text not null;
+alter table tidy_checks add column if not exists place text;
+alter table tidy_checks add column if not exists items jsonb not null default '[]';
+alter table tidy_checks add column if not exists score numeric;
+alter table tidy_checks add column if not exists ok_count integer not null default 0;
+alter table tidy_checks add column if not exists ng_count integer not null default 0;
+alter table tidy_checks add column if not exists na_count integer not null default 0;
+alter table tidy_checks add column if not exists comment text;
+alter table tidy_checks add column if not exists photos jsonb not null default '[]';
+alter table tidy_checks add column if not exists provisional boolean;
+alter table tidy_checks add column if not exists created_by text not null;
+alter table tidy_checks add column if not exists created_at timestamptz not null;
+alter table tidy_checks add column if not exists updated_by text;
+alter table tidy_checks add column if not exists updated_at timestamptz not null;
 alter table source_items add column if not exists entry text not null check (entry in ('file','folder','system'));
 alter table source_items add column if not exists path text not null unique deferrable initially deferred;
 alter table source_items add column if not exists parent_path text not null default '';
@@ -2803,6 +2915,11 @@ create index if not exists condolences_load_order_idx on condolences (date, crea
 create index if not exists doc_drafts_store_id_idx on doc_drafts (store_id);
 create index if not exists doc_drafts_status_idx on doc_drafts (status);
 create index if not exists doc_drafts_load_order_idx on doc_drafts (created_at, id);
+create index if not exists case_posts_order_id_idx on case_posts (order_id);
+create index if not exists case_posts_store_id_status_idx on case_posts (store_id, status);
+create index if not exists case_posts_load_order_idx on case_posts (created_at, id);
+create index if not exists tidy_checks_store_id_date_idx on tidy_checks (store_id, date);
+create index if not exists tidy_checks_load_order_idx on tidy_checks (date, created_at, id);
 create index if not exists source_items_folder_idx on source_items (folder);
 create index if not exists source_items_parent_path_idx on source_items (parent_path);
 create index if not exists source_items_entry_idx on source_items (entry);
@@ -3022,6 +3139,12 @@ grant select, insert, update, delete on table condolences to service_role;
 alter table doc_drafts enable row level security;
 revoke all on table doc_drafts from anon, authenticated;
 grant select, insert, update, delete on table doc_drafts to service_role;
+alter table case_posts enable row level security;
+revoke all on table case_posts from anon, authenticated;
+grant select, insert, update, delete on table case_posts to service_role;
+alter table tidy_checks enable row level security;
+revoke all on table tidy_checks from anon, authenticated;
+grant select, insert, update, delete on table tidy_checks to service_role;
 alter table source_items enable row level security;
 revoke all on table source_items from anon, authenticated;
 grant select, insert, update, delete on table source_items to service_role;

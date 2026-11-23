@@ -21,6 +21,7 @@ import { knowledgeSources } from "@/lib/knowledge";
 import { myReviewItems, reviewCtx } from "@/lib/knowledge-review";
 import { cronHealth } from "@/lib/knowledge-sync";
 import { docDraftAttention } from "@/lib/doc-drafts";
+import { casePostAttention } from "@/lib/case-posts";
 import { pendingReceptionCount } from "@/lib/reception";
 
 export const dynamic = "force-dynamic";
@@ -154,6 +155,17 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   }
   if (drafts.returned.length > 0) {
     notifications.push({ kind: "task", title: `差し戻された文書 ${drafts.returned.length} 件`, detail: "理由を確かめて文面を直し、もう一度「内容を確認した」を押してください", href: "/ai/drafts?view=returned" });
+  }
+  // 施工事例の投稿 (src/lib/case-posts.ts): 確認を待っている投稿 (確認する人)・差し戻された自分の投稿・承認されてまだ投稿していない自分の投稿
+  const posts = casePostAttention(getDb(), user);
+  if (posts.toReview.length > 0) {
+    notifications.push({ kind: "approval", title: `施工事例の投稿の確認依頼 ${posts.toReview.length} 件`, detail: `${posts.toReview.slice(0, 3).map((p) => p.title || p.number).join("・")}${posts.toReview.length > 3 ? " ほか" : ""}。投稿文と写真を確かめて承認するか差し戻してください`, href: "/materials?tab=cases&view=review" });
+  }
+  if (posts.returned.length > 0) {
+    notifications.push({ kind: "task", title: `差し戻された施工事例の投稿 ${posts.returned.length} 件`, detail: "理由を確かめて直し、もう一度「確認を依頼する」を押してください", href: "/materials?tab=cases&view=draft" });
+  }
+  if (posts.toPost.length > 0) {
+    notifications.push({ kind: "task", title: `承認された施工事例の投稿 ${posts.toPost.length} 件 (投稿待ち)`, detail: "文面をコピー・写真を保存して投稿し、投稿したら記録してください", href: "/materials?tab=cases&view=approved" });
   }
   if (leavePending.length > 0) {
     const nameOf = (id: string) => getDb().users.find((u) => u.id === id)?.name ?? "";

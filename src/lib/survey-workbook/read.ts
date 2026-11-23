@@ -18,8 +18,8 @@ export const WANTED_TAB = (title: string) => {
   return /クレーム手直し内容|口コミ|クチコミ|^KPI|集計/.test(t) && !/比較/.test(t);
 };
 
-/** .xlsx のセル (A1 形式) → 行 × 列 */
-function xlsxRows(rows: Map<number, Map<string, string>>): string[][] {
+/** .xlsx のセル (A1 形式) → 行 × 列 (KPI の分母の取込 src/lib/kpi-basis-import.ts も使う) */
+export function xlsxRows(rows: Map<number, Map<string, string>>): string[][] {
   const colIndex = (col: string) => col.split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0) - 1;
   const max = Math.max(0, ...rows.keys());
   const out: string[][] = [];

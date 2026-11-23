@@ -7,6 +7,7 @@ import { toDateKey } from "@/lib/format";
 import { CHANNEL_LABEL, PAYMENT_METHOD_LABEL } from "@/lib/constants";
 import { canManageFinance, isManagerOrAbove } from "@/lib/auth/permissions";
 import { postCash } from "@/lib/cashbook";
+import { invoiceOrderIds, settleInvoiceOrders } from "@/lib/billing";
 import { assertStore, choice, fail, numField, requireActionUser, str, withMsg } from "./guards";
 
 export async function recordPayment(invoiceId: string, formData: FormData) {
@@ -44,13 +45,8 @@ export async function recordPayment(invoiceId: string, formData: FormData) {
     inv.paidAmount += amount;
     inv.status = inv.paidAmount >= inv.total ? "paid" : "partially_paid";
     inv.updatedAt = now;
-    if (inv.status === "paid") {
-      const o = db.orders.find((x) => x.id === inv.orderId);
-      if (o) {
-        o.status = "paid";
-        o.updatedAt = now;
-      }
-    }
+    // 受注の状態: 入金を割り当てた額 (まとめ請求は売上計上日の古い順) が受注の金額に届いた案件を入金済みに
+    settleInvoiceOrders(db, inv, now);
     addAudit(db, { userId: user.id, action: "create", entity: "payment", entityId: invoiceId, entityLabel: inv.number, summary: `入金を登録 (¥${amount.toLocaleString("ja-JP")} / ${PAYMENT_METHOD_LABEL[method]})${inv.status === "paid" ? " → 入金完了" : ""}`, storeId: inv.storeId });
   });
   revalidatePath("/invoices");
@@ -90,16 +86,19 @@ export async function voidInvoice(invoiceId: string, formData: FormData) {
     if (inv.paidAmount > 0) fail(back, "入金済みの請求書は無効化できません。");
     inv.status = "void";
     inv.updatedAt = nowIso();
-    // 受注が再発行した別の請求書を指しているときは、受注の状態を変えない
-    const o = db.orders.find((x) => x.id === inv.orderId && x.invoiceId === inv.id);
-    if (o) {
+    // 受注が再発行した別の請求書を指しているときは、受注の状態を変えない (まとめ請求は対象の受注すべて)
+    const ids = new Set(invoiceOrderIds(inv));
+    for (const o of db.orders) {
+      if (!ids.has(o.id) || o.invoiceId !== inv.id) continue;
       o.invoiceId = undefined;
-      o.status = "completed";
+      if (o.status === "invoiced") o.status = "completed";
+      o.updatedAt = nowIso();
     }
     addAudit(db, { userId: user.id, action: "status", entity: "invoice", entityId: inv.id, entityLabel: inv.number, summary: `請求書を無効化 (${str(formData, "reason") || "理由未記入"})`, storeId: inv.storeId });
   });
   revalidatePath("/invoices");
-  redirect(withMsg(back, "請求書を無効化しました。案件から再発行できます。"));
+  revalidatePath("/invoices/batch");
+  redirect(withMsg(back, "請求書を無効化しました。案件から再発行できます (まとめ請求は、締め日のまとめ請求の画面から発行し直せます)。"));
 }
 
 /** 請求書の記載 (件名・備考・支払期限) を直す。金額の訂正は「無効化 → 見積の変更申請 (承認) → 再発行」で行う */

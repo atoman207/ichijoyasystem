@@ -22,8 +22,13 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
   const quote = order ? db.quotes.find((q) => q.id === order.quoteId) : undefined;
   const store = db.stores.find((s) => s.id === inv.storeId)!;
   const settings = documentSettings(db);
-  const items = inv.items?.length ? inv.items : quote && quote.total === inv.total ? quote.items : [{ id: "x", name: inv.title ?? order?.title ?? "工事一式", spec: undefined, qty: 1, unit: "式", unitPrice: inv.subtotal, amount: inv.subtotal }];
+  // まとめ請求 (src/lib/billing.ts): 案件ごとに 1 行 (税込)
+  const batchItems = inv.orderLines?.map((l) => ({ id: l.orderId, name: `${l.number} ${l.title}`, spec: [l.site ? `現場: ${l.site}` : "", `施工完了 ${fmtDate(l.salesDate ?? l.completedAt)}`].filter(Boolean).join(" / "), qty: 1, unit: "式", unitPrice: l.amount, amount: l.amount }));
+  const items = batchItems?.length ? batchItems : inv.items?.length ? inv.items : quote && quote.total === inv.total ? quote.items : [{ id: "x", name: inv.title ?? order?.title ?? "工事一式", spec: undefined, qty: 1, unit: "式", unitPrice: inv.subtotal, amount: inv.subtotal }];
   const itemsSum = items.reduce((a, i) => a + i.amount, 0);
+  // 税込の明細 (内税) は合計と比べる。税抜の明細は税抜の小計と比べる (差 = 値引き)
+  const taxIncluded = Boolean(batchItems?.length || inv.taxIncluded);
+  const discount = Math.max(0, itemsSum - (taxIncluded ? inv.total : inv.subtotal));
 
   return (
     <div className="min-h-screen bg-subtle py-6 print:bg-white print:py-0">
@@ -34,6 +39,7 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
             <h1 className="text-2xl font-semibold tracking-[0.4em]">御請求書</h1>
             <p className="mt-2 text-[11px] text-ink-2">請求番号: {inv.number}</p>
             <p className="text-[11px] text-ink-2">発行日: {fmtDate(inv.issueDate)} · お支払期限: {fmtDate(inv.dueDate)}</p>
+            {inv.periodTo && <p className="text-[11px] text-ink-2">締め日: {fmtDate(inv.periodTo)}{inv.periodFrom ? ` (取引期間 ${fmtDate(inv.periodFrom)}〜${fmtDate(inv.periodTo)})` : ""}</p>}
           </div>
           <div className="text-right text-[11px] leading-relaxed">
             <IchijoyaLogo title={settings.companyName} className="mb-2 ml-auto h-8 w-auto" />
@@ -48,7 +54,7 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
           <div className="text-lg">{customer?.name} <span className="text-sm">{customer?.type === "corporate" ? "御中" : "様"}</span></div>
           <div className="text-right text-[11px] text-ink-2">
             <div>{customer?.address}</div>
-            {order?.siteAddress && order.siteAddress !== customer?.address && <div>施工場所: {order.siteAddress}</div>}
+            {!batchItems?.length && order?.siteAddress && order.siteAddress !== customer?.address && <div>施工場所: {order.siteAddress}</div>}
           </div>
         </div>
         <p className="mt-6">下記のとおりご請求申し上げます。</p>
@@ -62,9 +68,9 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
             ))}
           </tbody>
           <tfoot>
-            {itemsSum > inv.subtotal && <tr><td colSpan={3} className="px-2 py-1 text-right">値引き</td><td className="px-2 py-1 text-right tnum">-{yen(itemsSum - inv.subtotal)}</td></tr>}
+            {discount > 0 && <tr><td colSpan={3} className="px-2 py-1 text-right">値引き</td><td className="px-2 py-1 text-right tnum">-{yen(discount)}</td></tr>}
             <tr><td colSpan={3} className="px-2 py-1 text-right">小計 (税抜・10%対象)</td><td className="px-2 py-1 text-right tnum">{yen(inv.subtotal)}</td></tr>
-            <tr><td colSpan={3} className="px-2 py-1 text-right">消費税 (10%)</td><td className="px-2 py-1 text-right tnum">{yen(inv.tax)}</td></tr>
+            <tr><td colSpan={3} className="px-2 py-1 text-right">消費税 (10%){taxIncluded ? " (内税)" : ""}</td><td className="px-2 py-1 text-right tnum">{yen(inv.tax)}</td></tr>
             <tr className="border-t border-ink font-semibold"><td colSpan={3} className="px-2 py-1.5 text-right">合計 (税込)</td><td className="px-2 py-1.5 text-right tnum">{yen(inv.total)}</td></tr>
           </tfoot>
         </table>
