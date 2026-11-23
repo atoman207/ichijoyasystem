@@ -52,7 +52,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const info = orderAccessInfo(db, user, o);
   if (info.access === "none") redirect(deniedHref(info, "/orders", "案件"));
   const viewOnly = info.access === "view";
-  if (viewOnly) logRecordView(user, info, { entity: "order", id: o.id, label: o.number, storeId: o.storeId }, db.auditLogs);
+  logRecordView(user, info, { entity: "order", id: o.id, label: o.number, storeId: o.storeId }, db.auditLogs);
   const lock = completedCaseLock(db, user, o);
   const customer = db.customers.find((c) => c.id === o.customerId);
   const store = db.stores.find((s) => s.id === o.storeId);

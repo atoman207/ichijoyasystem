@@ -31,7 +31,7 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
   const info = invoiceAccessInfo(db, user, inv);
   if (info.access === "none") redirect(deniedHref(info, "/invoices", "請求書"));
   const viewOnly = info.access === "view";
-  if (viewOnly) logRecordView(user, info, { entity: "invoice", id: inv.id, label: inv.number, storeId: inv.storeId }, db.auditLogs);
+  logRecordView(user, info, { entity: "invoice", id: inv.id, label: inv.number, storeId: inv.storeId }, db.auditLogs);
   const today = toDateKey(new Date());
   const status = (inv.status === "issued" || inv.status === "partially_paid") && inv.dueDate < today ? "overdue" : inv.status;
   const customer = db.customers.find((c) => c.id === inv.customerId);

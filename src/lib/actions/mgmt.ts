@@ -30,7 +30,7 @@ import { salesFacts } from "@/lib/assistant/facts";
 import { round4 } from "@/lib/mgmt/decimal";
 import { areaRowsFromXlsx, readXlsx } from "@/lib/xlsx";
 import { applyMaterialMoveImport, planHash, planMaterialMoveImport, type MoveImportPlan } from "@/lib/mgmt/material-move-import";
-import { putObject, readObject } from "@/lib/storage";
+import { putObject, readObject, removeObjects } from "@/lib/storage";
 
 /**
  * 管理会計の操作 (src/lib/mgmt の計算を使う)
@@ -844,6 +844,8 @@ export async function previewMaterialMoves(fd: FormData) {
   const hash = planHash(buf);
   const plan = planMaterialMoveImport(getDb(), sheets, { hash, fileName: file.name.slice(0, 100), now: nowIso() });
   if (!plan.sheets) fail(back, "月ごとのシート (「2026.10」のような名前) が見つかりません。");
+  // 同じファイルをもう一度読んだときは前の確認の内容を置き換える (ストレージは同じキーへの上書きを断るため、先に消す)
+  if (await readObject(MM_KEY(hash))) await removeObjects([MM_KEY(hash)]);
   await putObject(MM_KEY(hash), Buffer.from(JSON.stringify(plan)));
   // メッセージは「#」より前に付ける (後ろに付けるとページ内の位置の一部になって消える)
   redirect(`${withMsg(`${BASE}?tab=stock&mmplan=${hash}`, `${plan.sheets} か月分を読みました。内容を確かめてから「取り込む」を押してください。`)}#mm-import`);

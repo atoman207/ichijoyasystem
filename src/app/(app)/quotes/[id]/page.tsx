@@ -42,7 +42,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
   const info = quoteAccessInfo(db, user, q);
   if (info.access === "none") redirect(deniedHref(info, "/quotes", "見積"));
   const viewOnly = info.access === "view";
-  if (viewOnly) logRecordView(user, info, { entity: "quote", id: q.id, label: q.number, storeId: q.storeId }, db.auditLogs);
+  logRecordView(user, info, { entity: "quote", id: q.id, label: q.number, storeId: q.storeId }, db.auditLogs);
   const lock = quoteCompletedLock(db, user, q);
   const customer = db.customers.find((c) => c.id === q.customerId);
   const store = db.stores.find((s) => s.id === q.storeId);

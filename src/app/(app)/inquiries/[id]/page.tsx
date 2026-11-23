@@ -36,7 +36,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const info = inquiryAccessInfo(db, user, inq);
   if (info.access === "none") redirect(deniedHref(info, "/inquiries", "問い合わせ"));
   const viewOnly = info.access === "view";
-  if (viewOnly) logRecordView(user, info, { entity: "inquiry", id: inq.id, label: inq.number, storeId: inq.storeId }, db.auditLogs);
+  logRecordView(user, info, { entity: "inquiry", id: inq.id, label: inq.number, storeId: inq.storeId }, db.auditLogs);
   const customer = db.customers.find((c) => c.id === inq.customerId);
   const quote = db.quotes.find((q) => q.id === inq.quoteId);
   const order = quote ? db.orders.find((o) => o.quoteId === quote.id) : undefined;

@@ -47,7 +47,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
     );
   }
   const viewOnly = info.access === "view";
-  if (viewOnly) logRecordView(user, info, { entity: "customer", id: c.id, label: `${c.code} ${c.name}`, storeId: c.storeId }, db.auditLogs);
+  logRecordView(user, info, { entity: "customer", id: c.id, label: `${c.code} ${c.name}`, storeId: c.storeId }, db.auditLogs);
   // 進行中の案件だけで見ている人 (basis = open) には、進行中の案件だけを見せる。全社員に公開・閲覧の申請の承認のときは施工の履歴もすべて
   const t = viewOnly && info.basis === "open" ? openCaseTimeline(db, customerTimeline(db, id)) : customerTimeline(db, id);
   const openItems = t.inquiries.filter((i) => ["new", "in_progress", "quoted"].includes(i.status)).length + t.orders.filter((o) => ["pending_approval", "returned", "confirmed", "scheduled", "in_progress"].includes(o.status)).length;
