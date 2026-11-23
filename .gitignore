@@ -75,3 +75,7 @@ next-env.d.ts
 # ルートに残った PDF・インストーラー (誤配置の保険)
 /*.pdf
 *.deb
+
+# Python のキャッシュ (deploy/testweek-data.py の確認などで作られる)
+__pycache__/
+*.pyc
