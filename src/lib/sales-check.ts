@@ -1,5 +1,6 @@
 import type { Database, Order, StoreId } from "@/lib/db/types";
 import { isLedgerOnly, isSlipOrder, planReconcile } from "@/lib/sales-reconcile";
+import { compareStoreIds } from "@/lib/store-order";
 
 /**
  * 売上の照合 (お客様のご要望 2026-11-23「■2. 売上データの移行と整合性」・「■5」の 12 月の旧システムとの照合)
@@ -116,7 +117,7 @@ export function salesCheck(db: Database, opts: { from: string; to: string; store
   }
   fillDiff(totals);
   for (const c of Object.values(storeTotals)) fillDiff(c);
-  ledgerOnly.sort((a, b) => (a.salesDate ?? "").localeCompare(b.salesDate ?? "") || a.storeId.localeCompare(b.storeId));
+  ledgerOnly.sort((a, b) => (a.salesDate ?? "").localeCompare(b.salesDate ?? "") || compareStoreIds(a.storeId, b.storeId));
   return { months, totals, storeTotals, pairs: pairs.length, ledgerOnly, referenceLabel: ref.label };
 }
 
@@ -149,7 +150,7 @@ export function parseSalesReference(text: string, stores: { id: StoreId; name: s
   });
   // 同じ月・店舗は最後の行
   const uniq = new Map(rows.map((r) => [`${r.month}:${r.storeId}`, r]));
-  return { rows: [...uniq.values()].sort((a, b) => a.month.localeCompare(b.month) || a.storeId.localeCompare(b.storeId)), errors };
+  return { rows: [...uniq.values()].sort((a, b) => a.month.localeCompare(b.month) || compareStoreIds(a.storeId, b.storeId)), errors };
 }
 
 export type SalesCheckCsvKind = "months" | "stores" | "ledger-only";

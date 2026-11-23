@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AuditAction, AuditChange, Database, StoreId } from "./types";
 import { createSeed } from "./seed";
 import { migrateDb } from "./migrate";
+import { orderStores } from "@/lib/store-order";
 import { TABLES } from "./schema";
 import { readSnapshot, schemaHash, snapshotEnabled, writeSnapshot } from "./snapshot";
 import {
@@ -250,6 +251,8 @@ async function catchUp(from: number, to: number): Promise<boolean> {
     all[name] = next;
     notices.push({ kind: "rows", collection: name, upserts: f.rows, deletes: [...m].filter(([id]) => !got.has(id)).map(([id]) => id) });
   }
+  // 店舗は表示順に並べ直す (変更の取り込みで配列を作り直したため)
+  if (ops.has("stores")) orderStores(db);
   emit(notices);
   state.revision = to;
   state.checkedAt = Date.now();
@@ -440,6 +443,7 @@ function rollback(db: Database) {
     const prev = state.cache!.get(name);
     if (prev) all[name] = prev.ids.map((id) => JSON.parse(prev.json.get(id)!) as Entity);
   }
+  orderStores(db);
 }
 
 /** 変更を適用して保存する (1 件ずつ順番に実行) */

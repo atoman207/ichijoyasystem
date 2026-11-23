@@ -125,7 +125,7 @@ export async function updateInquiry(id: string, formData: FormData) {
       if (promo) inq.promotionId = promo.id;
       else delete inq.promotionId;
     }
-    // 担当店舗の変更 (本社・他店舗で受けた問い合わせを担当の店舗へ回す)
+    // 担当店舗の変更 (本部・他店舗で受けた問い合わせを担当の店舗へ回す)
     const storeId = str(formData, "storeId");
     if (storeId && storeId !== inq.storeId) {
       if (!db.stores.some((s) => s.id === storeId)) fail(back, "担当店舗が正しくありません。");

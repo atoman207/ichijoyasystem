@@ -73,9 +73,13 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-2">
           {db.stores.map((s) => (
             <Card key={s.id}>
-              <CardHeader title={<StoreTag store={s} />} description={s.kind === "hq" ? "本社・ショールーム" : "店舗"} />
+              <CardHeader title={<StoreTag store={s} />} description={s.kind === "hq" ? "本部・ショールーム" : "店舗"} />
               {admin ? (
                 <form action={updateStore.bind(null, s.id)} className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="店舗名" hint="予定表のタブ・帳票・一覧に出る名前"><Input name="name" defaultValue={s.name} required maxLength={30} /></Field>
+                    <Field label="略称" hint="予定表・グラフの短い名前"><Input name="shortName" defaultValue={s.shortName} required maxLength={10} /></Field>
+                  </div>
                   <Field label="住所"><Input name="address" defaultValue={s.address} /></Field>
                   <div className="grid grid-cols-2 gap-2">
                     <Field label="電話" hint="固定電話のない店舗は空欄 (公開ページ・帳票に出しません)"><Input name="phone" defaultValue={s.phone} /></Field>
@@ -276,7 +280,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 <tr className="border-t border-line"><td className="px-3 py-2">問い合わせ・現場情報・顧客のその他の項目の登録/変更</td><td className="px-3 py-2">-</td><td className="px-3 py-2">不要 (即時反映・履歴記録)</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">顧客の重要情報 (氏名・フリガナ・区分・電話・メール・住所) の変更</td><td className="px-3 py-2">{rules.customerChange ? "店舗スタッフ・本部スタッフの変更" : "承認なし (設定で変更可)"}</td><td className="px-3 py-2">{rules.customerChange ? "店長 (店長・管理者の変更は即時反映)" : "不要"}</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">見積の確定</td><td className="px-3 py-2">{yen(rules.quoteAdminThreshold)} 未満</td><td className="px-3 py-2">店長</td></tr>
-                <tr className="border-t border-line"><td className="px-3 py-2">見積の確定</td><td className="px-3 py-2">{yen(rules.quoteAdminThreshold)} 以上 / 本社案件</td><td className="px-3 py-2">管理者</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">見積の確定</td><td className="px-3 py-2">{yen(rules.quoteAdminThreshold)} 以上 / 本部案件</td><td className="px-3 py-2">管理者</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">確定後の金額変更</td><td className="px-3 py-2">変更前後の高い方で判定</td><td className="px-3 py-2">店長 / 管理者</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">受注 (契約) の確定</td><td className="px-3 py-2">見積と同じ基準額</td><td className="px-3 py-2">店長 / 管理者</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">契約内容 (契約日・契約金額) の変更</td><td className="px-3 py-2">変更前後の高い方で判定</td><td className="px-3 py-2">店長 / 管理者</td></tr>

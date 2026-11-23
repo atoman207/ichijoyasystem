@@ -12,6 +12,7 @@ import { SCORE_QUESTIONS } from "@/lib/survey";
 import { KpiTabs } from "@/components/kpi/KpiTabs";
 import { PeriodSelect } from "@/components/kpi/PeriodSelect";
 import { Card, CardHeader, Flash, LinkButton, PageHeader, StoreTag } from "@/components/ui";
+import { compareStoreIds } from "@/lib/store-order";
 
 export default async function KpiPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -35,7 +36,7 @@ export default async function KpiPage({ searchParams }: { searchParams: Promise<
       const u = userById.get(r.userId);
       return u && canViewStaffKpi(user, u) && (r.phoneCount || r.deliveryCount || r.orders || r.qualityCount || r.reviews);
     })
-    .sort((a, b) => (userById.get(a.userId)!.storeId.localeCompare(userById.get(b.userId)!.storeId)) || b.deliveryCount - a.deliveryCount);
+    .sort((a, b) => (compareStoreIds(userById.get(a.userId)!.storeId, userById.get(b.userId)!.storeId)) || b.deliveryCount - a.deliveryCount);
 
   return (
     <div>

@@ -15,7 +15,7 @@ import { decodeCsv, parseCsv } from "@/lib/csv";
  * ------------------------------------------------------------
  * - 管理会計の材料マスタ (materials の kind = heri) と在庫の移動 (stock_moves) をそのまま使う。新しい表は作らない
  *   (材料マスタに 規定量 reorderLevel・発注先 supplierId・シリーズ series・通常ヘリ lineup を足しただけ)
- * - 場所: 共通在庫 = store:hq (本社)、各店 = store:<店舗 ID>。操作と在庫の移動の対応:
+ * - 場所: 共通在庫 = store:hq (本部)、各店 = store:<店舗 ID>。操作と在庫の移動の対応:
  *   入庫 = 受入 (supplier → 場所) / 振り分け = 移動 (場所 → 場所) / 使用 = 使用 (場所 → 案件 order:<受注 ID>、案件の指定がなければ used) /
  *   棚卸 = 数えた数量と今の数量の差を 棚卸の調整 (adjust → 場所 か 場所 → adjust)
  * - この画面では原価・単価・金額を入力も表示もしない (社外秘)。移動の単価は管理会計と同じ順に自動で入れる
@@ -66,7 +66,7 @@ export function heriLocations(db: Pick<Database, "stores">): { loc: string; labe
   const stores = (db.stores ?? []).filter((s) => !s.closedOn);
   const hq = stores.find((s) => s.id === "hq");
   return [
-    { loc: COMMON_LOC, label: `共通在庫 (${hq?.shortName ?? "本社"})`, storeId: "hq" },
+    { loc: COMMON_LOC, label: `共通在庫 (${hq?.shortName ?? "本部"})`, storeId: "hq" },
     ...stores.filter((s) => s.id !== "hq").map((s) => ({ loc: storeLoc(s.id), label: s.name, storeId: s.id })),
   ];
 }

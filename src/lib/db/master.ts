@@ -63,8 +63,8 @@ export const STORES: Store[] = [
   {
     id: "hq",
     code: "HQ",
-    name: "本社・坪井ショールーム",
-    shortName: "本社",
+    name: "本部・ショールーム",
+    shortName: "本部",
     kind: "hq",
     postalCode: "860-0863",
     address: "熊本県熊本市中央区坪井5丁目2-27",

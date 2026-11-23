@@ -207,7 +207,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                   {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </Select>
               </Field>
-              <Field label="担当店舗" hint="本社・他店舗で受けた問い合わせは、担当の店舗へ回せます (担当者は回した先で決めます)">
+              <Field label="担当店舗" hint="本部・他店舗で受けた問い合わせは、担当の店舗へ回せます (担当者は回した先で決めます)">
                 <Select name="storeId" defaultValue={inq.storeId}>
                   {db.stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </Select>

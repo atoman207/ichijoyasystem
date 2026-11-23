@@ -125,6 +125,8 @@ function pickStore(db: Database, raw: string): StoreId | undefined {
   if (!v) return undefined;
   for (const s of db.stores) if ([s.id, s.name, s.shortName, s.code].some((x) => x && n(x) === v)) return s.id;
   for (const s of db.stores) if (n(s.name).includes(v) || v.includes(n(s.shortName))) return s.id;
+  // 「本社」(以前の名前) と「本部」は本部 (kind = hq) の店舗
+  if (/本社|本部/.test(v)) return db.stores.find((s) => s.kind === "hq")?.id;
   return undefined;
 }
 
@@ -225,7 +227,7 @@ function importCustomers(db: Database, user: User, body: string[][], idx: Record
     if (channelRaw && !channel) return add({ row, status: "error", label, message: `希望連絡手段「${channelRaw}」が分かりません (電話・LINE・メール・郵送 など)。` });
     const storeRaw = get("storeId");
     const storeId = storeRaw ? pickStore(db, storeRaw) : undefined;
-    if (storeRaw && !storeId) return add({ row, status: "error", label, message: `担当店舗「${storeRaw}」が分かりません (合志店・中央店・西店・玉名店・本社)。` });
+    if (storeRaw && !storeId) return add({ row, status: "error", label, message: `担当店舗「${storeRaw}」が分かりません (合志店・中央店・西店・玉名店・本部)。` });
     const email = get("email");
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return add({ row, status: "error", label, message: `メールアドレス「${email}」の形式が正しくありません。` });
     const tags = get("tags").split(/[,、\s]+/).map((t) => t.trim()).filter(Boolean);

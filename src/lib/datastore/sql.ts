@@ -206,7 +206,7 @@ const NOTES: Record<string, string> = {
   sales_orders:
     "受注 1 件 = 1 行 (キャンセルを除く)。売上の分析はまずこの表。sales_date = 売上計上日 (施工完了日。売上の集計の日付)、contract_date = 契約日、total = 金額 (税込)、" +
     `amt_* = 種別ごとの金額 (税込: ${AMOUNT_KEYS.map((k) => `amt_${k}=${AMOUNT_LABEL[k]}`).join("・")})、tatami_cost = 畳原価、purchase_cost = 案件にひも付いた仕入、` +
-    "staff_names = 担当 (営業担当。見積の担当者、移行データは販売管理ソフトの担当者欄の 1 番目)、worker_names = 施工担当 (移行データは担当者欄の 2 番目も)、store_id = koshi(合志店)/chuo(中央店)/nishi(西店)/tamana(玉名店)/hq(本社)、area = 地区",
+    "staff_names = 担当 (営業担当。見積の担当者、移行データは販売管理ソフトの担当者欄の 1 番目)、worker_names = 施工担当 (移行データは担当者欄の 2 番目も)、store_id = koshi(合志店)/chuo(中央店)/nishi(西店)/tamana(玉名店)/hq(本部・ショールーム)、area = 地区",
   sales_items: "明細 1 行 = 1 行。product = 品名 (分類つき。例: 畳 きずな)、category = 種別 (畳・襖・障子・網戸・カーテン・ブラインド・クロス・自社商品・小売・諸経費・雑工事・値引)、qty = 数量、unit_price・amount = 税込。sales_date で期間を絞る",
   order_staff: "受注と担当 (営業担当)。担当者別の集計はこの表を sales_orders と結合する (経営ダッシュボードの担当者別と同じ)",
   orders: "受注・施工の元の表。status = pending_approval/returned/confirmed/scheduled/in_progress/completed/invoiced/paid/cancelled。amounts = 種別の内訳 (JSON)、progress_notes = 経過 (JSON 配列。移行データは明細・担当者欄を含む)",

@@ -3,6 +3,7 @@ import { itemCategories } from "@/lib/mgmt/categories";
 import type { MgmtEntry } from "@/lib/db/types";
 import { Badge, Button, Card, CardHeader, Field, Input, Note, Select, Table, Td, Textarea, Th, Tr } from "@/components/ui";
 import { Money, PeriodForm, StoreSelect, back, storeNameOf, userNameOf, type Ctx } from "./parts";
+import { compareStoreIds } from "@/lib/store-order";
 
 export const ENTRY_KIND_LABEL: Record<MgmtEntry["kind"], string> = {
   labor: "人件費",
@@ -17,7 +18,7 @@ const BUDGET_METRIC_LABEL: Record<string, string> = { sales: "管理売上", gro
 
 export function EntriesTab({ ctx }: { ctx: Ctx }) {
   const { db } = ctx;
-  const rows = db.mgmtEntries.filter((m) => m.month === ctx.month && (!ctx.storeIds || ctx.storeIds.includes(m.storeId))).sort((a, b) => a.storeId.localeCompare(b.storeId) || a.createdAt.localeCompare(b.createdAt));
+  const rows = db.mgmtEntries.filter((m) => m.month === ctx.month && (!ctx.storeIds || ctx.storeIds.includes(m.storeId))).sort((a, b) => compareStoreIds(a.storeId, b.storeId) || a.createdAt.localeCompare(b.createdAt));
   const b = back(ctx);
   return (
     <div className="space-y-4">

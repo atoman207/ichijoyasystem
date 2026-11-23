@@ -17,6 +17,8 @@ export const maxDuration = 60;
  *     お客様のご要望 2026-11-23「■1」の「今日登録したものも反映」)。from・to = 見積の作成日 (日本時間の日付。to を含む)
  *   既定は確認だけ (直す内容を返す)。apply=1 で書き込み、見積ごとに変更履歴を残す
  * 例: curl -X POST -H "Authorization: Bearer $CRON_SECRET" "http://127.0.0.1:3300/api/cron/data-fix?task=quote-line-units&from=2026-11-23&to=2026-11-23&apply=1"
+ *   task = store-name: 店舗の名前・略称を変える (id・name・short。お客様のご要望 2026-11-23「本社」→「本部」。画面では 設定 → 店舗)。
+ *     既定は確認だけ、apply=1 で書き込み、変更履歴を残す
  */
 export async function POST(req: Request) {
   const secret = (process.env.CRON_SECRET ?? "").trim();
@@ -26,6 +28,7 @@ export async function POST(req: Request) {
   if (given.length !== want.length || !timingSafeEqual(given, want)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const url = new URL(req.url);
   const task = url.searchParams.get("task");
+  if (task === "store-name") return storeName(url);
   if (task !== "quote-line-units") return NextResponse.json({ error: "unknown task" }, { status: 400 });
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? from;
@@ -59,4 +62,30 @@ export async function POST(req: Request) {
     return fixes;
   });
   return NextResponse.json({ ok: true, applied: true, range, fixes: applied });
+}
+
+/** 店舗の名前・略称 (設定 → 店舗 と同じ変更。変更履歴つき) */
+async function storeName(url: URL) {
+  const id = url.searchParams.get("id") ?? "";
+  const name = (url.searchParams.get("name") ?? "").trim().slice(0, 30);
+  const short = (url.searchParams.get("short") ?? "").trim().slice(0, 10);
+  const apply = url.searchParams.get("apply") === "1";
+  const db0 = await syncDb();
+  const s0 = db0.stores.find((s) => s.id === id);
+  if (!s0) return NextResponse.json({ error: "店舗がありません" }, { status: 404 });
+  if (!name || !short) return NextResponse.json({ error: "name と short を指定してください" }, { status: 400 });
+  if (db0.stores.some((s) => s.id !== id && s.name === name)) return NextResponse.json({ error: "ほかの店舗と同じ名前です" }, { status: 400 });
+  const plan = { id, before: { name: s0.name, shortName: s0.shortName }, after: { name, shortName: short } };
+  if (!apply || (s0.name === name && s0.shortName === short)) return NextResponse.json({ ok: true, applied: false, plan });
+  await mutate((db) => {
+    const s = db.stores.find((x) => x.id === id)!;
+    const changes = [
+      ...(s.name !== name ? [{ field: "name", before: s.name, after: name }] : []),
+      ...(s.shortName !== short ? [{ field: "shortName", before: s.shortName, after: short }] : []),
+    ];
+    s.name = name;
+    s.shortName = short;
+    addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "store", entityId: id, entityLabel: name, summary: `店舗の名前を変更 (${plan.before.name} → ${name}・略称 ${plan.before.shortName} → ${short})`, changes });
+  });
+  return NextResponse.json({ ok: true, applied: true, plan, at: nowIso() });
 }

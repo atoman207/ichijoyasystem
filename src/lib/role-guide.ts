@@ -68,5 +68,5 @@ export const STORE_PHOTO: Record<string, string> = {
   hq: "/brand/stores/hq.webp",
 };
 
-/** 店舗の表示順 (合志 → 中央 → 西 → 玉名 → 本社) */
+/** 店舗の表示順 (合志 → 中央 → 西 → 玉名 → 本部。src/lib/store-order.ts と同じ) */
 export const STORE_ORDER = ["koshi", "chuo", "nishi", "tamana", "hq"] as const;

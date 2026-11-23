@@ -12,6 +12,7 @@ import { SheetUploader } from "@/components/schedule/SheetUploader";
 import { BATCH_RE, readBatchMonths } from "@/lib/schedule-sheet/batch";
 import { planSheetImport, sheetSettings, type PlanItem, type SheetPlan } from "@/lib/schedule-sheet/plan";
 import { applyScheduleSheet, discardScheduleSheet, removeScheduleSheetMonth, saveScheduleSheetAliases } from "@/lib/actions/schedule-sheet";
+import { compareStoreIds } from "@/lib/store-order";
 
 /**
  * 予定表 →「スプレッドシートの取込」(お客様のご要望 2026-11-23「■ 予定表の新システムへの移行について」)
@@ -55,7 +56,7 @@ export default async function ScheduleImportPage({ searchParams }: { searchParam
   const loaded = batch ? await readBatchMonths(batch) : null;
   const settings = sheetSettings(db);
   const storeName = new Map(db.stores.map((s) => [s.id, s.shortName || s.name]));
-  const users = db.users.filter((u) => u.active && !u.id.startsWith("u_review")).sort((a, b) => a.storeId.localeCompare(b.storeId) || a.name.localeCompare(b.name, "ja"));
+  const users = db.users.filter((u) => u.active && !u.id.startsWith("u_review")).sort((a, b) => compareStoreIds(a.storeId, b.storeId) || a.name.localeCompare(b.name, "ja"));
   const userName = (id?: string) => db.users.find((u) => u.id === id)?.name ?? "";
   const plan: SheetPlan | null = loaded?.months.length ? planSheetImport(db, loaded.months, { from }) : null;
   const last = settings.lastImport;

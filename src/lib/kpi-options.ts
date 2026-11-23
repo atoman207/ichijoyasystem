@@ -1,12 +1,13 @@
 import type { Database, StoreId, User } from "@/lib/db/types";
 import { scopeByStore } from "@/lib/auth/permissions";
+import { compareStoreIds } from "@/lib/store-order";
 
 /** 担当者の選択肢 (有効な社員。指定した店舗の社員を先に) */
 export function staffOptions(db: Pick<Database, "users" | "stores">, storeId?: StoreId): { id: string; label: string }[] {
   const short = (id: string) => db.stores.find((s) => s.id === id)?.shortName ?? "";
   return db.users
     .filter((u) => u.active)
-    .sort((a, b) => Number(b.storeId === storeId) - Number(a.storeId === storeId) || a.storeId.localeCompare(b.storeId) || a.kana.localeCompare(b.kana, "ja"))
+    .sort((a, b) => Number(b.storeId === storeId) - Number(a.storeId === storeId) || compareStoreIds(a.storeId, b.storeId) || a.kana.localeCompare(b.kana, "ja"))
     .map((u) => ({ id: u.id, label: `${u.name} (${short(u.storeId)})` }));
 }
 

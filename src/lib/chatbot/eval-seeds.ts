@@ -7,7 +7,7 @@ import type { EvalCaseInput } from "./eval";
  * そのためサンプルデータでも本番のデータでも、データが変わっても使える。
  * - 定義は統合データモデル (src/lib/datastore/model.ts の METRICS) と同じ: 売上 = 受注の金額 (税込) を売上計上日で、キャンセルを除く。
  *   未入金 = 状態が 発行済・一部入金・期日超過 の請求の (金額 − 入金済み)
- * - :store は質問する人の店舗、:other はほかの店舗 (seedEvalCases が本社以外の最初の 2 店舗を入れる)。
+ * - :store は質問する人の店舗、:other はほかの店舗 (seedEvalCases が本部以外の最初の 2 店舗を入れる)。
  *   {store_name}・{other_name} は質問の文の店舗名、{store_id}・{other_id} は SQL の店舗の id (入れるときに置き換える)
  * - 「今年」などは日本時間の今日から (SQLite の date('now', 'localtime'))
  * key は変えない (同じ key は入れ直さない。人が直した内容を残すため。人が直していない質問は、正しい回答の説明 answerNote だけを新しくする)

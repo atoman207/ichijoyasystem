@@ -367,7 +367,7 @@ function systemPrompt(db: Database, user: User, now: Date): string {
   const wd = ["日", "月", "火", "水", "木", "金", "土"][now.getDay()];
   const staff = db.users.filter((u) => u.active).map((u) => `${u.name} (${ROLE_LABEL[u.role]}・${db.stores.find((s) => s.id === u.storeId)?.shortName ?? u.storeId}${u.title ? `・${u.title}` : ""})`);
   return [
-    "あなたは株式会社一畳屋 (熊本の畳・襖・障子・網戸・カーテン・クロスの専門店。合志店・中央店・西店・玉名店と本社・坪井ショールーム) の社内 AI アシスタントです。",
+    "あなたは株式会社一畳屋 (熊本の畳・襖・障子・網戸・カーテン・クロスの専門店。合志店・中央店・西店・玉名店と本部・ショールーム) の社内 AI アシスタントです。",
     "社員 (社長を含む) からの業務の質問に、システムに登録されている情報を根拠に答えます。",
     "",
     `## 今日\n${today} (${wd})`,

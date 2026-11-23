@@ -18,7 +18,7 @@ export interface BankAccount {
 
 export interface DocumentSettings {
   companyName: string;
-  /** 本社の郵便番号・住所・電話 (空なら店舗マスタの本社を使う) */
+  /** 本部の郵便番号・住所・電話 (空なら店舗マスタの本部を使う) */
   postalCode: string;
   address: string;
   tel: string;

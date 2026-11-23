@@ -1,4 +1,5 @@
 import type { Database } from "./types";
+import { orderStores } from "@/lib/store-order";
 import { normTime } from "@/lib/calendar";
 
 /** 管理会計のコレクション (後から追加。無ければ空で作る) */
@@ -45,6 +46,8 @@ export function migrateDb(db: Database): Database {
     if (!Array.isArray(db[key])) (db as unknown as Record<string, unknown[]>)[key] = [];
   }
   if (version < DATA_VERSION) db.meta = { ...db.meta, version: DATA_VERSION };
+  // 店舗は表示順 (合志 → 中央 → 西 → 玉名 → 本部) に並べる (src/lib/store-order.ts)
+  orderStores(db);
   return db;
 }
 

@@ -7,6 +7,7 @@ import { countsFromLines, countsFromText, stripKindWords, type WorkLine } from "
 import { addDays } from "@/lib/format";
 import { isClosedDay } from "@/lib/schedule-capacity";
 import { shortDate } from "@/lib/calendar";
+import { compareStoreIds } from "@/lib/store-order";
 
 /**
  * 畳製造予定 (お客様のご要望 2026-11-23「■3. 畳製造予定表」)
@@ -368,7 +369,7 @@ export interface ProductionView {
   undecided: ProductionRow[];
 }
 
-const byDateThenStore = (a: ProductionRow, b: ProductionRow) => (a.date ?? "").localeCompare(b.date ?? "") || a.storeId.localeCompare(b.storeId) || a.name.localeCompare(b.name, "ja");
+const byDateThenStore = (a: ProductionRow, b: ProductionRow) => (a.date ?? "").localeCompare(b.date ?? "") || compareStoreIds(a.storeId, b.storeId) || a.name.localeCompare(b.name, "ja");
 
 /** 画面の区分 (店舗で絞った行) */
 export function productionView(rows: ProductionRow[], q: ProductionQuery): ProductionView {

@@ -203,7 +203,7 @@ function CashFields({ direction, opening = false, values, accountsOut }: { direc
         </Field>
       )}
       <Field label="相手 (任意)"><Input name="counterparty" defaultValue={values?.counterparty} /></Field>
-      <Field label="摘要"><Input name="description" defaultValue={values?.description} placeholder={direction === "in" ? "例: 本社から小口現金を補充" : "例: 肥後銀行 合志支店へ預け入れ"} /></Field>
+      <Field label="摘要"><Input name="description" defaultValue={values?.description} placeholder={direction === "in" ? "例: 本部から小口現金を補充" : "例: 肥後銀行 合志支店へ預け入れ"} /></Field>
     </>
   );
 }

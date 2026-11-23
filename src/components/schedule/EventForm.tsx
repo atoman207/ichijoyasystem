@@ -504,7 +504,7 @@ export function EventForm({
               ) : (
                 <>
                   <Field label="場所">
-                    <Input name="location" value={v.location} onChange={(e) => set("location", e.target.value)} maxLength={200} placeholder={SCHEDULE_KIND[v.kind].group === "case" ? "現場住所" : "例: 本社 会議室 / 坪井ショールーム"} />
+                    <Input name="location" value={v.location} onChange={(e) => set("location", e.target.value)} maxLength={200} placeholder={SCHEDULE_KIND[v.kind].group === "case" ? "現場住所" : "例: 本部 会議室 / 坪井ショールーム"} />
                   </Field>
                   {suggestedLocation && suggestedLocation !== v.location && !syncedOrderNumber && (
                     <button type="button" onClick={() => set("location", suggestedLocation)} className="-mt-1 inline-flex items-center gap-1 self-start text-xs text-accent hover:underline">

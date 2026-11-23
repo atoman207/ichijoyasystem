@@ -47,7 +47,7 @@ export default async function HeriPage({ searchParams }: { searchParams: Promise
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader
         title="縁在庫"
-        description="畳縁の品番ごとの数量を、共通在庫 (本社) と各店で管理します。入庫・各店への振り分け・使用・棚卸で数量が変わり、共通在庫が規定量を下回ると本部と店長に社内連絡でお知らせします。原価・単価はこの画面には出ません"
+        description="畳縁の品番ごとの数量を、共通在庫 (本部) と各店で管理します。入庫・各店への振り分け・使用・棚卸で数量が変わり、共通在庫が規定量を下回ると本部と店長に社内連絡でお知らせします。原価・単価はこの画面には出ません"
         actions={<LinkButton href="/api/office?kind=heri" variant="secondary" size="sm" download>CSV で書き出す</LinkButton>}
       />
       <LinkTabs

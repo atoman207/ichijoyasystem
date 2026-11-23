@@ -136,7 +136,7 @@ export function SalesLedgerImport() {
             顧客: 新規 {result.customersCreated}・更新 {result.customersUpdated}・売上台帳の顧客を統合 {result.customersMerged} / 受注: 新規 {result.ordersCreated}・更新 {result.ordersUpdated}・売上台帳の受注にひも付け {result.ordersLinked}
             {result.taxExcluded > 0 && ` / 税抜の伝票を税込に換算 ${result.taxExcluded}`}
             {(result.duplicatesMerged ?? 0) > 0 && ` / 売上台帳と二重になっていた受注をまとめた ${result.duplicatesMerged}`}
-            {result.storeByDefault > 0 && ` / 店舗を判定できず本社扱い ${result.storeByDefault}`}
+            {result.storeByDefault > 0 && ` / 店舗を判定できず本部扱い ${result.storeByDefault}`}
           </div>
           {result.staffUnmatched.length > 0 && <div className="mt-1 text-xs">社員に登録のない担当者 (経過メモに氏名を残しました): {result.staffUnmatched.join("、")}</div>}
         </div>

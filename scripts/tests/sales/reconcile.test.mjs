@@ -162,7 +162,7 @@ section("売上の照合 (src/lib/sales-check.ts: 店舗別・月別・台帳だ
   eq(csv.length, 3, "台帳だけの売上の CSV (見出し + 2 行)");
   ok(SC.salesCheckCsv(c, "stores", db, all).at(-1)[0] === "合計", "店舗別の CSV に合計の行");
   const p = SC.parseSalesReference("月,店舗,金額\n2030-12,合志店,1,234,567\n2030/12\t中央\t¥2,000\n2030-13,西,1\n2030-12,どこか,1", db.stores);
-  eq(p.rows.map((r) => [r.month, r.storeId, r.amount]), [["2030-12", "chuo", 2000], ["2030-12", "koshi", 1234567]], "カンマ区切りの金額 1,234,567・タブ区切り・短い店舗名・¥ を読む");
+  eq(p.rows.map((r) => [r.month, r.storeId, r.amount]), [["2030-12", "koshi", 1234567], ["2030-12", "chuo", 2000]], "カンマ区切りの金額 1,234,567・タブ区切り・短い店舗名・¥ を読む");
   eq(p.errors.length, 2, "読めない行 (存在しない月・店舗) は理由を返す");
   eq(SC.salesCheckPeriod({ year: "2029" }).from, "2029-01", "期間: 年");
   eq(SC.salesCheckPeriod({ from: "2030-12", to: "2030-01" }).from, "2030-01", "期間: 逆に入れても並べ替える");

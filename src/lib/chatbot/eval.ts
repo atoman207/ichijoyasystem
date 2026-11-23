@@ -393,7 +393,7 @@ export function deleteEvalCase(id: number): void {
 
 /**
  * 始めの質問 (eval-seeds.ts) を入れる。すでにあるもの (seed_key が同じ) は変えない (人が直した内容を残す)。
- * 店舗の質問は、データにある店舗 (本社以外の最初の 2 店舗) で作る
+ * 店舗の質問は、データにある店舗 (本部以外の最初の 2 店舗) で作る
  */
 export function seedEvalCases(db: Database, by = "system"): number {
   ensureTables();

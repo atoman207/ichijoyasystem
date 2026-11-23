@@ -36,7 +36,7 @@ export const IMPORT_SPEC: Record<ImportTarget, TargetSpec> = {
       { key: "postalCode", header: "郵便番号", aliases: ["〒", "郵便"], note: "", example: "861-1113" },
       { key: "address", header: "住所", aliases: ["所在地", "住所1"], note: "", example: "熊本県合志市栄0000" },
       { key: "area", header: "地区", aliases: ["地域", "エリア"], note: "", example: "栄" },
-      { key: "storeId", header: "担当店舗", aliases: ["店舗", "店舗名", "担当店"], required: "new", note: "合志店・中央店・西店・玉名店・本社 (「合志」のような略称も可)", example: "合志店" },
+      { key: "storeId", header: "担当店舗", aliases: ["店舗", "店舗名", "担当店"], required: "new", note: "合志店・中央店・西店・玉名店・本部 (「合志」のような略称も可)", example: "合志店" },
       { key: "preferredChannel", header: "希望連絡手段", aliases: ["連絡手段", "希望する連絡手段"], note: "電話・LINE・メール・郵送 など (省略時は電話)", example: "電話" },
       { key: "tags", header: "タグ", aliases: ["分類"], note: "空白・カンマ区切りで複数", example: "リピーター" },
       { key: "notes", header: "備考", aliases: ["メモ", "注意事項"], note: "", example: "" },
@@ -47,7 +47,7 @@ export const IMPORT_SPEC: Record<ImportTarget, TargetSpec> = {
     description: "1 行を 1 件の問い合わせとして登録します (番号は自動)。受付日時・お名前・概要が同じ問い合わせが登録済みの行は取り込みません。",
     columns: [
       { key: "receivedAt", header: "受付日時", aliases: ["受付日", "日付", "日時", "受付"], required: "always", note: "2026-11-12 10:30 / 2026/11/12 (時刻は省略可)", example: "2026-11-12 10:30" },
-      { key: "storeId", header: "担当店舗", aliases: ["店舗", "店舗名", "担当店"], required: "always", note: "合志店・中央店・西店・玉名店・本社", example: "合志店" },
+      { key: "storeId", header: "担当店舗", aliases: ["店舗", "店舗名", "担当店"], required: "always", note: "合志店・中央店・西店・玉名店・本部", example: "合志店" },
       { key: "channel", header: "経路", aliases: ["入口", "受付方法", "手段", "問い合わせ方法"], note: "電話・来店・対面・郵送・メール・LINE・Web など (省略時は電話)", example: "電話" },
       { key: "category", header: "種別", aliases: ["商品", "品目", "区分"], note: "畳・襖・障子・網戸・カーテン・クロス・その他 (省略時はその他)", example: "畳" },
       { key: "contactName", header: "お名前", aliases: ["氏名", "名前", "顧客名", "お客様名"], required: "always", note: "", example: "山田 花子" },

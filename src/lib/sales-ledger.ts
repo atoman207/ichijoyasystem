@@ -286,7 +286,7 @@ function mediaStore(media: string): StoreId | undefined {
   if (/中央/.test(media)) return "chuo";
   if (/西店/.test(media)) return "nishi";
   if (/合志/.test(media)) return "koshi";
-  if (/本社|ショールーム/.test(media)) return "hq";
+  if (/本社|本部|ショールーム/.test(media)) return "hq";
   return undefined;
 }
 

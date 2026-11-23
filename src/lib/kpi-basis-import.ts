@@ -6,6 +6,7 @@ import { xlsxRows } from "@/lib/survey-workbook/read";
 import { nk, nkTight, parseMonth, parseNum, parseYear, storeOfLabel } from "@/lib/survey-workbook/tabs";
 import { normPostcardNo } from "@/lib/survey";
 import { kpiBasis, monthKey, type KpiBasis } from "./kpi-basis";
+import { compareStoreIds } from "@/lib/store-order";
 
 /**
  * KPI の分母・集計月の取込 (確認 → 取り込む)
@@ -123,7 +124,7 @@ export function parseIndividualSheet(rows: string[][], sheetName = "個人件数
   // 同じ店舗・月が 2 回 (年度の表の重なり) あれば後の表 (新しい年度) を使う
   const byKey = new Map<string, IndividualValue>();
   for (const v of values) byKey.set(monthKey(v.storeId, v.month), v);
-  return { values: [...byKey.values()].sort((a, b) => a.month.localeCompare(b.month) || a.storeId.localeCompare(b.storeId)), problems };
+  return { values: [...byKey.values()].sort((a, b) => a.month.localeCompare(b.month) || compareStoreIds(a.storeId, b.storeId)), problems };
 }
 
 /* ------------------------------------------------------------------ */

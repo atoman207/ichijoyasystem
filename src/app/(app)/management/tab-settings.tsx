@@ -4,11 +4,12 @@ import { itemCategories } from "@/lib/mgmt/categories";
 import { addSalesArea, closeSalesArea, importSalesAreas, saveItemCategory, saveStoreUnit, setRuleAction } from "@/lib/actions/mgmt";
 import { Badge, Button, Card, CardHeader, Field, Input, Note, Select, Table, Td, Th, Tr } from "@/components/ui";
 import { StoreSelect, back, storeNameOf, userNameOf, type Ctx } from "./parts";
+import { compareStoreIds } from "@/lib/store-order";
 
 export function SettingsTab({ ctx }: { ctx: Ctx }) {
   const { db } = ctx;
   const b = back(ctx);
-  const areas = activeAreas(db, ctx.today).sort((a, b2) => a.storeId.localeCompare(b2.storeId) || a.town.localeCompare(b2.town, "ja"));
+  const areas = activeAreas(db, ctx.today).sort((a, b2) => compareStoreIds(a.storeId, b2.storeId) || a.town.localeCompare(b2.town, "ja"));
   const byStore = new Map<string, number>();
   for (const a of areas) byStore.set(a.storeId, (byStore.get(a.storeId) ?? 0) + 1);
   const ended = db.salesAreas.filter((a) => a.validTo && a.validTo < ctx.today).length;

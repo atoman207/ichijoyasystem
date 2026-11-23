@@ -23,7 +23,7 @@ export type * from "./types-posts";
 
 export type Role = "admin" | "store_manager" | "store_staff" | "hq_staff";
 
-/** 店舗 ID (4 店舗 + 本社/坪井ショールーム) */
+/** 店舗 ID (4 店舗 + 本部・ショールーム (坪井)) */
 /**
  * 店舗 ID。開設時の 4 店舗と本部のほか、管理者が設定 → 店舗 で追加した店舗 (半角英小文字の ID) も入る。
  * 店舗の一覧・名前・色は db.stores から読む (ID の並びをコードに書かない)
@@ -1496,7 +1496,7 @@ export interface FaxMessage {
   poVersion?: number;
   /** 関連する案件 (受注)。発注書の明細の案件・読み取った案件番号 */
   orderIds: string[];
-  /** 閲覧範囲の店舗 (発注書・案件・顧客の店舗。未確定の受信 FAX は本社) */
+  /** 閲覧範囲の店舗 (発注書・案件・顧客の店舗。未確定の受信 FAX は本部) */
   storeId: StoreId;
   /** 担当者 */
   assignedUserId?: string;

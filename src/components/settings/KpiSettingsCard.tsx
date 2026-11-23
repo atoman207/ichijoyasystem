@@ -2,12 +2,13 @@ import type { Database } from "@/lib/db/types";
 import { updateKpiSettings } from "@/lib/actions/kpi";
 import { formatTiers, kpiSettings } from "@/lib/kpi-settings";
 import { Button, Card, CardHeader, Field, Input, Select } from "@/components/ui";
+import { compareStoreIds } from "@/lib/store-order";
 
 /** 設定 → KPI・インセンティブ (既定値は「お客様アンケート集計表」KPI シートの評価方法) */
 export function KpiSettingsCard({ db, admin }: { db: Database; admin: boolean }) {
   const s = kpiSettings(db);
   const i = s.incentive;
-  const users = db.users.filter((u) => u.active).sort((a, b) => a.storeId.localeCompare(b.storeId) || a.kana.localeCompare(b.kana, "ja"));
+  const users = db.users.filter((u) => u.active).sort((a, b) => compareStoreIds(a.storeId, b.storeId) || a.kana.localeCompare(b.kana, "ja"));
   const short = (id: string) => db.stores.find((x) => x.id === id)?.shortName ?? "";
   const chip = "inline-flex cursor-pointer items-center gap-1 rounded-full border border-line px-2.5 py-1 text-xs has-[:checked]:border-accent has-[:checked]:bg-accent-soft has-[:checked]:text-accent-ink";
   const tier = (name: string, label: string, value: string, hint: string) => (

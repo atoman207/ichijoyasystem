@@ -21,6 +21,7 @@ import { accuracyStats } from "@/lib/ocr-accuracy";
 import { customerHasPhone } from "@/lib/customer-contacts";
 import { Badge, Card, CardHeader, Flash, LinkButton, Note, PageHeader, Pager, StatusBadge, StoreTag, paginate } from "@/components/ui";
 import { Calculator } from "lucide-react";
+import { compareStoreIds } from "@/lib/store-order";
 
 /** AI の読み取り (最大 50 秒) を待つため、Vercel の処理時間の上限を 60 秒にする */
 export const maxDuration = 60;
@@ -129,7 +130,7 @@ export default async function CapturePage({ searchParams }: { searchParams: Prom
       orderOptions: recent.map((o) => ({ value: o.number, label: `${customerName(o.customerId)} 様 · ${o.title}${o.postcardNo ? ` · ハガキ ${o.postcardNo}` : ""}` })),
       users: db.users
         .filter((u) => u.active)
-        .sort((a, b) => (a.storeId === storeId ? -1 : 0) - (b.storeId === storeId ? -1 : 0) || a.storeId.localeCompare(b.storeId) || a.kana.localeCompare(b.kana, "ja"))
+        .sort((a, b) => (a.storeId === storeId ? -1 : 0) - (b.storeId === storeId ? -1 : 0) || compareStoreIds(a.storeId, b.storeId) || a.kana.localeCompare(b.kana, "ja"))
         .map((u) => ({ id: u.id, label: `${u.name} (${storeShort(u.storeId)})` })),
       salesUserId: sales[0] ?? "",
       deliveryUserIds: delivery.length ? delivery : (order?.workerIds ?? []),

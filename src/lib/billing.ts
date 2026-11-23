@@ -1,5 +1,6 @@
 import type { Customer, CustomerBillingTerms, Database, Invoice, InvoiceOrderLine, Order, StoreId } from "@/lib/db/types";
 import { dueDateFor } from "@/lib/suppliers";
+import { compareStoreIds } from "@/lib/store-order";
 
 /**
  * 売上計上と請求 (法人のお客様のまとめ請求)
@@ -232,7 +233,7 @@ export function batchGroups(db: Pick<Database, "customers" | "orders" | "invoice
     groups.set(key, g);
   }
   for (const g of groups.values()) g.orders.sort((a, b) => a.order.salesDate!.localeCompare(b.order.salesDate!) || a.order.number.localeCompare(b.order.number));
-  return [...groups.values()].sort((a, b) => a.customer.name.localeCompare(b.customer.name, "ja") || a.storeId.localeCompare(b.storeId));
+  return [...groups.values()].sort((a, b) => a.customer.name.localeCompare(b.customer.name, "ja") || compareStoreIds(a.storeId, b.storeId));
 }
 
 /** 締めの設定がない法人のお客様のうち、請求書のない完了した案件があるお客様 (まとめ請求の画面で案内する) */

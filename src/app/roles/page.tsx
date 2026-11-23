@@ -54,7 +54,7 @@ export default async function RolesPage() {
       <section className="mt-6" aria-labelledby="people-by-store">
         <CardHeader
           icon={<Users />}
-          title={<span id="people-by-store">店舗・本社の担当</span>}
+          title={<span id="people-by-store">店舗・本部の担当</span>}
           description="各人のカードに、その人ができること・できないことを整理しています。"
         />
         <div className="space-y-5">

@@ -984,11 +984,11 @@ function seedCompanyCalendar(ctx: Ctx) {
     addEvent(ctx, { title: "合志店 朝ミーティング", kind: "meeting", date: day, startTime: "08:00", endTime: "08:25", storeId: "koshi", assigneeIds: ["u02", "u06", "u07"], location: "合志店 事務所", memo: "今週の施工・現地調査の段取りと人員の確認", seriesId: koshiMtg, ...by("u02", at(addDays(mon, -35), 18, 0)) });
   }
   // 月次経営会議 (本日 16:00)
-  addEvent(ctx, { title: "月次経営会議 (店長・本部)", kind: "meeting", date: today, startTime: "16:00", endTime: "17:00", storeId: "hq", assigneeIds: ["u01", "u02", "u03", "u04", "u05", "u14"], location: "本社 会議室 (オンライン参加可)", memo: "今月の売上見込み・展示販売会の人員・年末の施工枠", ...by("u01", at(d(-2), 13, 10)) });
+  addEvent(ctx, { title: "月次経営会議 (店長・本部)", kind: "meeting", date: today, startTime: "16:00", endTime: "17:00", storeId: "hq", assigneeIds: ["u01", "u02", "u03", "u04", "u05", "u14"], location: "本部 会議室 (オンライン参加可)", memo: "今月の売上見込み・展示販売会の人員・年末の施工枠", ...by("u01", at(d(-2), 13, 10)) });
   // 社内行事: 新商品研修・全社安全講習
   addEvent(ctx, { title: "新商品研修 (和紙畳・カラー畳の提案方法)", kind: "company", date: workday(d(4)), startTime: "13:00", endTime: "15:00", storeId: "hq", assigneeIds: ["u06", "u08", "u10", "u12", "u15"], location: "坪井ショールーム", memo: "各店の営業・受付担当が参加。サンプル帳を持参", ...by("u15", at(d(-1), 15, 0)) });
   const safety = workday(d(8));
-  addEvent(ctx, { title: "全社 安全講習 (車両・電動工具)", kind: "company", date: safety, startTime: "17:30", endTime: "19:00", storeId: "hq", companyWide: true, assigneeIds: ["u02", "u03", "u04", "u05", "u07", "u09", "u11", "u13"], location: "本社 研修室", memo: "施工車の日常点検・電動工具の取扱い。受講記録を残します", ...by("u15", at(d(-1), 11, 30)) });
+  addEvent(ctx, { title: "全社 安全講習 (車両・電動工具)", kind: "company", date: safety, startTime: "17:30", endTime: "19:00", storeId: "hq", companyWide: true, assigneeIds: ["u02", "u03", "u04", "u05", "u07", "u09", "u11", "u13"], location: "本部 研修室", memo: "施工車の日常点検・電動工具の取扱い。受講記録を残します", ...by("u15", at(d(-1), 11, 30)) });
   // 会合
   addEvent(ctx, { title: "畳組合 定例会合", kind: "gathering", date: workday(d(6)), startTime: "18:30", endTime: "20:30", storeId: "hq", assigneeIds: ["u01"], location: "組合会館 (熊本市中央区)", ...by("u01", at(d(-3), 10, 0)) });
   addEvent(ctx, { title: "地域商工会 定例会 (中央地区)", kind: "gathering", date: workday(d(13)), startTime: "19:00", endTime: "21:00", storeId: "chuo", assigneeIds: ["u03"], location: "地区公民館", ...by("u03", at(d(-5), 11, 0)) });

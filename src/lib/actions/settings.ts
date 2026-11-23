@@ -10,6 +10,7 @@ import { CUSTOMER_CREATOR_LABEL, OPS_SETTINGS_ID } from "@/lib/ops-settings";
 import type { StoreId } from "@/lib/db/types";
 import { canManageSettings } from "@/lib/auth/permissions";
 import { CATEGORY_LABEL } from "@/lib/constants";
+import { orderStores } from "@/lib/store-order";
 import { NEW_STORE_COLORS } from "@/lib/store-colors";
 import { categoryName, isItemCategory, productItemCategory } from "@/lib/mgmt/categories";
 import { choice, fail, numField, requireActionUser, str, withMsg } from "./guards";
@@ -75,11 +76,17 @@ export async function updateStore(id: StoreId, formData: FormData) {
     const s = db.stores.find((x) => x.id === id);
     if (!s) fail(back, "店舗が見つかりません。");
     const before = { ...s };
+    // 店舗名・略称 (空のときは変えない。ほかの店舗と同じ名前にはしない。ID は変えない)
+    const name = str(formData, "name").slice(0, 30);
+    const shortName = str(formData, "shortName").slice(0, 10);
+    if (name && name !== s.name && db.stores.some((x) => x.id !== id && x.name === name)) fail(back, `「${name}」はほかの店舗の名前です。`);
+    if (name) s.name = name;
+    if (shortName) s.shortName = shortName;
     // 電話は空にできる (固定電話を置いていない店舗)。住所・責任者は空のときは変えない
     s.phone = str(formData, "phone");
     s.address = str(formData, "address") || s.address;
     s.managerUserId = str(formData, "managerUserId") || s.managerUserId;
-    const changes = diffChanges(before, s, ["phone", "address", "managerUserId"]);
+    const changes = diffChanges(before, s, ["name", "shortName", "phone", "address", "managerUserId"]);
     if (changes.length) addAudit(db, { userId: admin.id, action: "update", entity: "store", entityId: id, entityLabel: s.name, summary: `店舗情報を更新 (${s.name})`, changes });
   });
   revalidatePath("/settings");
@@ -108,6 +115,8 @@ export async function createStore(formData: FormData) {
     const pick = color || NEW_STORE_COLORS.find((c) => !used.has(c.toLowerCase())) || NEW_STORE_COLORS[db.stores.length % NEW_STORE_COLORS.length];
     const code = String(Math.max(0, ...db.stores.map((s) => Number(s.code) || 0)) + 1).padStart(2, "0");
     db.stores.push({ id, code, name, shortName, kind: "store", postalCode: str(formData, "postalCode"), address: str(formData, "address"), phone: str(formData, "phone"), managerUserId: str(formData, "managerUserId") || undefined, color: pick, openedOn: openedOn || undefined });
+    // 店舗の表示順 (合志 → 中央 → 西 → 玉名 → 足した店舗 → 本部。src/lib/store-order.ts)
+    orderStores(db);
     addAudit(db, { userId: admin.id, action: "create", entity: "store", entityId: id, entityLabel: name, summary: `店舗を追加 (${name}・ID ${id}${openedOn ? `・開設 ${openedOn}` : ""})`, storeId: id });
   });
   revalidatePath("/settings");

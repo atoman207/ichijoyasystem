@@ -6,6 +6,7 @@ import { addAudit, getDb, mutate } from "@/lib/db/store";
 import { canImportData } from "@/lib/auth/permissions";
 import { parseSalesReference, salesReference, SALES_REFERENCE_ID, type SalesReferenceRow } from "@/lib/sales-check";
 import { fail, requireActionUser, str, withMsg } from "./guards";
+import { compareStoreIds } from "@/lib/store-order";
 
 /**
  * 売上の照合 (/data/sales-check) の「旧システムの数字」を保存する (管理者・本部スタッフ)。
@@ -26,7 +27,7 @@ export async function saveSalesReference(formData: FormData) {
     const now = new Date().toISOString();
     const before = salesReference(db);
     const keep: SalesReferenceRow[] = replaceAll ? [] : before.rows.filter((r) => !rows.some((x) => x.month === r.month && x.storeId === r.storeId));
-    const next = [...keep, ...rows].sort((a, b) => a.month.localeCompare(b.month) || a.storeId.localeCompare(b.storeId));
+    const next = [...keep, ...rows].sort((a, b) => a.month.localeCompare(b.month) || compareStoreIds(a.storeId, b.storeId));
     count = rows.length;
     const value = { rows: next, label: label || before.label };
     const row = db.settings.find((s) => s.id === SALES_REFERENCE_ID);

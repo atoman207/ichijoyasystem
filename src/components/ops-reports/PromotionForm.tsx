@@ -18,7 +18,7 @@ export function PromotionForm({ action, promotion, stores, storeLocked, defaultS
         <Field label="名前" required className="@3xl:col-span-2">
           <Input name="title" required defaultValue={p?.title} placeholder="例: 2026年4月 合志店 新聞折込チラシ / 春の畳フェア / 点検のご案内 DM" />
         </Field>
-        <Field label="店舗" hint={storeLocked ? "店長は自店舗の販促だけを登録できます" : "全社の販促は「本社」"}>
+        <Field label="店舗" hint={storeLocked ? "店長は自店舗の販促だけを登録できます" : "全社の販促は「本部」"}>
           <Select name="storeId" defaultValue={p?.storeId ?? defaultStore} disabled={storeLocked}>
             {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </Select>

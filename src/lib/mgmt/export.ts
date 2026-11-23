@@ -2,6 +2,7 @@ import type { Database } from "@/lib/db/types";
 import { storePnl } from "./pnl";
 import { METRIC_LABEL } from "./ledger";
 import { categoryName } from "./categories";
+import { compareStoreIds } from "@/lib/store-order";
 
 /**
  * 管理会計の CSV (税理士へ渡す資料・社内の確認用)
@@ -44,7 +45,7 @@ export function mgmtExportRows(db: Database, kind: MgmtExport, from: string, to:
   }
   const filter = kind === "moves" ? (x: (typeof r.rows)[number]) => MOVE_KINDS.has(x.source.kind) || (x.source.kind === "entry" && /畳表の差額|広告宣伝費の予算超過/.test(x.source.label)) : () => true;
   const rows: (string | number | null)[][] = [head, ["日付", "月", "店舗", "指標", "品目", "金額", "元の記録", "記録の ID", "暫定の理由"]];
-  for (const x of r.rows.filter(filter).sort((a, b) => a.date.localeCompare(b.date) || a.storeId.localeCompare(b.storeId))) {
+  for (const x of r.rows.filter(filter).sort((a, b) => a.date.localeCompare(b.date) || compareStoreIds(a.storeId, b.storeId))) {
     rows.push([x.date, x.month, db.stores.find((s) => s.id === x.storeId)?.name ?? x.storeId, METRIC_LABEL[x.metric], categoryName(db, x.itemCategory), x.amount, x.source.label, x.source.id, x.provisional ?? ""]);
   }
   return rows;

@@ -722,7 +722,7 @@ export const GLOSSARY: [string, string][] = [
   ["アンケート・お客様の声", "survey_responses"],
   ["口コミ・レビュー", "google_reviews"],
   ["社員・スタッフ・職人・担当", "users (名前で結合)"],
-  ["店舗: 合志・中央・西・玉名・本社", "store_id = koshi・chuo・nishi・tamana・hq (store_name に店舗名)"],
+  ["店舗: 合志・中央・西・玉名・本部 (本社)", "store_id = koshi・chuo・nishi・tamana・hq (store_name に店舗名)"],
   ["アンケート・はがき・お客様の評価・満足度", "survey_responses / v_surveys"],
   ["過去のアンケートの集計・H26〜R4・4年比較・年度の比較", "survey_history / v_survey_history"],
   ["クレーム・手直し・不具合・やり直し", "quality_issues / v_quality"],

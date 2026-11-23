@@ -13,6 +13,7 @@ import { userName } from "@/lib/db/queries";
 import { KpiTabs } from "@/components/kpi/KpiTabs";
 import { PeriodSelect } from "@/components/kpi/PeriodSelect";
 import { Button, Card, CardHeader, Flash, Note, PageHeader, StoreTag } from "@/components/ui";
+import { compareStoreIds } from "@/lib/store-order";
 
 const COLUMNS: [string, string][] = [
   ["reply", "返信率"],
@@ -45,7 +46,7 @@ export default async function IncentivesPage({ searchParams }: { searchParams: P
   const adjustments = ((db.settings.find((s) => s.id === `incentive_${fy}`)?.value as { adjust?: Adjustments } | undefined)?.adjust ?? {}) as Adjustments;
   const result = computeIncentives(db, period, settings, adjustments);
   const users = new Map(db.users.map((u) => [u.id, u]));
-  const rows = result.people.filter((r) => canViewStaffKpi(user, users.get(r.userId)!)).sort((a, b) => a.storeId.localeCompare(b.storeId) || b.total - a.total);
+  const rows = result.people.filter((r) => canViewStaffKpi(user, users.get(r.userId)!)).sort((a, b) => compareStoreIds(a.storeId, b.storeId) || b.total - a.total);
   const admin = canManageSettings(user);
   const reviewRows = reviewMonths(db.reviews.filter((r) => inPeriod(r.postedOn, period) && users.get(r.userId) && isPayable(users.get(r.userId)!, settings)), settings.reviewYenPerPoint, null);
   const reviewYen = new Map<string, number>();

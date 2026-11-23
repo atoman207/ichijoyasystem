@@ -177,12 +177,12 @@ export default async function HomePage() {
       <PageHeader
         eyebrow="株式会社一畳屋 · 社員専用"
         title="一畳屋 統合業務システム"
-        description="問い合わせから入金まで、ひとつの画面で。4 店舗と本社の社員が、お客様・見積・工事の予定・請求を同じ最新の情報で扱います。"
+        description="問い合わせから入金まで、ひとつの画面で。4 店舗と本部の社員が、お客様・見積・工事の予定・請求を同じ最新の情報で扱います。"
       />
 
       {/* 店舗 (公式サイトの写真。店名のみ。住所・電話・アイコンは出さない) */}
       <Card id="stores" className="mt-6 scroll-mt-24">
-        <CardHeader title="熊本の 4 店舗と本社が、同じ情報でつながります" description="どの店舗で受けたお問い合わせも、ほかの店舗・本社からすぐに確認できます。予定表は全店舗で共有しています。" />
+        <CardHeader title="熊本の 4 店舗と本部が、同じ情報でつながります" description="どの店舗で受けたお問い合わせも、ほかの店舗・本部からすぐに確認できます。予定表は全店舗で共有しています。" />
         <ul className="grid grid-cols-1 gap-3 @3xl:grid-cols-2">
           {shops.map((s) => (
             <li key={s.id} className="overflow-hidden rounded-xl border border-line/70 bg-panel">
@@ -213,7 +213,7 @@ export default async function HomePage() {
               </Badge>
               <h3 className="mt-2 text-[15px] font-semibold tracking-tight text-ink">{hq.name}</h3>
               <p className="mt-1.5 text-sm leading-relaxed text-ink-2">
-                経理・承認・経営の数字を全店舗まとめて確認します。各店舗の見積・請求・入金も、本社からリアルタイムで見えます。
+                経理・承認・経営の数字を全店舗まとめて確認します。各店舗の見積・請求・入金も、本部からリアルタイムで見えます。
               </p>
             </div>
           </div>
@@ -336,8 +336,8 @@ export default async function HomePage() {
       <Card id="features" className="mt-6 scroll-mt-24">
         <CardHeader
           icon={<LayoutGrid />}
-          title="現場・店舗・本社の仕事を、それぞれの画面で"
-          description="スマートフォンでも使えます。現場では写真と予定、店舗では見積と顧客対応、本社では承認と経営数値を中心に使います。"
+          title="現場・店舗・本部の仕事を、それぞれの画面で"
+          description="スマートフォンでも使えます。現場では写真と予定、店舗では見積と顧客対応、本部では承認と経営数値を中心に使います。"
         />
         <ul className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-4">
           {FEATURES.map((f) => (
