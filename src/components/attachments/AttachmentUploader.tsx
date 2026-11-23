@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Camera, CircleAlert, CircleCheck, LoaderCircle, Paperclip } from "lucide-react";
 import { prepareFile } from "./image-prep";
+import { CameraDialog, useTouchDevice } from "./CameraDialog";
 
 /** 1 回に選べるファイルの数 */
 const MAX_FILES = 20;
@@ -15,7 +16,7 @@ interface Row {
 }
 
 /**
- * 写真・資料の登録 (スマートフォン・タブレットのカメラ / アルバム / ファイル)。
+ * 写真・資料の登録 (スマートフォン・タブレットのカメラ / アルバム / ファイル。パソコンはブラウザーのカメラ = CameraDialog で続けて撮影)。
  * 写真は縮小してから 1 枚ずつ送り、すべて終わったら画面を更新する
  */
 export function AttachmentUploader({ parentType, parentId, accept, endpoint = "/api/attachments", note }: { parentType: string; parentId: string; accept: string; endpoint?: string; note?: string }) {
@@ -25,8 +26,10 @@ export function AttachmentUploader({ parentType, parentId, accept, endpoint = "/
   const [caption, setCaption] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
   const [busy, setBusy] = useState(false);
+  const pc = useTouchDevice() === false;
+  const [camera, setCamera] = useState(false);
 
-  async function upload(list: FileList | null) {
+  async function upload(list: FileList | File[] | null) {
     const files = Array.from(list ?? []);
     if (!files.length || busy) return;
     if (files.length > MAX_FILES) {
@@ -77,11 +80,18 @@ export function AttachmentUploader({ parentType, parentId, accept, endpoint = "/
   return (
     <div className="rounded-xl border border-dashed border-line-strong bg-subtle/40 p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <label className={`inline-flex h-10 cursor-pointer items-center gap-1.5 rounded-xl bg-accent px-4 text-sm font-medium text-white hover:bg-accent-hover ${busy ? "pointer-events-none opacity-60" : ""}`}>
-          <Camera className="h-4 w-4" aria-hidden />
-          カメラで撮影
-          <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="sr-only" disabled={busy} onChange={(e) => upload(e.target.files)} />
-        </label>
+        {pc ? (
+          <button type="button" onClick={() => setCamera(true)} disabled={busy} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-accent px-4 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-60">
+            <Camera className="h-4 w-4" aria-hidden />
+            カメラで撮影
+          </button>
+        ) : (
+          <label className={`inline-flex h-10 cursor-pointer items-center gap-1.5 rounded-xl bg-accent px-4 text-sm font-medium text-white hover:bg-accent-hover ${busy ? "pointer-events-none opacity-60" : ""}`}>
+            <Camera className="h-4 w-4" aria-hidden />
+            カメラで撮影
+            <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="sr-only" disabled={busy} onChange={(e) => upload(e.target.files)} />
+          </label>
+        )}
         <label className={`inline-flex h-10 cursor-pointer items-center gap-1.5 rounded-xl border border-line bg-panel px-4 text-sm font-medium text-ink hover:bg-subtle ${busy ? "pointer-events-none opacity-60" : ""}`}>
           <Paperclip className="h-4 w-4" aria-hidden />
           写真・資料を選ぶ (複数可)
@@ -97,6 +107,18 @@ export function AttachmentUploader({ parentType, parentId, accept, endpoint = "/
           disabled={busy}
         />
       </div>
+      {camera && (
+        <CameraDialog
+          multiple
+          title="カメラで撮影 (続けて撮れます)"
+          hint="撮りたいものをカメラに向けて「撮影」を押し、「この写真を追加」で何枚でも続けて撮れます。最後に「登録する」を押します。"
+          onClose={() => setCamera(false)}
+          onDone={(files) => {
+            setCamera(false);
+            void upload(files);
+          }}
+        />
+      )}
       <p className="mt-2 text-[11px] leading-relaxed text-ink-3">{note ?? `写真は自動で縮小して送ります (撮影日時・登録者を記録)。PDF・Excel・Word などは 1 ファイル 4 MB まで。1 回に ${MAX_FILES} 件まで選べます。`}</p>
       {rows.length > 0 && (
         <div className="mt-3 rounded-lg bg-panel p-2 text-xs" aria-live="polite">

@@ -64,7 +64,7 @@ export default async function QuoteCalcPage({ searchParams }: { searchParams: Pr
                 submit: "読み取って計算する",
                 pending: "AI が数量・単価を読み取り中… (10〜20 秒)",
                 sample: "サンプルで計算を試す",
-                drop: "タップして見積書を撮影",
+                drop: "見積書を撮影",
                 dropNote: "明るい場所で、影や斜めにならないように用紙全体を撮影してください",
                 note: ai.enabled ? "AI は品名・数量・単価を読むだけで、計算はシステムが行います (AI に計算はさせません)。" : "AI の API キーが未設定のため、サンプルの読取結果で計算します。",
               }}
@@ -202,7 +202,7 @@ export default async function QuoteCalcPage({ searchParams }: { searchParams: Pr
                 submit: "撮影して書き写しを確かめる",
                 pending: "書き写した金額を読み取り中… (10〜20 秒)",
                 sample: "サンプルで照合を試す",
-                drop: "タップして、金額を書いた見積書を撮影",
+                drop: "金額を書いた見積書を撮影",
                 dropNote: "計算に使った写真も残ります",
                 note: "読み取った金額と計算を行ごとに比べ、違う行は黄色で知らせます。",
               }}

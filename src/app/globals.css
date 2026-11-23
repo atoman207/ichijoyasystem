@@ -223,3 +223,17 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+  スマートフォン・タブレット (主な入力がタッチ) では入力欄の文字を 16px にする。
+  iPhone の Safari は 16px より小さい入力欄を押すと画面を拡大し (見積・書類取込の確認などで画面がずれて見える)、
+  入力のあとも拡大したままになるため。パソコン (マウス) の表示は変えない。
+  レイヤーの外に書くので、text-xs などのユーティリティより優先される
+*/
+@media (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="hidden"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

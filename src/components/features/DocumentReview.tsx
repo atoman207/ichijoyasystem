@@ -33,6 +33,14 @@ function num(v: string | undefined): number | null {
   return Number.isFinite(x) ? x : null;
 }
 
+/** 表の列の幅 (広い欄のとき。TableSpec の width、なければ種類から) + 削除の列 */
+function colTemplate(t: TableSpec): string {
+  const w = (c: TableSpec["columns"][number]) => c.width ?? (c.type === "text" ? "minmax(6rem,1fr)" : c.type === "flag" ? "3.5rem" : c.type === "fittingKind" ? "5.5rem" : "5.5rem");
+  return [...t.columns.map(w), "2rem"].join(" ");
+}
+/** カード (狭い欄) で 2 マス使う列 (品名・規格など幅の決まっていない文字の列)。カードは 2 列 (スマートフォン) か 4 列 (448px 以上) */
+const wideCol = (c: TableSpec["columns"][number]) => c.type === "text" && (!c.width || c.width.startsWith("minmax"));
+
 const toText = (v: unknown): string => (v === null || v === undefined ? "" : Array.isArray(v) ? v.map(String).join("\n") : String(v));
 
 function Submit({ children, variant = "primary", name, value, pendingLabel, blocked = false }: { children: React.ReactNode; variant?: "primary" | "secondary" | "danger"; name?: string; value?: string; pendingLabel?: string; blocked?: boolean }) {
@@ -283,55 +291,75 @@ export function DocumentReview({
             </button>
           )}
         </div>
-        <div className="overflow-x-auto rounded-xl border border-line">
-          <table className="w-full min-w-[620px] text-sm">
-            <thead>
-              <tr className="bg-subtle text-xs text-ink-2">
-                {t.columns.map((c) => <th key={c.key} className={`px-2 py-1.5 font-medium ${c.type === "text" || c.type === "fittingKind" ? "text-left" : c.type === "flag" ? "text-center" : "text-right"}`}>{c.label}</th>)}
-                <th className="w-8" />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr><td colSpan={t.columns.length + 1} className="px-3 py-3 text-center text-xs text-ink-3">読み取った行はありません{editable ? " (「行を追加」で入力できます)" : ""}</td></tr>
-              )}
-              {rows.map((r, i) => (
-                <tr key={i} className={`border-t border-line align-top ${r.uncertain === "true" ? "bg-warn-soft/70" : ""}`}>
-                  {t.columns.map((c) => (
-                    <td key={c.key} className="px-1.5 py-1">
-                      {c.type === "flag" ? (
-                        <label className="flex h-8 items-center justify-center" title="読みにくい・判断が難しい行">
-                          <input type="checkbox" checked={r[c.key] === "true"} onChange={(e) => setCell(t.key, i, c.key, e.target.checked ? "true" : "")} className="h-4 w-4" aria-label={c.label} />
-                        </label>
-                      ) : c.type === "fittingKind" ? (
-                        <select className="field h-8 py-1 text-xs" value={r[c.key] ?? ""} onChange={(e) => setCell(t.key, i, c.key, e.target.value)} aria-label={c.label}>
-                          {FITTING_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
-                        </select>
-                      ) : (
-                        <input
-                          className={`field h-8 py-1 text-xs ${c.type === "text" ? "" : "text-right tnum"}`}
-                          inputMode={c.type === "text" ? undefined : "decimal"}
-                          value={r[c.key] ?? ""}
-                          onChange={(e) => setCell(t.key, i, c.key, e.target.value)}
-                          aria-label={c.label}
-                        />
-                      )}
-                      {t.key === "items" && c.key === "name" && r._productId && r.name === r._origName && productNames[r._productId] && (
-                        <span className="mt-0.5 block truncate text-[10px] text-good-ink">商品マスタ: {productNames[r._productId]}</span>
-                      )}
-                    </td>
+        {/* 広い欄は表 (列の幅は TableSpec の width)、狭い欄 (スマートフォン) は 1 行ずつのカード。入力欄は 1 組だけ (送る値は data の JSON) */}
+        <div className="@container">
+          <div className="overflow-hidden rounded-xl border border-line text-sm" style={{ "--cols": colTemplate(t) } as React.CSSProperties}>
+            <div className="hidden gap-x-1.5 bg-subtle px-1.5 py-1.5 text-xs font-medium text-ink-2 @2xl:grid @2xl:grid-cols-(--cols)" aria-hidden>
+              {t.columns.map((c) => <span key={c.key} className={`px-0.5 ${c.type === "text" || c.type === "fittingKind" ? "text-left" : c.type === "flag" ? "text-center" : "text-right"}`}>{c.label}</span>)}
+              <span />
+            </div>
+            <div className="divide-y divide-line border-line @2xl:border-t">
+            {rows.length === 0 && (
+              <p className="px-3 py-3 text-center text-xs text-ink-3">読み取った行はありません{editable ? " (「行を追加」で入力できます)" : ""}</p>
+            )}
+            {rows.map((r, i) => (
+              <div
+                key={i}
+                role="group"
+                aria-label={`${i + 1} 行目`}
+                className={`grid grid-cols-2 gap-x-2 gap-y-2 p-3 @md:grid-cols-4 @2xl:grid-cols-(--cols) @2xl:items-start @2xl:gap-x-1.5 @2xl:gap-y-0 @2xl:px-1.5 @2xl:py-1 ${r.uncertain === "true" ? "bg-warn-soft/70" : ""}`}
+              >
+                <div className="col-span-2 flex items-center justify-between gap-2 @md:col-span-4 @2xl:hidden">
+                  <span className="text-xs font-medium text-ink-2">{i + 1} 行目</span>
+                  {/* 要確認などの印はカードの見出しの行に (広い欄では表の列) */}
+                  {t.columns.filter((c) => c.type === "flag").map((c) => (
+                    <label key={c.key} className="ml-auto flex items-center gap-1.5 text-xs text-ink-2" title="読みにくい・判断が難しい行">
+                      <input type="checkbox" checked={r[c.key] === "true"} onChange={(e) => setCell(t.key, i, c.key, e.target.checked ? "true" : "")} className="h-4 w-4" />
+                      {c.label}
+                    </label>
                   ))}
-                  <td className="px-1 py-1 text-right">
-                    {editable && (
-                      <button type="button" onClick={() => removeRow(t.key, i)} className="rounded p-1.5 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label="行を削除">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                  {editable && (
+                    <button type="button" onClick={() => removeRow(t.key, i)} className="rounded p-1.5 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`${i + 1} 行目を削除`}>
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                {t.columns.map((c) => (
+                  <div key={c.key} className={`min-w-0 ${c.type === "flag" ? "hidden @2xl:block" : wideCol(c) ? "col-span-2" : ""} @2xl:col-span-1`}>
+                    {c.type !== "flag" && <span className="mb-0.5 block text-[11px] text-ink-3 @2xl:hidden">{c.label}</span>}
+                    {c.type === "flag" ? (
+                      <label className="flex h-8 items-center justify-center" title="読みにくい・判断が難しい行">
+                        <input type="checkbox" checked={r[c.key] === "true"} onChange={(e) => setCell(t.key, i, c.key, e.target.checked ? "true" : "")} className="h-4 w-4" aria-label={c.label} />
+                      </label>
+                    ) : c.type === "fittingKind" ? (
+                      <select className="field h-9 py-1 text-sm @2xl:h-8 @2xl:text-xs" value={r[c.key] ?? ""} onChange={(e) => setCell(t.key, i, c.key, e.target.value)} aria-label={c.label}>
+                        {FITTING_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+                      </select>
+                    ) : (
+                      <input
+                        className={`field h-9 py-1 text-sm @2xl:h-8 @2xl:text-xs ${c.type === "text" ? "" : "text-right tnum"}`}
+                        inputMode={c.type === "text" ? undefined : "decimal"}
+                        value={r[c.key] ?? ""}
+                        onChange={(e) => setCell(t.key, i, c.key, e.target.value)}
+                        aria-label={c.label}
+                      />
                     )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    {t.key === "items" && c.key === "name" && r._productId && r.name === r._origName && productNames[r._productId] && (
+                      <span className="mt-0.5 block truncate text-[10px] text-good-ink">商品マスタ: {productNames[r._productId]}</span>
+                    )}
+                  </div>
+                ))}
+                <div className="hidden justify-end @2xl:flex">
+                  {editable && (
+                    <button type="button" onClick={() => removeRow(t.key, i)} className="rounded p-1.5 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`${i + 1} 行目を削除`}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+            </div>
+          </div>
         </div>
         {t.key === "items" && rows.length > 0 && (
           <div className="mt-1.5 flex flex-wrap items-center justify-end gap-3 text-xs text-ink-2">

@@ -1,10 +1,11 @@
 "use client";
 
-import { useRef, useState, useTransition, type FormEvent } from "react";
-import { Camera, Upload } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, useTransition, type FormEvent } from "react";
+import { Camera, FileText, Upload, X } from "lucide-react";
 import type { DocumentKind, StoreId } from "@/lib/db/types";
 import { DOCUMENT_KIND_LABEL } from "@/lib/constants";
 import { prepareFile } from "@/components/attachments/image-prep";
+import { CameraDialog, useCameraPresence, useTouchDevice } from "@/components/attachments/CameraDialog";
 
 /** 送信できる大きさ (Vercel の 1 回の送信は 4.5 MB まで。写真は縮小してから送る) */
 const MAX_BYTES = 4 * 1024 * 1024;
@@ -39,6 +40,16 @@ function SubmitButton({ hasFile, pending, labels }: { hasFile: boolean; pending:
   );
 }
 
+/** 写真・PDF だけを受け付ける (ドラッグ・貼り付けで別の種類のファイルが来たとき) */
+const acceptable = (f: File) => f.type.startsWith("image/") || f.type === "application/pdf" || /\.(pdf|jpe?g|png|webp|heic|heif)$/i.test(f.name);
+
+/**
+ * 書類の撮影・取込 (書類取込・見積の金額の計算・受付のメモで共通)。
+ * - スマートフォン・タブレット:「撮影する」= 端末のカメラのアプリ、「写真・ファイルを選ぶ」= アルバム・PDF
+ * - パソコン:「カメラで撮影」= ブラウザーのカメラ (CameraDialog。Web カメラ・書画カメラ)、「ファイルを選ぶ」、
+ *   ファイルのドラッグ、画像の貼り付け (Ctrl+V。画面に取込の欄が 1 つのときだけ)
+ * 写真は送る前に縮小する (image-prep.ts)。選んだファイルは状態に持ち、送るときに FormData の file に入れる
+ */
 export function CaptureUploader({
   action,
   defaultKind,
@@ -65,23 +76,64 @@ export function CaptureUploader({
   hidden?: Record<string, string>;
   labels?: UploaderLabels;
 }) {
+  const touch = useTouchDevice();
+  const pc = touch === false;
+  const hasCamera = useCameraPresence(pc);
   const [kind, setKind] = useState<DocumentKind>(defaultKind);
+  const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
-  const [fileName, setFileName] = useState<string>("");
   const [sample, setSample] = useState<string>(SAMPLES[defaultKind][0]);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [camera, setCamera] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const shootRef = useRef<HTMLInputElement>(null);
+  const pickRef = useRef<HTMLInputElement>(null);
+  const zoneRef = useRef<HTMLDivElement>(null);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState("");
+
+  const choose = useCallback((f: File | null | undefined) => {
+    setError("");
+    if (f && !acceptable(f)) {
+      setError("写真 (JPEG・PNG など) か PDF を選んでください。");
+      return;
+    }
+    setFile(f ?? null);
+    setPreview((old) => {
+      if (old) URL.revokeObjectURL(old);
+      return f && f.type.startsWith("image/") ? URL.createObjectURL(f) : null;
+    });
+  }, []);
+
+  // パソコン: 画像の貼り付け (Ctrl+V)。文字の入力欄への貼り付けと、取込の欄が 2 つ以上ある画面では受け取らない
+  useEffect(() => {
+    if (!pc) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const el = document.activeElement;
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement || (el instanceof HTMLElement && el.isContentEditable)) return;
+      if (document.querySelectorAll("[data-capture-zone]").length !== 1) return;
+      const f = Array.from(e.clipboardData?.files ?? []).find((x) => x.type.startsWith("image/"));
+      if (!f) return;
+      e.preventDefault();
+      const name = f.name && f.name !== "image.png" ? f.name : `paste-${Date.now()}.${f.type.split("/")[1] || "png"}`;
+      choose(new File([f], name, { type: f.type, lastModified: Date.now() }));
+      zoneRef.current?.scrollIntoView({ block: "nearest" });
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [pc, choose]);
+
+  useEffect(() => () => {
+    if (preview) URL.revokeObjectURL(preview);
+  }, [preview]);
 
   /** 写真は縮小し、縮小画像・撮影日時を添えて送る (元の画像は見積・経費・仕入の画面で表示する) */
   function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
-    const f = inputRef.current?.files?.[0];
     setError("");
     startTransition(async () => {
-      if (f) {
-        const p = await prepareFile(f);
+      if (file) {
+        const p = await prepareFile(file);
         if (p.file.size > MAX_BYTES) {
           setError(`ファイルが大きすぎます (${(p.file.size / 1048576).toFixed(1)} MB)。PDF などは 4 MB までにしてください。`);
           return;
@@ -94,20 +146,17 @@ export function CaptureUploader({
     });
   }
 
-  function onFile(f: File | undefined) {
-    if (!f) {
-      setPreview(null);
-      setFileName("");
-      return;
-    }
-    setFileName(f.name);
-    if (f.type.startsWith("image/")) {
-      const url = URL.createObjectURL(f);
-      setPreview(url);
-    } else {
-      setPreview(null);
-    }
+  /** 撮影: スマートフォンは端末のカメラ、パソコンはブラウザーのカメラ */
+  function openCamera() {
+    if (pc) setCamera(true);
+    else shootRef.current?.click();
   }
+
+  const title = labels.drop ?? "書類を撮影するか、写真・PDF を選んでください";
+  const note = pc
+    ? "パソコンのカメラ (Web カメラ・書画カメラ) で撮影するか、ファイルをここにドラッグ・貼り付け (Ctrl+V) してください。"
+    : (labels.dropNote ?? "カメラで撮影した写真をそのまま取り込めます (写真は自動で縮小。PDF は 4MB まで)");
+  const btn = "inline-flex h-10 items-center justify-center gap-1.5 rounded-xl px-4 text-sm font-medium disabled:opacity-60";
 
   return (
     <form action={action} onSubmit={onSubmit} className="space-y-4">
@@ -144,35 +193,70 @@ export function CaptureUploader({
       )}
 
       <div
-        className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-line-strong px-4 py-8 text-center transition hover:border-accent hover:bg-accent-soft/40"
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(e) => e.preventDefault()}
+        ref={zoneRef}
+        data-capture-zone
+        className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 py-6 text-center transition ${dragging ? "border-accent bg-accent-soft/60" : "border-line-strong"}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (!dragging) setDragging(true);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+        }}
         onDrop={(e) => {
           e.preventDefault();
-          const f = e.dataTransfer.files?.[0];
-          if (f && inputRef.current) {
-            const dt = new DataTransfer();
-            dt.items.add(f);
-            inputRef.current.files = dt.files;
-            onFile(f);
-          }
+          setDragging(false);
+          choose(e.dataTransfer.files?.[0]);
         }}
       >
-        <input ref={inputRef} type="file" name="file" accept="image/*,application/pdf" capture="environment" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
+        {/* スマートフォン: 端末のカメラ (capture) と、アルバム・ファイル (capture なし) を分ける */}
+        <input ref={shootRef} type="file" accept="image/*" capture="environment" className="hidden" tabIndex={-1} aria-hidden onChange={(e) => { choose(e.target.files?.[0]); e.target.value = ""; }} />
+        <input ref={pickRef} type="file" accept="image/*,application/pdf" className="hidden" tabIndex={-1} aria-hidden data-testid="capture-file" onChange={(e) => { choose(e.target.files?.[0]); e.target.value = ""; }} />
         {preview ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={preview} alt="プレビュー" className="max-h-56 rounded-lg object-contain" />
+          <img src={preview} alt="取り込む画像のプレビュー" className="max-h-64 rounded-lg object-contain" />
+        ) : file ? (
+          <div className="flex items-center gap-2 text-sm text-ink"><FileText className="h-8 w-8 text-ink-3" aria-hidden />PDF</div>
         ) : (
           <>
-            <div className="flex gap-3 text-ink-3"><Camera className="h-8 w-8" /><Upload className="h-8 w-8" /></div>
-            <p className="mt-3 text-sm font-medium text-ink">{labels.drop ?? "タップして撮影 / 画像・PDF を選択"}</p>
-            <p className="mt-1 text-xs text-ink-3">{labels.dropNote ?? "スマートフォン・タブレットのカメラで撮影した写真をそのまま取り込めます (写真は自動で縮小。PDF は 4MB まで)"}</p>
+            <div className="flex gap-3 text-ink-3" aria-hidden><Camera className="h-8 w-8" /><Upload className="h-8 w-8" /></div>
+            <p className="mt-3 text-sm font-medium text-ink">{title}</p>
+            <p className="mt-1 text-xs text-ink-3">{note}</p>
           </>
         )}
-        {fileName && <p className="mt-2 text-xs text-ink-2">{fileName}</p>}
+        {file && <p className="mt-2 max-w-full truncate text-xs text-ink-2">{file.name}</p>}
+        <div className="mt-4 flex w-full flex-wrap justify-center gap-2">
+          <button type="button" onClick={openCamera} disabled={pending} className={`${btn} min-w-[9rem] bg-accent text-white hover:bg-accent-hover`}>
+            <Camera className="h-4 w-4" aria-hidden />
+            {file ? "撮り直す" : pc ? "カメラで撮影" : "撮影する"}
+          </button>
+          <button type="button" onClick={() => pickRef.current?.click()} disabled={pending} className={`${btn} border border-line bg-panel text-ink hover:bg-subtle`}>
+            <Upload className="h-4 w-4" aria-hidden />
+            {pc ? "ファイルを選ぶ" : "写真・ファイルを選ぶ"}
+          </button>
+          {file && (
+            <button type="button" onClick={() => choose(null)} disabled={pending} className={`${btn} px-3 text-ink-2 hover:bg-subtle`}>
+              <X className="h-4 w-4" aria-hidden /> 取り消す
+            </button>
+          )}
+        </div>
+        {pc && hasCamera === false && !file && (
+          <p className="mt-2 text-[11px] text-ink-3">このパソコンにはカメラが見つかりません。USB の Web カメラ・書画カメラをつなぐと撮影できます (ファイルの取込はこのまま使えます)。</p>
+        )}
       </div>
 
-      {!fileName && (
+      {camera && (
+        <CameraDialog
+          onClose={() => setCamera(false)}
+          onDone={(files) => {
+            setCamera(false);
+            choose(files[0]);
+          }}
+          hint={labels.dropNote ? `${labels.dropNote}。` : undefined}
+        />
+      )}
+
+      {!file && (
         <label className="block">
           <span className="label">ファイルを選ばずに試す場合のサンプル名</span>
           <select name="sampleName" value={sample} onChange={(e) => setSample(e.target.value)} className="field">
@@ -184,7 +268,7 @@ export function CaptureUploader({
       )}
 
       {error && <p role="alert" className="rounded-lg bg-critical-soft px-3 py-2 text-xs text-critical-ink">{error}</p>}
-      <SubmitButton hasFile={Boolean(fileName)} pending={pending} labels={labels} />
+      <SubmitButton hasFile={Boolean(file)} pending={pending} labels={labels} />
       <p className="text-[11px] leading-relaxed text-ink-3">
         {labels.note ?? (aiEnabled
           ? "AI が画像・PDF を読み取り、書類の種類ごとの項目 (日付・取引先・品名・数量・金額など) に整理します。結果は登録前に確認・修正できます。"

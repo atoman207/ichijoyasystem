@@ -34,6 +34,7 @@
     "test:kpi-import": "node scripts/tests/kpi-import/workbook.test.mjs && node scripts/tests/kpi-import/basis.test.mjs",
     "kpi:import-workbook": "node scripts/ops/import-survey-workbook.mjs",
     "test:capture": "node scripts/tests/capture/quote-calc.test.mjs",
+    "test:capture-ui": "node scripts/tests/capture/camera.e2e.mjs",
     "test:sales": "node scripts/tests/sales/reconcile.test.mjs",
     "test:case-access": "node scripts/tests/case-access/case-access.test.mjs",
     "test:posts-tidy": "node scripts/tests/posts-tidy/posts-tidy.test.mjs",

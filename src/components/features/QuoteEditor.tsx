@@ -23,6 +23,13 @@ interface Row {
 const squash = (s: string) => s.replace(/[\s　]/g, "");
 
 const yen = (n: number) => `¥${Math.round(n).toLocaleString("ja-JP")}`;
+/** 明細の列 (広い欄のとき): 商品・品名・仕様・(品目)・数量・単位・単価・金額・削除 */
+const QCOLS = "minmax(9rem,1.4fr) minmax(7rem,1fr) minmax(7rem,1fr) 4.5rem 3.5rem 6.5rem 6rem 2rem";
+const QCOLS_CAT = "minmax(8rem,1.4fr) minmax(6rem,1fr) minmax(6rem,1fr) 8rem 4.5rem 3.5rem 6.5rem 6rem 2rem";
+/** 入力欄: 狭い欄 (カード) は指で押しやすい高さ、広い欄 (表) は詰める */
+const FIELD = "field h-10 py-1 @4xl:h-8 @4xl:text-xs";
+/** 項目名 (カードのときだけ出す。表は見出しの行) */
+const CELL_LABEL = "mb-0.5 block text-[11px] text-ink-3 @4xl:hidden";
 let seq = 0;
 const nextKey = () => `r${Date.now().toString(36)}_${seq++}`;
 
@@ -116,26 +123,32 @@ export function QuoteEditor({
         <input type="checkbox" checked={taxIncluded} onChange={(e) => setTaxIncluded(e.target.checked)} className="h-4 w-4" />
         単価・金額は税込 (手書き見積書の「税込」に○。消費税は合計から内税で計算します)
       </label>
-      <div className="overflow-x-auto rounded-xl border border-line">
-        <table className="w-full min-w-[900px] text-sm">
-          <thead>
-            <tr className="bg-subtle text-xs text-ink-2">
-              <th className="px-3 py-2 text-left font-medium">商品 (マスタから選択)</th>
-              <th className="px-3 py-2 text-left font-medium">品名</th>
-              <th className="px-3 py-2 text-left font-medium">仕様・備考</th>
-              {categories.length > 0 && <th className="px-3 py-2 text-left font-medium" title="管理会計 (店舗別・品目別の原価率) で数える品目。自社商品 (ミニ畳など) やリフォーム工事 (大工など) はここで選びます">品目</th>}
-              <th className="px-3 py-2 text-right font-medium">数量</th>
-              <th className="px-3 py-2 text-left font-medium">単位</th>
-              <th className="px-3 py-2 text-right font-medium">単価 ({taxIncluded ? "税込" : "税抜"})</th>
-              <th className="px-3 py-2 text-right font-medium">金額</th>
-              <th className="px-2 py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.key} className="border-t border-line">
-                <td className="px-2 py-1.5">
-                  <select className="field h-8 py-1 text-xs" value={r.productId ?? ""} onChange={(e) => choose(r.key, e.target.value)}>
+      {/* 広い欄 (896px 以上) は表、それより狭い欄は 1 行ずつのカード (スマートフォンは 2 列、448px 以上は 4 列)。入力欄は 1 組だけ (必須・数値の確かめが二重にならないように) */}
+      <div className="@container">
+        <div className="overflow-hidden rounded-xl border border-line text-sm" style={{ "--qcols": categories.length > 0 ? QCOLS_CAT : QCOLS } as React.CSSProperties}>
+          <div className="hidden gap-x-1.5 bg-subtle px-2 py-2 text-xs font-medium text-ink-2 @4xl:grid @4xl:grid-cols-(--qcols)" aria-hidden>
+            <span className="px-1">商品 (マスタから選択)</span>
+            <span className="px-1">品名</span>
+            <span className="px-1">仕様・備考</span>
+            {categories.length > 0 && <span className="px-1" title="管理会計 (店舗別・品目別の原価率) で数える品目。自社商品 (ミニ畳など) やリフォーム工事 (大工など) はここで選びます">品目</span>}
+            <span className="px-1 text-right">数量</span>
+            <span className="px-1">単位</span>
+            <span className="px-1 text-right">単価 ({taxIncluded ? "税込" : "税抜"})</span>
+            <span className="px-1 text-right">金額</span>
+            <span />
+          </div>
+          <div className="divide-y divide-line border-line @4xl:border-t">
+            {rows.map((r, i) => (
+              <div key={r.key} role="group" aria-label={`明細 ${i + 1} 行目`} className="grid grid-cols-2 gap-x-2 gap-y-2 p-3 @md:grid-cols-4 @4xl:grid-cols-(--qcols) @4xl:items-start @4xl:gap-x-1.5 @4xl:gap-y-0 @4xl:px-2 @4xl:py-1.5">
+                <div className="col-span-2 flex items-center justify-between @md:col-span-4 @4xl:hidden">
+                  <span className="text-xs font-medium text-ink-2">明細 {i + 1}</span>
+                  <button type="button" onClick={() => remove(r.key)} className="rounded p-1.5 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`明細 ${i + 1} 行目を削除`}>
+                    <Trash className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="col-span-2 min-w-0 @4xl:col-span-1">
+                  <span className={CELL_LABEL}>商品 (マスタから選択)</span>
+                  <select className={FIELD} value={r.productId ?? ""} onChange={(e) => choose(r.key, e.target.value)} aria-label="商品 (マスタから選択)">
                     <option value="">(自由入力)</option>
                     {grouped.map(([cat, list]) => (
                       <optgroup key={cat} label={CATEGORY_LABEL[cat]}>
@@ -147,40 +160,59 @@ export function QuoteEditor({
                       </optgroup>
                     ))}
                   </select>
-                </td>
-                <td className="px-2 py-1.5"><input className="field h-8 py-1 text-xs" value={r.name} onChange={(e) => update(r.key, { name: e.target.value })} placeholder="品名" required /></td>
-                <td className="px-2 py-1.5"><input className="field h-8 py-1 text-xs" value={r.spec} onChange={(e) => update(r.key, { spec: e.target.value })} placeholder="サイズ・柄など" /></td>
+                </div>
+                <div className="col-span-2 min-w-0 @4xl:col-span-1">
+                  <span className={CELL_LABEL}>品名</span>
+                  <input className={FIELD} value={r.name} onChange={(e) => update(r.key, { name: e.target.value })} placeholder="品名" required aria-label="品名" />
+                </div>
+                <div className="col-span-2 min-w-0 @4xl:col-span-1">
+                  <span className={CELL_LABEL}>仕様・備考</span>
+                  <input className={FIELD} value={r.spec} onChange={(e) => update(r.key, { spec: e.target.value })} placeholder="サイズ・柄など" aria-label="仕様・備考" />
+                </div>
                 {categories.length > 0 && (
-                  <td className="px-2 py-1.5">
-                    <select className="field h-8 w-32 py-1 text-xs" value={r.itemCategory} onChange={(e) => update(r.key, { itemCategory: e.target.value })} aria-label="品目 (管理会計)">
+                  <div className="col-span-2 min-w-0 @4xl:col-span-1">
+                    <span className={CELL_LABEL}>品目 (管理会計)</span>
+                    <select className={FIELD} value={r.itemCategory} onChange={(e) => update(r.key, { itemCategory: e.target.value })} aria-label="品目 (管理会計)">
                       <option value="">自動 ({autoName(r)})</option>
                       {categories.map((c) => (
                         <option key={c.id} value={c.id}>{c.name}</option>
                       ))}
                     </select>
                     {needsDoko(r) && (
-                      <select className="field mt-1 h-8 w-32 py-1 text-xs" value={r.dokoMaterialId} onChange={(e) => update(r.key, { dokoMaterialId: e.target.value })} aria-label="畳床 (材料原価)" title="使う畳床 (種類・厚み・規格)。選ばなければ品名・製造の予定から判定します">
+                      <select className={`${FIELD} mt-1`} value={r.dokoMaterialId} onChange={(e) => update(r.key, { dokoMaterialId: e.target.value })} aria-label="畳床 (材料原価)" title="使う畳床 (種類・厚み・規格)。選ばなければ品名・製造の予定から判定します">
                         <option value="">畳床: 自動</option>
                         {doko!.options.map((o) => (
                           <option key={o.id} value={o.id}>{o.label}</option>
                         ))}
                       </select>
                     )}
-                  </td>
+                  </div>
                 )}
-                <td className="px-2 py-1.5"><input type="number" step="0.5" min="0" className="field h-8 w-20 py-1 text-right text-xs tnum" value={r.qty} onChange={(e) => update(r.key, { qty: Number(e.target.value) })} /></td>
-                <td className="px-2 py-1.5"><input className="field h-8 w-14 py-1 text-xs" value={r.unit} onChange={(e) => update(r.key, { unit: e.target.value })} /></td>
-                <td className="px-2 py-1.5"><input type="number" step="100" className="field h-8 w-28 py-1 text-right text-xs tnum" title="値引きの行はマイナス (例: -1000)" value={r.unitPrice} onChange={(e) => update(r.key, { unitPrice: Number(e.target.value) })} /></td>
-                <td className="px-3 py-1.5 text-right text-sm tnum">{yen(r.qty * r.unitPrice)}</td>
-                <td className="px-2 py-1.5 text-right">
-                  <button type="button" onClick={() => remove(r.key)} className="rounded p-1 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label="行を削除">
+                <div className="min-w-0">
+                  <span className={CELL_LABEL}>数量</span>
+                  <input type="number" step="0.5" min="0" inputMode="decimal" className={`${FIELD} text-right tnum`} value={r.qty} onChange={(e) => update(r.key, { qty: Number(e.target.value) })} aria-label="数量" />
+                </div>
+                <div className="min-w-0">
+                  <span className={CELL_LABEL}>単位</span>
+                  <input className={FIELD} value={r.unit} onChange={(e) => update(r.key, { unit: e.target.value })} aria-label="単位" />
+                </div>
+                <div className="min-w-0">
+                  <span className={CELL_LABEL}>単価 ({taxIncluded ? "税込" : "税抜"})</span>
+                  <input type="number" step="100" inputMode="numeric" className={`${FIELD} text-right tnum`} title="値引きの行はマイナス (例: -1000)" value={r.unitPrice} onChange={(e) => update(r.key, { unitPrice: Number(e.target.value) })} aria-label="単価" />
+                </div>
+                <div className="min-w-0 text-right">
+                  <span className={CELL_LABEL}>金額</span>
+                  <span className="block py-2 text-base font-semibold tnum @4xl:py-1.5 @4xl:text-sm @4xl:font-normal">{yen(r.qty * r.unitPrice)}</span>
+                </div>
+                <div className="hidden justify-end @4xl:flex">
+                  <button type="button" onClick={() => remove(r.key)} className="rounded p-1 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`明細 ${i + 1} 行目を削除`}>
                     <Trash className="h-4 w-4" />
                   </button>
-                </td>
-              </tr>
+                </div>
+              </div>
             ))}
-          </tbody>
-        </table>
+          </div>
+        </div>
       </div>
       <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
         <button type="button" onClick={add} className="inline-flex items-center gap-1 rounded-lg border border-line px-3 py-1.5 text-xs text-ink-2 hover:bg-subtle">
