@@ -140,9 +140,27 @@ function requestApproval(db: Database, q: Quote, user: User, comment?: string): 
 /** 申請のあとの案内 (管理者の申請は承認を省略して承認済み) */
 const submittedText = (r: { role: string; auto: boolean }) => (r.auto ? `${AUTO_APPROVAL_NOTE}し、承認済みにしました。` : `${r.role === "admin" ? "管理者" : "店長"}へ承認を申請しました。`);
 
+/**
+ * 見積の作成の画面へ戻る先。取込書類・問い合わせ・お客様を付けて戻す
+ * (付けないと、入力の誤りで戻ったときに手書き見積書の読取結果が消えて、空の画面になる)
+ */
+function newQuoteBack(formData: FormData): string {
+  const qs = new URLSearchParams();
+  for (const k of ["documentId", "inquiryId", "customerId"]) {
+    const v = str(formData, k);
+    if (v) qs.set(k, v);
+  }
+  const s = qs.toString();
+  return s ? `/quotes/new?${s}` : "/quotes/new";
+}
+
+/** 取込書類から見積を作れるか (見積・受注などの登録先がまだない。顧客・問い合わせに添付しただけのものは作れる) */
+const docBlocksQuote = (doc: { linkedType?: string; linkedId?: string; status: string }) =>
+  doc.status === "discarded" || Boolean(doc.linkedId && doc.linkedType !== "customer" && doc.linkedType !== "inquiry");
+
 export async function createQuote(formData: FormData) {
   const user = await requireActionUser();
-  const back = "/quotes/new";
+  const back = newQuoteBack(formData);
   const customerId = str(formData, "customerId");
   const title = str(formData, "title");
   if (!customerId) fail(back, "お客様を選択してください。");
@@ -155,7 +173,7 @@ export async function createQuote(formData: FormData) {
   await mutate((db) => {
     const documentId = str(formData, "documentId");
     const doc = documentId ? db.documents.find((d) => d.id === documentId) : undefined;
-    if (doc && (doc.linkedId || doc.status === "discarded")) fail("/capture?doc=" + doc.id, "この取込書類はすでに登録済み (または破棄済み) です。");
+    if (doc && docBlocksQuote(doc)) fail("/capture?doc=" + doc.id, "この取込書類はすでに登録済み (または破棄済み) です。");
     const customer = db.customers.find((c) => c.id === customerId);
     if (!customer) fail(back, "お客様が見つかりません。");
     // 店舗のロールは自店舗のお客様だけ (一覧で見えないお客様の見積を作らない)

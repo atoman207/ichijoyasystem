@@ -463,13 +463,17 @@ export function DocumentReview({
                 <Submit key={t} name="intent" value={t} pendingLabel="保存中…" blocked={needsConfirm && !confirmedChecked}>{REGISTER_LABEL[t]} →</Submit>
               ))}
               <Submit name="intent" value="save" variant="secondary" pendingLabel="保存中…">修正を保存</Submit>
-              <Submit name="intent" value="confirm" variant="secondary" pendingLabel="保存中…">確定して保存 (登録先なし)</Submit>
+              {/* 手書き見積書は見積にするための書類。「確定して保存」は見積を作らずに書類を閉じるだけで、見積を作ったと取り違えやすいため出さない (2026-11-23) */}
+              {kind !== "handwritten_quote" && <Submit name="intent" value="confirm" variant="secondary" pendingLabel="保存中…">確定して保存 (登録先なし)</Submit>}
             </div>
+            {needsConfirm && registerTargets.length > 0 && !confirmedChecked && (
+              <p className="text-xs font-medium text-warn-ink">「{REGISTER_LABEL[registerTargets[0]]}」は、上の「元の書類と見比べて確認しました」にチェックを入れると押せます。</p>
+            )}
             <p className="text-[11px] text-ink-3">
               {registerTargets[0] === "survey"
                 ? "「アンケートとして登録」を押すと、案件・担当者に紐づけて登録し、返信率・評価・KPI に反映します。はがきの写真は案件の添付ファイル (現場写真・資料) になります。"
                 : registerTargets.length
-                ? `「${REGISTER_LABEL[registerTargets[0]]}」を押すと、確認した内容を初期値にして作成画面を開きます。元の画像は登録した記録の添付ファイルに移ります。`
+                ? `「${REGISTER_LABEL[registerTargets[0]]}」を押すと、確認した内容を初期値にして作成画面を開きます。${registerTargets[0] === "quote" ? "作成画面でお客様を選び、「承認を申請」(管理者は「確定 (承認不要)」) か「下書き保存」を押すと見積になります。" : ""}元の画像は登録した記録の添付ファイルに移ります。`
                 : "確認した内容を保存します。図面・施工資料は下の「案件に保存」で受注・問い合わせ・顧客に添付できます。"}
             </p>
           </form>
@@ -487,7 +491,7 @@ export function DocumentReview({
               </label>
               <div className="flex flex-wrap items-center gap-2">
                 <Submit variant="secondary" pendingLabel="保存中…">案件に保存</Submit>
-                <span className="text-[11px] text-ink-3">元の画像はその案件の添付ファイル (現場写真・資料) になり、読み取った内容は受注の進捗メモに残ります。</span>
+                <span className="text-[11px] text-ink-3">元の画像はその案件の添付ファイル (現場写真・資料) になり、読み取った内容は受注の進捗メモに残ります。{registerTargets.includes("quote") ? " 見積にはなりません (見積にするときは上の「見積を作成」)。" : ""}</span>
               </div>
             </form>
           )}

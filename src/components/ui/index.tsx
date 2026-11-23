@@ -1,4 +1,5 @@
 import Link from "@/components/ui/Link";
+import { PendingButton } from "@/components/ui/PendingButton";
 import clsx from "clsx";
 import type { ReactNode } from "react";
 import { ArrowLeft, CircleAlert, CircleCheck, Info, Lightbulb, TriangleAlert } from "lucide-react";
@@ -71,10 +72,18 @@ export function Button({
   children,
   ...rest
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: ButtonSize }) {
+  if (rest.type === "button" || rest.type === "reset") {
+    return (
+      <button className={buttonClass(variant, size, className)} {...rest}>
+        {children}
+      </button>
+    );
+  }
+  // 送信のボタン: 保存が終わるまで押せなくする (二度押しで同じ記録が 2 件できないように)
   return (
-    <button className={buttonClass(variant, size, className)} {...rest}>
+    <PendingButton className={buttonClass(variant, size, className)} {...rest}>
       {children}
-    </button>
+    </PendingButton>
   );
 }
 

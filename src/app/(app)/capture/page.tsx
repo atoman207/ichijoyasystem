@@ -74,6 +74,15 @@ export default async function CapturePage({ searchParams }: { searchParams: Prom
   const editable = Boolean(selected && (selected.status === "extracted" || selected.status === "failed" || selected.status === "uploaded"));
   const original = selected ? attachmentsOf(db, "document", selected.id)[0] : undefined;
   const linked = selected?.linkedType && selected.linkedId ? { ...LINKED[selected.linkedType], href: `/${LINKED[selected.linkedType].path}/${selected.linkedId}` } : undefined;
+  // 手書き見積書を「確定して保存」「案件に保存 (顧客・問い合わせ)」しただけで、まだ見積になっていないもの → 見積の作成へ
+  const quoteFromConfirmed =
+    selected && selected.status === "confirmed" && selected.kind === "handwritten_quote" && (!selected.linkedId || selected.linkedType === "customer" || selected.linkedType === "inquiry")
+      ? `/quotes/new?${new URLSearchParams({
+          documentId: selected.id,
+          ...(selected.linkedType === "customer" && selected.linkedId ? { customerId: selected.linkedId } : {}),
+          ...(selected.linkedType === "inquiry" && selected.linkedId ? { inquiryId: selected.linkedId } : {}),
+        })}`
+      : undefined;
 
   // 確認画面に渡す候補 (見積のお客様・案件の保存先)
   const scopedCustomers = selected && editable ? scopeByStore(user, db.customers) : [];
@@ -205,12 +214,14 @@ export default async function CapturePage({ searchParams }: { searchParams: Prom
                 />
               </div>
 
-              {linked && (
+              {(linked || quoteFromConfirmed) && (
                 <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
-                  <LinkButton href={linked.href} variant="secondary">登録先の{linked.label}を開く →</LinkButton>
+                  {quoteFromConfirmed && <LinkButton href={quoteFromConfirmed}>この書類から見積を作成 →</LinkButton>}
+                  {linked && <LinkButton href={linked.href} variant="secondary">登録先の{linked.label}を開く →</LinkButton>}
                 </div>
               )}
-              {selected.status === "confirmed" && !linked && <p className="border-t border-line pt-4 text-sm text-good-ink">確認済みのデータとして保存しています。</p>}
+              {quoteFromConfirmed && <p className="text-xs text-warn-ink">この書類はまだ見積になっていません ({linked ? `${linked.label}に添付しただけです` : "読取内容を確定しただけです"})。見積にするときは「この書類から見積を作成」を押し、お客様を選んで保存してください。</p>}
+              {selected.status === "confirmed" && !linked && !quoteFromConfirmed && <p className="border-t border-line pt-4 text-sm text-good-ink">確認済みのデータとして保存しています。</p>}
               <p className="text-[11px] text-ink-3">
                 取込: {userName(selected.uploadedBy)} · {fmtDateTime(selected.uploadedAt)} · <StoreTag store={db.stores.find((s) => s.id === selected.storeId)} short />
                 {edited?.at && <> · 修正: {userName(edited.by ?? "")} {fmtDateTime(edited.at)}</>}

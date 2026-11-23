@@ -355,8 +355,9 @@ await page.setViewportSize({ width: 1366, height: 900 });
 // ヘッダー: ユーザーメニューからログアウト
 await page.getByRole("button", { name: "ユーザーメニュー" }).click();
 await page.getByRole("menuitem", { name: "ログアウト" }).click();
-await page.waitForURL(/\/login/, { timeout: 90000 });
-results.push({ url: "header: ユーザーメニューからログアウト", status: "ok", ok: page.url().includes("/login") });
+// ログアウトのあとは公開のトップ (/home) に戻る (3ebe0e8)
+await page.waitForURL(/\/(login|home)/, { timeout: 90000 });
+results.push({ url: "header: ユーザーメニューからログアウト", status: "ok", ok: /\/(login|home)/.test(new URL(page.url()).pathname) });
 await shot("58-logged-out");
 
 // タブレット表示: ヘッダーのボタンでメニューを開き、画面を移動すると閉じる
@@ -387,9 +388,9 @@ await visit("/orders", "63-mobile-orders");
 await visit("/customers", "64-mobile-customers");
 await page.getByRole("button", { name: "ユーザーメニュー" }).click();
 await page.getByRole("menuitem", { name: "ログアウト" }).click();
-await page.waitForURL(/\/login/, { timeout: 90000 });
+await page.waitForURL(/\/(login|home)/, { timeout: 90000 });
 await page.waitForLoadState("networkidle");
-results.push({ url: "header (mobile): ログアウト", status: "ok", ok: page.url().includes("/login") });
+results.push({ url: "header (mobile): ログアウト", status: "ok", ok: /\/(login|home)/.test(new URL(page.url()).pathname) });
 await shot("65-mobile-login");
 
 await browser.close();

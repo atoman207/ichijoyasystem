@@ -26,7 +26,12 @@ const yen = (n: number) => `¥${Math.round(n).toLocaleString("ja-JP")}`;
 /** 明細の列 (広い欄のとき): 商品・品名・仕様・(品目)・数量・単位・単価・金額・削除 */
 const QCOLS = "minmax(9rem,1.4fr) minmax(7rem,1fr) minmax(7rem,1fr) 4.5rem 3.5rem 6.5rem 6rem 2rem";
 const QCOLS_CAT = "minmax(8rem,1.4fr) minmax(6rem,1fr) minmax(6rem,1fr) 8rem 4.5rem 3.5rem 6.5rem 6rem 2rem";
-/** 入力欄: 狭い欄 (カード) は指で押しやすい高さ、広い欄 (表) は詰める */
+/**
+ * 入力欄: 狭い欄 (カード) は指で押しやすい高さ、広い欄 (表) は詰める。
+ * 数量・単価・値引きの数字の欄は step="any" (刻みを付けると 10,560 円・1,650 円・値引き 5,300 円などを
+ * ブラウザーが「有効な値ではない」として保存を止める。2026-11-23 に手書き見積書から見積を保存できなかった原因)。
+ * 単価は inputMode を付けない (iPhone の数字だけのキーボードにはマイナスがなく、値引きの行を入力できない)
+ */
 const FIELD = "field h-10 py-1 @4xl:h-8 @4xl:text-xs";
 /** 項目名 (カードのときだけ出す。表は見出しの行) */
 const CELL_LABEL = "mb-0.5 block text-[11px] text-ink-3 @4xl:hidden";
@@ -190,7 +195,7 @@ export function QuoteEditor({
                 )}
                 <div className="min-w-0">
                   <span className={CELL_LABEL}>数量</span>
-                  <input type="number" step="0.5" min="0" inputMode="decimal" className={`${FIELD} text-right tnum`} value={r.qty} onChange={(e) => update(r.key, { qty: Number(e.target.value) })} aria-label="数量" />
+                  <input type="number" step="any" min="0" inputMode="decimal" className={`${FIELD} text-right tnum`} value={r.qty} onChange={(e) => update(r.key, { qty: Number(e.target.value) })} aria-label="数量" />
                 </div>
                 <div className="min-w-0">
                   <span className={CELL_LABEL}>単位</span>
@@ -198,7 +203,7 @@ export function QuoteEditor({
                 </div>
                 <div className="min-w-0">
                   <span className={CELL_LABEL}>単価 ({taxIncluded ? "税込" : "税抜"})</span>
-                  <input type="number" step="100" inputMode="numeric" className={`${FIELD} text-right tnum`} title="値引きの行はマイナス (例: -1000)" value={r.unitPrice} onChange={(e) => update(r.key, { unitPrice: Number(e.target.value) })} aria-label="単価" />
+                  <input type="number" step="any" className={`${FIELD} text-right tnum`} title="値引きの行はマイナス (例: -1000)" value={r.unitPrice} onChange={(e) => update(r.key, { unitPrice: Number(e.target.value) })} aria-label="単価" />
                 </div>
                 <div className="min-w-0 text-right">
                   <span className={CELL_LABEL}>金額</span>
@@ -222,7 +227,7 @@ export function QuoteEditor({
           <div className="flex items-center justify-between"><span className="text-ink-2">小計 ({taxIncluded ? "税込" : "税抜"})</span><span className="tnum">{yen(subtotal)}</span></div>
           <div className="flex items-center justify-between gap-3">
             <span className="whitespace-nowrap text-ink-2">値引き</span>
-            <input type="number" step="1000" min="0" className="field h-8 w-32 py-1 text-right text-xs tnum" value={discount} onChange={(e) => setDiscount(Number(e.target.value))} />
+            <input type="number" step="any" min="0" className="field h-8 w-32 py-1 text-right text-xs tnum" value={discount} onChange={(e) => setDiscount(Number(e.target.value))} />
           </div>
           <div className="flex items-center justify-between"><span className="text-ink-2">{taxIncluded ? "うち消費税 (10%)" : "消費税 (10%)"}</span><span className="tnum">{yen(tax)}</span></div>
           <div className="flex items-center justify-between border-t border-line pt-1.5 text-base font-semibold"><span>合計 (税込)</span><span className="tnum">{yen(total)}</span></div>
