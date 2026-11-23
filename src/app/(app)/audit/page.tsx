@@ -38,7 +38,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
   rows = [...rows].reverse();
   const paged = paginate(rows, sp.page, 100);
   const storeMap = new Map(db.stores.map((s) => [s.id, s]));
-  const names = new Map<string, string>([...db.users.map((u) => [u.id, u.name] as [string, string]), ...db.suppliers.map((s) => [s.id, s.name] as [string, string])]);
+  const names = new Map<string, string>([...db.users.map((u) => [u.id, u.name] as [string, string]), ...db.suppliers.map((s) => [s.id, s.name] as [string, string]), ...db.stores.map((s) => [s.id, s.name] as [string, string])]);
   const entities = [...new Set(visible.map((l) => l.entity))].sort((a, b) => (ENTITY_LABEL[a] ?? a).localeCompare(ENTITY_LABEL[b] ?? b, "ja"));
   const actors = [...new Set(visible.map((l) => l.userId))].map((id) => ({ id, name: userName(id) })).sort((a, b) => a.name.localeCompare(b.name, "ja"));
   const exportQs = new URLSearchParams(Object.entries({ type: "audit", entity: sp.entity, action: sp.action, user: sp.user, store: sp.store, from: sp.from, to: sp.to, q: sp.q }).filter(([, v]) => v) as [string, string][]).toString();

@@ -22,7 +22,7 @@ export async function GET(req: Request) {
   if (!canViewMgmt(user)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const sp = new URL(req.url).searchParams;
   const kind = (sp.get("kind") ?? "pnl") as MgmtExport;
-  if (!(kind in MGMT_EXPORTS)) return NextResponse.json({ error: "unknown kind" }, { status: 400 });
+  if (!Object.hasOwn(MGMT_EXPORTS, kind)) return NextResponse.json({ error: "unknown kind" }, { status: 400 });
   const isDate = (v: string | null) => /^\d{4}-\d{2}-\d{2}$/.test(v ?? "");
   const from = sp.get("from");
   const to = sp.get("to");

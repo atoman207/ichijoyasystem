@@ -10,20 +10,27 @@ import { canAdminMgmt, canEditMgmt, canRecordUsage, canRequestMove, canViewMgmtS
 import { mgmtTablesMissing } from "@/lib/mgmt/tables";
 import { RULE_DEFS, ruleAt, setRule, validateRule } from "@/lib/mgmt/rules";
 import { closedReason, lastClosedMonth, monthOf } from "@/lib/mgmt/close";
-import { activeInternalOrder, attributionId, calcInternalOrder, orderAddress, reverseAdjustment, storeName } from "@/lib/mgmt/attribution";
-import { matchArea, planAreaImport, applyAreaImport } from "@/lib/mgmt/areas";
+import { activeInternalOrder, attributionId, calcInternalOrder, orderAddress, reverseAdjustment, storeName, TAX_CATEGORY_LABEL, wantsInternalOrder } from "@/lib/mgmt/attribution";
+import { matchArea, planAreaImport, applyAreaImport, storeIdOfName } from "@/lib/mgmt/areas";
+import { moveAdOverage } from "@/lib/mgmt/ad-budget";
+import { aiCandidateOrders, aiTargetLines, applyAiSuggestions, buildPurchaseAiPrompt, normalizePurchaseAi, PURCHASE_AI_SCHEMA, type AiLineSuggestion } from "@/lib/mgmt/purchase-ai";
+import { AiError, aiStatus, generateJson } from "@/lib/ai/provider";
+import { withAiContext } from "@/lib/ai/usage";
 import { costingLines, planUsage, recordUsages, setMaterialCost, MATERIAL_KIND_LABEL, type SpecChoice } from "@/lib/mgmt/costing";
 import { productionNotes } from "@/lib/mgmt/doko";
 import { averageCost, postMove, reverseMove, validateMove, locStore } from "@/lib/mgmt/stock";
 import { buildLineAllocs, confirmLineAlloc, upsertLineAllocs, COST_TYPE_LABEL } from "@/lib/mgmt/purchase-lines";
 import { confirmAllocation, previewAllocation } from "@/lib/mgmt/allocation";
+import { freezeMonth } from "@/lib/mgmt/freeze";
 import { confirmOmoteDiff, omoteDiffKey, previewOmoteDiff, reverseOmoteDiff } from "@/lib/mgmt/omote-diff";
 import { planTransfer, reverseTransfer } from "@/lib/mgmt/transfers";
 import { storePnl } from "@/lib/mgmt/pnl";
-import { CATEGORY_IDS, categoryName, isItemCategory, itemCategories, mainCategory, orderCategorySales, orderLineSource } from "@/lib/mgmt/categories";
+import { CATEGORY_IDS, categoryName, isItemCategory, itemCategories, mainCategory, orderCategorySales, orderLineSource, syncInvoiceLineCategories } from "@/lib/mgmt/categories";
 import { salesFacts } from "@/lib/assistant/facts";
 import { round4 } from "@/lib/mgmt/decimal";
-import { areaRowsFromXlsx } from "@/lib/xlsx";
+import { areaRowsFromXlsx, readXlsx } from "@/lib/xlsx";
+import { applyMaterialMoveImport, planHash, planMaterialMoveImport, type MoveImportPlan } from "@/lib/mgmt/material-move-import";
+import { putObject, readObject } from "@/lib/storage";
 
 /**
  * 管理会計の操作 (src/lib/mgmt の計算を使う)
@@ -98,6 +105,9 @@ export async function saveAttribution(fd: FormData) {
   let msg = "売上の帰属を保存しました。";
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === order.id)!;
+    // 施工店舗・税区分などは確定した月の材料費・売上を変えるため、月次確定済みの月の受注は断る
+    const closedAttr = closedReason(db, o.salesDate ?? today(), "売上の帰属の変更");
+    if (closedAttr) fail(back, closedAttr);
     const facts = salesFacts(db).byId.get(o.id);
     const main = mainCategory(orderCategorySales(db, o, facts, o.salesDate ?? o.contractDate), "other");
     const area = matchArea(db, orderAddress(db, o), o.salesDate ?? o.contractDate);
@@ -106,9 +116,10 @@ export async function saveAttribution(fd: FormData) {
     const row = { id, orderId: o.id, areaStoreId: area.storeId, areaKey: area.key, receivedStoreId: received, workStoreId: work, workKind, hqSpecial: str(fd, "hqSpecial") === "1" || undefined, taxCategory, note: str(fd, "note").slice(0, 300) || undefined, updatedBy: user.id, updatedAt: nowIso() };
     if (prev) Object.assign(prev, row);
     else db.orderAttributions.push(row);
-    // 内部受注: 受注店舗 ≠ 施工店舗 なら計上。前の計上と内容が違えば取り消して計上し直す
+    // 内部受注: 受注店舗 ≠ 施工店舗 なら計上。前の計上と内容が違えば取り消して計上し直す。
+    // ただし本部の売上で作業だけ店舗が行った案件 (本部の特殊配分) は、金額を指定した配分で店舗に移すため内部受注を計上しない
     const active = activeInternalOrder(db, o.id);
-    const want = received !== work;
+    const want = wantsInternalOrder(o, received, work, row.hqSpecial);
     const same = active && active.fromStoreId === received && active.toStoreId === work && active.workKind === workKind && (overrideBp === undefined ? active.rateSource !== "override" : active.rateBp === overrideBp);
     if (active && (!want || !same)) {
       const r = reverseAdjustment(db, active, { id: newId("adj"), number: nextNumber(db, "SA", db.salesAdjustments, today()), userId: user.id, now: nowIso(), today: today(), reason: reason || "売上の帰属の変更" });
@@ -147,6 +158,35 @@ export async function saveAttribution(fd: FormData) {
     addAudit(db, { userId: user.id, action: prev ? "update" : "create", entity: "order_attribution", entityId: id, entityLabel: o.number, summary: `売上の帰属: 受注店舗 ${storeName(db, received)} / 施工店舗 ${storeName(db, work)} / ${workKind === "reform" ? "リフォーム工事" : "通常工事"} (主な品目 ${main})`, storeId: o.storeId });
   });
   done(back, msg);
+}
+
+/** 受注の税区分だけを登録する (輸出の免税など。内部受注などほかの帰属の内容は変えない) */
+export async function setOrderTaxCategory(fd: FormData) {
+  const { user, back } = await start(fd, `${BASE}?tab=sales`, "edit");
+  const order = orderByNumberOrId(str(fd, "orderId"));
+  if (!order) fail(back, "受注が見つかりません。");
+  const tax = str(fd, "taxCategory");
+  if (!["taxable", "exempt", "non_taxable", "out_of_scope"].includes(tax)) fail(back, "税区分を選んでください。");
+  const taxCategory = tax as "taxable" | "exempt" | "non_taxable" | "out_of_scope";
+  await mutate((db) => {
+    const o = db.orders.find((x) => x.id === order.id)!;
+    const closed = closedReason(db, o.salesDate ?? today(), "税区分の登録");
+    if (closed) fail(back, closed);
+    const id = attributionId(o.id);
+    const prev = db.orderAttributions.find((a) => a.id === id);
+    const before = prev?.taxCategory ?? "unset";
+    if (prev) {
+      prev.taxCategory = taxCategory;
+      prev.updatedBy = user.id;
+      prev.updatedAt = nowIso();
+    } else {
+      const main = mainCategory(orderCategorySales(db, o, salesFacts(db).byId.get(o.id), o.salesDate ?? o.contractDate), "other");
+      const area = matchArea(db, orderAddress(db, o), o.salesDate ?? o.contractDate);
+      db.orderAttributions.push({ id, orderId: o.id, areaStoreId: area.storeId, areaKey: area.key, receivedStoreId: o.storeId, workStoreId: o.storeId, workKind: main === "reform" ? "reform" : "normal", taxCategory, updatedBy: user.id, updatedAt: nowIso() });
+    }
+    addAudit(db, { userId: user.id, action: prev ? "update" : "create", entity: "order_attribution", entityId: id, entityLabel: o.number, summary: `税区分を登録: ${TAX_CATEGORY_LABEL[before as "unset"] ?? before} → ${TAX_CATEGORY_LABEL[taxCategory]}`, storeId: o.storeId, changes: [{ field: "taxCategory", before, after: taxCategory }] });
+  });
+  done(back, "税区分を登録しました。");
 }
 
 /** 本部の特殊配分・手入力の売上調整 (金額指定)。管理者 */
@@ -236,7 +276,10 @@ export async function recordOrderCost(fd: FormData) {
   const stage = (["estimate", "planned", "actual"].includes(str(fd, "stage")) ? str(fd, "stage") : "planned") as "estimate" | "planned" | "actual";
   const spec: SpecChoice = {};
   for (const [k, v] of fd.entries()) {
-    if (k.startsWith("spec:") && typeof v === "string" && v) spec[k.slice(5)] = { materialId: v };
+    if (!k.startsWith("spec:") || typeof v !== "string" || !v) continue;
+    // 製造仕様で選べるのは畳床の材料だけ
+    if (!getDb().materials.some((m) => m.id === v && m.kind === "doko" && m.active)) fail(back, "畳床の仕様は材料マスタの畳床から選んでください。");
+    spec[k.slice(5)] = { materialId: v };
   }
   let msg = "";
   await mutate((db) => {
@@ -289,13 +332,7 @@ export async function saveLineCategories(fd: FormData) {
     if (!changes.length) fail(back, "変更された品目がありません。");
     src.record.updatedAt = now;
     // 同じ受注の請求書 (見積から作った同じ明細) も合わせる
-    if (src.kind === "quote") {
-      for (const inv of db.invoices.filter((i) => i.orderId === o.id && i.items?.length === src.items.length)) {
-        if (!inv.items!.every((x, k) => x.name === src.items[k].name && x.amount === src.items[k].amount)) continue;
-        inv.items!.forEach((x, k) => (x.itemCategory = src.items[k].itemCategory));
-        inv.updatedAt = now;
-      }
-    }
+    if (src.kind === "quote") syncInvoiceLineCategories(db, o.id, src.items, now);
     msg = `明細の品目を変更しました (${changes.length} 行)。`;
     addAudit(db, { userId: user.id, action: "update", entity: src.kind === "quote" ? "quote" : "invoice", entityId: src.record.id, entityLabel: src.record.number, summary: `明細の品目 (管理会計) を変更 (受注 ${o.number}): ${lines.join(" / ")}`, storeId: o.storeId, changes });
   });
@@ -526,6 +563,36 @@ export async function analyzePurchase(fd: FormData) {
   done(back, `${ids.length} 件の仕入 (${n} 明細) を判定しました。確定は明細ごとに確認してから行ってください。`);
 }
 
+/** 要確認の明細に AI の候補を出す (規則で決まらなかった案件・店舗・品目・費用区分。確定は担当者) */
+export async function aiAssistPurchase(fd: FormData) {
+  const { user, back } = await start(fd, `${BASE}?tab=purchases`, "edit");
+  if (!aiStatus().enabled) fail(back, "AI の API キーが設定されていないため、AI の候補は出せません (規則の判定と担当者の確認で進めてください)。");
+  const db0 = getDb();
+  const p = db0.purchases.find((x) => x.id === str(fd, "purchaseId"));
+  if (!p) fail(back, "仕入が見つかりません。");
+  const lines = aiTargetLines(db0.purchaseLineAllocs.filter((a) => a.purchaseId === p.id)).slice(0, 30);
+  if (!lines.length) fail(back, "AI の候補を出す明細 (要確認・未振り分けの明細) がありません。先に「自動判定する」を押してください。");
+  const candidates = aiCandidateOrders(db0, p, lines);
+  const prompt = buildPurchaseAiPrompt(db0, p, lines, candidates, salesFacts(db0).byId);
+  let suggestions: AiLineSuggestion[] = [];
+  let aiError = "";
+  try {
+    const r = await withAiContext({ kind: "purchase_match", userId: user.id }, () =>
+      generateJson<unknown>({ system: prompt.system, parts: [{ type: "text", text: prompt.user }], schema: PURCHASE_AI_SCHEMA as unknown as Record<string, unknown>, schemaName: "ichijoya_purchase_lines", maxTokens: 4000 }),
+    );
+    suggestions = normalizePurchaseAi(db0, r.data, lines, candidates);
+  } catch (err) {
+    aiError = err instanceof AiError ? err.message : "AI の候補を出せませんでした。";
+  }
+  if (aiError) fail(back, aiError);
+  let n = 0;
+  await mutate((db) => {
+    n = applyAiSuggestions(db, suggestions, p.id, nowIso());
+    addAudit(db, { userId: user.id, action: "update", entity: "purchase_line_alloc", entityId: p.id, entityLabel: p.number, summary: `仕入明細に AI の候補を入れました (${n} 明細・案件の候補 ${candidates.length} 件)` });
+  });
+  done(back, n ? `${n} 明細に AI の候補を入れました。理由を確かめてから確定してください (AI の候補だけでは確定しません)。` : "AI は候補を出せませんでした。明細ごとに確かめて振り分けてください。");
+}
+
 /** 明細の振り分けを確定する (複数の店舗・案件・品目に分けられる。合計は明細の税抜の金額) */
 export async function confirmPurchaseLine(fd: FormData) {
   const { user, back } = await start(fd, `${BASE}?tab=purchases`, "edit");
@@ -595,6 +662,67 @@ export async function addMgmtEntry(fd: FormData) {
     addAudit(db, { userId: user.id, action: "create", entity: "mgmt_entry", entityId: row.id, entityLabel: `${month} ${storeName(db, storeId)}`, summary: `${kind} ${amount.toLocaleString("ja-JP")} 円 ${row.note ?? ""}`, storeId });
   });
   done(back, "登録しました。");
+}
+
+/**
+ * 人件費の一括取込 (CSV: 月,店舗,金額[,備考]。給与ソフトなどから店舗ごとの月額)。
+ * 月 × 店舗の人件費の合計が CSV の金額になるように、差額だけの行を足す (同じ CSV をもう一度取り込んでも増えない)
+ */
+export async function importLaborCsv(fd: FormData) {
+  const { user, back } = await start(fd, `${BASE}?tab=entries`, "edit");
+  const file = fd.get("file");
+  const text = file instanceof File && file.size ? Buffer.from(await file.arrayBuffer()).toString("utf8").replace(/^\uFEFF/, "") : str(fd, "csv");
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) fail(back, "CSV を選ぶか貼り付けてください。");
+  if (lines.length > 600) fail(back, "1 回に取り込めるのは 600 行までです。");
+  const db0 = getDb();
+  const rows: { month: string; storeId: StoreId; amount: number; note?: string }[] = [];
+  for (const [i, l] of lines.entries()) {
+    const [m, storeRaw, amountRaw, note] = l.split(/[,\t]/).map((x) => x.trim());
+    if (i === 0 && !/^\d{4}[-/]\d{1,2}$/.test(m ?? "")) continue; // 見出しの行
+    const mm = (m ?? "").match(/^(\d{4})[-/](\d{1,2})$/);
+    if (!mm) fail(back, `${i + 1} 行目: 月は 2026-11 の形で書いてください。`);
+    const month = `${mm[1]}-${mm[2].padStart(2, "0")}`;
+    const storeId = storeIdOf(storeRaw ?? "") ?? storeIdOfName(db0, storeRaw ?? "");
+    if (!storeId) fail(back, `${i + 1} 行目: 店舗「${storeRaw}」が分かりません。`);
+    const amount = yenInt(amountRaw ?? "");
+    if (!Number.isSafeInteger(amount)) fail(back, `${i + 1} 行目: 金額は円の整数で書いてください。`);
+    rows.push({ month, storeId, amount, note: note?.slice(0, 100) || undefined });
+  }
+  let added = 0;
+  let same = 0;
+  await mutate((db) => {
+    for (const r of rows) {
+      const closed = closedReason(db, `${r.month}-01`, "人件費の取込");
+      if (closed) fail(back, closed);
+      const current = db.mgmtEntries.filter((m) => m.kind === "labor" && m.month === r.month && m.storeId === r.storeId).reduce((a, m) => a + m.amount, 0);
+      const diff = r.amount - current;
+      if (diff === 0) {
+        same++;
+        continue;
+      }
+      db.mgmtEntries.push({ id: newId("me"), month: r.month, storeId: r.storeId, kind: "labor", amount: diff, note: `人件費の取込 (CSV): 合計 ${r.amount.toLocaleString("ja-JP")} 円${current ? ` (前の合計 ${current.toLocaleString("ja-JP")} 円との差額)` : ""}${r.note ? ` ${r.note}` : ""}`, status: "active", createdBy: user.id, createdAt: nowIso() });
+      added++;
+    }
+    addAudit(db, { userId: user.id, action: "import", entity: "mgmt_entry", entityId: "labor_csv", entityLabel: "人件費の取込", summary: `人件費の取込 (CSV): ${rows.length} 行 (登録 ${added}・変わらず ${same})` });
+  });
+  done(back, `人件費を取り込みました (${rows.length} 行のうち 登録 ${added} 行・同じ金額のため変更なし ${same} 行)。`);
+}
+
+/** 広告宣伝費の予算の超過分を店舗独自経費へ移す (月ごと) */
+export async function moveAdOverageAction(fd: FormData) {
+  const { user, back } = await start(fd, `${BASE}?tab=alloc`, "edit");
+  const month = str(fd, "month");
+  if (!isMonth(month)) fail(back, "月を選んでください。");
+  let msg = "";
+  await mutate((db) => {
+    const r = moveAdOverage(db, month, { userId: user.id, now: nowIso(), makeId: () => newId("me") });
+    if (typeof r === "string") fail(back, r);
+    const moved = r.filter((x) => x.kind === "store_expense");
+    msg = `広告宣伝費の予算超過分を店舗独自経費へ移しました (${moved.map((x) => `${storeName(db, x.storeId)} ${x.amount.toLocaleString("ja-JP")} 円`).join("・")})。`;
+    addAudit(db, { userId: user.id, action: "create", entity: "mgmt_entry", entityId: `ad_over_${month}`, entityLabel: `${month} 広告の予算超過`, summary: msg });
+  });
+  done(back, msg);
 }
 
 export async function reverseMgmtEntry(fd: FormData) {
@@ -695,6 +823,48 @@ export async function reverseMaterialTransfer(fd: FormData) {
 }
 
 /* ================================================================== */
+/* これまでの「材料移動」の表 (.xlsx) の取込                               */
+/* ================================================================== */
+
+const MM_KEY = (hash: string) => `imports/material-moves/${hash}.json`;
+
+/** 表を読んで、取り込む内容を確かめる (保存はしない。確認の内容はファイルに置く)。管理者 */
+export async function previewMaterialMoves(fd: FormData) {
+  const { back } = await start(fd, `${BASE}?tab=stock`, "admin");
+  const file = fd.get("file");
+  if (!(file instanceof File) || !file.size) fail(back, "材料移動の表 (.xlsx) を選んでください。");
+  if (file.size > 4 * 1024 * 1024) fail(back, "ファイルが大きすぎます (4 MB まで)。");
+  const buf = Buffer.from(await file.arrayBuffer());
+  let sheets: ReturnType<typeof readXlsx>;
+  try {
+    sheets = readXlsx(buf, { sheet: (n) => /^\s*\d{4}\.\d{1,2}\s*$/.test(n) });
+  } catch {
+    fail(back, ".xlsx のファイルを読めませんでした。");
+  }
+  const hash = planHash(buf);
+  const plan = planMaterialMoveImport(getDb(), sheets, { hash, fileName: file.name.slice(0, 100), now: nowIso() });
+  if (!plan.sheets) fail(back, "月ごとのシート (「2026.10」のような名前) が見つかりません。");
+  await putObject(MM_KEY(hash), Buffer.from(JSON.stringify(plan)));
+  redirect(withMsg(`${BASE}?tab=stock&mmplan=${hash}#mm-import`, `${plan.sheets} か月分を読みました。内容を確かめてから「取り込む」を押してください。`));
+}
+
+/** 確かめた内容を取り込む (材料移動 = 原価の振替・内部受注 = 売上の調整)。すでに取り込んだ行・確定した月の行は飛ばす。管理者 */
+export async function applyMaterialMoves(fd: FormData) {
+  const { user, back } = await start(fd, `${BASE}?tab=stock`, "admin");
+  const hash = str(fd, "hash");
+  if (!/^[0-9a-f]{32}$/.test(hash)) fail(back, "確認の内容が見つかりません。もう一度ファイルを読んでください。");
+  const raw = await readObject(MM_KEY(hash));
+  if (!raw) fail(back, "確認の内容が見つかりません。もう一度ファイルを読んでください。");
+  const plan = JSON.parse(raw.toString("utf8")) as MoveImportPlan;
+  let r = { transfers: 0, adjustments: 0, existing: 0, closed: 0 };
+  await mutate((db) => {
+    r = applyMaterialMoveImport(db, plan, { userId: user.id, now: nowIso(), makeId: (p) => newId(p), number: (p, list, date) => nextNumber(db, p, list, date) });
+    addAudit(db, { userId: user.id, action: "import", entity: "material_transfer", entityId: hash, entityLabel: plan.fileName, summary: `材料移動の表の取込 (${plan.sheets} か月分): 材料移動 ${r.transfers} 件・売上の調整 ${r.adjustments} 件 (取込済み ${r.existing}・確定済みの月 ${r.closed} は飛ばした)` });
+  });
+  done(back, `取り込みました: 店舗間の材料移動 ${r.transfers} 件・店舗間の売上の調整 (過去の内部受注・本部の特殊配分) ${r.adjustments} 件${r.existing ? ` (取込済み ${r.existing} 件は飛ばしました)` : ""}${r.closed ? ` (月次確定済みの月の ${r.closed} 件は飛ばしました)` : ""}。`);
+}
+
+/* ================================================================== */
 /* 共通経費の案分・月次確定                                               */
 /* ================================================================== */
 
@@ -730,13 +900,15 @@ export async function closeMonthAction(fd: FormData) {
     if (row?.status === "closed") fail(back, `${month} はもう確定しています。`);
     const p = previewAllocation(db, month);
     if (p.status !== "empty" && !db.allocationRuns.some((r) => r.month === month && r.status === "confirmed")) fail(back, `${month} の共通経費の案分が確定していません${p.status === "held" ? ` (保留: ${p.holdReason})` : ""}。先に案分を確定してください。`);
+    // 自動で決まる値 (自動計算の材料原価・「自動」の明細の品目) を固定してから確定する (確定後に材料マスタなどを変えても確定した月の数字が変わらない)
+    const frozen = freezeMonth(db, month, { userId: user.id, now: nowIso(), makeId: () => newId("mu") });
     const [y, m] = month.split("-").map(Number);
     const res = storePnl(db, `${month}-01`, toDateKey(new Date(y, m, 0)));
     const snapshot = { at: nowIso(), basis: res.basis, stores: res.stores, total: res.total, categories: res.categories, allocations: res.allocations, provisional: res.provisional };
     const entry = { action: "close" as const, by: user.id, at: nowIso(), reason: str(fd, "reason") || undefined };
     if (row) Object.assign(row, { status: "closed", snapshot, history: [...row.history, entry], updatedAt: nowIso() });
     else db.periodCloses.push({ id: month, month, status: "closed", snapshot, history: [entry], updatedAt: nowIso() });
-    addAudit(db, { userId: user.id, action: "approve", entity: "period_close", entityId: month, entityLabel: month, summary: `月次確定 (全社の管理売上 ${res.total.mgmtSales.toLocaleString("ja-JP")} 円・損益 ${res.total.profit.toLocaleString("ja-JP")} 円${res.provisional ? "・暫定を含む" : ""})` });
+    addAudit(db, { userId: user.id, action: "approve", entity: "period_close", entityId: month, entityLabel: month, summary: `月次確定 (全社の管理売上 ${res.total.mgmtSales.toLocaleString("ja-JP")} 円・損益 ${res.total.profit.toLocaleString("ja-JP")} 円${res.provisional ? "・暫定を含む" : ""}${frozen.usages || frozen.lines ? ` / 固定: 自動計算の材料原価 ${frozen.orders} 件 (${frozen.usages} 行)・明細の品目 ${frozen.lines} 行` : ""})` });
   });
   done(back, `${month} を月次確定しました (確定時の店舗別損益を保存しました)。`);
 }

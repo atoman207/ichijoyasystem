@@ -91,6 +91,8 @@ export interface CostingLine {
   label: string;
   qty: number;
   itemCategory: string;
+  /** 見積の明細で選んだ畳床 */
+  dokoMaterialId?: string;
 }
 
 export function costingLines(db: Pick<Database, "quotes" | "products">, order: Pick<Order, "quoteId" | "category" | "total">, fact: Pick<OrderFact, "items" | "itemSource" | "total"> | undefined): CostingLine[] {
@@ -99,7 +101,7 @@ export function costingLines(db: Pick<Database, "quotes" | "products">, order: P
     const products = new Map(db.products.map((p) => [p.id, p]));
     return q.items
       .filter((i) => i.qty > 0)
-      .map((i) => ({ key: i.id, productId: i.productId, label: [i.name, i.spec].filter(Boolean).join(" "), qty: i.qty, itemCategory: lineItemCategory(i, products.get(i.productId ?? ""), order.category) }));
+      .map((i) => ({ key: i.id, productId: i.productId, label: [i.name, i.spec].filter(Boolean).join(" "), qty: i.qty, itemCategory: lineItemCategory(i, products.get(i.productId ?? ""), order.category), dokoMaterialId: i.dokoMaterialId }));
   }
   // 移行した受注 (売上台帳の明細): 雑工事は売上の品目と同じくリフォーム
   return (fact?.items ?? [])
@@ -144,7 +146,8 @@ export function planUsage(db: Database, lines: CostingLine[], date: string, spec
         usages.push({ ...base, itemCategory: line.itemCategory, unitCost: unit, costId: sub.ruleId ?? "default:sub_material.unit_cost", amount: qtyTimesCost(qty, unit), explain: `副資材 ${unit} 円 × ${qty}` });
         return;
       }
-      const chosen = bl.materialId ? undefined : spec[`${line.key}:${idx}`] ?? spec[line.key];
+      // 製造仕様: 画面で選んだもの → 見積の明細で選んだ畳床
+      const chosen = bl.materialId ? undefined : (spec[`${line.key}:${idx}`] ?? spec[line.key] ?? (bl.materialKind === "doko" && line.dokoMaterialId ? { materialId: line.dokoMaterialId } : undefined));
       let m: Material | undefined = bl.materialId ? materials.get(bl.materialId) : chosen ? materials.get(chosen.materialId) : undefined;
       // 仕様を選んでいない行: 畳床は品名・製造の予定から判定 → 既定の畳床。ほかの種類は既定の材料
       let inferred: string | undefined;
@@ -196,6 +199,23 @@ export function autoUsage(db: Database, order: Pick<Order, "quoteId" | "category
   const lines = costingLines(db, order, fact);
   if (!lines.length) return { usages: [], unmatched: [] };
   return planUsage(db, lines, date, {}, { hintText });
+}
+
+/**
+ * 見積の明細で畳床を選べるようにするための情報: 畳床の材料の一覧と、材料が決まっていない畳床の行を持つ材料構成
+ * (商品で決まるもの = productIds、品名で決まるもの = matchNames。品名は空白を除いて比べる)
+ */
+export function dokoChoiceInfo(db: Pick<Database, "boms" | "materials" | "materialCosts">, date: string): { options: { id: string; label: string }[]; productIds: string[]; matchNames: string[] } {
+  const options = (db.materials ?? [])
+    .filter((m) => m.active && m.kind === "doko")
+    .map((m) => ({ id: m.id, label: `${m.name}${m.thickness ? ` ${m.thickness}mm` : ""}${m.size ? ` ${SIZE_LABEL[m.size] ?? m.size}` : ""}${costAt(db, m.id, date) ? "" : " (単価なし)"}` }));
+  if (!options.length) return { options, productIds: [], matchNames: [] };
+  const boms = (db.boms ?? []).filter((b) => activeBom(b, date) && b.lines.some((l) => l.materialKind === "doko" && !l.materialId));
+  return {
+    options,
+    productIds: boms.flatMap((b) => (b.productId ? [b.productId] : [])),
+    matchNames: boms.flatMap((b) => (b.matchName ? [b.matchName.replace(/[\s　]/g, "")] : [])),
+  };
 }
 
 /** 受注の原価に数える使用の行 (一番進んだ段階の、有効な行) */

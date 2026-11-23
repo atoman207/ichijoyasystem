@@ -2,8 +2,9 @@ import Link from "next/link";
 import { yen } from "@/lib/format";
 import { COST_TYPE_LABEL } from "@/lib/mgmt/purchase-lines";
 import { itemCategories } from "@/lib/mgmt/categories";
-import { analyzePurchase, confirmPurchaseLine } from "@/lib/actions/mgmt";
+import { aiAssistPurchase, analyzePurchase, confirmPurchaseLine } from "@/lib/actions/mgmt";
 import type { PurchaseLineAlloc } from "@/lib/db/types";
+import { aiStatus } from "@/lib/ai/provider";
 import { Badge, Button, Card, CardHeader, Input, Note, Select, Table, Td, Th, Tr } from "@/components/ui";
 import { Money, PeriodForm, back, qs, storeNameOf, type Ctx } from "./parts";
 
@@ -15,6 +16,7 @@ const STATUS: Record<PurchaseLineAlloc["status"], { label: string; tone: "good" 
 
 export function PurchasesTab({ ctx }: { ctx: Ctx }) {
   const { db } = ctx;
+  const aiOn = aiStatus().enabled;
   const purchases = db.purchases.filter((p) => p.status !== "rejected" && p.invoiceDate >= ctx.from && p.invoiceDate <= ctx.to).sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate));
   const allocs = new Map<string, PurchaseLineAlloc[]>();
   for (const a of db.purchaseLineAllocs) (allocs.get(a.purchaseId) ?? allocs.set(a.purchaseId, []).get(a.purchaseId)!).push(a);
@@ -78,6 +80,14 @@ export function PurchasesTab({ ctx }: { ctx: Ctx }) {
             <input type="hidden" name="purchaseId" value={selected.id} />
             <Button type="submit" variant="secondary" size="sm">{allocs.has(selected.id) ? "もう一度自動判定 (確定した明細はそのまま)" : "自動判定する"}</Button>
           </form>
+          {aiOn && (allocs.get(selected.id) ?? []).some((a) => a.status !== "confirmed" && (a.status === "needs_review" || !a.splits.length)) && (
+            <form action={aiAssistPurchase} className="mb-3 flex flex-wrap items-center gap-2">
+              {back(ctx, { purchase: selected.id })}
+              <input type="hidden" name="purchaseId" value={selected.id} />
+              <Button type="submit" variant="secondary" size="sm">要確認の明細に AI の候補を出す</Button>
+              <span className="text-xs text-ink-2">規則で決まらなかった明細の案件・店舗・品目・費用区分の候補と理由を AI が出します。確定は担当者が行います (金額は AI に計算させません)。</span>
+            </form>
+          )}
           <div className="space-y-4">
             {(allocs.get(selected.id) ?? []).sort((a, b) => a.lineNo - b.lineNo).map((a) => {
               const rows = a.splits.length ? a.splits : [{ storeId: a.ai?.storeId ?? "", orderId: a.ai?.orderId, itemCategory: a.ai?.itemCategory ?? "", costType: a.ai?.costType ?? "material", materialId: a.ai?.materialId, qty: a.ocr.qty, amount: a.ocr.amountExTax }];

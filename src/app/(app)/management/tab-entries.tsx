@@ -1,7 +1,7 @@
-import { addMgmtEntry, reverseMgmtEntry } from "@/lib/actions/mgmt";
+import { addMgmtEntry, importLaborCsv, reverseMgmtEntry } from "@/lib/actions/mgmt";
 import { itemCategories } from "@/lib/mgmt/categories";
 import type { MgmtEntry } from "@/lib/db/types";
-import { Badge, Button, Card, CardHeader, Field, Input, Note, Select, Table, Td, Th, Tr } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, Field, Input, Note, Select, Table, Td, Textarea, Th, Tr } from "@/components/ui";
 import { Money, PeriodForm, StoreSelect, back, storeNameOf, userNameOf, type Ctx } from "./parts";
 
 export const ENTRY_KIND_LABEL: Record<MgmtEntry["kind"], string> = {
@@ -13,6 +13,8 @@ export const ENTRY_KIND_LABEL: Record<MgmtEntry["kind"], string> = {
   budget: "予算",
 };
 
+const BUDGET_METRIC_LABEL: Record<string, string> = { sales: "管理売上", gross: "粗利益", profit: "店舗の損益", ad: "広告宣伝費" };
+
 export function EntriesTab({ ctx }: { ctx: Ctx }) {
   const { db } = ctx;
   const rows = db.mgmtEntries.filter((m) => m.month === ctx.month && (!ctx.storeIds || ctx.storeIds.includes(m.storeId))).sort((a, b) => a.storeId.localeCompare(b.storeId) || a.createdAt.localeCompare(b.createdAt));
@@ -21,7 +23,7 @@ export function EntriesTab({ ctx }: { ctx: Ctx }) {
     <div className="space-y-4">
       <PeriodForm ctx={ctx} monthOnly />
       <Note>
-        システムにない数字 (給与などの人件費・管理経費・共通経費・予算) と、畳表の仮原価と実仕入の差額などの調整を、月 × 店舗で入力します (税抜)。畳表の差額の計算方法 (期間・在庫評価) は未確定のため、自動では計算しません。確かめた差額を備考と一緒に入力してください。取消しは逆の行を追加します。
+        システムにない数字 (給与などの人件費・管理経費・共通経費・予算) と、材料の差額などの調整を、月 × 店舗で入力します (税抜)。人件費は下の CSV でまとめて取り込めます。畳表の仮原価と実仕入の差額は「共通経費の案分」のタブで計算・確定でき、確定するとここに「材料の差額調整」として載ります。広告宣伝費の店舗の予算は、種類「予算」・指標「広告宣伝費」で登録します。取消しは逆の行を追加します。
       </Note>
       {ctx.canEdit && (
         <Card>
@@ -47,10 +49,22 @@ export function EntriesTab({ ctx }: { ctx: Ctx }) {
                 <option value="sales">管理売上</option>
                 <option value="gross">粗利益</option>
                 <option value="profit">店舗の損益</option>
+                <option value="ad">広告宣伝費 (店舗の予算。超えた分は店舗独自経費)</option>
               </Select>
             </Field>
             <Field label="備考" className="@3xl:col-span-2"><Input name="note" /></Field>
             <div className="@3xl:col-span-4"><Button type="submit">登録</Button></div>
+          </form>
+        </Card>
+      )}
+      {ctx.canEdit && (
+        <Card>
+          <CardHeader title="人件費の取込 (CSV)" description="1 行 = 月,店舗,金額 (税抜・円)[,備考]。例: 2026-11,合志店,1234567。店舗は名前か ID (koshi など)。月 × 店舗の人件費の合計が CSV の金額になるように差額だけを登録します (同じ CSV をもう一度取り込んでも増えません)" />
+          <form action={importLaborCsv} className="space-y-2">
+            {b}
+            <Input type="file" name="file" accept=".csv,text/csv" />
+            <Textarea name="csv" rows={3} placeholder={"または貼り付け:\n月,店舗,金額,備考\n2026-11,合志店,1234567,給与ソフトより"} />
+            <Button type="submit" size="sm">取り込む</Button>
           </form>
         </Card>
       )}
@@ -69,7 +83,7 @@ export function EntriesTab({ ctx }: { ctx: Ctx }) {
           {rows.map((m) => (
             <Tr key={m.id}>
               <Td>{storeNameOf(db, m.storeId)}</Td>
-              <Td>{ENTRY_KIND_LABEL[m.kind]}{m.metric && m.kind === "budget" ? ` (${m.metric})` : ""}{m.reversalOf && <Badge tone="neutral">取消しの行</Badge>}{m.status === "reversed" && <Badge tone="neutral">取消し済み</Badge>}</Td>
+              <Td>{ENTRY_KIND_LABEL[m.kind]}{m.metric && m.kind === "budget" ? ` (${BUDGET_METRIC_LABEL[m.metric] ?? m.metric})` : ""}{m.reversalOf && <Badge tone="neutral">取消しの行</Badge>}{m.status === "reversed" && <Badge tone="neutral">取消し済み</Badge>}</Td>
               <Td align="right"><Money v={m.amount} /></Td>
               <Td className="text-xs">{m.note}</Td>
               <Td className="text-xs">{m.createdAt.slice(0, 10)} {userNameOf(db, m.createdBy)}</Td>

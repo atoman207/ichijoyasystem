@@ -23,7 +23,7 @@ export function CostTab({ ctx }: { ctx: Ctx }) {
       const tatami = (fact?.amounts.tatami ?? (o.category === "tatami" ? o.total : 0)) > 0;
       const legacy = !used.length && Boolean(o.tatamiCost);
       // 原価の行がない受注は、材料構成から自動で計算した原価 (店舗別損益にもこの金額が入る)
-      const auto = !used.length && !legacy && tatami ? autoUsage(db, o, fact, o.salesDate ?? ctx.today, notes.get(o.id) ?? "") : undefined;
+      const auto = !used.length && !legacy && tatami && o.source !== "import" ? autoUsage(db, o, fact, o.salesDate ?? ctx.today, notes.get(o.id) ?? "") : undefined;
       return { o, used, tatami, legacy, auto };
     })
     .filter((r) => r.tatami || r.used.length);
@@ -143,7 +143,7 @@ function OrderCosting({ ctx, orderId, docoIds }: { ctx: Ctx; orderId: string; do
                     {MATERIAL_KIND_LABEL[u.materialKind]}
                     {u.materialKind === "doko" && (u.needsReview || u.spec?.inferred) && (
                       <div className="mt-1">
-                        <Select name={`spec:${u.lineKey}`} defaultValue={u.needsReview ? "" : (u.materialId ?? "")}>
+                        <Select name={`spec:${u.lineKey}`} defaultValue={u.needsReview || u.assumed ? "" : (u.materialId ?? "")}>
                           <option value="">畳床の仕様を選ぶ…</option>
                           {docos.map((m) => (
                             <option key={m.id} value={m.id}>

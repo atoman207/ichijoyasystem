@@ -95,6 +95,26 @@ export function orderLineSource(db: Pick<Database, "quotes" | "invoices">, order
   return null;
 }
 
+/**
+ * 見積の明細の品目を、同じ受注の請求書 (見積から作った同じ明細: 行数・品名・金額が同じ) にもそろえる (mutate の中で呼ぶ)。
+ * 見積の金額が受注と違うとき、売上の分析は請求書の明細を使うため。そろえた請求書の数を返す
+ */
+export function syncInvoiceLineCategories(db: Pick<Database, "invoices">, orderId: string | undefined, items: Pick<QuoteItem, "name" | "amount" | "itemCategory" | "dokoMaterialId">[], now: string): number {
+  if (!orderId) return 0;
+  let n = 0;
+  for (const inv of (db.invoices ?? []).filter((i) => i.orderId === orderId && i.items?.length === items.length)) {
+    if (!inv.items!.every((x, k) => x.name === items[k].name && x.amount === items[k].amount)) continue;
+    if (inv.items!.every((x, k) => (x.itemCategory ?? "") === (items[k].itemCategory ?? "") && (x.dokoMaterialId ?? "") === (items[k].dokoMaterialId ?? ""))) continue;
+    inv.items!.forEach((x, k) => {
+      x.itemCategory = items[k].itemCategory;
+      x.dokoMaterialId = items[k].dokoMaterialId;
+    });
+    inv.updatedAt = now;
+    n++;
+  }
+  return n;
+}
+
 /** 見積の明細の編集画面 (QuoteEditor) に渡す品目の一覧・商品の品目・自由入力の行の既定 */
 export function itemCategoryProps(db: Pick<Database, "itemCategories" | "products">, serviceCategory: ServiceCategory | undefined) {
   return {

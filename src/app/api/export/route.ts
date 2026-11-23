@@ -69,7 +69,7 @@ export async function GET(req: Request) {
     return csv(toCsv(rows), `monthly_sales_${stamp}.csv`);
   }
   const userOf = (id?: string) => (id === "system" ? "システム (外部連携)" : (db.users.find((u) => u.id === id)?.name ?? id ?? ""));
-  const names = new Map<string, string>([...db.users.map((u) => [u.id, u.name] as [string, string]), ...db.suppliers.map((s) => [s.id, s.name] as [string, string])]);
+  const names = new Map<string, string>([...db.users.map((u) => [u.id, u.name] as [string, string]), ...db.suppliers.map((s) => [s.id, s.name] as [string, string]), ...db.stores.map((s) => [s.id, s.name] as [string, string])]);
   const from = params.get("from") ?? "";
   const to = params.get("to") ?? "";
   if (type === "audit") {

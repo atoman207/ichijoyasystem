@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth/session";
 import { canAccessStore, canSeeAllStores } from "@/lib/auth/permissions";
 import type { StoreId, User } from "@/lib/db/types";
+import { getDb } from "@/lib/db/store";
 
 /** サーバーアクション共通: ログインユーザー必須 */
 export async function requireActionUser(): Promise<User> {
@@ -32,8 +33,8 @@ export function assertStore(user: User, storeId: StoreId, backPath: string) {
 /** 店舗ロールは自店舗に固定、全店舗ロールはフォームの値を採用 */
 export function resolveStoreId(user: User, requested: string | null | undefined, fallback?: StoreId): StoreId {
   if (!canSeeAllStores(user)) return user.storeId;
-  const valid: StoreId[] = ["koshi", "chuo", "nishi", "tamana", "hq"];
-  if (requested && (valid as string[]).includes(requested)) return requested as StoreId;
+  // 店舗の一覧はデータベースから (管理者が追加した店舗も選べる)
+  if (requested && getDb().stores.some((s) => s.id === requested)) return requested as StoreId;
   return fallback ?? user.storeId;
 }
 

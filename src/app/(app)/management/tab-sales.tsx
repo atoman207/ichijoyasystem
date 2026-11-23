@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { fmtDate, yen } from "@/lib/format";
 import { salesFacts } from "@/lib/assistant/facts";
-import { ADJ_KIND_LABEL, TAX_CATEGORY_LABEL, TREATMENT_LABEL, WORK_KIND_LABEL, adjustmentDate, attributionOf, internalOrderStale } from "@/lib/mgmt/attribution";
+import { ADJ_KIND_LABEL, TAX_CATEGORY_LABEL, TREATMENT_LABEL, WORK_KIND_LABEL, adjustmentDate, attributionOf, internalOrderStale, orderTaxStatus } from "@/lib/mgmt/attribution";
 import { mainCategory, orderCategorySales } from "@/lib/mgmt/categories";
 import { ruleAt, ruleLabel } from "@/lib/mgmt/rules";
-import { createAdjustment, recalcInternalOrder, reverseAdjustmentAction, saveAttribution } from "@/lib/actions/mgmt";
+import { createAdjustment, recalcInternalOrder, reverseAdjustmentAction, saveAttribution, setOrderTaxCategory } from "@/lib/actions/mgmt";
 import { Badge, Button, Card, CardHeader, Field, Input, Note, Select, Table, Td, Th, Tr } from "@/components/ui";
 import { Money, PeriodForm, StoreSelect, back, storeNameOf, type Ctx } from "./parts";
 
@@ -18,6 +18,8 @@ export function SalesTab({ ctx }: { ctx: Ctx }) {
   const candidates = atts.filter(({ a }) => !a.saved && a.area.status === "matched" && a.area.storeId !== a.workStoreId);
   const saved = atts.filter(({ a }) => a.saved);
   const warned = atts.filter(({ a }) => a.warnings.length);
+  // 税区分の確認: 見積・請求書の消費税が 0 円で、税区分が未登録の受注 (輸出など)
+  const zeroTax = orders.filter((o) => orderTaxStatus(db, o, db.orderAttributions.find((x) => x.orderId === o.id)).source === "zero");
   const orderIndex = new Map(db.orders.map((o) => [o.id, o]));
   const adjs = (db.salesAdjustments ?? [])
     .filter((x) => {
@@ -97,6 +99,30 @@ export function SalesTab({ ctx }: { ctx: Ctx }) {
         )}
         {candidates.length > 100 && <p className="mt-2 text-xs text-ink-2">先頭の 100 件を表示しています。期間を絞ってください。</p>}
       </Card>
+
+      {zeroTax.length > 0 && (
+        <Card>
+          <CardHeader title={`税区分の確認 (${zeroTax.length} 件)`} description="見積・請求書の消費税が 0 円で、税区分が未登録の受注です (輸出など)。店舗別損益では税を引かずに数えています。税区分を登録してください" />
+          <ul className="space-y-2 text-sm">
+            {zeroTax.slice(0, 50).map((o) => (
+              <li key={o.id} className="flex flex-wrap items-center gap-2">
+                <Link className="text-accent hover:underline" href={`/orders/${o.id}`}>{o.number}</Link>
+                <span>{o.title}</span>
+                <span className="text-ink-2">{yen(o.total)}</span>
+                {ctx.canEdit &&
+                  (["exempt", "non_taxable", "out_of_scope", "taxable"] as const).map((t) => (
+                    <form key={t} action={setOrderTaxCategory}>
+                      {b}
+                      <input type="hidden" name="orderId" value={o.id} />
+                      <input type="hidden" name="taxCategory" value={t} />
+                      <Button type="submit" size="sm" variant={t === "exempt" ? "primary" : "secondary"}>{TAX_CATEGORY_LABEL[t]}</Button>
+                    </form>
+                  ))}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       {warned.length > 0 && (
         <Card>

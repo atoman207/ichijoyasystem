@@ -2,7 +2,8 @@ import { requireUser } from "@/lib/auth/session";
 import { BACKEND, getDb } from "@/lib/db/store";
 import { canExportData, canManageSettings, canRunBackup } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
-import { createProduct, updateDocumentSettings, updateOpsSettings, updateProduct, updateStore } from "@/lib/actions/settings";
+import { createProduct, createStore, updateDocumentSettings, updateOpsSettings, updateProduct, updateStore } from "@/lib/actions/settings";
+import { NEW_STORE_COLORS } from "@/lib/store-colors";
 import { UsersTab } from "@/components/settings/UsersTab";
 import { resetSampleData } from "@/lib/actions/auth";
 import { aiStatus } from "@/lib/ai/provider";
@@ -87,6 +88,27 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               )}
             </Card>
           ))}
+          {admin && (
+            <Card>
+              <CardHeader title="店舗を追加 (新店舗の開設)" description="追加した店舗は、所属・担当店舗・予定表・管理会計 (営業エリア・店舗別損益・案分の対象) にそのまま出ます。店舗 ID はあとから変えられません" />
+              <form action={createStore} className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="店舗 ID (半角英小文字)" required hint="例: kikuyo"><Input name="id" required pattern="[a-z][a-z0-9_]{1,19}" /></Field>
+                  <Field label="開設日"><Input type="date" name="openedOn" /></Field>
+                  <Field label="店舗名" required><Input name="name" required placeholder="例: 菊陽店" /></Field>
+                  <Field label="略称" required><Input name="shortName" required placeholder="例: 菊陽" /></Field>
+                  <Field label="郵便番号"><Input name="postalCode" /></Field>
+                  <Field label="電話" hint="固定電話がなければ空欄"><Input name="phone" /></Field>
+                </div>
+                <Field label="住所"><Input name="address" /></Field>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="責任者"><Select name="managerUserId" defaultValue=""><option value="">あとで決める</option>{db.users.filter((u) => u.active).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></Field>
+                  <Field label="グラフの色"><Select name="color" defaultValue=""><option value="">自動 (使っていない色)</option>{NEW_STORE_COLORS.filter((c) => !db.stores.some((s) => s.color.toLowerCase() === c.toLowerCase())).map((c) => <option key={c} value={c}>{c}</option>)}</Select></Field>
+                </div>
+                <Button type="submit" size="sm">店舗を追加</Button>
+              </form>
+            </Card>
+          )}
         </div>
       )}
 

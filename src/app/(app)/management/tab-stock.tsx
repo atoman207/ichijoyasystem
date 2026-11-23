@@ -1,6 +1,8 @@
 import { yen } from "@/lib/format";
 import { MOVE_KIND_LABEL, locLabel, monthlyMovement, stockBalances, stockTotals } from "@/lib/mgmt/stock";
-import { approveStockMove, postMaterialTransfer, postStockMoveAction, reverseMaterialTransfer, reverseStockMoveAction } from "@/lib/actions/mgmt";
+import { applyMaterialMoves, approveStockMove, postMaterialTransfer, postStockMoveAction, previewMaterialMoves, reverseMaterialTransfer, reverseStockMoveAction } from "@/lib/actions/mgmt";
+import { readObject } from "@/lib/storage";
+import type { MoveImportPlan } from "@/lib/mgmt/material-move-import";
 import { transferSummary } from "@/lib/mgmt/transfers";
 import { categoryName, itemCategories } from "@/lib/mgmt/categories";
 import { Badge, Button, Card, CardHeader, Field, Input, Note, Select, Table, Td, Th, Tr } from "@/components/ui";
@@ -98,6 +100,8 @@ export function StockTab({ ctx }: { ctx: Ctx }) {
       </div>
 
       <TransferCard ctx={ctx} />
+
+      {ctx.canAdmin && <MaterialMoveImportCard ctx={ctx} />}
 
       {drafts.length > 0 && (
         <Card>
@@ -314,6 +318,74 @@ function TransferCard({ ctx }: { ctx: Ctx }) {
           )}
         </tbody>
       </Table>
+    </Card>
+  );
+}
+
+/** これまでの「材料移動」の表 (.xlsx) の取込 (管理者): 読む → 確かめる → 取り込む */
+async function MaterialMoveImportCard({ ctx }: { ctx: Ctx }) {
+  const { db } = ctx;
+  const hash = /^[0-9a-f]{32}$/.test(ctx.sp.mmplan ?? "") ? ctx.sp.mmplan! : "";
+  const raw = hash ? await readObject(`imports/material-moves/${hash}.json`).catch(() => null) : null;
+  const plan = raw ? (JSON.parse(raw.toString("utf8")) as MoveImportPlan) : null;
+  const done = new Set([...db.materialTransfers.map((t) => t.note ?? ""), ...db.salesAdjustments.map((a) => a.reason ?? "")].filter((x) => x.startsWith("材料移動の表")).map((x) => x.split(" | ")[0]));
+  const pending = plan ? plan.rows.filter((r) => !done.has(`材料移動の表 ${r.ref}`)) : [];
+  const sum = (rows: MoveImportPlan["rows"]) => rows.reduce((a, r) => a + r.amount, 0);
+  return (
+    <Card id="mm-import">
+      <CardHeader title="これまでの「材料移動」の表の取込 (.xlsx)" description="月ごとのシート (「2026.10」など) の、襖材料・自社商品の欄を店舗間の材料移動 (原価の振替) に、内部受注の欄を店舗間の売上の調整に取り込みます。相手の店舗は備考 (「本部より」「合志店より」「本部へ」) で決め、備考がなければ工場 (合志店)。その他の欄 (消耗品など。今後は案分経費) と畳原価の合計 (移行した受注にある) は取り込みません" />
+      <form action={previewMaterialMoves} className="flex flex-wrap items-end gap-2">
+        {back(ctx)}
+        <Input type="file" name="file" accept=".xlsx" required />
+        <Button type="submit" size="sm" variant="secondary">読んで確かめる</Button>
+      </form>
+      {hash && !plan && <Note tone="warn">確認の内容が見つかりません。もう一度ファイルを読んでください。</Note>}
+      {plan && (
+        <div className="mt-3 space-y-3 text-sm">
+          <p>
+            {plan.fileName} · {plan.sheets} か月分 · 取り込む行 {plan.rows.length} 件 (材料移動 {plan.rows.filter((r) => r.kind === "transfer").length} 件 {yen(sum(plan.rows.filter((r) => r.kind === "transfer")))}・売上の調整 {plan.rows.filter((r) => r.kind === "internal").length} 件 {yen(sum(plan.rows.filter((r) => r.kind === "internal")))})
+            {pending.length !== plan.rows.length && <span className="text-ink-2"> · うち取込済み {plan.rows.length - pending.length} 件</span>}
+          </p>
+          <Table minWidth="min-w-[720px]">
+            <thead>
+              <tr>
+                <Th>取り込まない行</Th>
+                <Th align="right">件数</Th>
+                <Th align="right">金額</Th>
+                <Th>例</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {plan.skipped.map((x) => (
+                <Tr key={x.reason}>
+                  <Td className="text-xs">{x.reason}</Td>
+                  <Td align="right">{x.count}</Td>
+                  <Td align="right">{yen(x.amount)}</Td>
+                  <Td className="text-xs text-ink-2">{x.examples.slice(0, 2).join(" / ")}</Td>
+                </Tr>
+              ))}
+            </tbody>
+          </Table>
+          <details>
+            <summary className="cursor-pointer text-accent">取り込む行 (先頭の 40 件)</summary>
+            <ul className="mt-1 space-y-0.5 text-xs">
+              {plan.rows.slice(0, 40).map((r) => (
+                <li key={r.ref}>{r.sheet} · {r.kind === "transfer" ? "材料移動" : "売上の調整"} · {storeNameOf(db, r.fromStoreId)} {r.kind === "transfer" ? "→" : "←"} {storeNameOf(db, r.toStoreId)} · {r.name} · {yen(r.amount)}{r.note ? ` (${r.note})` : ""}</li>
+              ))}
+            </ul>
+          </details>
+          {pending.length > 0 ? (
+            <form action={applyMaterialMoves} className="flex flex-wrap items-center gap-2">
+              {back(ctx, { mmplan: hash })}
+              <input type="hidden" name="hash" value={hash} />
+              <Button type="submit" size="sm">取り込む ({pending.length} 件)</Button>
+              <span className="text-xs text-ink-2">月次確定済みの月の行と、取込済みの行は飛ばします。売上の調整は「手入力の調整 (過去の内部受注)」、相手が本部なら「本部の特殊配分」になります。</span>
+            </form>
+          ) : (
+            <p className="text-xs text-ink-2">この内容はすべて取り込み済みです。</p>
+          )}
+        </div>
+      )}
     </Card>
   );
 }

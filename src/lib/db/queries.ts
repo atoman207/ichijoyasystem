@@ -175,13 +175,13 @@ export function monthlySales(db: Database, months = 12, now = new Date()): Month
     const m = new Date(d.getFullYear(), d.getMonth() - i, 1);
     keys.push(toMonthKey(m));
   }
-  const empty = (): Record<StoreId, number> => ({ koshi: 0, chuo: 0, nishi: 0, tamana: 0, hq: 0 });
+  const empty = (): Record<StoreId, number> => Object.fromEntries(db.stores.map((s) => [s.id, 0])) as Record<StoreId, number>;
   const map = new Map(keys.map((k) => [k, { month: k, byStore: empty(), total: 0 }]));
   for (const o of db.orders) {
     if (!o.salesDate) continue;
     const row = map.get(toMonthKey(o.salesDate));
     if (!row) continue;
-    row.byStore[o.storeId] += o.total;
+    row.byStore[o.storeId] = (row.byStore[o.storeId] ?? 0) + o.total;
     row.total += o.total;
   }
   return keys.map((k) => map.get(k)!);

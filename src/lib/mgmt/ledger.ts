@@ -1,14 +1,16 @@
-import type { Database, MaterialKind, Order, OrderAttribution, StoreId } from "@/lib/db/types";
+import type { Database, MaterialKind, Order, StoreId } from "@/lib/db/types";
 import { salesFacts } from "@/lib/assistant/facts";
 import { exTax, type Rounding } from "./decimal";
 import { ruleAt } from "./rules";
 import { mainCategory, orderCategorySales } from "./categories";
-import { adjustmentDate, ADJ_KIND_LABEL, ratePct } from "./attribution";
-import { autoUsage, countedUsageIndex, STAGE_LABEL } from "./costing";
+import { adjustmentDate, ADJ_KIND_LABEL, orderTaxStatus, ratePct } from "./attribution";
+import { autoUsage, countedUsageIndex, STAGE_LABEL, type CostingLine, type PlannedUsage } from "./costing";
+import type { OrderFact } from "@/lib/assistant/facts";
 import { productionNoteIndex } from "./doko";
 import { COST_TYPE_LABEL, linesExTax } from "./purchase-lines";
 import { MOVE_KIND_LABEL } from "./stock";
 import { COMMON_ACCOUNTS, defaultExpenseClass } from "./expense-class";
+import { isClosed } from "./close";
 
 /**
  * 管理会計の元帳 (店舗別損益のすべての数字の元)
@@ -75,8 +77,7 @@ export interface LedgerRow {
   materialKind?: MaterialKind;
 }
 
-/** 消費税のかからない売上の税区分 */
-const NO_TAX: NonNullable<OrderAttribution["taxCategory"]>[] = ["exempt", "non_taxable", "out_of_scope"];
+
 
 const MATERIAL_ACCOUNTS = /仕入|材料|原材料|商品/;
 const OUTSOURCE_ACCOUNTS = /外注/;
@@ -97,6 +98,54 @@ export function basisFromExTax(db: Database, amountEx: number, date: string): nu
   return amountEx + Math.floor((amountEx * ratePct(date)) / 100);
 }
 
+/**
+ * 受注ごとに、仕入で計上した畳の材料費 (仕入明細を案件の「材料費」で振り分けたもの・案件にひも付いた振り分け前の材料の仕入)。
+ * 材料が分かる振り分けは材料の種類 (kinds)、分からない畳の材料費・振り分け前の仕入は any
+ */
+export function purchaseMaterialCoverage(db: Database): Map<string, { kinds: Set<MaterialKind>; any: boolean }> {
+  const out = new Map<string, { kinds: Set<MaterialKind>; any: boolean }>();
+  const get = (id: string) => out.get(id) ?? out.set(id, { kinds: new Set(), any: false }).get(id)!;
+  const materials = new Map((db.materials ?? []).map((m) => [m.id, m]));
+  const confirmedLines = new Set<string>();
+  for (const a of db.purchaseLineAllocs ?? []) {
+    if (a.status !== "confirmed") continue;
+    confirmedLines.add(`${a.purchaseId}|${a.itemId}`);
+    for (const sp of a.splits) {
+      if (!sp.orderId || sp.costType !== "material") continue;
+      const m = sp.materialId ? materials.get(sp.materialId) : undefined;
+      if (m) get(sp.orderId).kinds.add(m.kind);
+      else if (sp.itemCategory === "tatami") get(sp.orderId).any = true;
+    }
+  }
+  for (const p of db.purchases ?? []) {
+    if (p.status === "rejected" || !p.orderId || OUTSOURCE_ACCOUNTS.test(p.account ?? "") || (p.account && !MATERIAL_ACCOUNTS.test(p.account))) continue;
+    if (linesExTax(p).some((l) => !confirmedLines.has(`${p.id}|${l.itemId}`))) get(p.orderId).any = true;
+  }
+  return out;
+}
+
+export interface OrderAutoCost {
+  storeId: StoreId;
+  usages: PlannedUsage[];
+  unmatched: CostingLine[];
+  /** 仕入で畳の材料費を計上しているため自動計算をやめた理由 (あれば) */
+  stopped?: string;
+}
+
+/**
+ * 原価の行を登録していない受注 (新システムの受注) の自動計算の材料原価。元帳と月次確定 (確定時に行として保存) で同じものを使う。
+ * 仕入で同じ材料を計上した受注は二重に数えない (材料の種類が分かればその種類だけ、分からなければ自動計算をやめて要確認)
+ */
+export function orderAutoCost(db: Database, o: Order, fact: OrderFact | undefined, ctx: { notes: Map<string, string>; coverage: Map<string, { kinds: Set<MaterialKind>; any: boolean }> }): OrderAutoCost | null {
+  if (!(db.boms ?? []).length || o.source === "import" || !o.salesDate) return null;
+  const storeId = db.orderAttributions?.find((a) => a.orderId === o.id)?.workStoreId ?? o.storeId;
+  const auto = autoUsage(db, o, fact, o.salesDate, ctx.notes.get(o.id) ?? "");
+  if (!auto.usages.length && !auto.unmatched.length) return null;
+  const cov = ctx.coverage.get(o.id);
+  if (cov?.any) return { storeId, usages: [], unmatched: [], stopped: "仕入で畳の材料費を計上しているため、材料構成からの自動計算をやめました (仕入の振り分けの材料を確かめてください)" };
+  return { storeId, usages: auto.usages.filter((u) => !cov?.kinds.has(u.materialKind)), unmatched: auto.unmatched };
+}
+
 /** 期間の元帳の行 (案分額 allocated は含まない。allocation.ts / pnl.ts で足す) */
 export function baseLedger(db: Database, from: string, to: string): LedgerRow[] {
   const rows: LedgerRow[] = [];
@@ -107,10 +156,23 @@ export function baseLedger(db: Database, from: string, to: string): LedgerRow[] 
   const orders = new Map(db.orders.map((o) => [o.id, o]));
   const usage = countedUsageIndex(db);
   const atts = new Map((db.orderAttributions ?? []).map((a) => [a.orderId, a]));
-  const noTax = (orderId: string | undefined) => Boolean(orderId && NO_TAX.includes(atts.get(orderId)?.taxCategory ?? "unset"));
+  // 消費税の扱い: 税区分の登録 (免税・非課税・不課税) → 見積・請求書の消費税が 0 円 (未登録の輸出など)
+  const taxCache = new Map<string, ReturnType<typeof orderTaxStatus>>();
+  const taxOf = (orderId: string | undefined) => {
+    if (!orderId) return undefined;
+    let t = taxCache.get(orderId);
+    if (!t) {
+      const o = orders.get(orderId);
+      if (!o) return undefined;
+      taxCache.set(orderId, (t = orderTaxStatus(db, o, atts.get(orderId))));
+    }
+    return t;
+  };
+  const noTax = (orderId: string | undefined) => Boolean(taxOf(orderId)?.noTax);
   // 税込 → 表示の金額 (消費税のかからない売上は税込 = 税抜)
   const salesBasis = (incl: number, date: string, orderId?: string) => (noTax(orderId) ? incl : basisAmount(db, incl, date));
   let notes: Map<string, string> | undefined;
+  let coverage: Map<string, { kinds: Set<MaterialKind>; any: boolean }> | undefined;
   const catCache = new Map<string, Record<string, number>>();
   const salesOf = (o: Order) => {
     let c = catCache.get(o.id);
@@ -124,8 +186,10 @@ export function baseLedger(db: Database, from: string, to: string): LedgerRow[] 
     const date = o.salesDate!;
     const cats = salesOf(o);
     const src = { kind: "order", id: o.id, label: `受注 ${o.number} ${o.title}`, href: `/orders/${o.id}` };
-    const taxNote = noTax(o.id) ? "消費税のかからない売上 (税区分の登録どおり)" : undefined;
-    for (const [cat, incl] of Object.entries(cats)) push({ date, storeId: o.storeId, metric: "sales", itemCategory: cat, amount: salesBasis(incl, date, o.id), source: taxNote ? { ...src, label: `${src.label} (${taxNote})` } : src });
+    const tax = taxOf(o.id);
+    const taxNote = tax?.noTax ? (tax.source === "zero" ? "見積・請求書の消費税が 0 円のため税を引かない" : "消費税のかからない売上 (税区分の登録どおり)") : undefined;
+    const taxProvisional = tax?.source === "zero" ? "税区分が未登録 (見積・請求書の消費税が 0 円。売上配分のタブで免税などを登録)" : undefined;
+    for (const [cat, incl] of Object.entries(cats)) push({ date, storeId: o.storeId, metric: "sales", itemCategory: cat, amount: salesBasis(incl, date, o.id), source: taxNote ? { ...src, label: `${src.label} (${taxNote})` } : src, provisional: taxProvisional });
     const used = usage.get(o.id);
     const costHref = `/management?tab=cost&order=${o.id}`;
     if (used?.length) {
@@ -150,11 +214,16 @@ export function baseLedger(db: Database, from: string, to: string): LedgerRow[] 
       }
     } else if (o.tatamiCost) {
       push({ date, storeId: o.storeId, metric: "material", itemCategory: "tatami", amount: basisFromExTax(db, Math.round(o.tatamiCost), date), source: { ...src, kind: "tatami_cost", label: `畳原価 (売上台帳から移行) ${o.number}` } });
-    } else if ((db.boms ?? []).length) {
-      // 原価の行を登録していない受注: 売上明細の商品・数量と材料構成から自動で計算する (施工店舗に計上)
+    } else if ((db.boms ?? []).length && o.source !== "import" && !isClosed(db, date.slice(0, 7))) {
+      // 月次確定した月は自動計算しない (確定のときに行として保存した材料原価だけを数える。freeze.ts)
+      // 原価の行を登録していない受注 (新システムで登録した受注): 売上明細の商品・数量と材料構成から自動で計算する (施工店舗に計上)。
+      // 販売管理ソフトから移行した受注は、売上台帳の畳原価 (あれば) のまま (今の材料構成・単価で過去の数字を書き換えない)
       notes ??= productionNoteIndex(db);
-      const workStore = atts.get(o.id)?.workStoreId ?? o.storeId;
-      const auto = autoUsage(db, o, byId.get(o.id), date, notes.get(o.id) ?? "");
+      coverage ??= purchaseMaterialCoverage(db);
+      const auto = orderAutoCost(db, o, byId.get(o.id), { notes, coverage });
+      if (!auto) continue;
+      const workStore = auto.storeId;
+      if (auto.stopped) rows.push({ date, month: date.slice(0, 7), storeId: workStore, metric: "material", itemCategory: "tatami", amount: 0, source: { kind: "usage_auto", id: `${o.id}:stopped`, label: `要確認: ${o.number} ${auto.stopped}`, href: costHref }, provisional: "要確認の材料 (金額なし)" });
       for (const u of auto.usages) {
         const autoSrc = { kind: "usage_auto", id: `${o.id}:${u.lineKey}`, label: `自動計算 ${o.number} ${u.productLabel ?? ""}`.trim(), href: costHref };
         if (u.needsReview || u.amount === undefined) {

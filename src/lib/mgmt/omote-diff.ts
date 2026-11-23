@@ -89,6 +89,8 @@ export function previewOmoteDiff(db: Database, fromMonth: string, toMonth: strin
 
   if (method.value !== "gross_ratio") return { ...base, status: "off", holdReason: method.value === "manual" ? "設定が「担当者が差額を手入力」のため、自動で案分しません (手入力のタブで店舗ごとに登録してください)。" : "設定が「未確定」のため計算しません。", results: [] };
   if (!receiveCount && !omoteRows.length) return { ...base, status: "empty", results: [] };
+  // 仕入 (在庫の受入) がない期間は差額 = −仮原価の計上 になり、店舗の材料費を誤って消してしまうため案分しない
+  if (!receiveCount) return { ...base, status: "held", holdReason: "この期間に畳表の仕入 (仕入明細を「在庫」で確定した受入) がありません。畳表の請求書を仕入として登録して在庫で確定するか、仕入のある月を含む長めの期間で計算してください。", results: [] };
   if (diff === 0) return { ...base, status: "empty", results: [] };
   if (basisTotal <= 0) return { ...base, status: "held", holdReason: `対象の店舗の粗利益の合計が ${basisTotal.toLocaleString("ja-JP")} 円 (0 以下) のため、自動で案分しません。期間を広げるか、手入力で登録してください。`, results: [] };
   const negative = basis.filter((b) => b.gross < 0);

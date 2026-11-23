@@ -6,7 +6,7 @@ import { getChunk, getChunks, getDoc, materialsStats, openMaterials, searchMater
 import { REGISTRY_CATEGORIES } from "@/lib/registry/classify";
 import { activityReport, activityText } from "@/lib/registry/activity";
 import { catalogText, dataCatalog, dataStores } from "@/lib/registry/catalog";
-import { BACKEND } from "@/lib/db/store";
+import { BACKEND, getDb } from "@/lib/db/store";
 
 /**
  * AI アシスタントの道具: データ台帳 (クライアント資料の資料庫・全データの一覧・社内の活動)
@@ -29,7 +29,7 @@ const STORE_IDS = new Set(["koshi", "chuo", "nishi", "tamana", "hq"]);
 const resolveStore = (db: Database, v: unknown): StoreId | undefined => {
   const s = str(v, 40);
   if (!s) return undefined;
-  if (STORE_IDS.has(s)) return s as StoreId;
+  if (STORE_IDS.has(s) || getDb().stores.some((x) => x.id === s)) return s as StoreId;
   return db.stores.find((x) => x.name === s || x.name.replace(/店$/, "") === s.replace(/店$/, "") || (x.shortName && x.shortName === s))?.id;
 };
 

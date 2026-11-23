@@ -21,7 +21,8 @@ export default async function RolesPage() {
   const members = db.users
     .filter((u) => u.active && !isDemoAccount(u) && !isReviewAccount(u))
     .sort((a, b) => roleRank(a.role) - roleRank(b.role) || a.name.localeCompare(b.name, "ja"));
-  const stores = STORE_ORDER.map((id) => db.stores.find((s) => s.id === id)).filter(Boolean) as typeof db.stores;
+  // 決まった並び (合志・中央・西・玉名・本部) のあとに、管理者が追加した店舗
+  const stores = [...(STORE_ORDER.map((id) => db.stores.find((s) => s.id === id)).filter(Boolean) as typeof db.stores), ...db.stores.filter((s) => !(STORE_ORDER as readonly string[]).includes(s.id))];
 
   return (
     <PublicShell current="roles">

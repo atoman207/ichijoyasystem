@@ -86,14 +86,16 @@ export function competitionRanks<T>(items: T[], value: (t: T) => number | null, 
   return ranks;
 }
 
-export function computeIncentives(db: Pick<Database, "orders" | "customers" | "surveys" | "qualityIssues" | "reviews" | "users">, p: Period | null, s: KpiSettings, adjustments: Adjustments = {}): IncentiveResult {
+export function computeIncentives(db: Pick<Database, "orders" | "customers" | "surveys" | "qualityIssues" | "reviews" | "users"> & Partial<Pick<Database, "stores">>, p: Period | null, s: KpiSettings, adjustments: Adjustments = {}): IncentiveResult {
   const rules = s.incentive;
+  // 評価する店舗: 店舗 (本部を除く)。管理者が追加した店舗も入る
+  const scoredStores: StoreId[] = db.stores?.length ? db.stores.filter((x) => x.kind === "store").map((x) => x.id) : SCORED_STORES;
   const customers = new Map<string, Customer>(db.customers.map((c) => [c.id, c]));
   const cards = db.surveys.filter((x) => isCard(x) && inPeriod(surveyDate(x), p));
   const allSurveys = db.surveys.filter((x) => inPeriod(surveyDate(x), p));
   const issues = db.qualityIssues.filter((q) => countedIssue(q) && inPeriod(q.occurredOn, p));
 
-  const units: UnitResult[] = SCORED_STORES.map((storeId) => {
+  const units: UnitResult[] = scoredStores.map((storeId) => {
     const orders = periodOrders(db, p, storeId);
     const individual = orders.filter((o) => customers.get(o.customerId)?.type !== "corporate").length;
     const storeCards = cards.filter((c) => c.storeId === storeId);
@@ -154,7 +156,7 @@ export function computeIncentives(db: Pick<Database, "orders" | "customers" | "s
     const cur = reviewCounts.get(r.userId) ?? { n: 0, points: 0 };
     reviewCounts.set(r.userId, { n: cur.n + 1, points: cur.points + r.points });
   }
-  const people = payable.filter((u) => clerkSet.has(u.id) || SCORED_STORES.includes(u.storeId) || salesCards.has(u.id) || craftScores.has(u.id) || reviewCounts.has(u.id));
+  const people = payable.filter((u) => clerkSet.has(u.id) || scoredStores.includes(u.storeId) || salesCards.has(u.id) || craftScores.has(u.id) || reviewCounts.has(u.id));
   const salesAvg = (id: string) => avg(salesCards.get(id) ?? []);
   const craftAvg = (id: string) => avg(craftScores.get(id) ?? []);
   const salesRank = competitionRanks(people.map((u) => u.id), salesAvg);

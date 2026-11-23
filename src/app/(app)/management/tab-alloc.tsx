@@ -4,7 +4,8 @@ import { confirmedRun, monthRange, previewAllocation, RUN_STATUS_LABEL } from "@
 import { ruleAt, ruleLabel } from "@/lib/mgmt/rules";
 import { defaultExpenseClass } from "@/lib/mgmt/expense-class";
 import { omoteDiffEntries, parseOmoteDiffKey, previewOmoteDiff } from "@/lib/mgmt/omote-diff";
-import { classifyExpense, confirmAllocationAction, confirmOmoteDiffAction, reverseOmoteDiffAction } from "@/lib/actions/mgmt";
+import { classifyExpense, confirmAllocationAction, confirmOmoteDiffAction, moveAdOverageAction, reverseOmoteDiffAction } from "@/lib/actions/mgmt";
+import { adBudgetStatus } from "@/lib/mgmt/ad-budget";
 import { Badge, Button, Card, CardHeader, Field, Input, Note, Select, Table, Td, Th, Tr } from "@/components/ui";
 import { Money, PeriodForm, back, storeNameOf, userNameOf, type Ctx } from "./parts";
 
@@ -122,6 +123,8 @@ export function AllocTab({ ctx }: { ctx: Ctx }) {
       )}
 
       <OmoteDiffCard ctx={ctx} />
+
+      <AdBudgetCard ctx={ctx} />
 
       <Card>
         <CardHeader title={`${month} の経費の区分 (${expenses.length} 件)`} description="区分を登録していない経費は勘定科目から自動で決めます: 消耗品費・廃棄物処分費・広告宣伝費・販促費・開発費、ハガキ・タオル、本部の経費 = 案分経費 / それ以外 = 店舗独自経費。店舗の判断で予算を超えて行った広告宣伝費などは「店舗独自経費」に変えて保存してください" />
@@ -271,6 +274,57 @@ function OmoteDiffCard({ ctx }: { ctx: Ctx }) {
             );
           })}
         </div>
+      )}
+    </Card>
+  );
+}
+
+/** 広告宣伝費の店舗の予算と超過分 (超過分は店舗独自経費) */
+function AdBudgetCard({ ctx }: { ctx: Ctx }) {
+  const { db } = ctx;
+  const rows = adBudgetStatus(db, ctx.month, ctx.storeIds);
+  const anyBudget = rows.some((r) => r.budget !== null);
+  const pending = rows.filter((r) => r.budget !== null && r.toMove !== 0);
+  return (
+    <Card>
+      <CardHeader title={`${ctx.month} の広告宣伝費 (店舗の予算と超過分)`} description="広告宣伝費は案分経費ですが、店舗の判断で予算を超えた分は店舗独自経費にします。予算は「人件費・手入力」のタブで種類「予算」・指標「広告宣伝費」で登録します。店舗の広告宣伝費 = その店舗の広告・販促の経費 + 仕入明細の振り分けでその店舗を選んだ分" />
+      {!anyBudget ? (
+        <p className="text-sm text-ink-2">この月の広告の予算はまだ登録されていません (予算のない店舗は判定しません)。</p>
+      ) : (
+        <Table minWidth="min-w-[720px]">
+          <thead>
+            <tr>
+              <Th>店舗</Th>
+              <Th align="right">予算</Th>
+              <Th align="right">広告宣伝費</Th>
+              <Th align="right">うち店舗独自経費済み</Th>
+              <Th align="right">超過分</Th>
+              <Th align="right">移した額</Th>
+              <Th align="right">これから移す額</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <Tr key={r.storeId}>
+                <Td>{storeNameOf(db, r.storeId)}</Td>
+                <Td align="right">{r.budget === null ? <span className="text-xs text-ink-3">未登録</span> : <Money v={r.budget} />}</Td>
+                <Td align="right"><Money v={r.spend} /></Td>
+                <Td align="right"><Money v={r.ownAlready} /></Td>
+                <Td align="right"><Money v={r.budget === null ? null : r.overage} strong /></Td>
+                <Td align="right"><Money v={r.moved} /></Td>
+                <Td align="right"><Money v={r.budget === null ? null : r.toMove} strong /></Td>
+              </Tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+      {ctx.canEdit && pending.length > 0 && (
+        <form action={moveAdOverageAction} className="mt-3 flex flex-wrap items-center gap-2">
+          {back(ctx)}
+          <input type="hidden" name="month" value={ctx.month} />
+          <Button type="submit" size="sm">超過分を店舗独自経費へ移す ({pending.length} 店舗)</Button>
+          <span className="text-xs text-ink-2">店舗独自経費 + と案分経費 − の 2 行を登録します (全社の経費の合計は変わりません)。</span>
+        </form>
       )}
     </Card>
   );

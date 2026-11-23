@@ -22,7 +22,11 @@ export type * from "./types-drafts";
 export type Role = "admin" | "store_manager" | "store_staff" | "hq_staff";
 
 /** 店舗 ID (4 店舗 + 本社/坪井ショールーム) */
-export type StoreId = "koshi" | "chuo" | "nishi" | "tamana" | "hq";
+/**
+ * 店舗 ID。開設時の 4 店舗と本部のほか、管理者が設定 → 店舗 で追加した店舗 (半角英小文字の ID) も入る。
+ * 店舗の一覧・名前・色は db.stores から読む (ID の並びをコードに書かない)
+ */
+export type StoreId = "koshi" | "chuo" | "nishi" | "tamana" | "hq" | (string & {});
 
 export interface Store {
   id: StoreId;
@@ -250,6 +254,8 @@ export interface QuoteItem {
   amount: number;
   /** 管理会計の品目 (明細ごとに選んだもの)。空なら商品の品目 → 見積の種別から決める (src/lib/mgmt/categories.ts の lineItemCategory) */
   itemCategory?: string;
+  /** 畳床 (管理会計の材料マスタの畳床)。選べば材料原価はこの畳床で計算する (空なら品名・製造の予定から判定。src/lib/mgmt/doko.ts) */
+  dokoMaterialId?: string;
 }
 
 export type QuoteStatus =

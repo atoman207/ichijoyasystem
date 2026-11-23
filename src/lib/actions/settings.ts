@@ -10,6 +10,7 @@ import { CUSTOMER_CREATOR_LABEL, OPS_SETTINGS_ID } from "@/lib/ops-settings";
 import type { StoreId } from "@/lib/db/types";
 import { canManageSettings } from "@/lib/auth/permissions";
 import { CATEGORY_LABEL } from "@/lib/constants";
+import { NEW_STORE_COLORS } from "@/lib/store-colors";
 import { categoryName, isItemCategory, productItemCategory } from "@/lib/mgmt/categories";
 import { choice, fail, numField, requireActionUser, str, withMsg } from "./guards";
 
@@ -83,6 +84,35 @@ export async function updateStore(id: StoreId, formData: FormData) {
   });
   revalidatePath("/settings");
   redirect(withMsg(back, "店舗情報を更新しました。"));
+}
+
+/**
+ * 店舗の追加 (新店舗の開設。管理者)。ID は半角英小文字 (一度決めたら変えない)。
+ * 追加した店舗は、所属・担当店舗・予定表・管理会計 (営業エリア・店舗別損益・案分の対象) などの店舗の一覧にそのまま出る
+ */
+export async function createStore(formData: FormData) {
+  const back = "/settings?tab=stores";
+  const admin = await requireAdmin(back);
+  const id = str(formData, "id").toLowerCase();
+  const name = str(formData, "name").slice(0, 40);
+  const shortName = str(formData, "shortName").slice(0, 10);
+  const openedOn = str(formData, "openedOn");
+  if (!/^[a-z][a-z0-9_]{1,19}$/.test(id)) fail(back, "店舗 ID は半角英小文字で始まる 2〜20 文字 (英小文字・数字・_) にしてください (例: kikuyo)。");
+  if (!name || !shortName) fail(back, "店舗名と略称を入力してください。");
+  if (openedOn && !/^\d{4}-\d{2}-\d{2}$/.test(openedOn)) fail(back, "開設日を確かめてください。");
+  const color = /^#[0-9a-fA-F]{6}$/.test(str(formData, "color")) ? str(formData, "color") : "";
+  await mutate((db) => {
+    if (db.stores.some((s) => s.id === id)) fail(back, `店舗 ID「${id}」はもう使われています。`);
+    if (db.stores.some((s) => s.name === name)) fail(back, `「${name}」はもう登録されています。`);
+    const used = new Set(db.stores.map((s) => s.color.toLowerCase()));
+    const pick = color || NEW_STORE_COLORS.find((c) => !used.has(c.toLowerCase())) || NEW_STORE_COLORS[db.stores.length % NEW_STORE_COLORS.length];
+    const code = String(Math.max(0, ...db.stores.map((s) => Number(s.code) || 0)) + 1).padStart(2, "0");
+    db.stores.push({ id, code, name, shortName, kind: "store", postalCode: str(formData, "postalCode"), address: str(formData, "address"), phone: str(formData, "phone"), managerUserId: str(formData, "managerUserId") || undefined, color: pick, openedOn: openedOn || undefined });
+    addAudit(db, { userId: admin.id, action: "create", entity: "store", entityId: id, entityLabel: name, summary: `店舗を追加 (${name}・ID ${id}${openedOn ? `・開設 ${openedOn}` : ""})`, storeId: id });
+  });
+  revalidatePath("/settings");
+  revalidatePath("/", "layout");
+  redirect(withMsg(back, `店舗「${name}」を追加しました。営業エリア (管理会計 → 設定) で担当の町名を登録してください。`));
 }
 
 /* ------------------------------------------------------------------ */

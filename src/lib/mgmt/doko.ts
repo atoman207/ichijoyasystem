@@ -40,14 +40,18 @@ const TYPE_PATTERNS: [RegExp, string][] = [
   [/建材/, "建材"],
 ];
 
-/** 寸法の呼び名 → 材料マスタの規格 (costing.ts の SIZE_LABEL のキー) と、使う畳床の規格 */
-const SIZE_NAMES: { re: RegExp; raw: string; exact?: string; cls: DokoSizeClass }[] = [
-  { re: /本間|京間|六三|六四|(?<!\d)(?:630|640)(?!\d)/, raw: "本間", exact: "honma", cls: "honma" },
-  { re: /六一|(?<!\d)61(?:0)?(?!\d)/, raw: "六一", exact: "rokuichi", cls: "honma" },
-  { re: /六〇|中京間|三六|(?<!\d)600(?!\d)/, raw: "六〇", exact: "rokumaru", cls: "honma" },
-  { re: /六二|五九|(?<!\d)(?:620|590)(?!\d)/, raw: "五九〜六二", cls: "honma" },
-  { re: /五八|江戸間|(?<!\d)58(?:0)?(?!\d)/, raw: "五八", exact: "gohachi", cls: "gohachi" },
-  { re: /五六|五七|団地間|(?<!\d)(?:560|570)(?!\d)/, raw: "五六〜五七", cls: "gohachi" },
+/**
+ * 寸法の呼び名 → 材料マスタの規格 (costing.ts の SIZE_LABEL のキー) と、使う畳床の規格。
+ * re = 漢字の呼び名 (品名のどこにあってもよい)、num = 数字の書き方 (「サイズ」の後ろだけで読む。金額・品番の数字と取り違えない)。
+ * 中京間は京間 (本間) より先に調べる
+ */
+const SIZE_NAMES: { re: RegExp; num?: RegExp; raw: string; exact?: string; cls: DokoSizeClass }[] = [
+  { re: /六〇|中京間|三六/, num: /(?<!\d)600(?!\d)/, raw: "六〇", exact: "rokumaru", cls: "honma" },
+  { re: /本間|(?<!中)京間|六三|六四/, num: /(?<!\d)(?:630|640|63|64)(?!\d)/, raw: "本間", exact: "honma", cls: "honma" },
+  { re: /六一/, num: /(?<!\d)61(?:0)?(?!\d)/, raw: "六一", exact: "rokuichi", cls: "honma" },
+  { re: /六二|五九/, num: /(?<!\d)(?:620|590|62|59)(?!\d)/, raw: "五九〜六二", cls: "honma" },
+  { re: /五八|江戸間/, num: /(?<!\d)58(?:0)?(?!\d)/, raw: "五八", exact: "gohachi", cls: "gohachi" },
+  { re: /五六|五七|団地間/, num: /(?<!\d)(?:560|570|56|57)(?!\d)/, raw: "五六〜五七", cls: "gohachi" },
 ];
 
 /** 品名・製造の予定のメモから、畳床の種類・厚み・規格を読む */
@@ -60,15 +64,15 @@ export function dokoHints(text: string): DokoHints {
       break;
     }
   }
-  const th = t.match(/[tT]=?(\d{2})(?!\d)/) ?? t.match(/(\d{2})(?:mm|ミリ|㎜)/) ?? t.match(/床(\d{2})(?!\d)/) ?? t.match(/型(\d{2})(?!\d)/);
+  const th = t.match(/(?<![A-Za-z])[tT]=?(\d{2})(?!\d)/) ?? t.match(/(?<!\d)(\d{2})(?:mm|ミリ|㎜)/) ?? t.match(/床(\d{2})(?!\d)/) ?? t.match(/型(\d{2})(?!\d)/);
   if (th) {
     const n = Number(th[1]);
     if (n >= 10 && n <= 70) out.thickness = n;
   }
-  // 寸法は「サイズ」の後ろを優先して読む (品名の数字を寸法と取り違えない)
-  const sizePart = t.match(/サイズ([^/／]+)/)?.[1] ?? t;
+  // 寸法: 「サイズ」の後ろがあればそこだけを読む (数字の書き方もそこだけ)。なければ漢字の呼び名だけを品名から読む
+  const sizePart = t.match(/サイズ([^/／]+)/)?.[1];
   for (const s of SIZE_NAMES) {
-    if (s.re.test(sizePart)) {
+    if (sizePart !== undefined ? s.re.test(sizePart) || Boolean(s.num?.test(sizePart)) : s.re.test(t)) {
       out.sizeRaw = s.raw;
       out.sizeClass = s.cls;
       if (s.exact) out.sizeExact = s.exact;
@@ -108,12 +112,13 @@ export function pickDoko(db: Pick<Database, "materials">, hints: DokoHints, defa
   if (!hints.type && !hints.thickness && !hints.sizeClass) return withDefault("品名・製造の予定に畳床の仕様 (種類・厚み・寸法) がない");
   let c = all;
   const used: string[] = [];
+  const missing: string[] = [];
   const narrow = (pred: (m: Material) => boolean, label: string) => {
     const next = c.filter(pred);
     if (next.length) {
       c = next;
       used.push(label);
-    }
+    } else missing.push(label);
   };
   if (hints.type) narrow((m) => dokoTypeOf(m) === hints.type, `種類 ${hints.type}`);
   if (hints.thickness) narrow((m) => m.thickness === hints.thickness, `厚み ${hints.thickness}mm`);
@@ -125,6 +130,8 @@ export function pickDoko(db: Pick<Database, "materials">, hints: DokoHints, defa
     } else narrow((m) => sizeClassOf(m.size) === hints.sizeClass, `寸法 ${hints.sizeRaw} → ${hints.sizeClass === "gohachi" ? "五八間" : "本間"}の畳床`);
   }
   if (!used.length) return withDefault(`読み取った仕様 (${describe(hints)}) に合う畳床が材料マスタにない`);
+  // 読み取った仕様のうち合う畳床がないものがあれば、ほかの条件だけで決めない (例: 15mm と書いてあるのに 55mm を選ばない)
+  if (missing.length) return withDefault(`読み取った仕様のうち ${missing.join("・")} に合う畳床が材料マスタにない`);
   if (c.length === 1) return { material: c[0], assumed: false, reason: `品名・製造の予定の ${used.join("・")} から「${c[0].name}」`, candidates: 1 };
   if (fallback && c.some((m) => m.id === fallback.id)) return { material: fallback, assumed: true, reason: `${used.join("・")} に合う畳床が ${c.length} 件あるため、既定の畳床「${fallback.name}」で計算 (製造仕様で確認してください)`, candidates: c.length };
   return { assumed: false, reason: `${used.join("・")} に合う畳床が ${c.length} 件あります。畳床の仕様を選んでください`, candidates: c.length };

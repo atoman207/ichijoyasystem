@@ -35,10 +35,14 @@ export function mgmtExportRows(db: Database, kind: MgmtExport, from: string, to:
   }
   if (kind === "items") {
     const rows: (string | number | null)[][] = [head, ["店舗", "品目", "売上 (管理売上)", "材料費", "外注費", "粗利益", "材料原価率 (%)"]];
-    for (const c of r.categories) rows.push([c.storeId === "all" ? "全社" : (db.stores.find((s) => s.id === c.storeId)?.name ?? c.storeId), c.name, c.sales, c.material, c.outsource, c.gross, c.materialRate]);
+    // 店舗を絞ったときは「全社」の行を出さない (その店舗だけの合計を全社と誤解しないように)
+    for (const c of r.categories) {
+      if (c.storeId === "all" && storeIds) continue;
+      rows.push([c.storeId === "all" ? "全社" : (db.stores.find((s) => s.id === c.storeId)?.name ?? c.storeId), c.name, c.sales, c.material, c.outsource, c.gross, c.materialRate]);
+    }
     return rows;
   }
-  const filter = kind === "moves" ? (x: (typeof r.rows)[number]) => MOVE_KINDS.has(x.source.kind) || (x.source.kind === "entry" && x.source.label.includes("畳表の差額")) : () => true;
+  const filter = kind === "moves" ? (x: (typeof r.rows)[number]) => MOVE_KINDS.has(x.source.kind) || (x.source.kind === "entry" && /畳表の差額|広告宣伝費の予算超過/.test(x.source.label)) : () => true;
   const rows: (string | number | null)[][] = [head, ["日付", "月", "店舗", "指標", "品目", "金額", "元の記録", "記録の ID", "暫定の理由"]];
   for (const x of r.rows.filter(filter).sort((a, b) => a.date.localeCompare(b.date) || a.storeId.localeCompare(b.storeId))) {
     rows.push([x.date, x.month, db.stores.find((s) => s.id === x.storeId)?.name ?? x.storeId, METRIC_LABEL[x.metric], categoryName(db, x.itemCategory), x.amount, x.source.label, x.source.id, x.provisional ?? ""]);

@@ -24,6 +24,26 @@ export const ratePct = (date: string) => Math.round(taxRate(date) * 100);
 
 export const attributionId = (orderId: string) => `oa_${orderId}`;
 
+/** 消費税のかからない税区分 */
+export const NO_TAX_CATEGORIES: NonNullable<OrderAttribution["taxCategory"]>[] = ["exempt", "non_taxable", "out_of_scope"];
+
+/**
+ * 受注の消費税の扱い (店舗別損益の税抜の計算に使う)
+ * - registered: 売上の帰属で税区分を登録している (免税・非課税・不課税 → none、課税 → taxed)
+ * - zero: 税区分は未登録だが、売上の明細の元 (見積 → 請求書) の消費税が 0 円 (輸出など)。税を引かずに数え、税区分の登録を促す
+ * - taxed: それ以外 (通常の課税売上)
+ */
+export function orderTaxStatus(db: Pick<Database, "quotes" | "invoices">, order: Pick<Order, "id" | "quoteId" | "total" | "progressNotes" | "amounts">, att: Pick<OrderAttribution, "taxCategory"> | undefined): { noTax: boolean; source: "registered" | "zero" | "taxed" } {
+  const cat = att?.taxCategory;
+  if (cat && cat !== "unset") return { noTax: NO_TAX_CATEGORIES.includes(cat), source: "registered" };
+  if (order.total > 0 && !order.amounts) {
+    const q = order.quoteId ? db.quotes.find((x) => x.id === order.quoteId) : undefined;
+    const doc = q && q.total === order.total ? q : (db.invoices ?? []).find((i) => i.orderId === order.id && i.status !== "void" && i.total === order.total);
+    if (doc && doc.tax === 0 && doc.total > 0) return { noTax: true, source: "zero" };
+  }
+  return { noTax: false, source: "taxed" };
+}
+
 /** 受注の住所 (施工場所 → お客様の住所) */
 export function orderAddress(db: Pick<Database, "customers">, order: Pick<Order, "siteAddress" | "customerId">): string {
   return order.siteAddress?.trim() || db.customers.find((c) => c.id === order.customerId)?.address || "";
@@ -43,6 +63,14 @@ export interface Attribution {
   saved?: OrderAttribution;
   /** 確かめること (施工店舗と売上帰属店舗が違う など) */
   warnings: string[];
+}
+
+/**
+ * 内部受注を計上するか: 受注店舗 ≠ 施工店舗 のとき。ただし本部の売上で作業だけ店舗が行った案件 (本部の特殊配分) は、
+ * 作業に相当する金額を指定して店舗に配分するため、率による内部受注は計上しない
+ */
+export function wantsInternalOrder(order: Pick<Order, "storeId">, receivedStoreId: StoreId, workStoreId: StoreId, hqSpecial: boolean | undefined): boolean {
+  return receivedStoreId !== workStoreId && !(hqSpecial && order.storeId === "hq");
 }
 
 /** 受注の工事の区分の初期値 (主な品目がリフォームならリフォーム工事) */

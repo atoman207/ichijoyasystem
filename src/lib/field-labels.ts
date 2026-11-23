@@ -70,8 +70,8 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
 
 export function fieldLabel(entity: string, field: string): string {
   // 見積・請求書の明細の品目 (管理会計): items.<行>.itemCategory
-  const line = field.match(/^items\.(\d+)\.itemCategory$/);
-  if (line) return `明細 ${line[1]} 行目の品目 (管理会計)`;
+  const line = field.match(/^items\.(\d+)\.(itemCategory|dokoMaterialId)$/);
+  if (line) return `明細 ${line[1]} 行目の${line[2] === "itemCategory" ? "品目" : "畳床"} (管理会計)`;
   return BY_ENTITY[entity]?.[field] ?? COMMON[field] ?? field;
 }
 

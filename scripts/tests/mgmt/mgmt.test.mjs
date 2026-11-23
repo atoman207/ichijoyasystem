@@ -22,6 +22,12 @@ const EC = await imp("lib/mgmt/expense-class.ts");
 const EX = await imp("lib/mgmt/export.ts");
 const FACTS = await imp("lib/assistant/facts.ts");
 const FL = await imp("lib/field-labels.ts");
+const LG = await imp("lib/mgmt/ledger.ts");
+const FZ = await imp("lib/mgmt/freeze.ts");
+const AD = await imp("lib/mgmt/ad-budget.ts");
+const MMI = await imp("lib/mgmt/material-move-import.ts");
+const PAI = await imp("lib/mgmt/purchase-ai.ts");
+const INC = await imp("lib/incentive.ts");
 
 const db = store.getDb();
 const admin = db.users.find((u) => u.role === "admin");
@@ -649,6 +655,199 @@ section("Test 27: 新システムの見積の明細の品目 (自社商品・リ
   eq([src?.kind, src?.items.length], ["quote", 4], "受注の明細の元は見積 (金額が同じ)");
   eq(FL.fieldLabel("quote", "items.3.itemCategory"), "明細 3 行目の品目 (管理会計)", "変更履歴の項目名");
   eq(FL.fieldValue ? FL.fieldValue("items.3.itemCategory", "reform") : "リフォーム", "リフォーム", "変更履歴の値 (品目の名前)");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 28: 移行した受注は自動計算しない (過去の数字を今の材料構成で書き換えない)");
+{
+  const M = "2032-02";
+  const cI = cust("移行 太郎", "熊本県合志市テスト町28");
+  const qI = { ...q19, id: "q_t28", number: "QT-2032-0028", customerId: cI.id, orderId: "o_t28" };
+  const oI = order(cI.id, "koshi", 66000, "tatami", { id: "o_t28", contractDate: `${M}-01`, salesDate: `${M}-10`, quoteId: qI.id, source: "import" });
+  await store.mutate((d) => { d.customers.push(cI); d.quotes.push(qI); d.orders.push(oI); });
+  const r = P.storePnl(store.getDb(), `${M}-01`, `${M}-28`);
+  ok(!r.rows.some((x) => x.source.kind === "usage_auto" && x.source.id.startsWith(oI.id)), "移行した受注 (source = import) は材料構成から自動計算しない");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 29: 畳表の差額は仕入のない期間では案分しない (店舗の材料費を誤って消さない)");
+{
+  const p = OD.previewOmoteDiff(store.getDb(), "2031-03", "2031-03");
+  ok(p.receiveCount === 0 ? p.status === "held" && p.holdReason.includes("仕入") : true, `仕入がなければ保留 (${p.status})`);
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 30: 本部の売上で作業だけ店舗 (本部の特殊配分) は率の内部受注を計上しない");
+{
+  eq(AT.wantsInternalOrder({ storeId: "hq" }, "hq", "chuo", true), false, "本部の特殊配分 (受注の店舗 = 本部) → 内部受注なし (金額指定の配分だけ)");
+  eq(AT.wantsInternalOrder({ storeId: "chuo" }, "koshi", "chuo", false), true, "通常の内部受注 (合志店 → 中央店) は計上");
+  eq(AT.wantsInternalOrder({ storeId: "chuo" }, "chuo", "chuo", false), false, "受注店舗 = 施工店舗 は計上しない");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 31: 仕入で計上した畳の材料は自動計算で二重に数えない");
+{
+  const M = "2032-03";
+  const c31 = cust("仕入 次郎", "熊本県合志市テスト町31");
+  const q31 = { ...q19, id: "q_t31", number: "QT-2032-0031", customerId: c31.id, orderId: "o_t31" };
+  const o31 = order(c31.id, "koshi", 66000, "tatami", { id: "o_t31", contractDate: `${M}-01`, salesDate: `${M}-10`, quoteId: q31.id });
+  const pu31 = { ...pu7, id: "pu_t31", number: "AP-2032-9031", documentId: undefined, invoiceDate: `${M}-12`, dueDate: `${M}-28`, amount: 5500, taxAmount: 500, items: [{ id: "x1", name: "畳床 (店で購入)", qty: 2, unit: "枚", unitPrice: 2750, amount: 5500 }], orderId: o31.id };
+  await store.mutate((d) => { d.customers.push(c31); d.quotes.push(q31); d.orders.push(o31); d.purchases.push(pu31); PL.upsertLineAllocs(d, PL.buildLineAllocs(d, pu31, now)); });
+  const before = P.storePnl(store.getDb(), `${M}-01`, `${M}-31`).rows.filter((x) => x.source.id.startsWith(o31.id));
+  ok(before.some((x) => x.source.id === `${o31.id}:stopped`), "振り分け前の案件の材料の仕入があれば自動計算をやめて要確認 (二重に数えない)");
+  const opts = { userId: admin.id, now, today: `${M}-20`, makeMove: () => ({ id: id("sm"), number: num("SM") }), closed: () => null };
+  await store.mutate((d) => { PL.confirmLineAlloc(d, d.purchaseLineAllocs.find((a) => a.purchaseId === pu31.id), [{ storeId: "koshi", orderId: o31.id, itemCategory: "tatami", costType: "material", materialId: mDokoKT.id, qty: 2, amount: 5000 }], opts); });
+  const after = P.storePnl(store.getDb(), `${M}-01`, `${M}-31`).rows.filter((x) => x.source.kind === "usage_auto" && x.source.id.startsWith(o31.id));
+  ok(after.length > 0 && !after.some((x) => x.materialKind === "doko"), "畳床を仕入で計上した案件は、自動計算から畳床だけを除く (畳表・縁・副資材は残る)");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 32: 月次確定で自動で決まる値を固定する (確定後に材料マスタを変えても確定した月の数字は変わらない)");
+{
+  const M = "2032-04";
+  const c32 = cust("確定 三郎", "熊本県合志市テスト町32");
+  const q32 = { ...q19, id: "q_t32", number: "QT-2032-0032", customerId: c32.id, orderId: "o_t32", items: [{ ...q19.items[0], id: "qa" }, { id: "qb", name: "確認用 何かの小物", qty: 1, unit: "個", unitPrice: 1000, amount: 1000 }] };
+  q32.subtotal = 61000; q32.tax = 6100; q32.total = 67100;
+  const o32 = order(c32.id, "koshi", 67100, "tatami", { id: "o_t32", contractDate: `${M}-01`, salesDate: `${M}-10`, quoteId: q32.id });
+  await store.mutate((d) => { d.customers.push(c32); d.quotes.push(q32); d.orders.push(o32); });
+  const r0 = P.storePnl(store.getDb(), `${M}-01`, `${M}-30`);
+  const mat0 = storeOf(r0, "koshi").material;
+  ok(mat0 > 0, `確定前は自動計算の材料費 (${mat0})`);
+  let fz;
+  await store.mutate((d) => {
+    fz = FZ.freezeMonth(d, M, { userId: admin.id, now, makeId: () => id("mu") });
+    d.periodCloses.push({ id: M, month: M, status: "closed", history: [{ action: "close", by: admin.id, at: now }], updatedAt: now });
+  });
+  ok(fz.usages > 0 && fz.lines >= 2, `確定のときに自動計算の材料原価 (${fz.usages} 行) と明細の品目 (${fz.lines} 行) を保存`);
+  eq(store.getDb().quotes.find((q) => q.id === q32.id).items.map((i) => i.itemCategory), ["tatami", "tatami"], "「自動」の明細に確定時の品目を書いた");
+  // 確定後に材料の単価を変えても、確定した月の材料費は変わらない
+  await store.mutate((d) => { C.setMaterialCost(d, { materialId: mOmote.id, unitCost: 99999, kind: "provisional", validFrom: `${M}-01` }, admin.id, id("mc"), now); });
+  const r1 = P.storePnl(store.getDb(), `${M}-01`, `${M}-30`);
+  eq(storeOf(r1, "koshi").material, mat0, "確定した月の材料費は変わらない (保存した単価の写し)");
+  ok(!r1.rows.some((x) => x.source.kind === "usage_auto"), "確定した月は自動計算しない");
+  await store.mutate((d) => { const c = d.materialCosts.find((x) => x.unitCost === 99999); d.materialCosts.splice(d.materialCosts.indexOf(c), 1); const prev = d.materialCosts.filter((x) => x.materialId === mOmote.id).sort((a, b) => b.validFrom.localeCompare(a.validFrom))[0]; delete prev.validTo; });
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 33: 畳床の判定の直し (合わない仕様を黙って捨てない・金額の数字を寸法にしない・中京間)");
+{
+  const d = store.getDb();
+  const p = DK.pickDoko(d, DK.dokoHints("床 建材 15mm / サイズ 五八"), mDokoKH.id);
+  eq([p.material?.id, p.assumed], [mDokoKH.id, true], "15mm の畳床がなければ 55mm を「決まった」として選ばず、既定の畳床 (暫定)");
+  ok(p.reason.includes("15mm"), "理由に合わなかった仕様 (15mm)");
+  eq(DK.dokoHints("畳新調 さくら 1,580円").sizeClass, undefined, "「サイズ」のない数字 (金額) は寸法にしない");
+  eq(DK.dokoHints("610×1220").sizeClass, undefined, "品番・寸法の数字だけでは六一にしない");
+  eq(DK.dokoHints("サイズ 610").sizeExact, "rokuichi", "「サイズ」のあとの 610 は六一");
+  eq(DK.dokoHints("中京間").sizeExact, "rokumaru", "中京間は六〇間 (京間 = 本間 と取り違えない)");
+  eq(DK.dokoHints("京間").sizeExact, "honma", "京間は本間");
+  const noMatch = DK.pickDoko(d, DK.dokoHints("床 ポリスチレン / サイズ 本間"), undefined);
+  ok(!noMatch.material, "材料マスタにない種類 (ポリスチレン) を建材にすり替えない (既定がなければ要確認)");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 34: 見積・請求書の消費税が 0 円の受注 (輸出など) は税を引かない");
+{
+  const M = "2032-05";
+  const c34 = cust("輸出 四郎", "海外");
+  const q34 = { ...q19, id: "q_t34", number: "QT-2032-0034", customerId: c34.id, orderId: "o_t34", subtotal: 100000, tax: 0, total: 100000, items: [{ id: "e1", name: "輸出用 畳", qty: 1, unit: "式", unitPrice: 100000, amount: 100000 }] };
+  const o34 = order(c34.id, "hq", 100000, "tatami", { id: "o_t34", contractDate: `${M}-01`, salesDate: `${M}-10`, quoteId: q34.id });
+  await store.mutate((d) => { d.customers.push(c34); d.quotes.push(q34); d.orders.push(o34); });
+  const st = AT.orderTaxStatus(store.getDb(), o34, undefined);
+  eq([st.noTax, st.source], [true, "zero"], "税区分が未登録でも見積の消費税が 0 円なら税なし");
+  const r = P.storePnl(store.getDb(), `${M}-01`, `${M}-31`);
+  eq(storeOf(r, "hq").externalSales, 100000, "店舗別損益の売上 100,000 (1.1 で割らない)");
+  ok(r.rows.some((x) => x.source.id === o34.id && x.provisional?.includes("税区分")), "税区分の登録を促す (暫定の理由)");
+  eq(AT.orderTaxStatus(store.getDb(), o34, { taxCategory: "taxable" }).noTax, false, "税区分を「課税」と登録すればその扱い");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 35: 広告宣伝費の店舗の予算と超過分 (超過分は店舗独自経費)");
+{
+  const M = "2032-06";
+  await store.mutate((d) => {
+    d.mgmtEntries.push({ id: id("me"), month: M, storeId: "nishi", kind: "budget", metric: "ad", amount: 30000, status: "active", createdBy: admin.id, createdAt: now });
+    d.expenses.push({ id: "ex_t35", number: "EX-2032-0035", storeId: "nishi", submittedBy: admin.id, date: `${M}-05`, vendor: "テスト印刷", amount: 55000, taxAmount: 5000, account: "広告宣伝費", paymentMethod: "transfer", description: "チラシ (店舗の判断で追加)", status: "approved", source: "manual", createdAt: now, updatedAt: now });
+  });
+  const st = AD.adBudgetStatus(store.getDb(), M).find((r) => r.storeId === "nishi");
+  eq([st.budget, st.spend, st.overage, st.toMove], [30000, 50000, 20000, 20000], "予算 30,000・広告 50,000 (税抜) → 超過 20,000 を移す");
+  const poolBefore = AL.previewAllocation(store.getDb(), M).poolTotal;
+  let moved;
+  await store.mutate((d) => { moved = AD.moveAdOverage(d, M, { userId: admin.id, now, makeId: () => id("me") }); });
+  ok(Array.isArray(moved) && moved.length === 2, "店舗独自経費 + と 案分経費 − の 2 行");
+  const r = P.storePnl(store.getDb(), `${M}-01`, `${M}-30`);
+  eq(storeOf(r, "nishi").ownExpense, 20000, "西店の店舗独自経費 +20,000");
+  eq(AL.previewAllocation(store.getDb(), M).poolTotal, poolBefore - 20000, "案分経費は 20,000 減る (全社の経費は変わらない)");
+  eq(AD.adBudgetStatus(store.getDb(), M).find((x) => x.storeId === "nishi").toMove, 0, "もう一度押しても増えない (移した額 = 超過分)");
+  ok(typeof AD.moveAdOverage(store.getDb(), M, { userId: admin.id, now, makeId: () => id("me") }) === "string", "移す超過分がなければ断る");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 36: これまでの「材料移動」の表の取込");
+{
+  const cell = (rows) => new Map(rows.map(([r, cells]) => [r, new Map(Object.entries(cells))]));
+  const sheet = { name: "2032.7", rows: cell([
+    [1, { A: "7", B: "月" }],
+    [2, { A: "中央店" }],
+    [3, { A: "襖材料", H: "その他", O: "内部受注【税別】※仕事をあげた側に記入" }],
+    [4, { A: "日付", B: "品目", C: "数量", D: "単価", E: "合計", F: "備考", H: "日付", I: "品目", J: "数量", K: "単価", L: "合計", O: "日付", P: "品目", Q: "数量", R: "単価", S: "合計", T: "備考" }],
+    [5, { A: "15", B: "テスト襖紙", C: "10", D: "200", E: "2000", F: "本部より", I: "コピー用紙", J: "2", K: "500", L: "1000", O: "15", P: "テスト 様 畳", Q: "1", R: "24000", S: "24000", T: "本部より" }],
+    [6, { B: "テストベニア", C: "1", D: "1100", E: "-1100", F: "", P: "テスト 二 様", Q: "1", R: "5000", S: "5000", T: "西店より" }],
+    [7, { D: "合計", E: "900", K: "合計", L: "1000", R: "合計", S: "29000" }],
+    [8, { C: "畳原価", D: "合計", E: "123456" }],
+    [9, { A: "西店" }],
+    [10, { A: "襖材料", O: "内部受注" }],
+    [11, { A: "日付", B: "品目", C: "数量", D: "単価", E: "合計", F: "備考", O: "日付", P: "品目", Q: "数量", R: "単価", S: "合計", T: "備考" }],
+    [12, { P: "テスト 二 様", Q: "1", R: "-5000", S: "-5000", T: "中央店" }],
+  ]) };
+  const d = store.getDb();
+  const plan = MMI.planMaterialMoveImport(d, [sheet], { hash: "h".repeat(32), fileName: "テスト.xlsx", now });
+  const tr = plan.rows.filter((r) => r.kind === "transfer");
+  eq(tr.map((r) => [r.fromStoreId, r.toStoreId, r.amount, r.date]), [["hq", "chuo", 2000, "2032-07-15"], ["chuo", "koshi", 1100, "2032-07-15"]], "襖材料: 本部より → 本部 → 中央店、マイナスで備考なし → 中央店 → 工場 (合志店)");
+  const it = plan.rows.filter((r) => r.kind === "internal");
+  eq(it.map((r) => [r.fromStoreId, r.toStoreId, r.amount]), [["chuo", "hq", 24000], ["chuo", "nishi", 5000]], "内部受注: 書いた店舗が受け取る (本部より = 本部の特殊配分)。両方の欄に書いた同じ移動は 1 件");
+  ok(plan.skipped.some((x) => x.reason.includes("その他") && x.count === 1) && plan.skipped.some((x) => x.reason.includes("畳原価") && x.amount === 123456) && plan.skipped.some((x) => x.reason.includes("両方")), "その他の欄・畳原価・両方の欄の重複は取り込まずに報告");
+  let r1, r2;
+  await store.mutate((dd) => { r1 = MMI.applyMaterialMoveImport(dd, plan, { userId: admin.id, now, makeId: (p) => id(p), number: (p) => num(p) }); });
+  await store.mutate((dd) => { r2 = MMI.applyMaterialMoveImport(dd, plan, { userId: admin.id, now, makeId: (p) => id(p), number: (p) => num(p) }); });
+  eq([r1.transfers, r1.adjustments, r2.transfers, r2.adjustments, r2.existing], [2, 2, 0, 0, 4], "取り込める・もう一度取り込んでも増えない");
+  const adj = store.getDb().salesAdjustments.find((a) => a.reason?.includes("テスト 様 畳"));
+  eq([adj.kind, adj.treatment, adj.base], ["hq_special", "sales_transfer", "tax_excluded"], "本部からの配分は本部の特殊配分 (税別)");
+  const r = P.storePnl(store.getDb(), "2032-07-01", "2032-07-31");
+  eq(r.stores.reduce((a, x) => a + x.adjHq + x.adjManual, 0), 0, "店舗間の売上の調整の合計は 0");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 37: 見積の明細で選んだ畳床で材料原価を計算 / 仕入明細の AI の候補は確かめてから使う");
+{
+  const d = store.getDb();
+  const info = C.dokoChoiceInfo(d, "2032-01-10");
+  ok(info.options.some((o) => o.id === mDokoKT.id) && info.matchNames.includes("テスト畳新調"), "畳床を選べる材料構成 (品名) と畳床の一覧");
+  const pl = C.planUsage(d, [{ key: "z", label: "テスト畳新調", qty: 1, itemCategory: "tatami", dokoMaterialId: mDokoW.id }], "2032-01-10");
+  eq(pl.usages.find((u) => u.materialKind === "doko").materialId, mDokoW.id, "明細で選んだ畳床 (わら床) を使う");
+  const allocs = d.purchaseLineAllocs.filter((a) => a.purchaseId === "pu_t24");
+  const p24 = d.purchases.find((p) => p.id === "pu_t24");
+  const cand = PAI.aiCandidateOrders(d, p24, allocs);
+  const prompt = PAI.buildPurchaseAiPrompt(d, p24, allocs, cand);
+  ok(prompt.user.includes("lineNo 2") && prompt.system.includes("金額は計算しない"), "AI への依頼に明細と決まり (金額は計算しない)");
+  const oB = d.orders.find((o) => d.customers.find((c) => c.id === o.customerId)?.name === "両方 次郎");
+  const sug = PAI.normalizePurchaseAi(d, { lines: [{ lineNo: 2, orderNumber: oB.number, storeId: "koshi", itemCategory: "fusuma", costType: "material", reason: "現場名が一致", confidence: 80 }, { lineNo: 1, orderNumber: "NOPE-1", storeId: "mars", itemCategory: "bogus", costType: "x", reason: "", confidence: 300 }] }, allocs, cand);
+  eq([sug[0].orderId, sug[0].itemCategory, sug[0].costType], [oB.id, "fusuma", "material"], "候補にある受注・品目・費用区分は使う");
+  eq([sug[1].orderId, sug[1].storeId, sug[1].itemCategory, sug[1].costType, sug[1].confidence], [undefined, undefined, undefined, undefined, 100], "候補にない受注・存在しない店舗・品目・費用区分は捨てる");
+  let n;
+  await store.mutate((dd) => { n = PAI.applyAiSuggestions(dd, sug, "pu_t24", now); });
+  const a2 = store.getDb().purchaseLineAllocs.find((a) => a.purchaseId === "pu_t24" && a.lineNo === 2);
+  eq([n, a2.status, a2.ai.method, a2.splits[0]?.itemCategory], [2, "needs_review", "rules+ai", "fusuma"], "AI の候補は振り分けの案に入るが、確定は担当者 (要確認のまま)");
+}
+
+/* ------------------------------------------------------------------ */
+section("Test 38: 新しい店舗 (管理者が追加) も評価・集計の対象");
+{
+  const d = store.getDb();
+  const stores = [...d.stores, { id: "kikuyo", code: "09", name: "テスト菊陽店", shortName: "菊陽", kind: "store", postalCode: "", address: "", phone: "", color: "#7a5af5" }];
+  const res = INC.computeIncentives({ ...d, stores }, null, (await imp("lib/kpi-settings.ts")).kpiSettings(d));
+  ok(res.units.some((u) => u.unit === "kikuyo"), "インセンティブの店舗の評価に追加した店舗が入る");
+  const own = EX.mgmtExportRows(d, "items", "2032-01-01", "2032-01-31", ["koshi"]);
+  ok(!own.some((r) => r[0] === "全社"), "店舗を絞った品目別の CSV に「全社」の行を出さない");
 }
 
 summary();

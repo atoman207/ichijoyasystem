@@ -18,6 +18,9 @@ import { CloseTab } from "./tab-close";
 import { SettingsTab } from "./tab-settings";
 import { MastersTab } from "./tab-masters";
 
+// 仕入明細の AI の候補 (generateJson) を呼ぶため
+export const maxDuration = 60;
+
 const TABS: { id: string; label: string; edit?: boolean }[] = [
   { id: "pnl", label: "店舗別損益" },
   { id: "items", label: "品目別" },

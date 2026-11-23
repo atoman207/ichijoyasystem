@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, getDb, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
-import { categoryName, isItemCategory } from "@/lib/mgmt/categories";
+import { categoryName, isItemCategory, syncInvoiceLineCategories } from "@/lib/mgmt/categories";
+import { closedReason } from "@/lib/mgmt/close";
 import type { Approval, Database, Quote, QuoteItem, StoreId, User } from "@/lib/db/types";
 import { AUTO_APPROVAL_NOTE, settleOwnApproval } from "@/lib/approval-decide";
 import { addDays, toDateKey } from "@/lib/format";
@@ -50,16 +51,20 @@ function parseItems(formData: FormData, back: string): QuoteItem[] {
       amount: Math.round(qty * unitPrice),
       // 管理会計の品目 (明細で選んだときだけ。空なら商品の品目 → 見積の種別から決める)
       itemCategory: isItemCategory(getDb(), String(r.itemCategory ?? "")) ? String(r.itemCategory) : undefined,
+      // 畳床 (管理会計の材料マスタの畳床。選んだときだけ)
+      dokoMaterialId: r.dokoMaterialId && getDb().materials.some((m) => m.id === String(r.dokoMaterialId) && m.kind === "doko") ? String(r.dokoMaterialId) : undefined,
     });
   }
   if (items.length === 0) fail(back, "明細を 1 行以上入力してください。");
   return items;
 }
 
-/** 明細の品目だけが違うか (金額・品名・数量などは同じ) */
-function categoryChanges(before: QuoteItem[], after: QuoteItem[]): { line: number; name: string; before?: string; after?: string }[] {
+/** 明細の管理会計の項目 (品目・畳床) だけの違い (金額・品名・数量などは同じ前提) */
+function categoryChanges(before: QuoteItem[], after: QuoteItem[]): { line: number; name: string; field: "itemCategory" | "dokoMaterialId"; before?: string; after?: string }[] {
   if (before.length !== after.length) return [];
-  return after.flatMap((it, k) => ((it.itemCategory ?? "") !== (before[k].itemCategory ?? "") ? [{ line: k + 1, name: it.name, before: before[k].itemCategory, after: it.itemCategory }] : []));
+  return after.flatMap((it, k) =>
+    (["itemCategory", "dokoMaterialId"] as const).flatMap((f) => ((it[f] ?? "") !== (before[k][f] ?? "") ? [{ line: k + 1, name: it.name, field: f, before: before[k][f], after: it[f] }] : [])),
+  );
 }
 
 /** 施工場所 (お客様の住所と違うとき) と領収書の宛名。フォームに欄がないときは undefined (変更しない) */
@@ -268,9 +273,14 @@ export async function updateQuote(id: string, formData: FormData) {
         const done: string[] = [];
         if (siteChanged) done.push(...applySiteFields(db, q, site!, user).map((f) => (f === "siteAddress" ? "施工場所" : "領収書の宛名")));
         if (cats.length) {
-          cats.forEach((c) => (q.items[c.line - 1].itemCategory = c.after));
-          addAudit(db, { userId: user.id, action: "update", entity: "quote", entityId: id, entityLabel: q.number, summary: `明細の品目 (管理会計) を変更: ${cats.map((c) => `${c.line} 行目 ${c.name} ${c.before ? categoryName(db, c.before) : "自動"} → ${c.after ? categoryName(db, c.after) : "自動"}`).join(" / ")}`, storeId: q.storeId, changes: cats.map((c) => ({ field: `items.${c.line}.itemCategory`, before: c.before ?? null, after: c.after ?? null })) });
-          done.push("明細の品目");
+          const ord = q.orderId ? db.orders.find((o) => o.id === q.orderId) : undefined;
+          const closedCat = ord?.salesDate ? closedReason(db, ord.salesDate, "明細の品目・畳床の変更") : null;
+          if (closedCat) fail(back, closedCat);
+          cats.forEach((c) => (q.items[c.line - 1][c.field] = c.after));
+          syncInvoiceLineCategories(db, q.orderId, q.items, now);
+          const show = (c: (typeof cats)[number], v?: string) => (!v ? "自動" : c.field === "itemCategory" ? categoryName(db, v) : (db.materials.find((m) => m.id === v)?.name ?? v));
+          addAudit(db, { userId: user.id, action: "update", entity: "quote", entityId: id, entityLabel: q.number, summary: `明細の${cats.some((c) => c.field === "dokoMaterialId") ? "品目・畳床" : "品目"} (管理会計) を変更: ${cats.map((c) => `${c.line} 行目 ${c.name} ${c.field === "dokoMaterialId" ? "畳床 " : ""}${show(c, c.before)} → ${show(c, c.after)}`).join(" / ")}`, storeId: q.storeId, changes: cats.map((c) => ({ field: `items.${c.line}.${c.field}`, before: c.before ?? null, after: c.after ?? null })) });
+          done.push(cats.some((c) => c.field === "dokoMaterialId") ? "明細の品目・畳床" : "明細の品目");
         }
         q.updatedAt = now;
         message = `${done.join("・")}を変更しました${siteChanged && q.orderId ? " (受注にも反映しました)" : ""}。`;
