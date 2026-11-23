@@ -219,6 +219,8 @@ export const TABLES: TableDef[] = [
       // 2026-11: 施工場所 (お客様の住所と違うとき) と領収書の宛名。受注に引き継ぐ
       ["siteAddress", "text"],
       ["receiptName", "text"],
+      // 2026-11-23: 畳の仕様 (部屋ごと。畳表・畳縁・畳床・寸法。src/lib/tatami-spec.ts)。受注に引き継ぐ
+      ["tatamiRooms", "jsonb"],
     ],
     orderBy: ["created_at"],
     indexes: [["store_id"], ["status"], ["customer_id"]],
@@ -270,6 +272,8 @@ export const TABLES: TableDef[] = [
       ["receiptName", "text"],
       // 2026-11-23: 品目ごとの引取日・納品日 (src/lib/handover.ts)
       ["handovers", "jsonb"],
+      // 2026-11-23: 畳の仕様 (部屋ごと。畳表・畳縁・畳床・寸法。src/lib/tatami-spec.ts)
+      ["tatamiRooms", "jsonb"],
     ],
     orderBy: ["created_at"],
     indexes: [["store_id"], ["status"], ["customer_id"], ["sales_date"]],
@@ -1689,6 +1693,8 @@ export const TABLES: TableDef[] = [
       ["spec", "text"],
       ["qty", "numeric"],
       ["herinashi", "numeric"],
+      // 畳の仕様 (部屋ごと。受注のない行)
+      ["rooms", "jsonb"],
       ["note", "text"],
       ["history", "jsonb not null default '[]'"],
       ["createdBy", "text not null"],

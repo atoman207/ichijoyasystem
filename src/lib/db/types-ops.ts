@@ -7,7 +7,7 @@
  *   (Inquiry.media) と販促 (Inquiry.promotionId) から計算する (src/lib/ops-reports/promo-analysis.ts)
  * - 媒体の分類のラベルと、過去のデータの読み替えの対応表は src/lib/media.ts
  */
-import type { StoreId } from "./types";
+import type { StoreId, TatamiRoom } from "./types";
 
 /**
  * 全社共通の媒体の分類 (お客様が当社を知ったきっかけ)。問い合わせ・顧客・アンケートで同じ分類を使う。
@@ -136,6 +136,8 @@ export interface TatamiProduction {
   qty?: number;
   /** へり無し畳の枚数 (手で足した行) */
   herinashi?: number;
+  /** 畳の製造の仕様 (部屋ごと)。受注のない行 (移行した予定表の引き取り・手で足した行) の仕様。受注の行は受注の tatamiRooms */
+  rooms?: TatamiRoom[];
   note?: string;
   /** 繰り越し・日付の変更などの記録 (新しい 30 件) */
   history: TatamiProductionEvent[];

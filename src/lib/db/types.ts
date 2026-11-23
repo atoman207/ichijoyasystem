@@ -404,6 +404,8 @@ export interface Quote {
   taxIncluded?: boolean;
   /** 現場情報・引継ぎ事項 */
   siteInfo?: SiteInfo;
+  /** 畳の製造の仕様 (部屋ごと。src/lib/tatami-spec.ts)。空なら見積の明細から自動で作る */
+  tatamiRooms?: TatamiRoom[];
   /** 手書き見積書の No. */
   paperNo?: string;
   /** 現場でお客様に手書きの見積書を渡し済み (承認されたら「送付済」にする) */
@@ -497,6 +499,8 @@ export interface Order {
   workDetails?: string;
   /** 現場情報・引継ぎ事項 (見積から引き継ぎ) */
   siteInfo?: SiteInfo;
+  /** 畳の製造の仕様 (部屋ごと。src/lib/tatami-spec.ts)。空なら見積の明細から自動で作る */
+  tatamiRooms?: TatamiRoom[];
   /** 仕様: pending = 一部の仕様が未確定 */
   specStatus?: "pending" | "fixed";
   specNote?: string;
@@ -517,6 +521,34 @@ export interface Order {
    * (お客様のご要望 2026-11-23「■ 予定表への反映方法」「■ 引取日・納品日の登録・変更」)
    */
   handovers?: OrderHandover[];
+}
+
+/**
+ * 畳の製造の仕様 (部屋ごと。src/lib/tatami-spec.ts。お客様のご要望 2026-11-23「畳製造予定: 畳表・畳縁・畳床・寸法を部屋ごとに」)。
+ * 空の項目は未確定 (画面では「寸法未確認」など)。見積の明細から自動で作り、見積・受注・畳製造予定の画面であとから入れ・直せる
+ */
+export interface TatamiRoom {
+  id: string;
+  /** 部屋 (例: 1階 和室・仏間)。空なら「部屋 1」… */
+  room?: string;
+  /** 作業: omote = 表替え / ura = 裏返し / new = 新調 */
+  work: "omote" | "ura" | "new";
+  /** 畳数 (半畳は 0.5)。0 = 未確認 */
+  qty: number;
+  /** 畳表 (品名。例: きずな・銀白 100A) */
+  omote?: string;
+  /** 畳縁 (品名。例: マス菊・アラベスク510)。縁無なら空 */
+  heri?: string;
+  /** 縁無 (へり無し畳) */
+  herinashi?: boolean;
+  /** 畳床の種類 (本ワラ床・建材床・床暖房用畳床 など。表替え・裏返しは今の床) */
+  doko?: string;
+  /** 畳床の厚み (例: 55mm) */
+  dokoThickness?: string;
+  /** 寸法 (例: 本間・江戸間 (五八)・六一・880×1760) */
+  size?: string;
+  /** メモ (半畳・炉あり など) */
+  note?: string;
 }
 
 /** 引取・納品の品目 (src/lib/handover.ts の HANDOVER_ITEM)。reform は施工期間 (開始日〜終了日) で予定表に載せる */

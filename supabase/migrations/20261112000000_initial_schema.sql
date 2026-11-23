@@ -180,7 +180,8 @@ create table if not exists quotes (
   spec_status text,
   estimator_id text,
   site_address text,
-  receipt_name text
+  receipt_name text,
+  tatami_rooms jsonb
 );
 comment on table quotes is '見積';
 
@@ -224,7 +225,8 @@ create table if not exists orders (
   closed_at timestamptz,
   closed_by text,
   receipt_name text,
-  handovers jsonb
+  handovers jsonb,
+  tatami_rooms jsonb
 );
 comment on table orders is '受注・施工 (売上)';
 
@@ -1413,6 +1415,7 @@ create table if not exists tatami_production (
   spec text,
   qty numeric,
   herinashi numeric,
+  rooms jsonb,
   note text,
   history jsonb not null default '[]',
   created_by text not null,
@@ -1758,6 +1761,7 @@ alter table quotes add column if not exists spec_status text;
 alter table quotes add column if not exists estimator_id text;
 alter table quotes add column if not exists site_address text;
 alter table quotes add column if not exists receipt_name text;
+alter table quotes add column if not exists tatami_rooms jsonb;
 alter table orders add column if not exists number text not null unique;
 alter table orders add column if not exists quote_id text references quotes(id) on delete set null;
 alter table orders add column if not exists customer_id text not null references customers(id);
@@ -1796,6 +1800,7 @@ alter table orders add column if not exists closed_at timestamptz;
 alter table orders add column if not exists closed_by text;
 alter table orders add column if not exists receipt_name text;
 alter table orders add column if not exists handovers jsonb;
+alter table orders add column if not exists tatami_rooms jsonb;
 alter table invoices add column if not exists number text not null unique;
 alter table invoices add column if not exists order_id text not null references orders(id);
 alter table invoices add column if not exists customer_id text not null references customers(id);
@@ -2648,6 +2653,7 @@ alter table tatami_production add column if not exists title text;
 alter table tatami_production add column if not exists spec text;
 alter table tatami_production add column if not exists qty numeric;
 alter table tatami_production add column if not exists herinashi numeric;
+alter table tatami_production add column if not exists rooms jsonb;
 alter table tatami_production add column if not exists note text;
 alter table tatami_production add column if not exists history jsonb not null default '[]';
 alter table tatami_production add column if not exists created_by text not null;

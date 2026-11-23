@@ -1,6 +1,7 @@
 import { CATEGORY_LABEL, CHANNEL_LABEL, EXPENSE_METHOD_LABEL, PURCHASE_PAY_METHOD_LABEL, ROLE_LABEL, SUPPLIER_KIND_LABEL } from "@/lib/constants";
 import { MEDIA_LABEL } from "@/lib/media";
 import { handoverText } from "@/lib/handover";
+import { roomsText } from "@/lib/tatami-spec";
 
 /**
  * 変更履歴 (監査ログ) の項目名と値の表示
@@ -34,8 +35,8 @@ const COMMON: Record<string, string> = {
 const BY_ENTITY: Record<string, Record<string, string>> = {
   customer: { name: "氏名", kana: "フリガナ", type: "顧客区分", lineId: "LINE ID", area: "地区", assignedUserId: "担当者", preferredChannel: "希望連絡手段", tags: "タグ", notes: "メモ", contacts: "ほかの連絡先", tradeStopped: "取引停止", tradeStopNote: "取引停止の理由", "billingTerms.batch": "まとめ請求", "billingTerms.closingDay": "請求の締め日", "billingTerms.payMonthOffset": "支払期限の月", "billingTerms.payDay": "支払期限の日", "billingTerms.note": "請求のメモ" },
   inquiry: { contactName: "お客様名", contactPhone: "電話", channel: "受付経路", summary: "要件", detail: "詳細", assignedUserId: "担当者", nextAction: "次の対応", nextActionDue: "次の対応の期限", receivedAt: "受付日時", customerId: "顧客", media: "媒体 (当社を知ったきっかけ)", promotionId: "きっかけの販促" },
-  quote: { total: "見積金額 (税込)", title: "件名", items: "明細", validUntil: "有効期限", workDetails: "施工内容", siteAddress: "施工場所", receiptName: "領収書の宛名" },
-  order: { total: "契約金額 (税込)", contractDate: "契約日", siteAddress: "施工場所 (現場住所)", receiptName: "領収書の宛名", workDetails: "施工内容", scheduledStart: "施工開始日", scheduledEnd: "施工終了日", workerIds: "施工担当", billing: "請求書の発行", plannedPayment: "入金の予定方法", specStatus: "仕様", scheduleStatus: "工事日程", completedAt: "施工完了日", salesDate: "売上計上日 (施工完了日)", handovers: "引取・納品の日程" },
+  quote: { total: "見積金額 (税込)", title: "件名", items: "明細", validUntil: "有効期限", workDetails: "施工内容", siteAddress: "施工場所", receiptName: "領収書の宛名", tatamiRooms: "畳の仕様 (部屋ごと)" },
+  order: { total: "契約金額 (税込)", contractDate: "契約日", siteAddress: "施工場所 (現場住所)", receiptName: "領収書の宛名", workDetails: "施工内容", scheduledStart: "施工開始日", scheduledEnd: "施工終了日", workerIds: "施工担当", billing: "請求書の発行", plannedPayment: "入金の予定方法", specStatus: "仕様", scheduleStatus: "工事日程", completedAt: "施工完了日", salesDate: "売上計上日 (施工完了日)", handovers: "引取・納品の日程", tatamiRooms: "畳の仕様 (部屋ごと)" },
   invoice: { dueDate: "支払期限", expectedDate: "入金予定日", expectedAmount: "入金予定額", expectedNote: "入金予定のメモ", title: "件名", notes: "備考", orderIds: "対象の案件", periodFrom: "締めの期間 (から)", periodTo: "締め日" },
   expense: { vendor: "支払先", date: "日付", amount: "金額 (税込)", taxAmount: "うち消費税", account: "勘定科目", paymentMethod: "支払方法", description: "内容・用途" },
   purchase: { supplierId: "仕入先", invoiceDate: "請求日", dueDate: "支払期限", scheduledPayDate: "支払予定日", amount: "金額 (税込)", taxAmount: "うち消費税", account: "勘定科目", items: "仕入内容", orderId: "案件", supplierInvoiceNo: "請求書番号", payMethod: "支払方法", payReference: "支払の記録" },
@@ -59,7 +60,7 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   holiday_work: { slot: "区分", days: "日数", kind: "種類" },
   leave_grant: { grantDate: "付与日", baseDate: "もとの付与日", expiresOn: "有効期限", days: "日数" },
   work_report: { visitors: "来店数", flyers: "チラシの配布 (配布人・枚数・地域)", note: "メモ" },
-  production: { date: "製造日", undecided: "製造日未定", status: "状態", title: "案件・内容", spec: "仕様", qty: "畳数", herinashi: "へり無し畳", note: "メモ" },
+  production: { date: "製造日", undecided: "製造日未定", status: "状態", title: "案件・内容", spec: "仕様", qty: "畳数", herinashi: "へり無し畳", rooms: "畳の仕様 (部屋ごと)", note: "メモ" },
   holiday: { label: "休業日の名前", closed: "休業日", holiday: "祝日", dates: "日付" },
   promotion: { kind: "販促の種類", title: "名前", startDate: "配布日・開始日", endDate: "終了日", areas: "地域と部数", copies: "部数・件数", cost: "費用", media: "媒体", vendor: "配布業者・依頼先", note: "メモ", status: "状態" },
   office_improvement: { year: "年", date: "日付", staffName: "担当", staffId: "担当 (社員)", item: "項目", content: "内容", cause: "原因", measure: "具体的改善策" },
@@ -119,6 +120,8 @@ export function fieldValue(field: string, v: unknown, names?: Map<string, string
   if (v === undefined || v === null || v === "") return "(空)";
   // 受注の品目ごとの引取・納品の日程 (src/lib/handover.ts)
   if (field === "handovers") return handoverText(v);
+  // 畳の仕様 (部屋ごと。src/lib/tatami-spec.ts)
+  if (field === "tatamiRooms" || field === "rooms") return roomsText(v as never);
   if (typeof v === "boolean") return v ? "はい" : "いいえ";
   if (Array.isArray(v)) {
     if (v.length === 0) return "(空)";

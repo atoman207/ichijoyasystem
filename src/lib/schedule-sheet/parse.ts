@@ -5,7 +5,7 @@
  * 日別のシートの作り (スプレッド原紙と同じ):
  * - 店舗の欄 (B 列に「合志店」「中央店」… = db.stores の名前): A 列の「AM」「PM」で午前・午後、「上限」で欄の終わり。
  *   左が ハギ (引き取り。B 現場名・C〜J 畳/襖/障子/アミド の 表・新・K 備考・L 時間・担当)、右が シキ (納品。M〜W 同じ並び)、
- *   X〜AD は工場の製造の表 (現場名・新/表・枚数・表・ヘリ・サイズ・床)
+ *   X〜AD は工場の製造の表 (現場名・新/表・枚数・表・ヘリ・サイズ・床。同じ現場名の引き取りのメモに「製造: …」として残す = 部屋ごとの仕様)
  * - 事務の欄 (B 列「事務」): 次の行の B・M・X が人の名前で、その下がその人の予定
  * - 右上の人の予定 (1 行目の名前 + 2 行目の「AM」「PM」の見出し。例: 光子): 見出しの下の行がその人の午前・午後の予定
  * 読み取るだけ (データベースに触れない)。顧客・案件との照合と登録は plan.ts
@@ -356,7 +356,17 @@ function readDay(rows: string[][], date: string, ref: (row: number) => string, s
       if (site && pieces && !/^現場名$|^計$|本日製造/.test(site) && !storeOf(site)) {
         const herinashi = /^無し?$|^なし$/.test(nk(r[27])) ? pieces : 0;
         const cell = (v: unknown) => nk(v).replace(/^(\d+)\.0$/, "$1");
-        const text = ["製造:", cell(r[24]).replace(/\s+/g, ""), `${fmtNum(pieces)}枚`, cell(r[26]), cell(r[27]) && `縁 ${cell(r[27])}`, cell(r[28]), cell(r[29])].filter(Boolean).join(" ") + (herinashi ? ` 縁無${fmtNum(herinashi)}` : "");
+        // 「製造: 表 6枚 / 表 きずな / 縁 浮14 / サイズ 61 / 床 建材」(1 行 = 1 部屋の仕様。src/lib/tatami-spec.ts の roomsFromSheetMemo が読む)
+        const heri = cell(r[27]);
+        const text = [
+          `製造: ${[cell(r[24]).replace(/\s+/g, ""), `${fmtNum(pieces)}枚`].filter(Boolean).join(" ")}`,
+          cell(r[26]) && `表 ${cell(r[26])}`,
+          herinashi ? `縁無${fmtNum(herinashi)}` : heri && `縁 ${heri}`,
+          cell(r[28]) && `サイズ ${cell(r[28])}`,
+          cell(r[29]) && `床 ${cell(r[29])}`,
+        ]
+          .filter(Boolean)
+          .join(" / ");
         const k = fold(site);
         production.set(k, [...(production.get(k) ?? []), { text, herinashi }]);
       }

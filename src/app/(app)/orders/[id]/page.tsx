@@ -2,7 +2,10 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canManageFinance, canManagePurchaseOrders, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
+import { canAccessStore, canEditProduction, canManageFinance, canManagePurchaseOrders, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
+import { TatamiRoomsCard } from "@/components/schedule/TatamiRoomsCard";
+import { saveOrderTatamiRooms } from "@/lib/actions/tatami-rooms";
+import { ROOMS_SOURCE_LABEL, orderRooms, quoteRooms } from "@/lib/tatami-rooms";
 import { orderChain, userName } from "@/lib/db/queries";
 import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, requestOrderChange, resubmitOrder, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
@@ -101,6 +104,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const legacyEvent = planMode && !savedPlan.length ? db.schedule.find((e) => e.orderId === o.id && e.source === "order" && !isHandoverEvent(e)) : undefined;
   const pendingHandover = chain.approvals.find((a) => a.status === "pending" && a.type === "handover_change" && a.targetId === o.id);
   const planEditable = planMode && orderEditable(o) && !lock.locked && !viewOnly;
+  // 畳の仕様 (部屋ごと。畳表・畳縁・畳床・寸法)。受注 → 見積で入れた仕様 → 見積の明細から自動 (src/lib/tatami-rooms.ts)
+  const tatamiSpec = orderRooms(db, o);
   const today = toDateKey(new Date());
   const survey = db.surveys.find((x) => x.orderId === o.id);
   const issues = db.qualityIssues.filter((x) => x.orderId === o.id).sort((a, b) => b.occurredOn.localeCompare(a.occurredOn));
@@ -261,6 +266,18 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             )}
           </Card>
           )}
+
+          {tatamiSpec.rooms.length > 0 || o.handovers?.some((h) => h.item.startsWith("tatami_")) ? (
+            <TatamiRoomsCard
+              rooms={tatamiSpec.rooms}
+              sourceLabel={ROOMS_SOURCE_LABEL[tatamiSpec.source]}
+              auto={chain.quote ? quoteRooms(db, { items: chain.quote.items, siteInfo: o.siteInfo ?? chain.quote.siteInfo }).rooms : []}
+              action={saveOrderTatamiRooms.bind(null, o.id)}
+              editable={canEditProduction(user) && o.status !== "cancelled"}
+              idPrefix={`or-${o.id}`}
+              description="部屋ごとの畳数・畳表・畳縁 (縁無)・畳床・寸法。畳製造予定にそのまま出ます。決まっていない項目は空欄のままにして、現地の採寸のあとに入れてください"
+            />
+          ) : null}
 
           <MapInfoCard db={db} user={user} target={{ type: "order", id: o.id }} returnTo={returnTo} title="施工場所の地図・住宅地図" />
 

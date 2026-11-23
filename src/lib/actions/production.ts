@@ -9,6 +9,8 @@ import { isDateKey, shortDate } from "@/lib/calendar";
 import { toDateKey } from "@/lib/format";
 import { carryTarget, findProductionRow, productionId, type ProductionRow } from "@/lib/production/plan";
 import { productionTableMissing } from "@/lib/production/tables";
+import { cleanRooms, roomsText, sameRooms } from "@/lib/tatami-spec";
+import { orderRooms } from "@/lib/tatami-rooms";
 import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 /**
@@ -218,4 +220,61 @@ export async function deleteProduction(formData: FormData) {
   revalidatePath("/schedule");
   if (!ok) fail(back, "削除できるのは手で追加した製造の予定だけです。");
   redirect(withMsg(back, "製造の予定を削除しました。"));
+}
+
+/**
+ * 部屋ごとの仕様 (畳表・畳縁・畳床・寸法。src/lib/tatami-spec.ts) を畳製造予定の画面で入れる・直す。
+ * 受注の行はその受注の仕様 (この行の作業の部屋を置き換え、ほかの作業の部屋は残す)、受注のない行は製造予定の行に保存する
+ */
+export async function saveProductionRooms(formData: FormData) {
+  const user = await requireActionUser();
+  const back = safeReturn(str(formData, "back"), PAGE);
+  if (!canEditProduction(user)) fail(back, "畳製造予定を変更する権限がありません。");
+  const key = str(formData, "key");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(str(formData, "rooms") || "[]");
+  } catch {
+    fail(back, "仕様の形式が正しくありません。もう一度入力してください。");
+  }
+  const parsed = cleanRooms(raw);
+  if (parsed.error) fail(back, parsed.error);
+  const today = toDateKey(new Date());
+  const row0 = findProductionRow(getDb(), key, today);
+  if (!row0) fail(back, "製造の予定が見つかりません。");
+  if (row0.roomsTarget.kind === "record") {
+    const missing = await productionTableMissing();
+    if (missing) fail(back, missing);
+  }
+  let changed = false;
+  await mutate((db) => {
+    const row = findProductionRow(db, key, today);
+    if (!row) fail(back, "製造の予定が見つかりません。");
+    const now = nowIso();
+    if (row.roomsTarget.kind === "order") {
+      const target = row.roomsTarget;
+      const o = db.orders.find((x) => x.id === target.orderId);
+      if (!o) fail(back, "受注が見つかりません。");
+      const before = orderRooms(db, o);
+      const next = [...before.rooms.filter((r) => !target.works.includes(r.work)), ...parsed.rooms];
+      if (before.source === "order" && sameRooms(before.rooms, next)) return;
+      o.tatamiRooms = next;
+      o.updatedAt = now;
+      changed = true;
+      addAudit(db, { userId: user.id, action: "update", entity: "order", entityId: o.id, entityLabel: o.number, summary: `畳の仕様 (部屋ごと) を畳製造予定で入力: ${roomsText(parsed.rooms).slice(0, 200)}`, storeId: o.storeId, changes: [{ field: "tatamiRooms", before: before.source === "order" ? before.rooms : null, after: next }] });
+      return;
+    }
+    const rec = ensureRecord(db, row, user.id, now);
+    const before = cleanRooms(rec.rooms ?? []).rooms;
+    if (sameRooms(before, parsed.rooms)) return;
+    rec.rooms = parsed.rooms.length ? parsed.rooms : undefined;
+    rec.updatedBy = user.id;
+    rec.updatedAt = now;
+    pushHistory(rec, { at: now, by: user.id, action: "edit", note: "部屋ごとの仕様" });
+    changed = true;
+    addAudit(db, { userId: user.id, action: "update", entity: "production", entityId: rec.id, entityLabel: label(row), summary: `畳の仕様 (部屋ごと) を入力: ${roomsText(parsed.rooms).slice(0, 200)}`, storeId: rec.storeId, changes: [{ field: "rooms", before, after: parsed.rooms }] });
+  });
+  revalidatePath(PAGE);
+  if (row0.orderId) revalidatePath(`/orders/${row0.orderId}`);
+  redirect(withMsg(back, changed ? `${label(row0)} の仕様 (部屋ごと) を保存しました。` : "変更はありませんでした。"));
 }

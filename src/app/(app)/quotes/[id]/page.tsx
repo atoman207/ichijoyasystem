@@ -5,7 +5,10 @@ import { logRecordView } from "@/lib/record-views";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canApprove, skipsApproval } from "@/lib/auth/permissions";
+import { canAccessStore, canApprove, canEditProduction, skipsApproval } from "@/lib/auth/permissions";
+import { TatamiRoomsCard } from "@/components/schedule/TatamiRoomsCard";
+import { saveQuoteTatamiRooms } from "@/lib/actions/tatami-rooms";
+import { ROOMS_SOURCE_LABEL, orderRooms, quoteRooms } from "@/lib/tatami-rooms";
 import { quoteChain, userName } from "@/lib/db/queries";
 import { convertQuoteToOrder, deleteQuote, markQuoteLost, sendQuote, submitQuote } from "@/lib/actions/quotes";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
@@ -146,6 +149,25 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
           </Card>
 
           <SiteInfoCard info={q.siteInfo} action={updateSiteInfo.bind(null, "quote", q.id)} returnTo={returnTo} canEdit={!["rejected", "expired"].includes(q.status)} />
+
+          {(() => {
+            // 畳の仕様 (部屋ごと。畳表・畳縁・畳床・寸法)。受注にした見積は受注の仕様 (畳製造予定は受注の仕様を使う)
+            const ord = q.orderId ? db.orders.find((x) => x.id === q.orderId) : undefined;
+            const spec = ord ? orderRooms(db, ord) : quoteRooms(db, q);
+            if (!spec.rooms.length && !q.tatamiRooms) return null;
+            return (
+              <TatamiRoomsCard
+                rooms={spec.rooms}
+                sourceLabel={ROOMS_SOURCE_LABEL[spec.source]}
+                auto={quoteRooms(db, { items: q.items, siteInfo: q.siteInfo }).rooms}
+                action={saveQuoteTatamiRooms.bind(null, q.id)}
+                editable={!ord && canEditProduction(user) && !["rejected", "expired"].includes(q.status)}
+                idPrefix={`qt-${q.id}`}
+                description="見積の明細と手書きの備考 (サイズ・わら・建材) から部屋ごとの仕様を入れています。受注にすると畳製造予定にそのまま出ます。決まっていない項目 (建材床の厚み・寸法など) は空欄のままで、あとから入れられます"
+                note={ord ? <p className="mt-2 text-xs text-ink-2">受注 <Link href={`/orders/${ord.id}#tatami-rooms`} className="text-accent-ink underline">{ord.number}</Link> の画面で入力・変更します。</p> : undefined}
+              />
+            );
+          })()}
 
           {["approved", "sent"].includes(q.status) && !q.orderId && (
             <Card>

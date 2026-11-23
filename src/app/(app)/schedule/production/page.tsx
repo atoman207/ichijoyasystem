@@ -9,7 +9,11 @@ import { canEditProduction, canViewCompanySchedule } from "@/lib/auth/permission
 import { dateRange, dayOfWeek, isDateKey, longDate, shortDate } from "@/lib/calendar";
 import { addDays, toDateKey } from "@/lib/format";
 import { Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select, Textarea } from "@/components/ui";
-import { addProduction, deleteProduction, updateProduction } from "@/lib/actions/production";
+import { addProduction, deleteProduction, saveProductionRooms, updateProduction } from "@/lib/actions/production";
+import { TatamiRoomsTable, pendingRoomCount } from "@/components/schedule/TatamiRoomsTable";
+import { TatamiRoomsEditor } from "@/components/schedule/TatamiRoomsEditor";
+import { roomsFromSheetMemo } from "@/lib/tatami-spec";
+import { quoteRooms } from "@/lib/tatami-rooms";
 import { carryTarget, productionByDay, productionRows, productionView, type ProductionRow } from "@/lib/production/plan";
 import { productionTableReady } from "@/lib/production/tables";
 
@@ -35,14 +39,37 @@ function Totals({ rows, compact = false }: { rows: ProductionRow[]; compact?: bo
   const qty = rows.reduce((a, r) => a + r.qty, 0);
   const herinashi = rows.filter((r) => r.herinashiSeen);
   const open = rows.filter((r) => r.status === "planned").length;
+  const pending = rows.filter((r) => r.status === "planned" && pendingRoomCount(r.rooms) > 0).length;
   return (
     <span className={clsx("inline-flex flex-wrap items-center gap-x-2 gap-y-0.5", compact ? "text-[11px]" : "text-xs")}>
       <span className="font-semibold text-ink tnum">{rows.length} 件</span>
       <span className="font-semibold text-ink tnum">タ{num(qty)}</span>
       {herinashi.length > 0 && <span className="font-semibold text-critical-ink">縁無 {herinashi.length} 件</span>}
       {open < rows.length && <span className="text-ink-3">済 {rows.length - open} 件</span>}
+      {pending > 0 && <span className="font-semibold text-warn-ink">仕様の未確認 {pending} 件</span>}
     </span>
   );
+}
+
+const ROOMS_SOURCE: Record<ProductionRow["roomsSource"], string> = {
+  order: "受注で入れた仕様",
+  quote: "見積で入れた仕様",
+  record: "製造予定で入れた仕様",
+  auto: "見積の明細から自動 (確かめて直してください)",
+  sheet: "予定表の製造の表から",
+  count: "仕様は未入力 (畳数だけ)",
+};
+
+/** 「見積の明細から作り直す」の案 (受注の行は見積の明細、移行した予定表の行は製造の表) */
+function autoRooms(db: ReturnType<typeof getDb>, r: ProductionRow) {
+  if (r.roomsTarget.kind === "order") {
+    const works = r.roomsTarget.works;
+    const o = db.orders.find((x) => x.id === r.orderId);
+    const q = o?.quoteId ? db.quotes.find((x) => x.id === o.quoteId) : undefined;
+    return q ? quoteRooms(db, { items: q.items, siteInfo: o?.siteInfo ?? q.siteInfo }).rooms.filter((x) => works.includes(x.work)) : [];
+  }
+  const ev = r.eventId ? db.schedule.find((e) => e.id === r.eventId) : undefined;
+  return ev ? roomsFromSheetMemo(ev.memo) : [];
 }
 
 function RowItem({ r, stores, editable, back, today, db }: { r: ProductionRow; stores: Map<StoreId, Store>; editable: boolean; back: string; today: string; db: ReturnType<typeof getDb> }) {
@@ -88,8 +115,13 @@ function RowItem({ r, stores, editable, back, today, db }: { r: ProductionRow; s
             )}
           </span>
           {r.work && <span className="text-xs text-ink-2">{r.work}</span>}
+          {pendingRoomCount(r.rooms) > 0 && r.status === "planned" && <span className="rounded bg-warn-soft px-1.5 py-0.5 text-[11px] font-semibold text-warn-ink">仕様の未確認 {pendingRoomCount(r.rooms)} 部屋</span>}
         </div>
-        {r.spec && <p className="mt-0.5 text-xs break-words text-ink-2">仕様: {r.spec}</p>}
+        <div className="mt-1.5">
+          <TatamiRoomsTable rooms={r.rooms} dim={r.status === "done"} />
+          <p className="mt-0.5 text-[11px] text-ink-3" data-testid="rooms-source">{ROOMS_SOURCE[r.roomsSource]}</p>
+        </div>
+        {r.roomsSource === "count" && r.spec && <p className="mt-0.5 text-xs break-words text-ink-2">明細: {r.spec}</p>}
         <p className="mt-0.5 text-[11px] text-ink-3">
           {r.baseDate ? `${r.baseLabel} ${shortDate(r.baseDate)}` : r.baseLabel === "手で追加" ? "手で追加した予定" : `${r.baseLabel}なし`}
           {r.deliveryDate && ` · 納品 ${shortDate(r.deliveryDate)}`}
@@ -102,6 +134,22 @@ function RowItem({ r, stores, editable, back, today, db }: { r: ProductionRow; s
             {w}
           </p>
         ))}
+        {editable && (
+          <details className="mt-2 rounded-lg border border-line bg-panel" data-testid="rooms-edit">
+            <summary className="cursor-pointer px-3 py-1.5 text-xs font-medium text-accent-ink">仕様を入力・変更 (部屋ごとの畳表・畳縁・畳床・寸法)</summary>
+            <div className="border-t border-line p-3">
+              <TatamiRoomsEditor
+                action={saveProductionRooms}
+                initial={r.rooms}
+                auto={autoRooms(db, r)}
+                hidden={{ key: r.key, back }}
+                works={r.roomsTarget.kind === "order" ? r.roomsTarget.works : undefined}
+                idPrefix={`pr-${r.key.replace(/[^a-z0-9]/gi, "")}`}
+                submitLabel={r.roomsTarget.kind === "order" ? "仕様を保存する (受注にも反映)" : "仕様を保存する"}
+              />
+            </div>
+          </details>
+        )}
       </div>
       {editable && (
         <div className="flex flex-wrap items-center gap-1.5 @3xl:justify-end">

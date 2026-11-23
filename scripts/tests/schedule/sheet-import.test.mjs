@@ -180,7 +180,7 @@ const day1 = month.events.filter((e) => e.date === D(1));
 const find = (raw, side) => day1.find((e) => e.raw === P.nk(raw) && (!side || e.side === side));
 const oiwa = find("(須屋)大岩", "hagi");
 eq([oiwa?.kind, oiwa?.area, oiwa?.name, oiwa?.countText, oiwa?.startTime, oiwa?.endTime, oiwa?.storeId], ["pickup", "須屋", "大岩", "畳 表替え6 / 襖 張替2", "08:30", "09:30", "koshi"], "ハギ: 引き取り・地区・名前・枚数・時刻・店舗");
-eq(oiwa?.production, ["製造: 裏 6枚 縁 麻の葉橙 61"], "工場の製造の表を同じ現場名の引き取りに付ける (61.0 → 61)");
+eq(oiwa?.production, ["製造: 裏 6枚 / 縁 麻の葉橙 / サイズ 61"], "工場の製造の表を同じ現場名の引き取りに付ける (61.0 → 61・項目の名前つき)");
 eq([find("(須屋)大岩", "shiki")?.kind, find("(須屋)大岩", "shiki")?.slot], ["delivery", "pm"], "シキ: 午後の納品");
 eq([find("（植木町）早川　現見")?.kind, find("（植木町）早川　現見")?.name, find("（植木町）早川　現見")?.countText], ["survey", "早川", "障子 張替8"], "「現見」は枚数があっても現地調査 (見積の数量は仕事内容に)");
 const newbie = find("(幾久富)新規田", "hagi");

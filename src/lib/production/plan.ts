@@ -1,4 +1,6 @@
-import type { Database, Order, OrderHandover, ScheduleEvent, StoreId, TatamiProduction } from "@/lib/db/types";
+import type { Database, Order, OrderHandover, ScheduleEvent, StoreId, TatamiProduction, TatamiRoom } from "@/lib/db/types";
+import { cleanRooms, roomTotals, roomsFromSheetMemo, fmtQty, type TatamiWork } from "@/lib/tatami-spec";
+import { orderRooms } from "@/lib/tatami-rooms";
 import { classifyLine, HANDOVER_ITEM } from "@/lib/handover";
 import { lineKind } from "@/lib/line-kind";
 import { countsFromLines, countsFromText, stripKindWords, type WorkLine } from "@/lib/work-summary";
@@ -19,6 +21,10 @@ import { shortDate } from "@/lib/calendar";
  * - 手で足した行
  * 日付がなければ「製造日未定」。製造日を変えても、引取日・納品日の予定は変えない (予定表の予定には触れない)。
  * 元の日 (引取日) があとで変わったとき、製造日を手で決めていない行は新しい引取日に動き、手で決めた行はそのまま (注意を出す)。
+ *
+ * 部屋ごとの仕様 (畳表・畳縁・畳床・寸法。src/lib/tatami-spec.ts): 受注の行は受注の仕様 (受注 → 見積で入れた仕様 → 見積の明細から自動) の
+ * うちこの行の作業 (表替え・裏返し・新調) の部屋、移行した予定表の引き取りは工場の製造の表の行 (メモの「製造: …」)、
+ * 手で足した行・受注のない行で人が入れた仕様は TatamiProduction.rooms。人が入れた仕様があれば畳数は部屋の合計
  *
  * 済みの扱い: 製造済みにした行のほか、受注が施工完了以降・納品の日が過ぎた予定は製造済みとみなす。
  * この画面を使い始める前の予定 (PRODUCTION_START より前) は製造済みとみなす (移行した予定表の過去の引き取りを未完了として出さない)。
@@ -66,6 +72,12 @@ export interface ProductionRow {
   href?: string;
   /** 注意 (引取日が変わった・製造日が納品日より後) */
   warnings: string[];
+  /** 部屋ごとの仕様 (畳表・畳縁・畳床・寸法) */
+  rooms: TatamiRoom[];
+  /** 仕様の出どころ: order / quote / record = 人が入れた、auto = 見積の明細から自動、sheet = 予定表の製造の表、count = 畳数だけ */
+  roomsSource: "order" | "quote" | "auto" | "sheet" | "record" | "count";
+  /** 仕様を保存する先 (受注の行はその受注の、この行の作業の部屋) */
+  roomsTarget: { kind: "order"; orderId: string; works: TatamiWork[] } | { kind: "record" };
 }
 
 const DONE_ORDER = new Set(["completed", "invoiced", "paid"]);
@@ -89,6 +101,16 @@ function orderLines(ix: Index, o: Order): WorkLine[] {
 
 interface Candidate extends Omit<ProductionRow, "record" | "date" | "mode" | "status" | "warnings"> {
   autoDone: boolean;
+  /** 仕様の注意 (部屋の畳数の合計が見積と違う など) */
+  specWarnings?: string[];
+}
+
+const ITEM_WORK: Record<string, TatamiWork> = { tatami_omote: "omote", tatami_ura: "ura", tatami_new: "new" };
+/** 作業の言葉 (表替え・新調・裏返し) → 作業 */
+const workOf = (text: string): TatamiWork => (/新調|新/.test(text) ? "new" : /裏返/.test(text) ? "ura" : "omote");
+/** 仕様の入っていない行の部屋 (畳数だけ) */
+function countRoom(work: TatamiWork, qty: number, herinashi: number, key: string): TatamiRoom {
+  return { id: `tr_${key.replace(/[^a-z0-9]/gi, "").toLowerCase().slice(-20) || "row"}`, work, qty: qty > 0 ? qty : 0, ...(herinashi > 0 && herinashi >= qty ? { herinashi: true } : {}) };
 }
 
 /** 受注の候補 (畳の明細・畳の品目の日程がある受注) */
@@ -112,6 +134,8 @@ function orderCandidates(db: Database, events: ScheduleEvent[], today: string): 
     const autoDone = DONE_ORDER.has(o.status);
     const base = { source: "order" as const, storeId: o.storeId, orderId: o.id, orderNumber: o.number, customerId: o.customerId, name, href: `/orders/${o.id}`, autoDone };
     const heriSpec = heriLines.map((x) => lineText(x.l));
+    const spec = orderRooms(db, o);
+    const explicitSpec = spec.source === "order" || spec.source === "quote";
 
     if (tatamiRows.length) {
       // 引取日 (新調は採寸の日) が同じ畳の行を 1 行にまとめる
@@ -130,14 +154,33 @@ function orderCandidates(db: Database, events: ScheduleEvent[], today: string): 
         const counts = rows.some((r) => sharedItem.has(r.item)) || !mine.length ? countsFromText(rows.map((r) => r.label?.trim() || HANDOVER_ITEM[r.item].label).join(" / ")) : countsFromLines(mine.map((x) => x.l));
         const herinashi = countsFromLines(mine.map((x) => x.l));
         const deliveries = rows.map((r) => r.deliveryDate).filter((d): d is string => Boolean(d)).sort();
+        // 部屋ごとの仕様: この行の作業 (表替え・裏返し・新調) の部屋
+        const works = [...new Set(rows.map((r) => ITEM_WORK[r.item]))];
+        const shared = rows.some((r) => sharedItem.has(r.item));
+        let rooms = spec.rooms.filter((r) => works.includes(r.work));
+        let roomsSource: ProductionRow["roomsSource"] = spec.source;
+        if (!rooms.length) {
+          rooms = [countRoom(works[0], Math.max(counts.tatami, herinashi.herinashi), herinashi.herinashi, rows[0].id)];
+          roomsSource = "count";
+        }
+        const t = roomTotals(rooms);
+        const lineQty = Math.max(counts.tatami, herinashi.herinashi);
+        const useRooms = explicitSpec && roomsSource !== "count" && !shared && t.qty > 0;
+        const specWarnings: string[] = [];
+        if (useRooms && lineQty > 0 && Math.abs(t.qty - lineQty) > 0.01) specWarnings.push(`部屋ごとの畳数の合計 (${fmtQty(t.qty)}畳) が見積の畳数 (${fmtQty(lineQty)}畳) と違います。仕様を確かめてください`);
+        if (shared && roomsSource !== "count") specWarnings.push("同じ作業を別の日に分けているため、部屋の仕様は両方の日に出しています");
         out.push({
           ...base,
+          rooms,
+          roomsSource,
+          roomsTarget: { kind: "order", orderId: o.id, works },
+          specWarnings,
           key: `ho:${rows[0].id}`,
           spec: uniqJoin([...(mine.length ? mine.map((x) => lineText(x.l)) : rows.map((r) => r.label?.trim() || HANDOVER_ITEM[r.item].label)), ...heriSpec], " / "),
           work: uniqJoin(rows.map((r) => HANDOVER_ITEM[r.item].label.replace(/^畳\s*/, ""))),
-          qty: Math.max(counts.tatami, herinashi.herinashi),
-          herinashi: herinashi.herinashi,
-          herinashiSeen: herinashi.herinashiSeen,
+          qty: useRooms ? t.qty : lineQty,
+          herinashi: useRooms ? t.herinashi : herinashi.herinashi,
+          herinashiSeen: useRooms ? t.herinashiSeen : herinashi.herinashiSeen,
           herinashiHalf: herinashi.herinashiHalf,
           baseDate: b || undefined,
           baseLabel: rows.some((r) => r.item === "tatami_new") && measure && b === measure ? "採寸日" : "引取日",
@@ -154,14 +197,27 @@ function orderCandidates(db: Database, events: ScheduleEvent[], today: string): 
     const delivery = evs.filter((e) => e.kind === "delivery").map((e) => e.date)[0];
     const b = (isNew && measure) || pickup || o.scheduledStart;
     const c = countsFromLines(tatamiLines.map((x) => x.l));
+    const allWorks = [...new Set(tatamiLines.map((x) => x.k?.tatami ?? "omote"))] as TatamiWork[];
+    let rooms = spec.rooms;
+    let roomsSource: ProductionRow["roomsSource"] = spec.source;
+    if (!rooms.length) {
+      rooms = [countRoom(allWorks[0] ?? "omote", c.tatami, c.herinashi, o.id)];
+      roomsSource = "count";
+    }
+    const t = roomTotals(rooms);
+    const useRooms = explicitSpec && roomsSource !== "count" && t.qty > 0;
     out.push({
       ...base,
+      rooms,
+      roomsSource,
+      roomsTarget: { kind: "order", orderId: o.id, works: allWorks.length ? allWorks : ["omote", "ura", "new"] },
+      specWarnings: useRooms && c.tatami > 0 && Math.abs(t.qty - c.tatami) > 0.01 ? [`部屋ごとの畳数の合計 (${fmtQty(t.qty)}畳) が見積の畳数 (${fmtQty(c.tatami)}畳) と違います。仕様を確かめてください`] : [],
       key: `ord:${o.id}`,
       spec: uniqJoin([...tatamiLines.map((x) => lineText(x.l)), ...heriSpec], " / "),
       work: uniqJoin(tatamiLines.map((x) => WORK_NAME[x.k?.tatami ?? "omote"])),
-      qty: c.tatami,
-      herinashi: c.herinashi,
-      herinashiSeen: c.herinashiSeen,
+      qty: useRooms ? t.qty : c.tatami,
+      herinashi: useRooms ? t.herinashi : c.herinashi,
+      herinashiSeen: useRooms ? t.herinashiSeen : c.herinashiSeen,
       herinashiHalf: c.herinashiHalf,
       baseDate: b || undefined,
       baseLabel: isNew && measure && b === measure ? "採寸日" : pickup && b === pickup ? "引取日" : "施工予定",
@@ -198,7 +254,15 @@ function eventCandidates(db: Database, events: ScheduleEvent[], coveredOrders: S
     const name = stripKindWords(e.title, "pickup");
     const limit = addDays(e.date, 60);
     const delivery = (deliveryIndex.get(`${e.storeId}|${name}`) ?? []).filter((d) => d >= e.date && d <= limit).sort()[0];
+    // 部屋ごとの仕様: 予定表の工場の製造の表の行 (メモの「製造: …」)。なければ畳数だけ
+    const work = uniqJoin(segs.map((s) => (/新調/.test(s) ? "新調" : /裏返/.test(s) ? "裏返し" : "表替え"))) || (h.herinashiSeen ? "へり無し" : "");
+    const sheetRooms = roomsFromSheetMemo(memo);
+    const sheetQty = roomTotals(sheetRooms).qty;
     out.push({
+      rooms: sheetRooms.length ? sheetRooms : [countRoom(workOf(work), qty, h.herinashi, e.id)],
+      roomsSource: sheetRooms.length ? "sheet" : "count",
+      roomsTarget: { kind: "record" },
+      specWarnings: sheetRooms.length && qty > 0 && sheetQty > 0 && Math.abs(sheetQty - qty) > 0.01 ? [`予定表の製造の表の枚数 (${fmtQty(sheetQty)}畳) と引き取りの畳数 (${fmtQty(qty)}畳) が違います。仕様を確かめてください`] : [],
       key: `ev:${e.id}`,
       source: "schedule",
       storeId: e.storeId,
@@ -207,7 +271,7 @@ function eventCandidates(db: Database, events: ScheduleEvent[], coveredOrders: S
       customerId: e.customerId,
       name,
       spec: uniqJoin([...segs, ...herinashiWords], " / ") || (h.herinashiSeen ? "へり無し畳" : "畳"),
-      work: uniqJoin(segs.map((s) => (/新調/.test(s) ? "新調" : /裏返/.test(s) ? "裏返し" : "表替え"))) || (h.herinashiSeen ? "へり無し" : ""),
+      work,
       qty,
       herinashi: h.herinashi,
       herinashiSeen: h.herinashiSeen,
@@ -266,6 +330,9 @@ export function productionRows(db: Database, q: ProductionQuery): ProductionRow[
       baseLabel: "手で追加",
       href: r.orderId ? `/orders/${r.orderId}` : undefined,
       autoDone: false,
+      rooms: [countRoom(workOf(r.spec ?? ""), r.qty ?? 0, r.herinashi ?? 0, r.sourceKey)],
+      roomsSource: "count",
+      roomsTarget: { kind: "record" },
     });
   }
 
@@ -279,7 +346,15 @@ export function productionRows(db: Database, q: ProductionQuery): ProductionRow[
     const warnings: string[] = [];
     if (record?.date && record.baseDate && c.baseDate && record.baseDate !== c.baseDate) warnings.push(`${c.baseLabel}が変わりました (${shortDate(record.baseDate)} → ${shortDate(c.baseDate)})。製造日を確かめてください`);
     if (date && c.deliveryDate && date > c.deliveryDate && status === "planned") warnings.push(`製造日が納品日 (${shortDate(c.deliveryDate)}) より後です`);
-    out.push({ ...c, record, date, mode, status, warnings });
+    const { specWarnings, ...cand } = c;
+    warnings.push(...(specWarnings ?? []));
+    // 受注のない行で人が入れた仕様 (部屋ごと) があれば、畳数も部屋の合計
+    const saved = cand.roomsTarget.kind === "record" ? cleanRooms(record?.rooms ?? []).rooms : [];
+    if (saved.length) {
+      const t = roomTotals(saved);
+      Object.assign(cand, { rooms: saved, roomsSource: "record" as const }, t.qty > 0 ? { qty: t.qty, herinashi: t.herinashi, herinashiSeen: t.herinashiSeen } : {});
+    }
+    out.push({ ...cand, record, date, mode, status, warnings });
   }
   return out;
 }

@@ -426,6 +426,8 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
       receiptName: q.receiptName,
       workDetails: q.workDetails,
       siteInfo: q.siteInfo,
+      // 見積で入れた畳の仕様 (部屋ごと) を受注へ (なければ受注の画面・畳製造予定は見積の明細から自動で作る)
+      ...(q.tatamiRooms?.length ? { tatamiRooms: q.tatamiRooms } : {}),
       plannedPayment: plannedFromSiteInfo(q.siteInfo?.paymentMethod),
       progressNotes: [{ id: newId("pn"), at: now, userId: user.id, kind: "note", body: str(formData, "note") || "お客様よりご承諾をいただきました。契約承認を申請します。" }],
       createdBy: user.id,
