@@ -25,6 +25,9 @@ export function PayablesTab({ db, user, sp }: { db: Database; user: User; sp: Re
 
   return (
     <div className="space-y-4">
+      <Note>
+        基準日時点の買掛残高です。税理士送付の買掛一覧・支払予定の控えは source/11_取引先・仕入先/買掛・支払 にあります。非課税の仕入 (車検など) は請求書の写しも同フォルダーの請求書・見積書へ置きます。税理士へ渡す一覧は既定で総合振込の分だけです。
+      </Note>
       <form method="get" className="flex flex-wrap items-end gap-2">
         <input type="hidden" name="tab" value="ap" />
         <Field label="基準日"><Input type="date" name="asOf" defaultValue={asOf} /></Field>

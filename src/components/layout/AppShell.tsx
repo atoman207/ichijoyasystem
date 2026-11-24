@@ -240,7 +240,8 @@ function PinnedButton({ item, active, onClick }: { item: NavItem; active: boolea
       aria-label={item.badge ? `${item.label}（${item.badge} 件）` : item.label}
       title={item.label}
       className={clsx(
-        "group relative inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-linear-to-br from-accent to-info px-2.5 text-sm font-semibold text-white outline-none transition-transform duration-200 hover:-translate-y-px focus-visible:ring-4 focus-visible:ring-accent/30 sm:h-10 sm:px-3.5",
+        // スマートフォンではヘッダーが窮屈になるため非表示 (メニューの「予定表」から開く)
+        "group relative hidden h-9 shrink-0 items-center gap-1.5 rounded-xl bg-linear-to-br from-accent to-info px-2.5 text-sm font-semibold text-white outline-none transition-transform duration-200 hover:-translate-y-px focus-visible:ring-4 focus-visible:ring-accent/30 sm:inline-flex sm:h-10 sm:px-3.5",
         "animate-pin-glow motion-reduce:animate-none motion-reduce:shadow-[0_8px_18px_-10px_rgba(74,90,232,0.95)]",
         active && "ring-2 ring-white ring-offset-2 ring-offset-accent/40",
       )}
@@ -602,9 +603,10 @@ export function AppShell({
             </div>
           </nav>
 
+          {/* 右端: スマートフォンは通知・アバターだけ。検索・新規・承認は sm 以上 (狭い画面はメニューへ) */}
           <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1 lg:ml-0">
             {/* 顧客検索 */}
-            <div className="relative">
+            <div className="relative max-sm:hidden">
               <button
                 type="button"
                 className={clsx(ICON_BUTTON, menu === "search" && "bg-subtle text-ink")}
@@ -624,7 +626,7 @@ export function AppShell({
             </div>
 
             {/* 新規作成 */}
-            <div className="relative">
+            <div className="relative max-sm:hidden">
               <button
                 type="button"
                 onClick={toggle("create")}
@@ -663,7 +665,7 @@ export function AppShell({
                 aria-label={counts.approvals > 0 ? `承認 (承認を待っている申請 ${counts.approvals} 件)` : "承認 (承認を待っている申請はありません)"}
                 title={counts.approvals > 0 ? `承認を待っている申請 ${counts.approvals} 件` : "承認"}
                 data-testid="header-approvals"
-                className={clsx(ICON_BUTTON, "relative", isActive("/approvals") && "bg-subtle text-ink")}
+                className={clsx(ICON_BUTTON, "relative max-sm:hidden", isActive("/approvals") && "bg-subtle text-ink")}
               >
                 <ClipboardCheck className={clsx("h-5 w-5", ICON_ZOOM)} />
                 {counts.approvals > 0 && <CountBubble n={counts.approvals} className="absolute top-1 right-1" />}
@@ -809,6 +811,38 @@ export function AppShell({
             aria-label="メインメニュー"
             className={DRAWER_PANEL}
           >
+            {/* スマートフォン向け: ヘッダーから外した検索・新規・承認 */}
+            <div className="mb-3 space-y-3 border-b border-line pb-3 sm:hidden">
+              <div>
+                <div className="mb-1.5 px-1 text-[11px] font-semibold tracking-wide text-ink-3">顧客を検索</div>
+                <SearchBox />
+              </div>
+              <div>
+                <div className="mb-1.5 px-1 text-[11px] font-semibold tracking-wide text-ink-3">新規作成</div>
+                <div className="grid grid-cols-2 gap-1">
+                  {CREATE_ITEMS.map((it) => (
+                    <Link key={it.href} href={it.href} onClick={closeAll} className="flex items-center gap-2 rounded-xl px-2 py-2 text-sm text-ink transition hover:bg-subtle">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent-ink">
+                        <it.icon className="h-4 w-4" />
+                      </span>
+                      <span className="min-w-0 truncate font-medium">{it.label}</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+              {(user.canApprove || counts.approvals > 0) && (
+                <Link
+                  href="/approvals?tab=mine"
+                  prefetch={false}
+                  onClick={closeAll}
+                  className="flex items-center gap-2 rounded-xl bg-subtle px-3 py-2.5 text-sm font-medium text-ink transition hover:bg-line/60"
+                >
+                  <ClipboardCheck className="h-4 w-4 text-accent" />
+                  <span className="flex-1">承認</span>
+                  {counts.approvals > 0 && <span className="rounded-full bg-accent px-1.5 text-[10px] font-semibold text-white tnum">{counts.approvals}</span>}
+                </Link>
+              )}
+            </div>
             {groups.map((g) => (
               <div key={g.name || "_top"} className="mb-1 last:mb-0">
                 {g.name && <div className="px-1.5 pt-2 pb-1 text-[11px] font-semibold tracking-wide text-ink-3">{g.name}</div>}

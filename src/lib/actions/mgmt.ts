@@ -30,6 +30,7 @@ import { salesFacts } from "@/lib/assistant/facts";
 import { round4 } from "@/lib/mgmt/decimal";
 import { areaRowsFromXlsx, readXlsx } from "@/lib/xlsx";
 import { applyMaterialMoveImport, planHash, planMaterialMoveImport, type MoveImportPlan } from "@/lib/mgmt/material-move-import";
+import { applyTatamiCostPlan, parseTatamiCostSheet } from "@/lib/mgmt/tatami-cost-sheet";
 import { putObject, readObject, removeObjects } from "@/lib/storage";
 
 /**
@@ -465,6 +466,38 @@ export async function importMaterialsCsv(fd: FormData) {
     addAudit(db, { userId: user.id, action: "import", entity: "material", entityId: "csv", entityLabel: "材料マスタ", summary: `材料 ${added} 件・単価 ${costs} 件を取り込み` });
   });
   done(back, `材料 ${added} 件・単価 ${costs} 件を取り込みました。`);
+}
+
+/** 売上台帳「新原本」右上の畳材料原価単価表を取り込む (適用開始日つき。過去の原価は変えない) */
+export async function importTatamiCostSheet(fd: FormData) {
+  const { user, back } = await start(fd, `${BASE}?tab=masters`, "admin");
+  const file = fd.get("file");
+  if (!(file instanceof File) || !file.size) fail(back, "売上台帳の .xlsx (シート「新原本」) を選んでください。");
+  if (!/\.xlsx$/i.test(file.name)) fail(back, ".xlsx のファイルを選んでください。");
+  const validFrom = str(fd, "validFrom") || today();
+  if (!isDate(validFrom)) fail(back, "適用開始日を入力してください。");
+  let plan;
+  try {
+    plan = parseTatamiCostSheet({ buf: Buffer.from(await file.arrayBuffer()), validFrom });
+  } catch (e) {
+    fail(back, (e as Error).message || "単価表を読めませんでした。");
+  }
+  if (!plan.rows.length) fail(back, "単価表の行がありません (シート「新原本」の右上を確かめてください)。");
+  const lc = lastClosedMonth(getDb());
+  if (lc && monthOf(validFrom) <= lc) fail(back, `${lc} まで月次確定済みです。適用開始日は確定した月より後にしてください。`);
+  let r = { added: 0, updated: 0, costs: 0, unchanged: 0, codes: [] as string[] };
+  await mutate((db) => {
+    r = applyTatamiCostPlan(db, plan, { userId: user.id, now: nowIso(), makeId: newId });
+    addAudit(db, {
+      userId: user.id,
+      action: "import",
+      entity: "material",
+      entityId: "tatami_cost_sheet",
+      entityLabel: "畳材料原価単価表",
+      summary: `新原本の単価表を取込: 材料の追加 ${r.added}・更新 ${r.updated}・単価 ${r.costs}・変更なし ${r.unchanged} (適用 ${validFrom}・${plan.rows.length} 品目)`,
+    });
+  });
+  done(back, `取り込みました: 材料の追加 ${r.added} 件・更新 ${r.updated} 件・新しい単価 ${r.costs} 件 (同じ単価 ${r.unchanged} 件は履歴に足していません)。過去の受注の原価は変わりません。`);
 }
 
 /* ================================================================== */

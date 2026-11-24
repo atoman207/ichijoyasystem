@@ -103,7 +103,7 @@ export interface SourceFolder {
 export const SOURCE_FOLDERS: SourceFolder[] = [
   { folder: "01_社内ルール・マニュアル", label: "社内ルール・マニュアル", holds: "社内総合マニュアル・顧客対応マニュアル・事務改善シート・書類の保管期限・旅費規程", action: "materials", category: "社内ルール", visibility: "manager" },
   { folder: "02_お客様対応・アンケート", label: "お客様対応・アンケート", holds: "アンケートはがき・アンケートの集計・TEL待ちリスト・点検とテレアポ", action: "materials", category: "お客様対応", visibility: "manager" },
-  { folder: "03_売上・実績", label: "売上・実績", holds: "店舗別の売上台帳・販売管理ソフトの売上明細 (CSV)", action: "materials", category: "売上・実績", visibility: "hq" },
+  { folder: "03_売上・実績", label: "売上・実績", holds: "店舗別の売上台帳・販売管理ソフトの売上明細 (CSV)・税理士送付の売掛一覧・月別売上集計", action: "materials", category: "売上・実績", visibility: "hq" },
   { folder: "04_予定表・作業日報", label: "予定表・作業日報", holds: "予定スプレッド (月ごと・過去分)・店舗の作業日報・休日カレンダー", action: "materials", category: "予定・作業日報", visibility: "manager" },
   { folder: "05_販促・広告", label: "販促・広告", holds: "チラシ・折込とポスティング・DM・口コミ・パンフレット・SNS・YouTube・イベント・名刺・看板・販促の計画と分析", action: "materials", category: "販促・広告", visibility: "manager" },
   { folder: "06_研修・教育", label: "研修・教育", holds: "研修・教育カリキュラムとその進み具合", action: "materials", category: "研修・教育", visibility: "manager" },
@@ -111,8 +111,8 @@ export const SOURCE_FOLDERS: SourceFolder[] = [
   { folder: "08_経営・計画", label: "経営・計画", holds: "経営事項審査・新店舗の工程", action: "materials", category: "経営・計画", visibility: "hq" },
   { folder: "09_事務手続き・書式", label: "事務手続き・書式", holds: "事務の覚書・届出の様式・行政 (市役所など) の様式と見積・入札の申請", action: "materials", category: "事務手続き・書式", visibility: "hq" },
   { folder: "10_補助金・助成金", label: "補助金・助成金", holds: "補助金・助成金・くまモンの申請 (計画・様式・実績報告・写真)", action: "materials", category: "補助金・申請", visibility: "hq" },
-  { folder: "11_取引先・仕入先", label: "取引先・仕入先", holds: "取引先の請求書・見積書・発注書と発注の管理・契約と取引先の情報", action: "materials", category: "協力業者・仕入先", visibility: "hq" },
-  { folder: "12_商品・価格", label: "商品・価格", holds: "縁 (ヘリ) のラインナップと在庫・取扱商品 (クロス・クラッシーノ)・ミニ畳体験", action: "materials", category: "商品・価格", visibility: "hq" },
+  { folder: "11_取引先・仕入先", label: "取引先・仕入先", holds: "取引先の請求書・見積書・発注書と発注の管理・契約と取引先の情報・税理士送付の買掛一覧・支払予定", action: "materials", category: "協力業者・仕入先", visibility: "hq" },
+  { folder: "12_商品・価格", label: "商品・価格", holds: "縁 (ヘリ) のラインナップと在庫・取扱商品 (クロス・クラッシーノ)・ミニ畳体験・畳材料原価の単価表 (新原本)", action: "materials", category: "商品・価格", visibility: "hq" },
   { folder: "13_店舗・設備・車両", label: "店舗・設備・車両", holds: "車両点検表・設備・畳の製造と材料 (発注・移動・棚卸)", action: "materials", category: "店舗・設備・車両", visibility: "hq" },
   { folder: "14_施工事例", label: "施工事例", holds: "施工事例の写真と資料 (畳・襖・クロス・畳勉強会)", action: "materials", category: "施工・作業手順", visibility: "all" },
   { folder: "15_人事・労務", label: "人事・労務", holds: "求人。社員・ご家族の個人の情報 (健康診断・就労証明・有給・慶弔・給与・社員の写真) は「個人の情報（取り込まない）」に置く (中身を読まない)", action: "materials", category: "人事・労務", visibility: "admin" },
@@ -148,7 +148,11 @@ export const RULES: RegistryRule[] = [
   { id: "personal", test: /^15_人事・労務\/個人の情報/, action: "exclude", category: "人事・労務", visibility: "admin", note: "社員・ご家族の個人の情報 (人事・労務 → 個人の情報 のフォルダー)。内容は取り込みません" },
 
   /* ---- システムのデータに取込済み (要約だけ) ---- */
-  { id: "sales-ledger", test: /^03_売上・実績\/.*売上\.xlsx$/, action: "structured", category: "売上・実績", visibility: "hq", importedTo: "orders・customers (売上台帳)", note: "店舗別の売上台帳。受注・顧客として取込済み" },
+  { id: "ar-accountant", test: /売掛一覧/, action: "materials", category: "売上・実績", visibility: "hq", note: "税理士送付の売掛一覧 (前残マイナス = 前受金)。システムの売掛は入出金の予定 → 売掛一覧 (/finance?tab=ar)" },
+  { id: "ap-accountant", test: /買掛一覧|買掛支払|支払予定表/, action: "materials", category: "協力業者・仕入先", visibility: "hq", note: "税理士送付の買掛・支払予定。システムの買掛は入出金の予定 → 買掛一覧 (/finance?tab=ap)" },
+  { id: "tatami-cost-sheet", test: /畳材料原価|新原本含む/, action: "materials", category: "商品・価格", visibility: "hq", note: "畳材料原価の単価表 (新原本)。管理会計 → 材料・単価・材料構成 で取込・一覧管理。単価変更は適用開始日以降の受注だけに効く" },
+  { id: "monthly-sales-summary", test: /月別売上集計/, action: "materials", category: "売上・実績", visibility: "hq", note: "月別売上集計表 (税理士・社内集計の控え)" },
+  { id: "sales-ledger", test: /^03_売上・実績\/.*売上\.xlsx$/, action: "structured", category: "売上・実績", visibility: "hq", importedTo: "orders・customers (売上台帳)", note: "店舗別の売上台帳。受注・顧客として取込済み。シート「新原本」右上の畳材料原価単価表は管理会計 → 材料・単価で取込" },
   { id: "sales-csv", test: /^03_売上・実績\/(?:[^/]+\/)?[^/]+\.csv$/i, action: "structured", category: "売上・実績", visibility: "hq", importedTo: "orders・customers (販売管理ソフトの売上明細)", note: "販売管理ソフトの売上明細。データ入出力 → 売上明細の取込 で取込済み" },
   { id: "work-report", test: /作業日報\.xlsx$/, action: "structured", category: "予定・作業日報", visibility: "manager", importedTo: "schedule (予定の担当者を補完)", note: "店舗の作業日報。予定表の担当者として取込済み (月次の集計は 作業日報 /work-reports)" },
   {

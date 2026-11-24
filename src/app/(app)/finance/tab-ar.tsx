@@ -23,6 +23,9 @@ export function ReceivablesTab({ db, user, sp }: { db: Database; user: User; sp:
 
   return (
     <div className="space-y-4">
+      <Note>
+        基準日時点の売掛残高です。税理士へ毎月送っている一覧の控えは source/03_売上・実績/税理士送付 にあります (その表の「前残マイナス」は前受金。焦げ付き・自治体経由の前受金で工事待ちの案件も含みます)。ここから CSV を出せます。
+      </Note>
       <form method="get" className="flex flex-wrap items-end gap-2">
         <input type="hidden" name="tab" value="ar" />
         <Field label="基準日"><Input type="date" name="asOf" defaultValue={asOf} /></Field>

@@ -1,23 +1,51 @@
 import { yen } from "@/lib/format";
 import { MATERIAL_KIND_LABEL, SIZE_LABEL, costAt } from "@/lib/mgmt/costing";
 import { itemCategories } from "@/lib/mgmt/categories";
-import { importMaterialsCsv, saveBom, saveMaterial, setMaterialCostAction } from "@/lib/actions/mgmt";
+import { DEFAULT_VALID_FROM } from "@/lib/mgmt/tatami-cost-sheet";
+import { importMaterialsCsv, importTatamiCostSheet, saveBom, saveMaterial, setMaterialCostAction } from "@/lib/actions/mgmt";
 import { Button, Card, CardHeader, Field, Input, Note, Select, Table, Td, Th, Textarea, Tr } from "@/components/ui";
 import { back, userNameOf, type Ctx } from "./parts";
+import type { MaterialKind } from "@/lib/db/types";
 
 export function MastersTab({ ctx }: { ctx: Ctx }) {
   const { db } = ctx;
   const b = back(ctx);
   const cats = itemCategories(db);
+  const kindFilter = (ctx.sp.kind ?? "") as MaterialKind | "";
+  const q = (ctx.sp.q ?? "").trim();
+  const materials = db.materials
+    .filter((m) => (!kindFilter || m.kind === kindFilter) && (!q || m.name.includes(q) || m.code.includes(q)))
+    .sort((a, b2) => a.kind.localeCompare(b2.kind) || a.name.localeCompare(b2.name, "ja"));
   const sel = ctx.sp.material ? db.materials.find((m) => m.id === ctx.sp.material) : undefined;
   const boms = [...db.boms].sort((a, b2) => a.name.localeCompare(b2.name, "ja") || b2.validFrom.localeCompare(a.validFrom));
+  const filterQs = (extra: Record<string, string | undefined>) => {
+    const p = new URLSearchParams({ tab: "masters" });
+    const kind = extra.kind !== undefined ? extra.kind : kindFilter;
+    const query = extra.q !== undefined ? extra.q : q;
+    const material = extra.material !== undefined ? extra.material : ctx.sp.material;
+    if (kind) p.set("kind", kind);
+    if (query) p.set("q", query);
+    if (material) p.set("material", material);
+    return `/management?${p.toString()}`;
+  };
   return (
     <div className="space-y-4">
       <Note>
-        材料 (畳表・畳縁・畳床・化学畳表・副資材・クロス・襖紙など) と原価単価 (適用開始日つき・税抜)、商品 1 枚あたりの材料構成 (BOM) を登録します。単価・材料構成を変えても、登録済みの原価 (当時の単価の写し) は変わりません。畳表は仕入相場で変わるため「仮原価」で登録します。副資材 (1 枚 100 円) は設定タブで変えます。原価のデータは社外秘のため、リポジトリには入れず、ここで登録・取込します。
+        材料ごとの原価単価を一覧で管理します。単価を変えるときは「適用開始日」を付けて新しい行を登録します (前の単価は履歴に残ります)。すでに登録した受注・売上の原価 (当時の単価の写し) は変わりません。新しい受注から新しい単価が使われます。畳表 (い草) は仕入相場で変わるため「仮原価」で登録します。副資材 (1 枚 100 円) は設定タブで変えます。原価のデータは社外秘のため、リポジトリには入れず、ここで登録・取込します。
       </Note>
       <Card>
-        <CardHeader title={`材料 (${db.materials.length} 件)`} />
+        <CardHeader title={`材料・単価一覧 (${materials.length} / ${db.materials.length} 件)`} description="仕入価格の値上げ・変更があったら、該当の材料を開いて単価を登録してください。品目の追加も下の「材料を追加」からできます。" />
+        <form className="mb-3 flex flex-wrap items-end gap-2" method="get" action="/management">
+          <input type="hidden" name="tab" value="masters" />
+          <Field label="種類">
+            <Select name="kind" defaultValue={kindFilter}>
+              <option value="">すべて</option>
+              {Object.entries(MATERIAL_KIND_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </Select>
+          </Field>
+          <Field label="名前・コード"><Input name="q" defaultValue={q} placeholder="きずな・HERI など" /></Field>
+          <Button type="submit" size="sm" variant="secondary">絞り込み</Button>
+        </form>
         <Table minWidth="min-w-[860px]">
           <thead>
             <tr>
@@ -31,7 +59,7 @@ export function MastersTab({ ctx }: { ctx: Ctx }) {
             </tr>
           </thead>
           <tbody>
-            {db.materials.map((m) => {
+            {materials.map((m) => {
               const c = costAt(db, m.id, ctx.today);
               return (
                 <Tr key={m.id}>
@@ -41,23 +69,27 @@ export function MastersTab({ ctx }: { ctx: Ctx }) {
                   <Td>{cats.find((x) => x.id === m.itemCategory)?.name}</Td>
                   <Td className="text-xs">{[m.spec, m.thickness ? `${m.thickness}mm` : "", m.size ? SIZE_LABEL[m.size] ?? m.size : ""].filter(Boolean).join(" ")}</Td>
                   <Td align="right">{c ? `${yen(c.unitCost)}${c.kind === "provisional" ? " (仮)" : ""}` : <span className="text-warn-ink">未登録</span>}</Td>
-                  <Td><a className="text-xs text-accent hover:underline" href={`/management?tab=masters&material=${m.id}#material`}>単価・編集</a></Td>
+                  <Td><a className="text-xs text-accent hover:underline" href={filterQs({ material: m.id }) + "#material"}>単価・編集</a></Td>
                 </Tr>
               );
             })}
+            {!materials.length && (
+              <Tr><Td colSpan={7} className="text-ink-2">該当する材料がありません。下の取込か「材料を追加」で登録してください。</Td></Tr>
+            )}
           </tbody>
         </Table>
       </Card>
 
       {sel && (
         <Card id="material">
-          <CardHeader title={`${sel.name} の単価の履歴`} />
+          <CardHeader title={`${sel.name} の単価の履歴`} description="新しい単価を登録しても、過去の日付の原価計算と確定済みの使用実績は当時の単価のままです。" />
           <ul className="mb-3 space-y-1 text-sm">
             {db.materialCosts.filter((c) => c.materialId === sel.id).sort((a, b2) => b2.validFrom.localeCompare(a.validFrom)).map((c) => (
               <li key={c.id}>
                 {c.validFrom}〜{c.validTo ?? ""} {yen(c.unitCost)} ({c.kind === "provisional" ? "仮原価" : "原価単価"}) · {c.createdAt.slice(0, 10)} {userNameOf(db, c.createdBy)}{c.note ? ` · ${c.note}` : ""}
               </li>
             ))}
+            {!db.materialCosts.some((c) => c.materialId === sel.id) && <li className="text-ink-2">まだ単価がありません。</li>}
           </ul>
           {ctx.canAdmin && (
             <form action={setMaterialCostAction} className="flex flex-wrap items-end gap-2">
@@ -71,7 +103,7 @@ export function MastersTab({ ctx }: { ctx: Ctx }) {
                 </Select>
               </Field>
               <Field label="適用開始日" required><Input type="date" name="validFrom" defaultValue={ctx.today} required /></Field>
-              <Field label="メモ"><Input name="note" /></Field>
+              <Field label="メモ"><Input name="note" placeholder="例: 2026-11 仕入値上げ" /></Field>
               <Button type="submit" size="sm">単価を登録</Button>
             </form>
           )}
@@ -81,7 +113,7 @@ export function MastersTab({ ctx }: { ctx: Ctx }) {
       {ctx.canAdmin && (
         <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-2">
           <Card>
-            <CardHeader title={sel ? `材料を編集: ${sel.name}` : "材料を追加"} />
+            <CardHeader title={sel ? `材料を編集: ${sel.name}` : "材料を追加"} description="一覧にない品目を追加するとき。コードは再取込で同じ材料に当てる目印です。" />
             <form action={saveMaterial} className="grid grid-cols-2 gap-2">
               {b}
               {sel && <input type="hidden" name="id" value={sel.id} />}
@@ -117,13 +149,22 @@ export function MastersTab({ ctx }: { ctx: Ctx }) {
             </form>
           </Card>
           <Card>
-            <CardHeader title="材料と単価の一括取込 (CSV)" description="1 行 = コード,名前,種類,単位,品目,単価,単価の種類,適用開始日,厚み,規格,仕入先の品番 (UTF-8)。種類: omote・chem_omote・heri・doko・sub・cloth・paper・other / 品目: tatami・fusuma・reform・curtain・own・other・misc / 単価の種類: provisional (仮原価)・standard / 規格: gohachi・rokumaru・rokuichi・honma" />
-            <form action={importMaterialsCsv} className="space-y-2">
+            <CardHeader title="新原本の単価表を取り込む" description="売上台帳 .xlsx のシート「新原本」右上の畳材料原価単価表。適用開始日より前の受注・確定済みの原価には影響しません。" />
+            <form action={importTatamiCostSheet} className="space-y-2">
               {b}
-              <Input type="file" name="file" accept=".csv,text/csv" />
-              <Textarea name="csv" rows={4} placeholder="または貼り付け: DOKO-55G,畳床 55mm 五八,doko,枚,tatami,4000,standard,2026-07-01,55,gohachi," />
-              <Button type="submit" size="sm">取り込む</Button>
+              <Field label="売上台帳 (.xlsx)" required><Input type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required /></Field>
+              <Field label="適用開始日" required><Input type="date" name="validFrom" defaultValue={DEFAULT_VALID_FROM} required /></Field>
+              <Button type="submit" size="sm">単価表を取り込む</Button>
             </form>
+            <div className="mt-4 border-t border-line pt-3">
+              <CardHeader title="材料と単価の一括取込 (CSV)" description="1 行 = コード,名前,種類,単位,品目,単価,単価の種類,適用開始日,厚み,規格,仕入先の品番 (UTF-8)。種類: omote・chem_omote・heri・doko・sub・cloth・paper・other / 単価の種類: provisional (仮原価)・standard" />
+              <form action={importMaterialsCsv} className="space-y-2">
+                {b}
+                <Input type="file" name="file" accept=".csv,text/csv" />
+                <Textarea name="csv" rows={4} placeholder="または貼り付け: DOKO-55G,畳床 55mm 五八,doko,枚,tatami,4000,standard,2026-07-01,55,gohachi," />
+                <Button type="submit" size="sm">CSV を取り込む</Button>
+              </form>
+            </div>
           </Card>
         </div>
       )}
