@@ -1,7 +1,8 @@
 import type { Customer, Database, Inquiry, User } from "@/lib/db/types";
 import { canEditCaseStore, canReadStoreRecords } from "@/lib/auth/permissions";
 import { policyReader } from "@/lib/access-policy";
-import { addAudit, nowIso } from "@/lib/db/store";
+import { addAudit, newId, nowIso } from "@/lib/db/store";
+import { customerHasPhone, phoneDigits } from "@/lib/customer-contacts";
 import { linkInquiryLogs } from "@/lib/ai-intake";
 
 /**
@@ -9,6 +10,23 @@ import { linkInquiryLogs } from "@/lib/ai-intake";
  * 紐付けはお客様の記録を変えない (問い合わせの店舗・担当はそのまま) ため、ほかの店舗・本部で登録したお客様にも紐付けられる
  * (お客様のご要望 2026-11-24「顧客の二重登録を防ぐ」: 顧客検索で見つかるお客様が紐付けの候補に出なかった)
  */
+/**
+ * 問い合わせで聞いた電話番号が、紐付けたお客様の登録にないときは「ほかの電話番号」に足す (次からその番号でも検索・照合できる。
+ * お客様のご要望 2026-11-24「② どの電話番号からでも紐付け」)。お客様を変更できる人 (canEditCaseStore) のときだけ・ほかのお客様の番号でないときだけ。足した番号を返す
+ */
+export function addInquiryPhone(db: Database, user: User, c: Customer, phone: string | undefined, note: string): string | undefined {
+  const p = (phone ?? "").trim();
+  const d = phoneDigits(p);
+  if (d.length < 9 || customerHasPhone(c, d) || !canEditCaseStore(user, c.storeId)) return undefined;
+  // ほかのお客様の番号なら足さない (付け替えのときの前のお客様の番号など。同じ番号のお客様が増えると照合で迷う)
+  if (db.customers.some((x) => x.id !== c.id && customerHasPhone(x, d))) return undefined;
+  const before = [...(c.contacts ?? [])];
+  if (before.length >= 30) return undefined;
+  c.contacts = [...before, { id: newId("cc"), relation: "問い合わせの電話", phone: p, note: note.slice(0, 100) }];
+  addAudit(db, { userId: user.id, action: "update", entity: "customer", entityId: c.id, entityLabel: `${c.code} ${c.name}`, summary: `問い合わせで聞いた電話番号 ${p} を「ほかの電話番号」に追加`, storeId: c.storeId, changes: [{ field: "contacts", before, after: c.contacts }] });
+  return p;
+}
+
 export function canLinkToCustomer(db: Pick<Database, "settings">, user: User, c: Pick<Customer, "storeId">): boolean {
   return canEditCaseStore(user, c.storeId) || canReadStoreRecords(policyReader(db, user), c.storeId);
 }

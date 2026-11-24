@@ -10,6 +10,8 @@ import { isOnsiteQuoteText, isSiteSurveyText } from "@/lib/schedule-sheet/parse"
 import { SHEET_REF_PREFIX, eventFingerprint, sheetSettings, writeSheetSettings } from "@/lib/schedule-sheet/plan";
 import { applyAreaImport, planAreaImport, storeIdOfName } from "@/lib/mgmt/areas";
 import { prevDay } from "@/lib/mgmt/rules";
+import { POSTAL_FETCHED_AT, POSTAL_SOURCE, postalFromAddress } from "@/lib/postal/lookup";
+import { areaStoreOf } from "@/lib/store-area";
 import type { Database, ScheduleKind } from "@/lib/db/types";
 
 export const runtime = "nodejs";
@@ -30,6 +32,10 @@ export const maxDuration = 60;
  *   task = sales-areas: 営業エリア (住所 → 担当店舗。お客様のご要望 2026-11-24「③」。src/lib/store-area.ts) を登録する。
  *     本文 (JSON) = { rows: [{ store, town }] (予定表の「地域一覧」), manual: [{ store, town, note? }] (地域一覧にない地域), validFrom?, sourceName? }。
  *     エリアは社外秘のためコードに書かず、ここで受け取る (画面では 管理会計 → 設定 → 営業エリア)。既定は確認だけ、apply=1 で書き込み、変更履歴
+ *   task = postal-codes: 郵便番号が空の顧客に、住所から郵便番号を入れる (お客様のご要望 2026-11-24「①」。src/lib/postal/lookup.ts)。
+ *     住所で決まらない (町名だけ・候補が 2 つ以上) 顧客は空のまま。入力済みの郵便番号は変えない。既定は確認だけ、apply=1 で書き込み、
+ *     変更履歴はまとめて 1 件 (顧客ごとには残さない。試験期間の引き継ぎでは自動で入れた郵便番号を「変わった」に数えない = carryover.ts の DERIVED_FIELDS)。
+ *     本番のデータベースに切り替えたあと (12/1) に本番でもう一度実行する
  */
 export async function POST(req: Request) {
   const secret = (process.env.CRON_SECRET ?? "").trim();
@@ -41,6 +47,7 @@ export async function POST(req: Request) {
   const task = url.searchParams.get("task");
   if (task === "store-name") return storeName(url);
   if (task === "sales-areas") return salesAreas(url, req);
+  if (task === "postal-codes") return postalCodes(url);
   if (task === "schedule-onsite" || task === "schedule-kinds") return scheduleOnsite(url);
   if (task !== "quote-line-units") return NextResponse.json({ error: "unknown task" }, { status: 400 });
   const from = url.searchParams.get("from") ?? "";
@@ -129,6 +136,54 @@ async function salesAreas(url: URL, req: Request) {
     addAudit(db, { userId: SYSTEM_USER, action: "import", entity: "sales_area", entityId: "import", entityLabel: sourceName, summary: `営業エリアを登録: 地域一覧 ${n} 件・地域一覧にない地域 ${manual.length} 件 (${validFrom} から)` });
   });
   return NextResponse.json({ ok: true, applied: true, ...summary, at: nowIso() });
+}
+
+/** 郵便番号の自動設定 (住所から。空の顧客だけ) */
+async function postalCodes(url: URL) {
+  const apply = url.searchParams.get("apply") === "1";
+  const plan = (db: Database) => {
+    const fill: { id: string; postalCode: string }[] = [];
+    const reasons = { filled: 0, ambiguous: 0, not_found: 0, no_address: 0, already: 0 };
+    const samples: { ambiguous: string[]; not_found: string[] } = { ambiguous: [], not_found: [] };
+    for (const c of db.customers) {
+      if ((c.postalCode ?? "").replace(/\D/g, "")) {
+        reasons.already++;
+        continue;
+      }
+      // 候補が 2 つ以上 (同じ町名がほかの市にもある) のときは、お客様の担当店舗の営業エリアの町を選ぶ
+      const r = postalFromAddress(c.address, { prefer: (h) => areaStoreOf(db, `${h.city}${h.town}`)?.storeId === c.storeId });
+      if (r.ok) {
+        fill.push({ id: c.id, postalCode: r.hit.postalCode });
+        reasons.filled++;
+      } else {
+        reasons[r.reason]++;
+        if (r.reason !== "no_address" && samples[r.reason].length < 20) samples[r.reason].push(`${c.code} ${(c.address ?? "").slice(0, 20)}`);
+      }
+    }
+    return { fill, reasons, samples };
+  };
+  const db0 = await syncDb();
+  const p0 = plan(db0);
+  const summary = { source: `${POSTAL_SOURCE} (${POSTAL_FETCHED_AT})`, ...p0.reasons, samples: p0.samples };
+  if (!apply || !p0.fill.length) return NextResponse.json({ ok: true, applied: false, ...summary });
+  let n = 0;
+  // 2,000 件ずつ書く (本番の Supabase に一度に大量の行を送らない)
+  for (let i = 0; i < p0.fill.length; i += 2000) {
+    const part = p0.fill.slice(i, i + 2000);
+    await mutate((db) => {
+      const byId = new Map(db.customers.map((c) => [c.id, c]));
+      for (const f of part) {
+        const c = byId.get(f.id);
+        if (!c || (c.postalCode ?? "").replace(/\D/g, "")) continue;
+        c.postalCode = f.postalCode;
+        n++;
+      }
+    });
+  }
+  await mutate((db) => {
+    addAudit(db, { userId: SYSTEM_USER, action: "import", entity: "customer", entityId: "postal-codes", entityLabel: "郵便番号の自動設定", summary: `住所から郵便番号を入れました: ${n} 件 (郵便番号が空の顧客だけ。住所で決まらない ${p0.reasons.ambiguous + p0.reasons.not_found} 件は空のまま。${POSTAL_SOURCE} ${POSTAL_FETCHED_AT})` });
+  });
+  return NextResponse.json({ ok: true, applied: true, written: n, ...summary, at: nowIso() });
 }
 
 /** 予定表から取り込んだ「現見」「現調」の予定 (見積りのまま) → 直す種類 */

@@ -14,6 +14,7 @@ import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { contactLine, parseContacts } from "@/lib/customer-contacts";
 import { assertCaseStore, assertStore, choice, fail, requireActionUser, resolveStoreId, safeReturn, str, withMsg } from "./guards";
 import { propagateCustomerAddress } from "@/lib/maps/store";
+import { postalForSave } from "@/lib/postal/lookup";
 
 function parseTags(s: string): string[] {
   return s.split(/[,、\s]+/).map((t) => t.trim()).filter(Boolean);
@@ -96,7 +97,8 @@ export async function createCustomer(formData: FormData) {
       phone: str(formData, "phone"),
       email: str(formData, "email") || undefined,
       lineId: str(formData, "lineId") || undefined,
-      postalCode: str(formData, "postalCode"),
+      // 郵便番号が空なら住所から (お客様のご要望 2026-11-24「①」。src/lib/postal/lookup.ts)
+      postalCode: postalForSave(str(formData, "address"), str(formData, "postalCode")),
       address: str(formData, "address"),
       storeId,
       assignedUserId: str(formData, "assignedUserId") || user.id,
@@ -145,7 +147,8 @@ export async function updateCustomer(id: string, formData: FormData) {
       phone: str(formData, "phone"),
       email: str(formData, "email") || undefined,
       lineId: str(formData, "lineId") || undefined,
-      postalCode: str(formData, "postalCode"),
+      // 郵便番号が空なら住所から。住所を変えたら、前の住所から自動で入れた郵便番号も入れ直す
+      postalCode: postalForSave(str(formData, "address"), str(formData, "postalCode"), c),
       address: str(formData, "address"),
       // 担当店舗の変更は全店舗ロールだけ (店長がほかの店舗のお客様を変更しても、お客様の店舗は変えない)
       storeId: canSeeAllStores(user) ? resolveStoreId(user, str(formData, "storeId"), c.storeId) : c.storeId,

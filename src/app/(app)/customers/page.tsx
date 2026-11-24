@@ -102,7 +102,12 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
                   </div>
                 </Td>
                 <Td>
-                  <div className="text-sm">{c.phone}</div>
+                  <div className="text-sm tnum">{c.phone}</div>
+                  {/* ほかの電話番号 (携帯・自宅・ご家族など。お客様のご要望 2026-11-24「②」) */}
+                  {(c.contacts ?? []).slice(0, 2).map((x) => (
+                    <div key={x.id} className="text-xs text-ink-2 tnum">{x.phone} <span className="text-[10px] text-ink-3">{x.relation}</span></div>
+                  ))}
+                  {(c.contacts?.length ?? 0) > 2 && <div className="text-[10px] text-ink-3">ほか {(c.contacts?.length ?? 0) - 2} 件</div>}
                   <div className="text-[11px] text-ink-3">{CHANNEL_LABEL[c.preferredChannel]}希望{c.lineId ? " · LINE" : ""}</div>
                 </Td>
                 <Td><StoreTag store={storeMap.get(c.storeId)} />{!canEditCaseStore(user, c.storeId) && <span className="ml-1 text-[11px] text-ink-3">{openIds.has(c.id) ? "進行中 (閲覧のみ)" : "閲覧のみ"}</span>}</Td>

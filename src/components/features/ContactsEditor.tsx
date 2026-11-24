@@ -6,7 +6,7 @@ import type { CustomerContact } from "@/lib/db/types";
 import { CONTACT_RELATIONS } from "@/lib/customer-contacts";
 
 /**
- * 顧客の連絡先 (本人以外の電話番号) の入力。夫・姉・祖母・勤務先など、続柄つきで複数登録する。
+ * 顧客のほかの電話番号の入力。本人の携帯・自宅 (固定)・夫・姉・祖母・勤務先など、種類・続柄つきで複数登録する (お客様のご要望 2026-11-24「②」)。
  * 送信は hidden の JSON (name="contacts")。保存は src/lib/actions/customers.ts (parseContacts)
  */
 
@@ -39,7 +39,7 @@ export function ContactsEditor({ initial = [] }: { initial?: CustomerContact[] }
         <div className="space-y-2">
           {rows.map((r) => (
             <div key={r.key} className="grid grid-cols-2 gap-2 rounded-lg border border-line bg-subtle/40 p-2 @xl:grid-cols-[8rem_1fr_10rem_1fr_auto]">
-              <input className="field h-9 text-sm" list="contact-relations" value={r.relation} onChange={(e) => update(r.key, { relation: e.target.value })} placeholder="続柄 (例: 夫)" aria-label="続柄" />
+              <input className="field h-9 text-sm" list="contact-relations" value={r.relation} onChange={(e) => update(r.key, { relation: e.target.value })} placeholder="種類・続柄 (例: 本人 (携帯)・夫)" aria-label="種類・続柄" />
               <input className="field h-9 text-sm" value={r.name} onChange={(e) => update(r.key, { name: e.target.value })} placeholder="名前 (任意)" aria-label="名前" />
               <input className="field h-9 text-sm tnum" type="tel" value={r.phone} onChange={(e) => update(r.key, { phone: e.target.value })} placeholder="090-0000-0000" aria-label="電話番号" />
               <input className="field h-9 text-sm" value={r.note} onChange={(e) => update(r.key, { note: e.target.value })} placeholder="メモ (例: 平日は夕方以降)" aria-label="メモ" />
@@ -50,13 +50,24 @@ export function ContactsEditor({ initial = [] }: { initial?: CustomerContact[] }
           ))}
         </div>
       )}
-      <button
-        type="button"
-        onClick={() => setRows((rs) => [...rs, { key: nextKey(), relation: "", name: "", phone: "", note: "" }])}
-        className="mt-2 inline-flex items-center gap-1 rounded-lg border border-line px-3 py-1.5 text-xs text-ink-2 hover:bg-subtle"
-      >
-        <Plus className="h-3.5 w-3.5" aria-hidden /> 連絡先を追加
-      </button>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {(
+          [
+            ["本人 (携帯)", "携帯を追加"],
+            ["本人 (自宅)", "自宅 (固定電話) を追加"],
+            ["", "ご家族・勤務先などを追加"],
+          ] as const
+        ).map(([relation, label]) => (
+          <button
+            key={label}
+            type="button"
+            onClick={() => setRows((rs) => [...rs, { key: nextKey(), relation, name: "", phone: "", note: "" }])}
+            className="inline-flex items-center gap-1 rounded-lg border border-line px-3 py-1.5 text-xs text-ink-2 hover:bg-subtle"
+          >
+            <Plus className="h-3.5 w-3.5" aria-hidden /> {label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

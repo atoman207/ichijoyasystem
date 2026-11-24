@@ -314,6 +314,43 @@ r = await act(staffUser, () => RAct.registerReception(form({ id: rdoc.id, quick:
 const linked = db().inquiries.at(-1);
 eq([r.err, linked.customerId], [null, "cm_a"], `ほかの店舗のお客様にワンタッチで紐付けて登録 (${r.msg ?? r.err})`);
 
+/* ================================================================== */
+section("郵便番号の自動設定 (住所 → 郵便番号) と電話番号の複数登録");
+const PL = await imp("lib/postal/lookup.ts");
+const pc = (a) => {
+  const r = PL.postalFromAddress(a);
+  return r.ok ? r.hit.postalCode : r.reason;
+};
+eq(
+  ["熊本県合志市須屋99-99", "合志市須屋 99", "北区清水万石5丁目99", "大津町室9999", "熊本市植木町岩野99", "菊池郡菊陽町武蔵ケ丘北1丁目99", "泗水永99", "熊本市東区花立1丁目", "どこか町", ""].map(pc),
+  ["861-1102", "861-1102", "861-8068", "869-1235", "861-0136", "869-1112", "861-1204", "ambiguous", "not_found", "no_address"],
+  "県・郡・熊本市・区の省略、ヶとケ、途中の「町」の省略。丁目で分かれる町・分からない住所は決めない",
+);
+eq([PL.withPostal("合志市須屋99", ""), PL.withPostal("合志市須屋99", "860-0000")], ["861-1102", "860-0000"], "郵便番号が空のときだけ住所から入れる (入力済みは変えない)");
+eq(
+  [PL.postalForSave("熊本市北区清水万石99", "861-1102", { address: "合志市須屋99", postalCode: "861-1102" }), PL.postalForSave("熊本市北区清水万石99", "860-0001", { address: "合志市須屋99", postalCode: "860-0001" })],
+  ["861-8068", "860-0001"],
+  "住所を変えたら、前の住所から自動で入れた郵便番号は入れ直す (手で入れた番号はそのまま)",
+);
+const CA = await imp("lib/actions/customers.ts");
+r = await act(admin, () => CA.createCustomer(form({ name: "郵便 試験", address: "合志市須屋99-99", phone: "", storeId: manager.storeId, confirmDuplicate: "1" })));
+eq([r.err, db().customers.at(-1).postalCode], [null, "861-1102"], "顧客の登録: 住所から郵便番号が入る");
+const CO = await imp("lib/carryover.ts");
+const def = { collection: "customers", table: "customers", label: "顧客", columns: [["id", "text"], ["name", "text"], ["postalCode", "text"], ["address", "text"]] };
+const base = [["customers", { id: "k1", name: "A", postalCode: "", address: "x" }], ["customers", { id: "k2", name: "B", postalCode: "", address: "y" }]];
+const diff = await CO.diffRows([def], base, { customers: [{ id: "k1", name: "A", postalCode: "861-1102", address: "x" }, { id: "k2", name: "B2", postalCode: "861-1102", address: "y" }] });
+eq(diff.nodes.map((n) => `${n.id}:${n.kind}`), ["k2:mod"], "試験期間の引き継ぎ: 自動で入れた郵便番号だけの違いは「変わった」に数えない");
+// 問い合わせで聞いた別の電話番号は「ほかの電話番号」に足し、次からその番号でも照合できる
+await store.mutate((x) => x.customers.find((c) => c.id === "cm_a").storeId = staffUser.storeId);
+r = await act(staffUser, () => RAct.createReception(form({ source: "text", channel: "phone", storeId: staffUser.storeId, text: "見本様 携帯 080-7777-6666。見本町台33。襖の張替え。" })));
+const rdoc2 = db().documents.filter((x) => x.kind === "reception").at(-1);
+r = await act(staffUser, () => RAct.registerReception(form({ id: rdoc2.id, quick: "inquiry:cm_a", media: "repeat", confirmedUncertain: "on" })));
+const ca = db().customers.find((c) => c.id === "cm_a");
+ok(!r.err && (ca.contacts ?? []).some((x) => x.phone === "080-7777-6666") && /ほかの電話番号/.test(r.msg ?? ""), `紐付けたお客様に、メモの電話番号を「ほかの電話番号」として追加 (${r.msg ?? r.err})`);
+mr = RC.matchReception(db(), staffUser, fields({ customerName: "", address: "", phone: "08077776666" }));
+eq(mr.customers[0] && [mr.customers[0].customer.id, mr.customers[0].level], ["cm_a", "phone"], "追加した番号でも次から紐付けの候補に出る");
+eq(LS.searchCustomers(db(), staffUser, "080-7777-6666")[0]?.id, "cm_a", "追加した番号で顧客を検索できる");
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   for (const f of fails) console.log("  ✗", f);

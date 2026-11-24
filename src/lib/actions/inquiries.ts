@@ -12,7 +12,7 @@ import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib
 import { linkInquiryLogs } from "@/lib/ai-intake";
 import { DUE_CHOICES, REQUEST_PURPOSE, dueAtFrom, dueLabel, type DueChoice } from "@/lib/inquiry-flow";
 import { closeScheduleRequests, createInquiryRequest } from "@/lib/inquiry-requests";
-import { canLinkToCustomer, moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
+import { addInquiryPhone, canLinkToCustomer, moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
 import { storeInquiryNotices, storeRequestNotices } from "@/lib/notify/store-line";
@@ -20,6 +20,7 @@ import { assertCaseStore, choice, fail, isKeyOf, requireActionUser, safeReturn, 
 import { MEDIA_LABEL, isMediaKey, mapMediaText, readMediaRules } from "@/lib/media";
 import { isCommonStaff } from "@/lib/staff-choices";
 import { newCaseStore } from "@/lib/store-area";
+import { withPostal } from "@/lib/postal/lookup";
 import type { MediaKey } from "@/lib/db/types";
 
 /** 媒体 (当社を知ったきっかけ) は必須。選択肢に「不明」がある */
@@ -206,7 +207,7 @@ export async function registerCustomerFromInquiry(id: string, formData?: FormDat
       type: "individual",
       phone: inq.contactPhone ?? ik?.callbackPhone ?? ik?.phone ?? "",
       ...(ik?.email ? { email: ik.email } : {}),
-      postalCode: ik?.postalCode ?? "",
+      postalCode: withPostal(ik?.address, ik?.postalCode),
       address: ik?.address ?? "",
       storeId: inq.storeId,
       assignedUserId: inq.assignedUserId ?? user.id,
@@ -267,7 +268,9 @@ export async function linkInquiryToCustomer(id: string, customerId: string, retu
       storeId: inq.storeId,
       changes: [{ field: "customerId", before, after: c.id }],
     });
-    message = `問い合わせ ${inq.number} を ${c.name} 様に紐づけました。${r.events ? `予定 ${r.events} 件もこのお客様の予定にしました。` : ""}${r.removed ? `予定表の取込で仮に作った顧客 (${r.removed.code}) は記録がなくなったため削除しました。` : ""}これまでの履歴とあわせて表示されます。`;
+    // 問い合わせで聞いた電話番号が登録にないなら「ほかの電話番号」に足す (次からその番号でも照合できる。お客様のご要望 2026-11-24「②」)
+    const added = [inq.contactPhone, inq.intake?.phone, inq.intake?.callbackPhone].map((p) => addInquiryPhone(db, user, c, p, `問い合わせ ${inq.number} で聞いた番号`)).filter(Boolean);
+    message = `問い合わせ ${inq.number} を ${c.name} 様に紐づけました。${added.length ? `電話番号 ${added.join("・")} をお客様の「ほかの電話番号」に追加しました。` : ""}${r.events ? `予定 ${r.events} 件もこのお客様の予定にしました。` : ""}${r.removed ? `予定表の取込で仮に作った顧客 (${r.removed.code}) は記録がなくなったため削除しました。` : ""}これまでの履歴とあわせて表示されます。`;
   });
   revalidatePath(`/inquiries/${id}`);
   revalidatePath(`/customers/${customerId}`);

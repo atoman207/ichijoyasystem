@@ -12,7 +12,8 @@ import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/pe
 import { createInquiryRequest } from "@/lib/inquiry-requests";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
 import { newCaseStore } from "@/lib/store-area";
-import { canLinkToCustomer } from "@/lib/customer-link";
+import { addInquiryPhone, canLinkToCustomer } from "@/lib/customer-link";
+import { withPostal } from "@/lib/postal/lookup";
 import { isCommonStaff } from "@/lib/staff-choices";
 import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { dueAtFrom } from "@/lib/inquiry-flow";
@@ -334,6 +335,7 @@ export async function registerReception(formData: FormData) {
     const customerId = quickCustomer ?? (newCustomer ? "" : str(formData, "customerId"));
     const canCreate = newCustomer && userCanCreateCustomer(db0, user);
     let createdCustomer = "";
+    const addedPhones: string[] = [];
     const assigneeId = str(formData, "assignedUserId") || user.id;
     const handoff = formData.get("handoff") === "on";
     const inqId = newId("inq");
@@ -366,7 +368,7 @@ export async function registerReception(formData: FormData) {
           phone: f.phone,
           ...(f.otherPhone ? { contacts: [{ id: newId("ct"), relation: "その他", phone: f.otherPhone }] } : {}),
           ...(f.email ? { email: f.email } : {}),
-          postalCode: f.postalCode,
+          postalCode: withPostal(f.address, f.postalCode),
           address: f.address,
           storeId,
           assignedUserId: assigneeId,
@@ -431,6 +433,11 @@ export async function registerReception(formData: FormData) {
       const log: CommLog = { id: newId("cl"), customerId: customer?.id, storeId, channel, direction: meta0.call?.direction === "outbound" ? "outbound" : "inbound", subject: `受付: ${f.summary}`.slice(0, 120), body: logBody(f, meta0), at: receivedAt, userId: user.id, relatedType: "inquiry", relatedId: inqId, contactName };
       d.commLogs.push(log);
       if (customer) customer.updatedAt = now;
+      // 登録済みのお客様に紐付けたとき、メモの電話番号が登録にないなら「ほかの電話番号」に足す (次からその番号でも照合できる)
+      if (customer && !createdCustomer) for (const ph of [f.phone, f.otherPhone]) {
+        const added = addInquiryPhone(d, user, customer, ph, `問合せ登録 ${inq.number} で聞いた番号`);
+        if (added) addedPhones.push(added);
+      }
       relinkDocumentAttachments(d, doc.id, { type: "inquiry", id: inqId, customerId: customer?.id, storeId });
       doc.status = "confirmed";
       doc.linkedType = "inquiry";
@@ -446,7 +453,7 @@ export async function registerReception(formData: FormData) {
         notifyThreadId = t.id;
       }
       href = `/inquiries/${inqId}`;
-      message = `問い合わせ ${inq.number} を登録しました${createdCustomer ? `。新しいお客様 (${createdCustomer}) も登録しました` : customer ? ` (${customer.name} 様に紐付け)` : ""}${notifyThreadId ? ` (${assignee.name} さんに引き継ぎました)` : ""}。${customer ? "" : newCustomer ? "顧客の新規登録は事務担当が行います (問い合わせの画面の「顧客として登録する」)。" : "お客様が未登録のため、画面の「顧客として登録する」で登録できます。"}`;
+      message = `問い合わせ ${inq.number} を登録しました${createdCustomer ? `。新しいお客様 (${createdCustomer}) も登録しました` : customer ? ` (${customer.name} 様に紐付け${addedPhones.length ? `。電話番号 ${addedPhones.join("・")} をお客様の「ほかの電話番号」に追加` : ""})` : ""}${notifyThreadId ? ` (${assignee.name} さんに引き継ぎました)` : ""}。${customer ? "" : newCustomer ? "顧客の新規登録は事務担当が行います (問い合わせの画面の「顧客として登録する」)。" : "お客様が未登録のため、画面の「顧客として登録する」で登録できます。"}`;
     });
   } else if (intent === "case") {
     const key = quickCase ?? str(formData, "caseKey");

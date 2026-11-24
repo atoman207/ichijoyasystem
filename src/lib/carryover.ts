@@ -123,6 +123,23 @@ export interface CarryDiff {
 }
 
 /**
+ * 住所などから自動で入れる項目 (空だった項目に入れただけなら「変わった」に数えない。本番に切り替えたあと本番でも同じように入れる)。
+ * customers.postalCode = 住所からの郵便番号 (お客様のご要望 2026-11-24「① 郵便番号の自動設定」。/api/cron/data-fix?task=postal-codes)
+ */
+export const DERIVED_FIELDS: Record<string, string[]> = { customers: ["postalCode"] };
+
+const isBlank = (v: unknown) => v === undefined || v === null || (typeof v === "string" && v.trim() === "");
+
+/** テストの行から、控えで空だった自動の項目を控えの値に戻したもの (自動で入れただけの違いを消す) */
+function withoutDerived(coll: string, base: Row, test: Row): Row {
+  const fields = DERIVED_FIELDS[coll];
+  if (!fields) return test;
+  let out: Row | undefined;
+  for (const f of fields) if (isBlank(base[f]) && !isBlank(test[f])) (out ??= { ...test })[f] = base[f];
+  return out ?? test;
+}
+
+/**
  * 期間の始まりの控えの行 ([コレクション, 行] を順に返すもの。ndjson.gz を 1 行ずつ読むとメモリを使わない) と
  * テスト用のデータベースを比べる。並びは表の定義の順 → テスト用のデータベースの行の順 → 消えた行
  */
@@ -138,7 +155,7 @@ export async function diffRows(tables: CarryTableDef[], baseLines: AsyncIterable
     if (!def) continue;
     const tr = testIdx.get(coll)!.get(br.id);
     if (!tr) (dels.get(coll) ?? dels.set(coll, []).get(coll)!).push(br);
-    else if (canonRow(def, br) !== canonRow(def, tr)) (seen.get(coll) ?? seen.set(coll, new Map()).get(coll)!).set(br.id, br);
+    else if (canonRow(def, br) !== canonRow(def, withoutDerived(coll, br, tr))) (seen.get(coll) ?? seen.set(coll, new Map()).get(coll)!).set(br.id, br);
     else (same.get(coll) ?? same.set(coll, new Set()).get(coll)!).add(br.id);
   }
   const nodes: CarryNode[] = [];

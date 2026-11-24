@@ -60,7 +60,9 @@ export function searchCustomers(db: Pick<Database, "customers" | "stores" | "inq
     if (isPlaceholderCustomer(c)) score -= 30;
     scored.push({ c, score });
   }
-  scored.sort((a, b) => b.score - a.score || b.c.updatedAt.localeCompare(a.c.updatedAt));
+  // 同じ点数なら、変更できる店舗 (自店舗など) のお客様を先に
+  const mine = (c: Customer) => (canEditCaseStore(user, c.storeId) ? 1 : 0);
+  scored.sort((a, b) => b.score - a.score || mine(b.c) - mine(a.c) || b.c.updatedAt.localeCompare(a.c.updatedAt));
   const top = scored.slice(0, limit).map((x) => x.c);
   const ids = new Set(top.map((c) => c.id));
   const open = new Map<string, number>();

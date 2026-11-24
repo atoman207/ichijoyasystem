@@ -5,6 +5,7 @@ import { canSeeAllStores } from "@/lib/auth/permissions";
 import { checkCustomerDuplicates } from "@/lib/actions/customers";
 import { DuplicateWatcher } from "./DuplicateWatcher";
 import { ContactsEditor } from "./ContactsEditor";
+import { PostalAddressFields } from "./PostalAddressFields";
 
 export function CustomerForm({
   action,
@@ -51,8 +52,12 @@ export function CustomerForm({
             ))}
           </Select>
         </Field>
-        <Field label="電話番号">
-          <Input name="phone" defaultValue={customer?.phone} placeholder="090-0000-0000" />
+        <Field label="電話番号 (主な番号)" hint="携帯と自宅など 2 つ目からは下の「ほかの電話番号」に">
+          <Input name="phone" defaultValue={customer?.phone} placeholder="090-0000-0000" type="tel" />
+        </Field>
+        {/* 電話番号の複数登録 (お客様のご要望 2026-11-24「②」): 本人の携帯・自宅 (固定)・ご家族・勤務先など。どの番号からでも検索・紐付け・着信の照合ができる */}
+        <Field label="ほかの電話番号 (携帯・自宅の固定電話・ご家族・勤務先など)" hint="何件でも登録できます。登録したどの番号からでも、顧客の検索・問い合わせの紐付け・着信の照合ができます" className="@xl:col-span-2">
+          <ContactsEditor initial={customer?.contacts} />
         </Field>
         <Field label="メールアドレス">
           <Input name="email" type="email" defaultValue={customer?.email} />
@@ -67,12 +72,8 @@ export function CustomerForm({
             ))}
           </Select>
         </Field>
-        <Field label="郵便番号">
-          <Input name="postalCode" defaultValue={customer?.postalCode} placeholder="860-0000" />
-        </Field>
-        <Field label="住所">
-          <Input name="address" defaultValue={customer?.address} placeholder="熊本県熊本市..." />
-        </Field>
+        {/* 住所を入れると郵便番号が自動で入る (お客様のご要望 2026-11-24「①」) */}
+        <PostalAddressFields defaultAddress={customer?.address ?? ""} defaultPostal={customer?.postalCode ?? ""} />
         <Field label="担当者">
           <Select name="assignedUserId" defaultValue={customer?.assignedUserId ?? user.id}>
             {/* お客様の店舗の社員も選べる (店長がほかの店舗のお客様を編集するとき) */}
@@ -94,9 +95,6 @@ export function CustomerForm({
           <Input name="tags" defaultValue={customer?.tags?.join(", ")} />
         </Field>
       </div>
-      <Field label="ほかの連絡先 (本人以外の電話番号)" hint="夫・姉・祖母・勤務先など、続柄つきで何件でも登録できます。着信・Web フォームの照合と顧客の検索に使います">
-        <ContactsEditor initial={customer?.contacts} />
-      </Field>
       <DuplicateWatcher check={checkCustomerDuplicates} excludeId={customer?.id} requireConfirm={!customer?.id} />
       <Field label="備考 (駐車・訪問時の注意など)">
         <Textarea name="notes" defaultValue={customer?.notes} />
