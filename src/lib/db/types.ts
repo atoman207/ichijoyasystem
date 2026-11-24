@@ -821,7 +821,9 @@ export type ApprovalType =
   /** ほかの店舗の完了した案件のお客様の閲覧の申請 (閲覧の範囲 = 承認制のとき。承認から決まった日数だけ閲覧のみで見られる。src/lib/case-access.ts) */
   | "record_view"
   /** 受注の引取日・納品日 (品目ごと) の変更。はじめて入れる日程は承認なし、登録済みの日程の変更だけ (src/lib/handover.ts) */
-  | "handover_change";
+  | "handover_change"
+  /** 案件の施工店舗 (= 売上の店舗) の変更。予定表から申請し、今の施工店舗の店長が承認する (src/lib/case-store.ts) */
+  | "store_change";
 
 /** returned = 差戻し (修正して再申請) / rejected = 却下 / cancelled = 取下げ */
 export type ApprovalStatus = "pending" | "approved" | "returned" | "rejected" | "cancelled";
@@ -1116,6 +1118,11 @@ export interface ScheduleEvent {
   seriesId?: string;
   location?: string;
   memo?: string;
+  /**
+   * 仕事内容を手で決めたもの (予定表のチップの「タ12 フ6 シ4 ア2」。お客様のご要望 2026-11-24)。
+   * 空なら自動 (見積の明細・件名・メモから。src/lib/schedule-work.ts)
+   */
+  work?: string;
   createdBy?: string;
   createdAt?: string;
   updatedBy?: string;

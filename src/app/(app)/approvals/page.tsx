@@ -111,7 +111,7 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: Pr
                   </div>
                   {a.requestComment && <p className="mt-1 text-xs text-ink-2">申請コメント: {a.requestComment}</p>}
                   {a.decisionComment && <p className="mt-1 text-xs text-ink-2">判断コメント: {a.decisionComment}</p>}
-                  {a.status !== "pending" && a.changes && a.changes.length > 0 && <ChangeList entity={a.type === "customer_change" ? "customer" : "order"} changes={a.changes} />}
+                  {(a.status !== "pending" || a.type === "store_change") && a.changes && a.changes.length > 0 && <ChangeList entity={a.type === "customer_change" ? "customer" : a.type === "store_change" ? "store_change" : "order"} changes={a.changes} />}
                 </div>
                 <div className="text-right">
                   {a.amount > 0 && <div className="text-lg font-semibold tnum">{yen(a.amount)}</div>}

@@ -8,6 +8,7 @@ import { countsFromLines, countsFromText, emptyCounts, hasWork, mergeCounts, typ
  * 予定表の予定ごとの仕事内容と数量 (お客様のご要望 2026-11-23「■2」。表示は src/lib/work-summary.ts の workTokens)
  * ------------------------------------------------------------
  * 優先順位:
+ * 0. 予定表で手で決めた仕事内容 (ScheduleEvent.work。予定を押したときの小さな画面の「仕事内容」。お客様のご要望 2026-11-24)
  * 1. 予定の作業の内容 (job_specs の event。/schedule/spec で登録したもの)
  * 2. 受注の引取・納品の予定 (sourceRef = handover:…): その予定の品目 (畳・襖など) の見積の明細だけ
  * 3. 受注・見積にひも付く予定: 見積の明細 (移行した受注は経過メモの「明細 (税込): …」)
@@ -93,6 +94,11 @@ function specCounts(lk: Lookup, s: JobSpec | undefined): WorkCounts | undefined 
 const specOf = (lk: Lookup, type: JobSpec["recordType"], id: string | undefined) => (id ? lk.specs.get(specId(type, id)) : undefined);
 
 function eventCounts(lk: Lookup, e: ScheduleEvent): WorkCounts | undefined {
+  // 0. 予定表で手で決めた仕事内容 (ScheduleEvent.work。「タ12 フ6」「畳 表替え12」の形)
+  if (e.work?.trim()) {
+    const c = countsFromText(e.work, { shorthand: true });
+    if (hasWork(c)) return c;
+  }
   const fromEventSpec = specCounts(lk, specOf(lk, "event", e.id));
   if (fromEventSpec) return fromEventSpec;
 
@@ -152,7 +158,7 @@ function eventCounts(lk: Lookup, e: ScheduleEvent): WorkCounts | undefined {
 /** 予定ごとの仕事内容と数量 (案件の予定だけ。仕事内容の分からない予定は入れない) */
 export function scheduleWork(db: Database, events: ScheduleEvent[]): Map<string, WorkCounts> {
   const out = new Map<string, WorkCounts>();
-  const targets = events.filter((e) => CASE_KINDS.has(e.kind));
+  const targets = events.filter((e) => CASE_KINDS.has(e.kind) || Boolean(e.work?.trim()));
   if (!targets.length) return out;
   const lk = lookup(db);
   for (const e of targets) {

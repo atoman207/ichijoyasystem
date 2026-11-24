@@ -10,6 +10,7 @@ import { fieldLabel, fieldValue } from "@/lib/field-labels";
 import { fail } from "@/lib/actions/guards";
 import { propagateCustomerAddress } from "@/lib/maps/store";
 import { closedReason } from "@/lib/mgmt/close";
+import { applyCaseStoreChange, caseChainOf, storeChangeBlocker } from "@/lib/case-store";
 
 /**
  * 承認の反映 (承認・差戻し・却下で申請の対象を変える処理)
@@ -241,6 +242,25 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
       }
       break;
     }
+    case "store_change": {
+      // 案件の施工店舗 (= 売上の店舗) の変更 (src/lib/case-store.ts)。承認で案件の記録と案件の予定の店舗をそろえて変える
+      const chain = caseChainOf(db, a.targetId);
+      const change = a.changes?.find((c) => c.field === "storeId");
+      if (!chain || !change) return;
+      const storeName = (id: unknown) => db.stores.find((s) => s.id === id)?.name ?? String(id ?? "");
+      const what = `${storeName(change.before)} → ${storeName(change.after)}`;
+      if (decision === "approved") {
+        if (chain.head.storeId !== change.before) fail(back, "申請のあとに案件の店舗が変わっています。古い内容で上書きしないよう、この申請は差し戻して出し直してください。");
+        const blocker = storeChangeBlocker(db, chain, String(change.after));
+        if (blocker) fail(back, `${blocker} この申請は却下してください。`);
+        const r = applyCaseStoreChange(db, userId, chain, String(change.after), a.requestComment);
+        addAudit(db, { userId, action: "approve", entity: chain.head.type, entityId: chain.head.id, entityLabel: chain.head.number, summary: `施工店舗の変更を承認 (${what} / 記録 ${r.records} 件・予定 ${r.events} 件)`, storeId: String(change.after), changes: a.changes });
+      } else {
+        if (chain.order) chain.order.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `施工店舗の変更 (${what}) が${word}されました${note}` });
+        addAudit(db, { userId, action: "reject", entity: chain.head.type, entityId: chain.head.id, entityLabel: chain.head.number, summary: `施工店舗の変更 (${what}) を${word}${note}`, storeId: chain.head.storeId });
+      }
+      break;
+    }
     case "record_view": {
       // 閲覧の申請: 承認すると、申請者が決まった日数だけお客様の情報を閲覧のみで見られる (判定は src/lib/case-access.ts の viewGrantUntil)。記録は変えない
       const c = db.customers.find((x) => x.id === a.targetId);
@@ -293,6 +313,8 @@ export function touchesConfirmedSales(db: Database, a: Pick<Approval, "type" | "
     return done(o?.status) || (a.changes ?? []).some((c) => c.field === "completedAt" || c.field === "salesDate");
   }
   if (a.type === "quote_amend") return db.orders.some((o) => o.quoteId === a.targetId && done(o.status));
+  // 施工店舗の変更: 施工完了・請求済・入金済の受注は確定した売上の店舗が変わる
+  if (a.type === "store_change") return done(caseChainOf(db, a.targetId)?.order?.status);
   return false;
 }
 

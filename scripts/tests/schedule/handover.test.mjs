@@ -368,9 +368,12 @@ ok(H.handoverChangeLines(ap6.changes[0].before, ap6.changes[0].after).some((l) =
 await act(manager, () => apActions.decideApproval(ap6.id, "approved", form({ returnTo: "/approvals" })));
 ok(db().schedule.find((e) => e.id === fusDelivery.id)?.date === D("12-08") && db().schedule.find((e) => e.id === fusDelivery.id)?.memo === "襖紙の色を確認", "承認で予定表の同じ予定が動く (手で書いたメモは残る)");
 
-// j) 予定表から削除はできない
+// j) 予定表から削除 = 受注の日程からその日時を外す申請 (お客様のご要望 2026-11-24。案件・品目は残る)。ここでは取り下げて次の確認へ
 r = await act(staff, () => schActions.deleteScheduleEvent(fusDelivery.id, form({})));
-ok(r.err?.includes("引取・納品の日程"), "連動する予定は予定表から削除できない (受注の画面へ案内)");
+const apDel = db().approvals.find((a) => a.type === "handover_change" && a.status === "pending");
+ok(apDel && /申請しました/.test(r.msg ?? "") && db().schedule.some((e) => e.id === fusDelivery.id), "連動する予定の予定表からの削除は、受注の日程の変更の申請 (承認まで予定は残る)");
+await act(staff, () => apActions.cancelApproval(apDel.id, form({ returnTo: "/approvals" })));
+ok(db().approvals.find((a) => a.id === apDel.id)?.status === "cancelled", "削除の申請を取り下げられる (予定はそのまま)");
 
 // k) 品目の削除 (日程あり) は承認、承認で予定も消える
 const onlyTatami = order().handovers.filter((x) => x.item !== "fusuma");

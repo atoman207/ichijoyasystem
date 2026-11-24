@@ -3,9 +3,9 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nowIso } from "@/lib/db/store";
-import type { Database, ScheduleEvent, ScheduleKind, StoreId, User } from "@/lib/db/types";
+import type { Approval, Database, ScheduleEvent, ScheduleKind, StoreId, User } from "@/lib/db/types";
 import { QUICK_MAX_ASSIGNEES, SCHEDULE_KIND, SCHEDULE_KINDS, SCHEDULE_REPEAT, type ScheduleRepeat } from "@/lib/constants";
-import { canAccessStore, canEditEvent, canManageCompanyEvents, canManageSettings } from "@/lib/auth/permissions";
+import { approverRole, canAccessStore, canEditCaseStore, canEditEvent, canManageCompanyEvents, canManageSettings } from "@/lib/auth/permissions";
 import {
   addMonths,
   dateRange,
@@ -38,14 +38,15 @@ import { changeImpacts, moveBookingsWithEvent } from "@/lib/scheduling/impact";
 import { replanProductionForPickup } from "@/lib/scheduling/production";
 import { prefetchForStore } from "@/lib/scheduling/prefetch";
 import { planTablesReady } from "@/lib/scheduling/tables";
-import { applyEventMove, parseHandoverRef } from "@/lib/handover";
+import { applyEventMove, applyEventRemoval, parseHandoverRef } from "@/lib/handover";
 import { pendingHandoverChange, savePlan } from "@/lib/handover-save";
 import { notifyNewApprovals } from "@/lib/notify/approvals";
-import { AUTO_APPROVAL_NOTE } from "@/lib/approval-decide";
+import { AUTO_APPROVAL_NOTE, settleOwnApproval } from "@/lib/approval-decide";
+import { caseChainOf, pendingStoreChange, storeChangeBlocker } from "@/lib/case-store";
 import { closeScheduleRequests } from "@/lib/inquiry-requests";
 import { taskNotices } from "@/lib/notify/events";
 import { PAIR_PREFIX, eventPair } from "@/lib/schedule-pair";
-import { stripKindWords } from "@/lib/work-summary";
+import { countsFromText, hasWork, stripKindWords } from "@/lib/work-summary";
 import { sendAndRecord } from "@/lib/notify/send";
 import { fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
@@ -618,14 +619,10 @@ export async function deleteScheduleEvent(id: string, formData: FormData) {
   const e = db.schedule.find((x) => x.id === id);
   if (!e) fail("/schedule", "予定が見つかりません。");
   if (!canEditEvent(user, e)) fail(back, "この予定を削除する権限がありません (登録者・担当者・店舗のメンバーが削除できます)。");
-  if (e.source === "order") {
-    fail(
-      back,
-      parseHandoverRef(e.sourceRef)
-        ? "受注の引取・納品の日程と連動している予定です。受注の画面の「引取・納品の日程」で品目の日程を変更・削除してください (登録済みの日程の変更は承認のあとに反映されます)。"
-        : "受注の施工予定と連動している予定です。受注・施工画面で施工予定を変更してください。",
-    );
-  }
+  // 受注の引取・納品の日程と連動する予定: 受注の日程からこの日時を外す (品目・案件は残す)。登録済みの日程の変更なので、店舗スタッフは店長の承認のあとに消える
+  const hvRef = e.source === "order" ? parseHandoverRef(e.sourceRef) : undefined;
+  if (hvRef) return deleteHandoverEvent(user, e, hvRef, returnTo ?? `/schedule?date=${e.date}`);
+  if (e.source === "order") fail(returnTo ?? back, "受注の施工予定と連動している予定です。受注の画面の「施工予定・担当」で施工予定を変更してください。");
   let removed = 0;
   await mutate((db) => {
     const targets = scope === "series" && e.seriesId ? db.schedule.filter((x) => x.seriesId === e.seriesId && x.date >= e.date && canEditEvent(user, x)) : [e];
@@ -664,6 +661,137 @@ export async function deleteScheduleEvent(id: string, formData: FormData) {
   revalidateSchedule(e);
   const freed = SUGGEST_KINDS.includes(e.kind) && e.date >= new Date().toISOString().slice(0, 10) ? ` 空いた枠 (${shortDate(e.date)}) に入れられる予定・案件は 予定表 →「計画」の「空いた枠」で確かめられます。` : "";
   redirect(withMsg(returnTo ?? `/schedule?date=${e.date}`, `${removed > 1 ? `予定を ${removed} 件削除しました。` : "予定を削除しました。"}${freed}`));
+}
+
+/** 引取・納品の日程と連動する予定の削除 (deleteScheduleEvent から): 受注の日程のその品目の日時を外す申請 (src/lib/handover.ts の applyEventRemoval) */
+async function deleteHandoverEvent(user: User, e: ScheduleEvent, ref: NonNullable<ReturnType<typeof parseHandoverRef>>, back: string): Promise<never> {
+  const o0 = getDb().orders.find((x) => x.id === e.orderId);
+  if (!o0 || !orderEditable(o0)) fail(back, "施工完了・キャンセル済みの受注の予定は削除できません。");
+  if (pendingHandoverChange(getDb(), o0.id)) fail(back, "この案件には承認待ちの引取・納品日の変更があります。承認・差戻しのあとに削除してください (急ぐときは受注の画面で申請を取り下げてから)。");
+  let r: ReturnType<typeof savePlan> | undefined;
+  await mutate((db) => {
+    const o = db.orders.find((x) => x.id === e.orderId);
+    if (!o) return;
+    r = savePlan(db, user, o, applyEventRemoval(o.handovers, ref), { back, reason: `予定表で「${e.title}」(${periodLabel(e)}) を削除`, via: "schedule" });
+  });
+  if (r?.approval?.id && !r.auto) await notifyNewApprovals([r.approval.id], user.id);
+  revalidateSchedule(e);
+  const role = r?.approval?.requiredRole === "admin" ? "管理者" : "店長";
+  const msg = r?.approval && !r.auto
+    ? `受注の引取・納品の日程と連動する予定のため、削除を${role}へ申請しました。承認されると予定表から消えます (案件の情報は残ります)。`
+    : r?.applied || r?.auto
+      ? `${r.auto ? `${AUTO_APPROVAL_NOTE}し、` : ""}受注の引取・納品の日程からこの日時を外し、予定を削除しました (案件の情報は残っています)。`
+      : "削除できませんでした (受注の日程にこの予定の品目が見つかりません。受注の画面の「引取・納品の日程」で確かめてください)。";
+  redirect(withMsg(back, msg));
+}
+
+/**
+ * 予定の仕事内容 (お客様のご要望 2026-11-24「予定表から仕事内容の編集」): 予定表のチップの「タ12 フ6 シ4 ア2」を手で決める (ScheduleEvent.work)。
+ * 空にすると自動 (見積の明細・件名・メモから。src/lib/schedule-work.ts) に戻す。表示のためだけの値で、見積・受注の明細は変えない
+ */
+export async function updateEventWork(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const returnTo = safePath(str(formData, "returnTo")) ?? `/schedule/${id}`;
+  const e = getDb().schedule.find((x) => x.id === id);
+  if (!e) fail(returnTo, "予定が見つかりません (削除された可能性があります)。");
+  if (!canEditEvent(user, e)) fail(returnTo, "この予定を変更する権限がありません (登録者・担当者・店舗のメンバーが変更できます)。");
+  const text = str(formData, "work").replace(/\s+/g, " ").trim().slice(0, 120);
+  if (text && !hasWork(countsFromText(text, { shorthand: true }))) {
+    fail(returnTo, `仕事内容「${text}」を読み取れませんでした。タ (畳)・フ (襖)・シ (障子)・ア (網戸) のあとに数を書いてください (例: タ12 フ6 シ4 ア2。へり無し畳は「縁無6」)。`);
+  }
+  let changed = false;
+  await mutate((db) => {
+    const ev = db.schedule.find((x) => x.id === id);
+    if (!ev) return;
+    const before = ev.work;
+    const after = text || undefined;
+    if ((before ?? "") === (after ?? "")) return;
+    ev.work = after;
+    ev.updatedBy = user.id;
+    ev.updatedAt = nowIso();
+    changed = true;
+    addAudit(db, { userId: user.id, action: "update", entity: "schedule", entityId: id, entityLabel: ev.title, summary: after ? `仕事内容を「${after}」に変更` : "仕事内容を自動 (見積の明細・件名・メモから) に戻す", storeId: ev.storeId, changes: [{ field: "work", before: before ?? null, after: after ?? null }] });
+  });
+  revalidateSchedule(e);
+  redirect(withMsg(returnTo, changed ? (text ? `仕事内容を「${text}」にしました。` : "仕事内容を自動に戻しました。") : "変更はありませんでした。"));
+}
+
+/**
+ * 予定表から施工店舗を変える (お客様のご要望 2026-11-24): 案件の予定なら案件の施工店舗 (= 売上の店舗) の変更を申請する (承認の type = store_change。
+ * 今の施工店舗の店長が承認。店長・管理者の申請は承認を省略。src/lib/case-store.ts)。案件のない予定は予定の店舗だけをすぐに変える
+ */
+export async function changeEventStore(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const returnTo = safePath(str(formData, "returnTo")) ?? `/schedule/${id}`;
+  const to = str(formData, "storeId");
+  const reason = str(formData, "reason").slice(0, 200);
+  const db0 = getDb();
+  const e = db0.schedule.find((x) => x.id === id);
+  if (!e) fail(returnTo, "予定が見つかりません (削除された可能性があります)。");
+  if (!canEditEvent(user, e)) fail(returnTo, "この予定を変更する権限がありません (登録者・担当者・店舗のメンバーが変更できます)。");
+  const storeName = (sid: string) => db0.stores.find((s) => s.id === sid)?.name ?? sid;
+  if (!db0.stores.some((s) => s.id === to)) fail(returnTo, "店舗を選んでください。");
+  const ref = createCaseResolver(db0).ofEvent(e);
+  const chain0 = ref ? caseChainOf(db0, ref.id) : undefined;
+  if (!chain0) {
+    if (e.source === "order") fail(returnTo, "受注と連動する予定です。受注の画面で変更してください。");
+    if (to === e.storeId) fail(returnTo, "今と同じ店舗です。");
+    await mutate((db) => {
+      const ev = db.schedule.find((x) => x.id === id);
+      if (!ev) return;
+      const before = ev.storeId;
+      ev.storeId = to;
+      ev.updatedBy = user.id;
+      ev.updatedAt = nowIso();
+      addAudit(db, { userId: user.id, action: "update", entity: "schedule", entityId: id, entityLabel: ev.title, summary: `予定の店舗を変更 (${storeName(before)} → ${storeName(to)})`, storeId: to, changes: [{ field: "storeId", before, after: to }] });
+    });
+    revalidateSchedule(e);
+    redirect(withMsg(returnTo, `予定の店舗を${storeName(to)}にしました。`));
+  }
+  if (!canEditCaseStore(user, chain0.head.storeId)) fail(returnTo, `${storeName(chain0.head.storeId)}の案件の施工店舗を変える権限がありません (その店舗のメンバー・店長・本部・管理者が申請できます)。`);
+  const blocker = storeChangeBlocker(db0, chain0, to);
+  if (blocker) fail(returnTo, blocker);
+  if (pendingStoreChange(db0, chain0)) fail(returnTo, "この案件には承認待ちの施工店舗の変更があります。承認・差戻しのあとにもう一度変更してください。");
+  let approvalId = "";
+  let auto = false;
+  let role = "store_manager" as "store_manager" | "admin";
+  const from = chain0.head.storeId;
+  await mutate((db) => {
+    const c = caseChainOf(db, chain0.head.id);
+    if (!c) fail(returnTo, "案件が見つかりません。");
+    const again = storeChangeBlocker(db, c, to);
+    if (again) fail(returnTo, again);
+    if (pendingStoreChange(db, c)) fail(returnTo, "この案件には承認待ちの施工店舗の変更があります。");
+    role = approverRole(db.users, c.head.storeId, false, user.id);
+    const a: Approval = {
+      id: newId("ap"),
+      type: "store_change",
+      targetId: c.head.id,
+      title: `${c.head.number} ${c.head.title}`.trim(),
+      amount: 0,
+      storeId: c.head.storeId,
+      requestedBy: user.id,
+      requiredRole: role,
+      status: "pending",
+      requestComment: reason || undefined,
+      changes: [{ field: "storeId", before: c.head.storeId, after: to }],
+      createdAt: nowIso(),
+    };
+    db.approvals.push(a);
+    approvalId = a.id;
+    addAudit(db, { userId: user.id, action: "submit", entity: c.head.type, entityId: c.head.id, entityLabel: c.head.number, summary: `施工店舗の変更を申請 (${storeName(c.head.storeId)} → ${storeName(to)}${reason ? ` / 理由: ${reason}` : ""} / ${role === "admin" ? "管理者" : "店長"}承認)`, storeId: c.head.storeId, changes: a.changes });
+    auto = settleOwnApproval(db, a, user, returnTo);
+  });
+  if (!auto) await notifyNewApprovals([approvalId], user.id);
+  revalidatePath("/", "layout");
+  redirect(
+    withMsg(
+      returnTo,
+      auto
+        ? `${AUTO_APPROVAL_NOTE}し、施工店舗を${storeName(from)}から${storeName(to)}に変更しました (案件の記録と予定)。売上は${storeName(to)}に計上します。`
+        : `施工店舗の変更 (${storeName(from)} → ${storeName(to)}) を${role === "admin" ? "管理者" : `${storeName(from)}の店長`}へ申請しました。承認されると案件と予定表に反映され、売上は${storeName(to)}に計上します (それまでは今の店舗のままです)。`,
+    ),
+  );
 }
 
 /**

@@ -154,7 +154,7 @@ export function canApproveAll(user: User): boolean {
  * 店長が承認を省略できる申請の種類 (お客様の決定 2026-11-24「追加のお願い ①権限設定」: 店長の顧客情報の登録・変更、見積・受注の登録・変更は
  * 管理者の承認不要。入金・確定した売上 (施工完了した受注) の変更、経費・仕入の支払は今までどおり承認。src/lib/approval-decide.ts の settleOwnApproval)
  */
-export const MANAGER_SELF_APPROVE_TYPES: readonly ApprovalType[] = ["quote", "quote_amend", "order", "order_change", "handover_change", "customer_change"];
+export const MANAGER_SELF_APPROVE_TYPES: readonly ApprovalType[] = ["quote", "quote_amend", "order", "order_change", "handover_change", "customer_change", "store_change"];
 
 /**
  * 承認を省略して、自分の申請をそのまま反映する: 管理者 (社長) はすべて、店長は顧客・見積・受注 (MANAGER_SELF_APPROVE_TYPES)。

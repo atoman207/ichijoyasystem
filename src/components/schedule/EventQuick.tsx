@@ -5,11 +5,11 @@ import { createPortal } from "react-dom";
 import { usePathname, useSearchParams } from "next/navigation";
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
-import { CalendarPlus, ExternalLink, FileText, FileUp, Link2, MapPin, Navigation, Pencil, Phone, TriangleAlert, Truck, UserRound, Users, X } from "lucide-react";
+import { CalendarPlus, ClipboardList, ExternalLink, FileText, FileUp, Link2, MapPin, Navigation, Pencil, Phone, Store, Trash2, TriangleAlert, Truck, UserRound, Users, X } from "lucide-react";
 import type { ScheduleKind } from "@/lib/db/types";
 import { QUICK_MAX_ASSIGNEES, SCHEDULE_KIND } from "@/lib/constants";
 import type { ConflictQuery, ConflictReport } from "@/lib/calendar";
-import { addPairedDelivery, checkScheduleConflicts, quickUpdateScheduleEvent } from "@/lib/actions/schedule";
+import { addPairedDelivery, changeEventStore, checkScheduleConflicts, deleteScheduleEvent, quickUpdateScheduleEvent, updateEventWork } from "@/lib/actions/schedule";
 import { Button, buttonClass } from "@/components/ui";
 import { MapDocUploader } from "@/components/maps/MapDocUploader";
 import { CopyAddress } from "@/components/maps/CopyAddress";
@@ -622,16 +622,12 @@ function QuickBody({ data, returnTo, onOpenEvent, onReload }: { data: EventQuick
       <div className="mb-3 divide-y divide-line overflow-hidden rounded-xl border border-line bg-subtle/40" data-testid="event-quick-top">
         <MapRow map={data.map} eventId={data.id} returnTo={returnTo} onReload={onReload} />
         <AssigneeRow data={data} returnTo={returnTo} />
+        <WorkRow data={data} returnTo={returnTo} />
+        <StoreRow data={data} returnTo={returnTo} />
         <PairRow data={data} returnTo={returnTo} onOpenEvent={onOpenEvent} />
       </div>
 
       <CustomerBlock data={data} />
-      {data.work && (
-        <dl className="mb-3 grid grid-cols-[5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
-          <dt className="text-ink-3">仕事内容</dt>
-          <dd className="text-ink">{data.work}</dd>
-        </dl>
-      )}
 
       {!data.canEdit ? (
         <p className="rounded-lg bg-subtle px-3 py-2 text-xs text-ink-2">この予定は変更できません (登録者・担当者・店舗のメンバーが変更できます{data.synced ? "。完了した受注の予定は変えられません" : ""})。</p>
@@ -733,6 +729,142 @@ function QuickBody({ data, returnTo, onOpenEvent, onReload }: { data: EventQuick
             <ExternalLink className="h-3.5 w-3.5" aria-hidden />
             予定の詳細
           </Link>
+        </div>
+      )}
+      {/* 予定の削除はいちばん下 (押し間違えないように、確認してから。お客様のご要望 2026-11-24) */}
+      <DeleteSection data={data} returnTo={returnTo} />
+    </div>
+  );
+}
+
+/** 仕事内容 (予定表のチップの「タ12 フ6 シ4 ア2」)。手で決めると自動より優先 (ScheduleEvent.work) */
+function WorkRow({ data, returnTo }: { data: EventQuickData; returnTo: string }) {
+  const [open, setOpen] = useState(false);
+  if (!data.work && !data.canEdit) return null;
+  return (
+    <TopRow label="仕事" icon={<ClipboardList className="h-3.5 w-3.5" aria-hidden />} testId="event-quick-work">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-ink">{data.work ?? <span className="text-ink-3">未設定</span>}</span>
+        {data.workManual && <span className="rounded bg-accent-soft px-1 text-[10px] text-accent-ink">手入力</span>}
+        {data.canEdit && (
+          <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className={buttonClass(open ? "soft" : "ghost", "sm")} data-testid="work-toggle">
+            {open ? "閉じる" : "編集"}
+          </button>
+        )}
+      </div>
+      {open && (
+        <form action={updateEventWork.bind(null, data.id)} className="mt-1.5 space-y-1.5" data-testid="work-form">
+          <input type="hidden" name="returnTo" value={returnTo} />
+          <input name="work" defaultValue={data.workManual ?? data.workText ?? ""} maxLength={120} placeholder="例: タ12 フ6 シ4 ア2" className="field" aria-label="仕事内容" />
+          <p className="text-[11px] leading-relaxed text-ink-3">タ = 畳・フ = 襖・シ = 障子・ア = 網戸 のあとに数 (例: タ12 フ6)。へり無し畳は「縁無6」。予定表の表示だけを変えます (見積・受注の明細は変わりません)。</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="submit" size="sm">
+              仕事内容を保存
+            </Button>
+            {data.workManual && (
+              <button type="submit" name="work" value="" className="text-xs text-ink-2 hover:underline">
+                自動 (見積の明細など) に戻す
+              </button>
+            )}
+          </div>
+        </form>
+      )}
+    </TopRow>
+  );
+}
+
+/** 施工店舗 (案件の店舗 = 売上の店舗)。変えるときは今の施工店舗の店長の承認 (店長・管理者は承認なし) */
+function StoreRow({ data, returnTo }: { data: EventQuickData; returnTo: string }) {
+  const sc = data.storeChange;
+  const [open, setOpen] = useState(false);
+  const [to, setTo] = useState("");
+  if (!sc) return null;
+  return (
+    <TopRow label="施工店舗" icon={<Store className="h-3.5 w-3.5" aria-hidden />} testId="event-quick-store">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs font-medium text-ink">{sc.currentName}</span>
+        <span className="text-[11px] text-ink-3">売上の店舗 ({sc.caseLabel})</span>
+        {sc.canChange && (
+          <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className={buttonClass(open ? "soft" : "ghost", "sm")} data-testid="store-toggle">
+            {open ? "閉じる" : "変更"}
+          </button>
+        )}
+      </div>
+      {sc.pending && <p className="mt-1 text-[11px] text-warn-ink">{sc.pending}。承認されると変わります。</p>}
+      {sc.blocked && data.canEdit && <p className="mt-1 text-[11px] text-ink-3">{sc.blocked}</p>}
+      {open && sc.canChange && (
+        <form action={changeEventStore.bind(null, data.id)} className="mt-1.5 space-y-1.5" data-testid="store-form">
+          <input type="hidden" name="returnTo" value={returnTo} />
+          <label className="block">
+            <span className="label">新しい施工店舗</span>
+            <select name="storeId" value={to} onChange={(e) => setTo(e.target.value)} required className="field">
+              <option value="">選んでください</option>
+              {sc.options.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="label">理由 (任意)</span>
+            <input name="reason" maxLength={200} placeholder="例: 西店の担当エリアのため" className="field" />
+          </label>
+          <p className="text-[11px] leading-relaxed text-ink-3">
+            案件 (問い合わせ・見積・受注) とこの案件の予定の店舗が変わり、売上は新しい施工店舗に計上されます。お客様の店舗は変わりません。
+            {sc.needsApproval ? ` ${sc.approver}の承認のあとに変わります (それまでは今の店舗のままです)。` : " 承認なしですぐに変わります。"}
+          </p>
+          <Button type="submit" size="sm" disabled={!to}>
+            {sc.needsApproval ? `変更を申請する (${sc.approver}の承認)` : "施工店舗を変更する"}
+          </Button>
+        </form>
+      )}
+    </TopRow>
+  );
+}
+
+/** 予定の削除: いちばん下のボタン → 「本当に削除しますか？」の確認 → 削除 (予定だけ。案件の情報は残す) */
+function DeleteSection({ data, returnTo }: { data: EventQuickData; returnTo: string }) {
+  const [confirm, setConfirm] = useState(false);
+  const rm = data.remove;
+  if (!rm) return null;
+  if (rm.mode === "order") {
+    return (
+      <p className="mt-4 border-t border-line pt-3 text-[11px] text-ink-3">
+        受注の施工予定と連動する予定のため、ここでは削除できません。{rm.orderHref && <Link href={`${rm.orderHref}#schedule`} className="text-accent hover:underline">受注の画面</Link>}の「施工予定・担当」で変更してください。
+      </p>
+    );
+  }
+  if (!rm.canDelete) return null;
+  return (
+    <div className="mt-4 border-t border-line pt-3" data-testid="event-quick-delete">
+      {!confirm ? (
+        <button type="button" onClick={() => setConfirm(true)} className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-critical-ink hover:bg-critical-soft" data-testid="delete-open">
+          <Trash2 className="h-3.5 w-3.5" aria-hidden />
+          この予定を削除
+        </button>
+      ) : (
+        <div role="alertdialog" aria-labelledby={`del-${data.id}`} className="space-y-2 rounded-xl border border-critical/40 bg-critical-soft/60 p-3" data-testid="delete-confirm">
+          <p id={`del-${data.id}`} className="text-sm font-semibold text-critical-ink">
+            本当に削除しますか？
+          </p>
+          <p className="text-xs leading-relaxed text-ink-2">
+            「{data.label}」{data.period} の予定を予定表から削除します。お客様・問い合わせ・見積・受注などの案件の情報は残ります。
+            {rm.mode === "handover" &&
+              (rm.needsApproval
+                ? ` 受注の引取・納品の日程と連動しているため、受注の日程からこの日時を外す申請になります (${rm.approver ?? "店長"}の承認のあとに消えます)。`
+                : " 受注の引取・納品の日程と連動しているため、受注の日程からもこの日時を外します (品目は残ります)。")}
+          </p>
+          <form action={deleteScheduleEvent.bind(null, data.id)} className="flex flex-wrap items-center gap-2">
+            <input type="hidden" name="returnTo" value={returnTo} />
+            <input type="hidden" name="scope" value="one" />
+            <Button type="submit" variant="danger" size="sm" data-testid="delete-submit">
+              {rm.mode === "handover" && rm.needsApproval ? "削除を申請する" : "削除する"}
+            </Button>
+            <button type="button" onClick={() => setConfirm(false)} className={buttonClass("secondary", "sm")} autoFocus>
+              やめる
+            </button>
+          </form>
         </div>
       )}
     </div>

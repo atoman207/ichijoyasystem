@@ -95,7 +95,7 @@ export function approvalRequestNotices(db: Database, a: Approval): Outgoing[] {
   const changes = a.changes?.length
     ? `\n変更: ${a.changes.map((c) => (c.field === "handovers" ? handoverChangeLines(c.before, c.after).join(" / ") : `${fieldLabel(entity, c.field)} ${fieldValue(c.field, c.before)} → ${fieldValue(c.field, c.after)}`)).join(" / ")}`
     : "";
-  const noAmount = a.type === "record_view" || a.type === "handover_change";
+  const noAmount = a.type === "record_view" || a.type === "handover_change" || a.type === "store_change";
   return build(
     db,
     "approval_request",

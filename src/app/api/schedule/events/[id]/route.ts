@@ -9,8 +9,12 @@ import { periodLabel } from "@/lib/calendar";
 import { eventLabeler } from "@/lib/schedule-label";
 import { isPlaceholderCustomer } from "@/lib/customer-link";
 import { scheduleWork } from "@/lib/schedule-work";
-import { workDescription } from "@/lib/work-summary";
-import type { EventQuickData, QuickMap, QuickPair, QuickStaff } from "@/components/schedule/quick-types";
+import { workDescription, workText } from "@/lib/work-summary";
+import type { EventQuickData, QuickMap, QuickPair, QuickRemove, QuickStaff, QuickStoreChange } from "@/components/schedule/quick-types";
+import { approverRole, skipsApproval } from "@/lib/auth/permissions";
+import { caseChainOf, pendingStoreChange, storeChangeBlocker } from "@/lib/case-store";
+import { touchesConfirmedSales } from "@/lib/approval-decide";
+import type { Order } from "@/lib/db/types";
 import type { Database, ScheduleEvent, StoreId, User } from "@/lib/db/types";
 import { canEditRecordMap, canViewRecordMap } from "@/lib/maps/access";
 import { mapIndex, placeOf } from "@/lib/maps/resolve";
@@ -51,6 +55,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const inq = ref?.inquiryId ? db.inquiries.find((i) => i.id === ref.inquiryId) : undefined;
   const store = db.stores.find((s) => s.id === e.storeId);
   const users = new Map(db.users.map((u) => [u.id, u.name]));
+  const workCounts = scheduleWork(db, [e]).get(e.id);
   const data: EventQuickData = {
     id: e.id,
     title: e.title,
@@ -69,7 +74,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     storeName: store?.name ?? e.storeId,
     assigneeIds: e.assigneeIds,
     assignees: e.assigneeIds.map((a) => users.get(a) ?? "-"),
-    work: workDescription(scheduleWork(db, [e]).get(e.id)) || undefined,
+    work: workDescription(workCounts) || undefined,
+    workText: workText(workCounts) || undefined,
+    workManual: e.work?.trim() || undefined,
+    storeChange: quickStoreChange(db, user, e, canEdit, resolver),
+    remove: quickRemove(db, user, e, canEdit, order),
     caseRef: ref ? caseValue(ref) : undefined,
     case: ref ? { label: `${ref.stage} ${ref.number}`, title: ref.title, href: ref.href, canOpen: canAccessStore(user, ref.storeId) || canEditCaseStore(user, ref.storeId) } : undefined,
     customer: customer
@@ -95,6 +104,43 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     pair: quickPair(db, e, canEdit, labeler, users, resolver),
   };
   return NextResponse.json(data, { headers: NO_STORE });
+}
+
+/** 施工店舗の変更 (案件の予定だけ。案件のない予定は「詳しく変更」で店舗を変える) */
+function quickStoreChange(db: Database, user: User, e: ScheduleEvent, canEdit: boolean, resolver: ReturnType<typeof createCaseResolver>): QuickStoreChange | undefined {
+  const ref = resolver.ofEvent(e);
+  const chain = ref ? caseChainOf(db, ref.id) : undefined;
+  if (!chain) return undefined;
+  const storeName = (id: string) => db.stores.find((s) => s.id === id)?.name ?? id;
+  const pending = pendingStoreChange(db, chain);
+  const to = pending?.changes?.find((c) => c.field === "storeId")?.after;
+  // 承認が要るか: 店長・管理者は省略 (確定した売上の受注は管理者の承認)
+  const confirmed = touchesConfirmedSales(db, { type: "store_change", targetId: chain.head.id });
+  const needsApproval = !skipsApproval(user, "store_change") || (user.role !== "admin" && confirmed);
+  const role = confirmed ? "admin" : approverRole(db.users, chain.head.storeId, false, user.id);
+  // 店舗によらない理由 (請求書・キャンセル・月次確定) を先に出す (ほかの店舗のどれかで確かめる)
+  const other = db.stores.find((s) => s.id !== chain.head.storeId);
+  const reason = other ? storeChangeBlocker(db, chain, other.id) : undefined;
+  return {
+    mode: "case",
+    caseLabel: `${ref!.stage} ${chain.head.number}`,
+    current: chain.head.storeId,
+    currentName: storeName(chain.head.storeId),
+    options: db.stores.filter((s) => s.id !== chain.head.storeId).map((s) => ({ id: s.id, name: s.name })),
+    canChange: canEdit && canEditCaseStore(user, chain.head.storeId) && !reason && !pending,
+    blocked: reason,
+    pending: pending ? `${storeName(String(to ?? ""))}への変更を申請中 (${pending.createdAt.slice(5, 10).replace("-", "/")}・${db.users.find((u) => u.id === pending.requestedBy)?.name ?? "-"})` : undefined,
+    needsApproval,
+    approver: role === "admin" ? "管理者" : `${storeName(chain.head.storeId)}の店長`,
+  };
+}
+
+/** 予定の削除 (小さな画面のいちばん下) */
+function quickRemove(db: Database, user: User, e: ScheduleEvent, canEdit: boolean, order: Order | undefined): QuickRemove {
+  if (e.source !== "order") return { mode: "event", canDelete: canEditEvent(user, e), needsApproval: false };
+  if (!parseHandoverRef(e.sourceRef)) return { mode: "order", canDelete: false, needsApproval: false, orderHref: order ? `/orders/${order.id}` : undefined };
+  const needsApproval = !skipsApproval(user, "handover_change");
+  return { mode: "handover", canDelete: canEdit, needsApproval, approver: order && needsApproval ? (approverRole(db.users, order.storeId, false, user.id) === "admin" ? "管理者" : `${db.stores.find((s) => s.id === order.storeId)?.name ?? ""}の店長`) : undefined, orderHref: order ? `/orders/${order.id}` : undefined };
 }
 
 /** 地図: Google マップ・経路案内・登録済みの住宅地図 (MapInfoCard と同じ場所の決め方。src/lib/maps/resolve.ts) */

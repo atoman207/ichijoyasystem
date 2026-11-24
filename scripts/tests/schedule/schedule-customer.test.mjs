@@ -214,6 +214,10 @@ eq(S.inquiryContact({ contactPhone: "090", intake: { address: "合志市福原1"
 section("5. 予定表の上での変更 (日時・内容・種類)");
 const SA = await imp("lib/actions/schedule.ts");
 const back = `/schedule?view=week&date=${d(3)}&_r=abc`;
+// サンプルデータの予定 (今日からの相対の日付) と重ならないよう、この日のこの社員の予定を空ける (日によって研修などが重なっていた)
+await store.mutate((x) => {
+  x.schedule = x.schedule.filter((e) => e.id === "ev_free" || e.date !== d(5) || !e.assigneeIds.includes(staff.id));
+});
 r = await act(staff, () => SA.quickUpdateScheduleEvent("ev_free", form({ returnTo: back, kind: "onsite_quote", date: d(5), timeMode: "time", startTime: "13:00", endTime: "14:30", title: "ヤマダ 様 現見", memo: "網戸 大5 小2" })));
 const ev = db().schedule.find((e) => e.id === "ev_free");
 eq([r.err, r.path, ev.kind, ev.date, ev.startTime, ev.endTime, ev.slot, ev.title, ev.memo, ev.assigneeIds], [null, "/schedule", "onsite_quote", d(5), "13:00", "14:30", undefined, "ヤマダ 様 現見", "網戸 大5 小2", [staff.id]], "日時・種類 (現見)・件名・メモを変える (担当者はそのまま)・予定表に戻る");

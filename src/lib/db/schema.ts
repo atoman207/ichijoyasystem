@@ -603,6 +603,7 @@ export const TABLES: TableDef[] = [
       ["updatedBy", "text"],
       ["updatedAt", ts],
       ["sourceRef", "text"],
+      ["work", "text"],
     ],
     orderBy: ["date", "start_time", "id"],
     indexes: [["date"], ["store_id", "date"], ["order_id"], ["customer_id"]],

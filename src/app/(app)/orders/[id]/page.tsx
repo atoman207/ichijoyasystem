@@ -251,7 +251,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               )}
             </Card>
           ) : (
-          <Card>
+          <Card id="schedule">
             <CardHeader title="施工予定・担当" description="保存すると予定表 (店舗のカレンダー) の「施工」の予定に施工担当とともに反映されます。予定表の側で日程・担当を変えた場合もここに反映されます" />
             {active ? (
               <OrderScheduleForm

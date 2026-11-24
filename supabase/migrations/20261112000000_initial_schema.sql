@@ -499,7 +499,8 @@ create table if not exists schedule_events (
   created_at timestamptz,
   updated_by text,
   updated_at timestamptz,
-  source_ref text
+  source_ref text,
+  work text
 );
 comment on table schedule_events is '予定 (全社カレンダー)';
 
@@ -2010,6 +2011,7 @@ alter table schedule_events add column if not exists created_at timestamptz;
 alter table schedule_events add column if not exists updated_by text;
 alter table schedule_events add column if not exists updated_at timestamptz;
 alter table schedule_events add column if not exists source_ref text;
+alter table schedule_events add column if not exists work text;
 alter table company_holidays add column if not exists date date not null unique;
 alter table company_holidays add column if not exists label text not null default '休業日';
 alter table survey_responses add column if not exists received_at timestamptz not null;

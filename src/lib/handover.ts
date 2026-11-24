@@ -665,6 +665,21 @@ export function applyEventMove(
   });
 }
 
+/**
+ * 予定表で連動する予定を削除したとき (お客様のご要望 2026-11-24「予定表から予定の削除」): その予定の品目の引取 (または納品・施工) の日時を受注の日程から外す。
+ * 品目の行と、もう片方の日程 (引取を消したときの納品など) は残す (案件の情報は消さない)
+ */
+export function applyEventRemoval(rowsRaw: OrderHandover[] | undefined, ref: { role: HandoverRole; rowIds: string[] }): OrderHandover[] {
+  const ids = new Set(ref.rowIds);
+  return cleanHandovers(rowsRaw ?? []).rows.map((r) => {
+    if (!ids.has(r.id)) return r;
+    const next: OrderHandover = { ...r };
+    for (const f of SIDE_FIELDS[ref.role === "install" ? "pickup" : ref.role]) setField(next, f, undefined);
+    if (ref.role === "install") setField(next, "deliveryDate", undefined);
+    return cleanRow(next);
+  });
+}
+
 /* ---------------- 襖・障子・網戸の同じ日程 (受注の画面の入力) ---------------- */
 
 /** 日程の欄の値をつないだ印 (同じ日程かを比べる。空は "") */

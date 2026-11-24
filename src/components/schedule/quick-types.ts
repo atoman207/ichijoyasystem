@@ -22,6 +22,14 @@ export interface EventQuickData {
   assignees: string[];
   /** 仕事内容 (畳 12・襖 6 など) */
   work?: string;
+  /** 仕事内容の省略表記 (タ12 フ6。入力欄の初期値) */
+  workText?: string;
+  /** 予定表で手で決めた仕事内容 (ScheduleEvent.work。なければ自動) */
+  workManual?: string;
+  /** 施工店舗 (案件の店舗 = 売上の店舗) の変更 (お客様のご要望 2026-11-24。src/lib/case-store.ts) */
+  storeChange?: QuickStoreChange;
+  /** 予定の削除 (小さな画面のいちばん下。確認してから) */
+  remove?: QuickRemove;
   /** 重複の確認に渡す案件 ("order:o_1" など) */
   caseRef?: string;
   case?: { label: string; title: string; href: string; canOpen: boolean };
@@ -45,6 +53,34 @@ export interface EventQuickData {
   staff: QuickStaff[];
   /** 引取・現見 ⇄ 納品 の相手の予定 (お客様のご要望 2026-11-24「⑦」。src/lib/schedule-pair.ts) */
   pair?: QuickPair;
+}
+
+export interface QuickStoreChange {
+  /** case = 案件の施工店舗 (申請) / event = 案件のない予定の店舗 (すぐ変える) */
+  mode: "case";
+  caseLabel: string;
+  current: StoreId;
+  currentName: string;
+  options: { id: StoreId; name: string }[];
+  /** 変更 (申請) できる */
+  canChange: boolean;
+  /** 変えられない理由 (請求書を発行済みなど) */
+  blocked?: string;
+  /** 承認待ちの申請 (例: 西店への変更を申請中) */
+  pending?: string;
+  /** 店長 (管理者) の承認が要る / 承認者 */
+  needsApproval: boolean;
+  approver: string;
+}
+
+export interface QuickRemove {
+  /** event = 予定だけ削除 / handover = 受注の引取・納品の日程から外す (申請のことがある) / order = 受注の施工予定 (ここでは消せない) */
+  mode: "event" | "handover" | "order";
+  canDelete: boolean;
+  needsApproval: boolean;
+  approver?: string;
+  /** 受注の画面 (施工予定の変更) */
+  orderHref?: string;
 }
 
 export interface QuickStaff {
