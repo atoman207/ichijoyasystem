@@ -237,3 +237,13 @@ body {
     font-size: 16px;
   }
 }
+
+/*
+  ホーム画面のアプリ (display: standalone) にはブラウザーの戻るボタンがない。
+  PDF などシステムの画面の外を開くリンク (戻れなくなる) は、アプリでは隠す (住宅地図の画面の「PDF を別のタブで開く」)
+*/
+@media (display-mode: standalone) {
+  .hide-in-app {
+    display: none !important;
+  }
+}

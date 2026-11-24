@@ -208,16 +208,3 @@ export function MapDocUploader({
     </form>
   );
 }
-
-/** PDF のプレビュー (押したときだけ読み込む。スマートフォンは新しいタブで開く方が見やすい) */
-export function MapPdfPreview({ src, title }: { src: string; title: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="w-full">
-      <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        {open ? "プレビューを閉じる" : "プレビュー"}
-      </button>
-      {open && <iframe src={src} title={title} className="mt-2 h-[28rem] w-full rounded-lg border border-line bg-white" />}
-    </div>
-  );
-}

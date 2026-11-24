@@ -6,6 +6,7 @@ import { addAudit, getDb, mutate, nowIso } from "@/lib/db/store";
 import type { MapLocation, MapRefType } from "@/lib/db/types";
 import { canManageMaps, canRemoveMapDocument } from "@/lib/auth/permissions";
 import { removeObjects } from "@/lib/storage";
+import { purgeMapRender } from "@/lib/maps/render";
 import { syncOrderEvent } from "@/lib/db/schedule";
 import { canEditRecordMap, canViewLocation, canViewMapDocument } from "@/lib/maps/access";
 import { fmtCoord, inJapan, parseCoordinates, validPlaceId } from "@/lib/maps/google";
@@ -202,6 +203,8 @@ export async function removeMapDocument(documentId: string, formData: FormData) 
     addAudit(db, { userId: user.id, action: "delete", entity: "map_document", entityId: doc.id, entityLabel: label, summary: `住宅地図を取り消し (理由: ${reason}${prevStatus === "replaced" ? " / 差し替え前の版" : ""})`, storeId: doc.storeId, changes: [{ field: "status", before: prevStatus, after: "removed" }] });
   });
   if (key) await removeObjects([key]).catch((err) => console.warn("[maps] file cleanup failed:", (err as Error).message));
+  // 画面に出すために作った画像の控えも消す (src/lib/maps/render.ts)
+  await purgeMapRender(documentId);
   revalidatePath("/", "layout");
   redirect(withMsg(back, `「${label}」を取り消しました。台帳と変更履歴は残っています。`));
 }

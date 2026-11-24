@@ -8,6 +8,7 @@ import { putObject, removeObjects, storageDir } from "@/lib/storage";
 import { decodeCsv, parseCsv, toCsv } from "@/lib/csv";
 import { normalizeAddress, sameAddressText, sameHouse } from "./address";
 import { inspectPdf } from "./pdf";
+import { detectMapImage, imageToPdf } from "./image";
 import { mapIndex, placeOf, touchMapIndex, type ResolvedPlace } from "./resolve";
 import { DEFAULT_COPYRIGHT } from "./documents";
 import { ensureLocation, linkDocument } from "./store";
@@ -17,7 +18,7 @@ import { ensureLocation, linkDocument } from "./store";
  * ------------------------------------------------------------
  * 1. 住所の正規化 (normalize): 顧客の住所 (と進行中の受注の施工場所) から場所を作る。元の住所の文字は変えない。
  *    番地まである住所だけを場所にし、同じ番地の記録は 1 つの場所を共有する。番地のない住所は「要確認」として報告する
- * 2. 住宅地図の PDF の一括取込 (pdf_import): サーバーのフォルダー (MAP_IMPORT_DIR/<フォルダー>) の PDF を、
+ * 2. 住宅地図の PDF の一括取込 (pdf_import): サーバーのフォルダー (MAP_IMPORT_DIR/<フォルダー>) の PDF・画像 (PNG・JPEG。ゼンリン GIS の「画像出力」。1 ページの PDF にする) を、
  *    manifest.csv (ファイル名と顧客 ID・顧客コード・受注 ID・受注番号・住所) またはファイル名 (C-01234.pdf / O-2026-0012.pdf) で記録に結び付ける。
  *    ゼンリンからの自動ダウンロードはしない (許諾を確認した PDF を人が置く)
  * - どちらも「試し (dryRun)」で書き込まずに結果の報告だけを作れる
@@ -27,6 +28,8 @@ import { ensureLocation, linkDocument } from "./store";
  */
 
 export const MAP_BATCH_SETTING = "map_batch";
+/** 一括取込で読むファイル (PDF と、ゼンリン GIS の「画像出力」の画像) */
+const IMPORT_FILE = /\.(pdf|png|jpe?g)$/i;
 const STEP_NORMALIZE = 2000;
 const STEP_PDF = 25;
 
@@ -90,7 +93,7 @@ export async function listImportFolders(): Promise<{ name: string; pdfs: number;
   for (const e of entries) {
     if (!e.isDirectory() || !/^[\w.-]{1,80}$/.test(e.name)) continue;
     const files = await fsp.readdir(path.join(/*turbopackIgnore: true*/ root, e.name)).catch(() => [] as string[]);
-    out.push({ name: e.name, pdfs: files.filter((f) => /\.pdf$/i.test(f)).length, manifest: files.includes("manifest.csv") });
+    out.push({ name: e.name, pdfs: files.filter((f) => IMPORT_FILE.test(f) && !f.startsWith(".")).length, manifest: files.includes("manifest.csv") });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -300,7 +303,7 @@ async function folderFiles(folder: string): Promise<string[]> {
   const dir = path.join(/*turbopackIgnore: true*/ importRoot(), folder);
   const names = await fsp.readdir(/*turbopackIgnore: true*/ dir).catch(() => null);
   if (!names) throw new Error(`フォルダー ${dir} が見つかりません。`);
-  return names.filter((f) => /\.pdf$/i.test(f) && !f.startsWith(".")).sort();
+  return names.filter((f) => IMPORT_FILE.test(f) && !f.startsWith(".")).sort();
 }
 
 /* ---------------- ジョブの開始・1 回分の処理・取り消し ---------------- */
@@ -418,6 +421,8 @@ interface Prepared {
   result?: ImportResult;
   docId?: string;
   key?: string;
+  /** 画像から PDF にした */
+  fromImage?: boolean;
 }
 
 async function stepPdf(user: User, job0: MapBatchJob): Promise<MapBatchJob> {
@@ -455,6 +460,20 @@ async function stepPdf(user: User, job0: MapBatchJob): Promise<MapBatchJob> {
       p.result = { file, status: "error", detail: `読み込めません: ${(err as Error).message}` };
       continue;
     }
+    // 画像 (ゼンリン GIS の「画像出力」) は 1 ページの PDF にする (画面からの登録と同じ。src/lib/maps/image.ts)
+    const img = detectMapImage(bytes);
+    if (img) {
+      try {
+        bytes = (await imageToPdf(bytes, img)).pdf;
+        p.fromImage = true;
+      } catch (err) {
+        p.result = { file, status: "error", detail: `画像を読み取れません: ${(err as Error).message}` };
+        continue;
+      }
+    } else if (!/\.pdf$/i.test(file)) {
+      p.result = { file, status: "error", detail: "PNG・JPEG の画像ではありません (拡張子と中身が違います)" };
+      continue;
+    }
     const check = await inspectPdf(bytes);
     if (!check.ok) {
       p.result = { file, status: "error", detail: check.error ?? "PDF ではありません" };
@@ -475,7 +494,7 @@ async function stepPdf(user: User, job0: MapBatchJob): Promise<MapBatchJob> {
     const dup = bySha.get(p.sha);
     const twin = shaInStep.get(p.sha);
     if (job0.dryRun) {
-      p.result = dup || twin || earlier.has(p.sha) ? { file: p.file, status: "would_link", detail: `${p.via} / 同じ PDF が${dup ? "登録済み" : "このフォルダーの別のファイルにあり"}` } : { file: p.file, status: "would_create", detail: `${p.via} / ${p.pages} ページ`, documentId: p.sha };
+      p.result = dup || twin || earlier.has(p.sha) ? { file: p.file, status: "would_link", detail: `${p.via} / 同じ PDF が${dup ? "登録済み" : "このフォルダーの別のファイルにあり"}` } : { file: p.file, status: "would_create", detail: `${p.via} / ${p.pages} ページ${p.fromImage ? " (画像 → PDF)" : ""}`, documentId: p.sha };
       if (!dup && !twin) shaInStep.set(p.sha, p);
       continue;
     }
@@ -531,8 +550,8 @@ async function stepPdf(user: User, job0: MapBatchJob): Promise<MapBatchJob> {
           id: p.docId,
           kind: j.provider === "other" ? "other" : "residential",
           provider: j.provider ?? "zenrin",
-          title: (m?.title || p.file.replace(/\.pdf$/i, "")).slice(0, 120),
-          fileName: p.file.slice(0, 200),
+          title: (m?.title || p.file.replace(IMPORT_FILE, "")).slice(0, 120),
+          fileName: (p.fromImage ? p.file.replace(IMPORT_FILE, ".pdf") : p.file).slice(0, 200),
           contentType: "application/pdf",
           size: p.bytes!.length,
           sha256: p.sha!,
@@ -555,7 +574,7 @@ async function stepPdf(user: User, job0: MapBatchJob): Promise<MapBatchJob> {
         d.mapDocuments.push(doc);
         touchMapIndex();
         linkDocument(d, user, doc.id, loc.id);
-        p.result = { file: p.file, status: "created", detail: `${p.via} / ${p.pages} ページ`, documentId: doc.id, locationId: loc.id };
+        p.result = { file: p.file, status: "created", detail: `${p.via} / ${p.pages} ページ${p.fromImage ? " (画像 → PDF)" : ""}`, documentId: doc.id, locationId: loc.id };
       }
       for (const p of prepared) bump(j.counts, p.result!.status);
       j.cursor = Math.min(j.total, j.cursor + prepared.length);

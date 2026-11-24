@@ -35,6 +35,11 @@ async function session(email, viewport = { width: 1440, height: 1000 }) {
 }
 const mapCard = (page) => page.locator("#map");
 const hrefOf = async (loc) => (await loc.count()) ? loc.first().getAttribute("href") : null;
+/** 「地図を開く」(/maps/documents/<ID>?returnTo=…) の住宅地図の ID */
+const docIdOf = async (page) => {
+  const h = await hrefOf(mapCard(page).getByRole("link", { name: "地図を開く" }));
+  return h ? new URL(h, "http://x").pathname.split("/").pop() : undefined;
+};
 async function upload(page, file, { replace = false } = {}) {
   const card = mapCard(page);
   const opener = card.getByRole("button", { name: replace ? "差し替える" : "住宅地図の PDF を登録" }).first();
@@ -79,16 +84,31 @@ section("2. Upload authorized PDF to customer (UI)");
 await upload(page, SHOT + "cust-map.pdf");
 check(await mapCard(page).getByText("登録済み").first().isVisible(), "customer card shows registered PDF");
 check(await mapCard(page).getByText("© ZENRIN CO., LTD.").first().isVisible(), "copyright notice displayed");
-const pdfHref = await hrefOf(mapCard(page).getByRole("link", { name: "新しいタブで開く" }));
-const custDocId = pdfHref?.split("/").pop();
-check(/^\/api\/maps\/documents\/mdoc_/.test(pdfHref ?? ""), "PDF served via authenticated endpoint (no public URL)");
+const custDocId = await docIdOf(page);
+const pdfHref = `/api/maps/documents/${custDocId}`;
+check(/^mdoc_/.test(custDocId ?? "") && !(await mapCard(page).locator(`a[href="${pdfHref}"]`).count()), "map opens inside the system (no direct link to the raw PDF)");
 let r = await page.request.get(BASE + pdfHref);
 check(r.status() === 200 && r.headers()["content-type"] === "application/pdf" && (r.headers()["cache-control"] ?? "").includes("no-store"), "PDF endpoint 200 application/pdf, no-store");
 r = await page.request.get(BASE + pdfHref + "?download=1");
 check((r.headers()["content-disposition"] ?? "").startsWith("attachment"), "download disposition");
 await mapCard(page).getByRole("button", { name: "プレビュー" }).first().click();
-check(await mapCard(page).locator(`iframe[src="${pdfHref}"]`).isVisible(), "inline preview iframe");
+const prev = mapCard(page).locator(`img[src="${pdfHref}/page?p=1&size=preview"]`);
+await prev.waitFor();
+check(await prev.evaluate((img) => img.complete && img.naturalWidth === 800), "inline preview image (rendered page 1)");
 await page.screenshot({ path: SHOT + "e2e-02-customer-pdf.png", fullPage: true });
+// 地図の画面で見て、「元の画面に戻る」で顧客の画面に戻る (お客様のご要望 2026-11-24「①」)
+await mapCard(page).getByRole("link", { name: "地図を開く" }).click();
+await page.waitForURL(/\/maps\/documents\/mdoc_/);
+const big = page.getByTestId("map-page").locator("img");
+await big.waitFor();
+await page.waitForFunction(() => { const i = document.querySelector('[data-testid="map-page"] img'); return i && i.complete && i.naturalWidth > 0; });
+check(await big.evaluate((img) => img.naturalWidth === 2000), "viewer shows the map as an image inside the system");
+await big.click();
+check(await page.getByText("200%").isVisible(), "tap zooms in");
+await page.screenshot({ path: SHOT + "e2e-02b-viewer.png", fullPage: true });
+await page.getByTestId("map-back").first().click();
+await page.waitForURL(new RegExp(`/customers/${custId}`));
+check(new URL(page.url()).pathname === `/customers/${custId}`, "「元の画面に戻る」 returns to the customer screen");
 // server-side validation through HTTP
 const post = (fields, file, name) => page.request.post(BASE + "/api/maps/documents", { multipart: { ...fields, file: { name, mimeType: "application/pdf", buffer: fs.readFileSync(file) } }, headers: { origin: BASE } });
 r = await post({ targetType: "customer", targetId: custId, provider: "zenrin" }, SHOT + "site-map.pdf", "x.pdf");
@@ -175,10 +195,10 @@ await page.screenshot({ path: SHOT + "e2e-05-order-site-missing.png", fullPage: 
 section("6. Project-specific PDF");
 await upload(page, SHOT + "site-map.pdf");
 check(await mapCard(page).getByText("登録済み").first().isVisible(), "order shows its own site PDF");
-const siteDoc = (await hrefOf(mapCard(page).getByRole("link", { name: "新しいタブで開く" })))?.split("/").pop();
+const siteDoc = await docIdOf(page);
 check(siteDoc && siteDoc !== custDocId, "site PDF is a different document");
 await page.goto(BASE + `/customers/${custId}`);
-check((await hrefOf(mapCard(page).getByRole("link", { name: "新しいタブで開く" })))?.endsWith(custDocId), "customer still shows its own PDF");
+check((await docIdOf(page)) === custDocId, "customer still shows its own PDF");
 
 section("9. Explicit appointment override + 8. customer address change");
 await page.goto(BASE + `/schedule/new?customerId=${custId}&kind=visit`);
@@ -213,7 +233,7 @@ check(await mapCard(page).getByText(/お客様の住所を変えても/).first()
 section("11. Replace and remove PDF, history kept");
 await page.goto(BASE + `/orders/${order2}`);
 await upload(page, SHOT + "site-map-v2.pdf", { replace: true });
-const v2 = (await hrefOf(mapCard(page).getByRole("link", { name: "新しいタブで開く" })))?.split("/").pop();
+const v2 = await docIdOf(page);
 check(v2 && v2 !== siteDoc, "replacement is the active version");
 await mapCard(page).getByRole("link", { name: "場所の詳細・位置の修正" }).click();
 await page.waitForURL(/\/maps\/locations\//);

@@ -173,7 +173,7 @@ export function BatchRunner({ current, folders, labels }: { current?: Job; folde
         }}
       >
         <div className="font-semibold text-ink">② 住宅地図の PDF の一括取込</div>
-        <p className="text-ink-3">サーバーの取込フォルダーに置いた PDF を、manifest.csv (file, customer_code / customer_id / order_number / order_id / address) またはファイル名 (C-01234.pdf / O-2026-0012.pdf) で記録に結び付けます。ゼンリンから自動でダウンロードはしません。</p>
+        <p className="text-ink-3">サーバーの取込フォルダーに置いた PDF・画像 (PNG・JPEG。画像は 1 ページの PDF にします) を、manifest.csv (file, customer_code / customer_id / order_number / order_id / address) またはファイル名 (C-01234.pdf / O-2026-0012.pdf。後ろに名前などが付いていても可) で記録に結び付けます。ゼンリンから自動でダウンロードはしません。</p>
         {folders.length === 0 ? (
           <p className="text-warn-ink">取込フォルダーに PDF のフォルダーがありません。</p>
         ) : (
@@ -182,7 +182,7 @@ export function BatchRunner({ current, folders, labels }: { current?: Job; folde
             <select name="folder" className="field mt-1" required>
               {folders.map((f) => (
                 <option key={f.name} value={f.name}>
-                  {f.name} (PDF {f.pdfs} 件{f.manifest ? "・manifest.csv あり" : ""})
+                  {f.name} (PDF・画像 {f.pdfs} 件{f.manifest ? "・manifest.csv あり" : ""})
                 </option>
               ))}
             </select>

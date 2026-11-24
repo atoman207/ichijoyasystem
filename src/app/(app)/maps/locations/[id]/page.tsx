@@ -16,7 +16,9 @@ import { safeReturn } from "@/lib/actions/guards";
 import { fmtDateTime, toDateKey } from "@/lib/format";
 import { Badge, Button, Card, CardHeader, Field, Flash, Input, PageHeader, Select, Textarea, buttonClass } from "@/components/ui";
 import { HistoryCard } from "@/components/features/History";
-import { MapDocUploader, MapPdfPreview } from "@/components/maps/MapDocUploader";
+import { MapDocUploader } from "@/components/maps/MapDocUploader";
+import { MapPreview } from "@/components/maps/MapViewer";
+import { mapViewHref } from "@/lib/maps/links";
 
 export const metadata: Metadata = { title: "場所・住宅地図" };
 
@@ -33,6 +35,8 @@ export default async function LocationPage({ params, searchParams }: { params: P
   const back = safeReturn(sp.returnTo ?? "", "");
   const idx = mapIndex(db);
   const self = `/maps/locations/${loc.id}`;
+  // 地図の画面から戻るときは、この画面 (と、この画面の戻り先) に戻る
+  const selfBack = back ? `${self}?returnTo=${encodeURIComponent(back)}` : self;
   const verified = loc.coordStatus === "verified";
   const target = { address: loc.address, lat: loc.lat, lng: loc.lng, coordsVerified: verified, placeId: loc.placeId };
   const refs = locationReferences(db, loc, { today: toDateKey(new Date()) }, idx).filter((r) => canAccessStore(user, r.storeId) || r.assigneeIds?.includes(user.id));
@@ -124,8 +128,9 @@ export default async function LocationPage({ params, searchParams }: { params: P
                   {d.usePurpose && <div className="rounded-lg bg-subtle/70 px-2 py-1 text-ink-2"><span className="font-medium">用途: {MAP_USE_PURPOSE_LABEL[d.usePurpose]}{d.nameplate ? " · 表札の情報あり" : ""}</span> — {MAP_USE_PURPOSE_NOTE[d.usePurpose]}</div>}
                   <div className="text-ink-3">許諾の確認: {users.get(d.licenseConfirmedBy) ?? "-"} {fmtDateTime(d.licenseConfirmedAt)}{d.licenseRef ? ` · ${d.licenseRef}` : ""}</div>
                   <div className="flex flex-wrap items-start gap-2">
-                    <MapPdfPreview src={`/api/maps/documents/${d.id}`} title={d.title} />
+                    <Link href={mapViewHref(d.id, selfBack)} className={buttonClass("primary", "sm")}>地図を開く</Link>
                     <a href={`/api/maps/documents/${d.id}?download=1`} className={buttonClass("ghost", "sm")}>ダウンロード</a>
+                    <MapPreview src={`/api/maps/documents/${d.id}/page?p=1&size=preview`} href={mapViewHref(d.id, selfBack)} title={d.title} />
                     <MapDocUploader targetType="location" targetId={loc.id} replaceId={d.id} replaceLabel={d.title} defaultShareable={d.shareable} compact />
                     {shared > 0 && (
                       <form action={unlinkMapDocument.bind(null, d.id, loc.id)}><input type="hidden" name="returnTo" value={self} /><Button type="submit" variant="ghost" size="sm">この場所から外す</Button></form>
@@ -185,7 +190,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
                 {docs.filter((d) => d.status !== "active").map((d) => (
                   <li key={d.id}>
                     <Badge dot={false}>{STATUS_LABEL[d.status]}</Badge> {d.title} · 登録 {users.get(d.uploadedBy) ?? "-"} {fmtDateTime(d.uploadedAt)}{d.removedAt ? ` · 取り消し ${users.get(d.removedBy ?? "") ?? "-"} ${fmtDateTime(d.removedAt)} (${d.removeReason ?? ""})` : ""} · {d.copyrightNotice}
-                    {d.status === "replaced" && d.storageKey && <> · <a href={`/api/maps/documents/${d.id}`} target="_blank" rel="noreferrer" className="text-accent hover:underline">開く</a></>}
+                    {d.status === "replaced" && d.storageKey && <> · <Link href={mapViewHref(d.id, selfBack)} className="text-accent hover:underline">開く</Link></>}
                   </li>
                 ))}
               </ul>

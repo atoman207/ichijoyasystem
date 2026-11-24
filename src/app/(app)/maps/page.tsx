@@ -11,7 +11,7 @@ import { BATCH_COUNT_LABEL, importRoot, listImportFolders, readBatchState } from
 import { MAP_TABLES } from "@/lib/maps/store";
 import { missingTables } from "@/lib/db/supabase";
 import { fmtDateTime } from "@/lib/format";
-import { Badge, Card, CardHeader, Flash, Input, Note, PageHeader, Stat } from "@/components/ui";
+import { Badge, Card, CardHeader, Flash, Input, Note, PageHeader, Stat, buttonClass } from "@/components/ui";
 import { BatchRunner } from "@/components/maps/BatchRunner";
 
 export const metadata: Metadata = { title: "地図・住宅地図" };
@@ -78,6 +78,17 @@ export default async function MapsPage({ searchParams }: { searchParams: Promise
 
         <Card className="@3xl:col-span-2">
           <CardHeader title="一括処理 (1 万件以上の顧客にも対応)" description={`少しずつ処理し、途中で止まっても続きから再開できます。取込フォルダー: ${importRoot()}`} />
+          <div className="mb-4 rounded-xl border border-accent/20 bg-accent-soft/40 p-3 text-xs text-ink-2">
+            <p className="font-semibold text-ink">既存のお客様の住宅地図をまとめて登録するとき</p>
+            <p className="mt-1 leading-relaxed">
+              ゼンリン GIS には自動取得の仕組み (API) がないため、地図はご契約部署の方がゼンリン GIS で出力します。下の一覧 (CSV) は住宅地図のないお客様の住所・施工場所を、今後の予定 → 進行中の案件 → 最近の取引 の順に並べたものです (同じ番地は 1 行)。
+              住所をゼンリン GIS の地点検索に貼り付けて「印刷」(PDF) か「画像出力」(画像) で保存し、ファイル名を一覧の「登録用のファイル名」(C-01234.pdf など) にして取込フォルダーに置くと、下の一括取込でまとめて登録できます。
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <a href="/api/maps/missing?scope=priority" className={buttonClass("secondary", "sm")}>未登録の一覧 (今後の予定・進行中の案件) CSV</a>
+              <a href="/api/maps/missing?scope=all" className={buttonClass("ghost", "sm")}>未登録の一覧 (すべて) CSV</a>
+            </div>
+          </div>
           <BatchRunner current={state.current?.status === "running" ? state.current : undefined} folders={folders} labels={BATCH_COUNT_LABEL} />
           {state.history.length > 0 && (
             <div className="mt-4 border-t border-line pt-3">

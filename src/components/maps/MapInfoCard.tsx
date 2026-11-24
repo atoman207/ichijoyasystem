@@ -1,5 +1,5 @@
 import Link from "@/components/ui/Link";
-import { ExternalLink, FileText, MapPin, Navigation, TriangleAlert } from "lucide-react";
+import { Download, ExternalLink, FileText, Map as MapIcon, MapPin, Navigation, TriangleAlert } from "lucide-react";
 import type { Database, MapDocument, MapRefType, User } from "@/lib/db/types";
 import { canRemoveMapDocument, canSeeAllStores } from "@/lib/auth/permissions";
 import { canEditRecordMap, canViewRecordMap } from "@/lib/maps/access";
@@ -9,7 +9,9 @@ import { zenrinStatus } from "@/lib/maps/providers";
 import { applyCustomerAddressToSite, followCaseLocation, linkRecordToLocation, openPlace, removeMapDocument, unlinkMapDocument } from "@/lib/actions/maps";
 import { fmtDateTime } from "@/lib/format";
 import { Badge, Button, Card, CardHeader, buttonClass } from "@/components/ui";
-import { MapDocUploader, MapPdfPreview } from "./MapDocUploader";
+import { MapDocUploader } from "./MapDocUploader";
+import { MapPreview } from "./MapViewer";
+import { mapViewHref } from "@/lib/maps/links";
 import { CopyAddress } from "./CopyAddress";
 import { MAP_USE_PURPOSE_LABEL, MAP_USE_PURPOSE_NOTE, ZENRIN_GIS } from "@/lib/maps/purpose";
 
@@ -192,6 +194,7 @@ function GoogleSide({ place, target, returnTo, canEdit, candidates }: { place: R
 
 function DocumentRow({ doc, place, target, returnTo, canEdit, canRemove, sharedWith, uploader }: { doc: MapDocument; place: ResolvedPlace; target: { type: MapRefType; id: string }; returnTo: string; canEdit: boolean; canRemove: boolean; sharedWith: number; uploader: string }) {
   const src = `/api/maps/documents/${doc.id}`;
+  const view = mapViewHref(doc.id, `${returnTo}#map`);
   return (
     <div className="space-y-2 rounded-xl border border-line p-3">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -211,14 +214,17 @@ function DocumentRow({ doc, place, target, returnTo, canEdit, canRemove, sharedW
         </p>
       )}
       {doc.licenseRef && <p className="text-[11px] text-ink-3">許諾: {doc.licenseRef}</p>}
+      {/* 地図はシステムの画面の中で開く (PDF をそのまま開くと、アプリ・スマートフォンで元の画面に戻れなくなるため) */}
       <div className="flex flex-wrap items-start gap-2">
-        <MapPdfPreview src={src} title={doc.title} />
-        <a href={src} target="_blank" rel="noreferrer" className={buttonClass("secondary", "sm")}>
-          新しいタブで開く
-        </a>
+        <Link href={view} className={buttonClass("primary", "sm")}>
+          <MapIcon />
+          地図を開く
+        </Link>
         <a href={`${src}?download=1`} className={buttonClass("ghost", "sm")}>
+          <Download />
           ダウンロード
         </a>
+        <MapPreview src={`${src}/page?p=1&size=preview`} href={view} title={doc.title} />
       </div>
       {canEdit && (
         <div className="flex flex-wrap items-start gap-2 border-t border-line pt-2">

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
 import { CalendarPlus, ExternalLink, FileText, FileUp, Link2, MapPin, Navigation, Pencil, Phone, TriangleAlert, Truck, UserRound, Users, X } from "lucide-react";
@@ -13,6 +13,7 @@ import { addPairedDelivery, checkScheduleConflicts, quickUpdateScheduleEvent } f
 import { Button, buttonClass } from "@/components/ui";
 import { MapDocUploader } from "@/components/maps/MapDocUploader";
 import { CopyAddress } from "@/components/maps/CopyAddress";
+import { mapViewHref, reopenHref } from "@/lib/maps/links";
 import { KINDS_BY_GROUP, KindMark, kindLabel } from "./parts";
 import type { EventQuickData, QuickMap, QuickStaff } from "./quick-types";
 
@@ -28,8 +29,28 @@ import type { EventQuickData, QuickMap, QuickStaff } from "./quick-types";
 type Open = { id: string; search: string; returnTo: string };
 
 export function EventQuickHost({ children }: { children: ReactNode }) {
-  const [open, setOpen] = useState<Open | null>(null);
-  const search = useSearchParams().toString();
+  const params = useSearchParams();
+  const pathname = usePathname();
+  const search = params.toString();
+  const qe = params.get("qe");
+  // 住宅地図の画面から戻ったとき (?qe=<予定の ID>): その予定の小さな画面を開いた状態にする
+  const [open, setOpen] = useState<Open | null>(() => {
+    if (!qe || qe.startsWith("hold:")) return null;
+    const rest = new URLSearchParams(search);
+    rest.delete("qe");
+    const back = new URLSearchParams(rest);
+    for (const k of ["msg", "err", "_r"]) back.delete(k);
+    back.set("_r", Math.random().toString(36).slice(2, 8));
+    return { id: qe, search: rest.toString(), returnTo: `${pathname}?${back.toString()}` };
+  });
+  // 印 (qe) は URL から外す (読み込み直しで開き直さない)。外すと search が open.search と同じになり、小さな画面が出る
+  useEffect(() => {
+    if (!qe) return;
+    const sp = new URLSearchParams(window.location.search);
+    sp.delete("qe");
+    const q = sp.toString();
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${q ? `?${q}` : ""}${window.location.hash}`);
+  }, [qe]);
   const onClickCapture = (ev: React.MouseEvent<HTMLDivElement>) => {
     if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
     const a = (ev.target as HTMLElement).closest("a[data-ev]");
@@ -144,7 +165,7 @@ function TopRow({ label, icon, children, testId }: { label: string; icon: ReactN
   );
 }
 
-function MapRow({ map, eventId, onReload }: { map?: QuickMap; eventId: string; onReload: () => void }) {
+function MapRow({ map, eventId, returnTo, onReload }: { map?: QuickMap; eventId: string; returnTo: string; onReload: () => void }) {
   const [upload, setUpload] = useState(false);
   const [done, setDone] = useState("");
   if (!map) return null;
@@ -173,10 +194,11 @@ function MapRow({ map, eventId, onReload }: { map?: QuickMap; eventId: string; o
           </a>
         )}
         {map.docs.map((d, i) => (
-          <a key={d.id} href={`/api/maps/documents/${d.id}`} target="_blank" rel="noreferrer" className={buttonClass("secondary", "sm")} title={d.title}>
+          // システムの画面の中で地図を開き、「元の画面に戻る」でこの小さな画面に戻る (お客様のご要望 2026-11-24「①」)
+          <Link key={d.id} href={mapViewHref(d.id, reopenHref(returnTo, eventId))} className={buttonClass("secondary", "sm")} title={d.title}>
             <FileText />
             住宅地図{map.docs.length > 1 ? ` ${i + 1}` : ""}
-          </a>
+          </Link>
         ))}
         {map.docs.length === 0 && map.canEdit && (
           <button type="button" onClick={() => setUpload((u) => !u)} aria-expanded={upload} className={buttonClass(upload ? "soft" : "ghost", "sm")}>
@@ -598,7 +620,7 @@ function QuickBody({ data, returnTo, onOpenEvent, onReload }: { data: EventQuick
     <div>
       {/* よく使う操作 (地図・担当者・納品) は上に (お客様のご要望 2026-11-24「⑧」) */}
       <div className="mb-3 divide-y divide-line overflow-hidden rounded-xl border border-line bg-subtle/40" data-testid="event-quick-top">
-        <MapRow map={data.map} eventId={data.id} onReload={onReload} />
+        <MapRow map={data.map} eventId={data.id} returnTo={returnTo} onReload={onReload} />
         <AssigneeRow data={data} returnTo={returnTo} />
         <PairRow data={data} returnTo={returnTo} onOpenEvent={onOpenEvent} />
       </div>
