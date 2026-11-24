@@ -87,7 +87,7 @@ export async function uploadDocument(formData: FormData) {
   const mode: OcrMode | undefined = str(formData, "mode") === "calc" ? "calc" : undefined;
   const back = mode === "calc" ? "/capture/calc" : "/capture";
   const kind = mode === "calc" ? "handwritten_quote" : choice(formData, "kind", DOCUMENT_KIND_LABEL, "other");
-  if (kind === "reception") fail(back, "受付メモは 問い合わせ →「受付を登録」から取り込んでください。");
+  if (kind === "reception") fail(back, "受付メモは 問い合わせ →「問合せ登録」から取り込んでください。");
   const storeId = resolveStoreId(user, str(formData, "storeId"));
   assertStore(user, storeId, back);
   const up = await readUpload(formData, back);
@@ -139,7 +139,7 @@ export async function retryExtraction(formData: FormData) {
   const back = docPath(id, mode);
   assertEditable(doc, back);
   const kind = mode === "calc" ? "handwritten_quote" : choice(formData, "kind", DOCUMENT_KIND_LABEL, doc.kind);
-  if (kind === "reception" || doc.kind === "reception") fail(back, "受付メモは 問い合わせ →「受付を登録」の画面で読み直してください。");
+  if (kind === "reception" || doc.kind === "reception") fail(back, "受付メモは 問い合わせ →「問合せ登録」の画面で読み直してください。");
   const sample = Boolean(doc.extracted?._sample);
   let base64: string | undefined;
   let mimeType = "image/jpeg";

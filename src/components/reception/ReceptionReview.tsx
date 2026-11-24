@@ -64,6 +64,7 @@ export function ReceptionReview({
   currentUserId,
   defaultAssigneeId,
   mediaDefault,
+  canCreateCustomer = false,
 }: {
   action: (formData: FormData) => Promise<void>;
   id: string;
@@ -80,6 +81,8 @@ export function ReceptionReview({
   currentUserId: string;
   defaultAssigneeId: string;
   mediaDefault?: MediaKey;
+  /** 顧客の新規登録ができる (「新しいお客様として登録」で顧客も登録する) */
+  canCreateCustomer?: boolean;
 }) {
   const [act, setAct] = useState<ReceptionAction>(suggestion.action);
   const [customerId, setCustomerId] = useState(suggestion.customerId ?? "");
@@ -108,6 +111,7 @@ export function ReceptionReview({
   return (
     <form action={action} className="space-y-5">
       <input type="hidden" name="id" value={id} />
+      <MatchPanel customers={customers} cases={cases} canCreateCustomer={canCreateCustomer} mediaDefault={mediaDefault} fields={fields} />
       <section className="space-y-3">
         <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
           <label className="block">
@@ -163,7 +167,7 @@ export function ReceptionReview({
       </section>
 
       <section className="space-y-3 rounded-xl border border-line bg-subtle/60 p-4">
-        <h3 className="text-sm font-semibold text-ink">登録先</h3>
+        <h3 className="text-sm font-semibold text-ink">登録先 (詳しく選ぶ)</h3>
         <p className="text-xs text-ink-2">提案: {suggestion.reason}</p>
         <div className="grid grid-cols-1 gap-2 @xl:grid-cols-2">
           {ACTIONS.map((a) => (
@@ -197,10 +201,6 @@ export function ReceptionReview({
                 {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
               {!canChooseStore && <input type="hidden" name="storeId" value={storeId} />}
-            </label>
-            <label className="block">
-              <span className="label">媒体 (当社を知ったきっかけ) <span className="text-critical">*</span></span>
-              <MediaSelect name="media" defaultValue={mediaDefault ?? ""} required />
             </label>
             <label className="block">
               <span className="label">担当者</span>
@@ -278,12 +278,6 @@ export function ReceptionReview({
           </label>
         )}
 
-        {fields.uncertainFields.length > 0 && act !== "dismiss" && (
-          <label className="flex items-start gap-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn-ink">
-            <input type="checkbox" name="confirmedUncertain" className="mt-1" />
-            <span>黄色の項目 ({fields.uncertainFields.map((k) => RECEPTION_FIELD_LABEL[k as keyof ReceptionFields] ?? k).join("・")}) をメモ・会話と見比べて確認しました</span>
-          </label>
-        )}
 
         <div className="flex flex-wrap justify-end gap-2 pt-1">
           <button type="submit" name="intent" value="save" formNoValidate className="inline-flex h-10 items-center rounded-lg border border-line bg-panel px-4 text-sm text-ink-2 hover:bg-subtle">修正を保存</button>
@@ -293,5 +287,86 @@ export function ReceptionReview({
         </div>
       </section>
     </form>
+  );
+}
+
+/**
+ * お客様・案件の確認 (お客様のご要望 2026-11-24「追加 ③」: 手書きメモを撮影して AI が住所などを読み取ったら、同じ住所のお客様を
+ * 「こちらのお客様に紐付けますか？」と出し、ワンタッチで紐付ける。いなければそのまま新規顧客登録。既存の案件の連絡なら案件に紐付ける)。
+ * ボタンは quick = inquiry:<顧客> / case:<案件> / new を送る (actions/reception.ts の registerReception)
+ */
+function MatchPanel({ customers, cases, canCreateCustomer, mediaDefault, fields }: { customers: ReviewCustomer[]; cases: ReviewCase[]; canCreateCustomer: boolean; mediaDefault?: MediaKey; fields: ReceptionFields }) {
+  const strong = customers.filter((c) => c.level !== "name");
+  const weak = customers.filter((c) => c.level === "name");
+  const preset = customers.find((c) => c.level === "preset");
+  const btn = "inline-flex min-h-10 items-center justify-center rounded-lg px-3 py-2 text-sm font-medium";
+  const caseButtons = (cid: string) => {
+    const list = cases.filter((k) => k.customerId === cid && k.open).slice(0, 3);
+    if (!list.length) return null;
+    return (
+      <div className="mt-2 space-y-1">
+        <p className="text-[11px] text-ink-3">すでにある案件の連絡なら:</p>
+        {list.map((k) => (
+          <button key={k.key} type="submit" name="quick" value={`case:${k.key}`} formNoValidate className={`${btn} w-full justify-start border border-line bg-panel text-left text-ink hover:border-accent/50`}>
+            この案件のやりとりに追加: {k.kindLabel} {k.number} {k.title} ({k.statusLabel})
+          </button>
+        ))}
+      </div>
+    );
+  };
+  const card = (c: ReviewCustomer, primary: boolean) => (
+    <li key={c.id} className="rounded-lg border border-line bg-panel p-3">
+      <div className="text-sm font-medium text-ink">{c.label}</div>
+      <div className="text-[11px] text-ink-3">{c.level === "preset" ? "顧客の画面から登録" : c.reason}</div>
+      <button type="submit" name="quick" value={`inquiry:${c.id}`} className={`${btn} mt-2 w-full ${primary ? "bg-accent text-white hover:bg-accent-hover" : "border border-accent/50 bg-panel text-accent-ink hover:bg-accent-soft"}`}>
+        このお客様に紐付けて登録
+      </button>
+      {caseButtons(c.id)}
+    </li>
+  );
+  return (
+    <section className="space-y-3 rounded-xl border-2 border-accent/40 bg-accent-soft/25 p-4" data-testid="reception-match">
+      <h3 className="text-sm font-semibold text-ink">お客様・案件の確認</h3>
+      {preset ? (
+        <p className="text-sm text-ink">お客様は決まっています。読み取った内容を確かめて登録してください。</p>
+      ) : strong.length ? (
+        <p className="text-sm font-medium text-ink">同じ住所・電話番号のお客様がいます。こちらのお客様に紐付けますか？</p>
+      ) : (
+        <p className="text-sm text-ink">同じ住所・電話番号のお客様は見つかりませんでした{fields.address ? "" : " (住所が読み取れていません。住所を直して「修正を保存」すると探し直します)"}。</p>
+      )}
+      {strong.length > 0 && <ul className="grid grid-cols-1 gap-2 @xl:grid-cols-2">{strong.slice(0, 4).map((c, i) => card(c, i === 0))}</ul>}
+      {weak.length > 0 && (
+        <details>
+          <summary className="cursor-pointer text-xs text-ink-2">お名前だけ一致するお客様 {weak.length} 件 (住所が違う可能性があります)</summary>
+          <ul className="mt-2 grid grid-cols-1 gap-2 @xl:grid-cols-2">{weak.slice(0, 6).map((c) => card(c, false))}</ul>
+        </details>
+      )}
+      {!preset && (
+        <div className="rounded-lg border border-dashed border-line-strong bg-panel/70 p-3">
+          {strong.length > 0 && (
+            <label className="mb-2 flex items-start gap-2 text-xs text-ink">
+              <input type="checkbox" name="confirmDuplicate" className="mt-0.5 h-4 w-4" />
+              上の候補とは別のお客様です
+            </label>
+          )}
+          <button type="submit" name="quick" value="new" className={`${btn} w-full ${strong.length ? "border border-line bg-panel text-ink hover:bg-subtle" : "bg-accent text-white hover:bg-accent-hover"}`}>
+            {canCreateCustomer ? "新しいお客様として登録 (顧客も登録)" : "新しいお客様の問合せとして登録 (顧客は事務が登録)"}
+          </button>
+          <p className="mt-1 text-[11px] text-ink-3">{canCreateCustomer ? "お名前・ふりがな・電話・住所を顧客の情報に入れて、問い合わせと一緒に登録します。" : "顧客の新規登録は事務担当が行います。問い合わせだけを登録します。"}</p>
+        </div>
+      )}
+      <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+        <label className="block">
+          <span className="label">媒体 (当社を知ったきっかけ) <span className="text-critical">*</span></span>
+          <MediaSelect name="media" defaultValue={mediaDefault ?? ""} required />
+        </label>
+        {fields.uncertainFields.length > 0 && (
+          <label className="flex items-start gap-2 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn-ink">
+            <input type="checkbox" name="confirmedUncertain" className="mt-0.5" />
+            <span>黄色の項目 ({fields.uncertainFields.map((k) => RECEPTION_FIELD_LABEL[k as keyof ReceptionFields] ?? k).join("・")}) を下の欄でメモと見比べて確認しました</span>
+          </label>
+        )}
+      </div>
+    </section>
   );
 }

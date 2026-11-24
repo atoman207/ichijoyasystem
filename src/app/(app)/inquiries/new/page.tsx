@@ -26,7 +26,7 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
     <div className="max-w-3xl">
       <Flash err={err} />
       <PageHeader title="問い合わせを登録" back={{ href: "/inquiries", label: "問い合わせ一覧" }} />
-      <Note tone="accent">電話・来店 (対面)・郵送・LINE などで受けた問い合わせを手入力で登録します。既存のお客様の新規案件は、受注番号は不要です。「既存顧客を選択」で住所・お名前から選んでください (同じ氏名・電話でも住所が違うことがあります)。手書きのメモを撮影する・話して入力する・通話の録音から読み取るときは <Link href="/inquiries/reception" className="font-medium underline">受付を登録</Link> を使うと、AI がお名前・電話・住所・用件を読み取り、登録済みのお客様・進行中の案件も探します。</Note>
+      <Note tone="accent">電話・来店 (対面)・郵送・LINE などで受けた問い合わせを手入力で登録します。既存のお客様の新規案件は、受注番号は不要です。「既存顧客を選択」で住所・お名前から選んでください (同じ氏名・電話でも住所が違うことがあります)。手書きのメモを撮影する・話して入力する・通話の録音から読み取るときは <Link href="/inquiries/reception" className="font-medium underline">問合せ登録</Link> を使うと、AI がお名前・電話・住所・用件を読み取り、登録済みのお客様・進行中の案件も探します。</Note>
       <Card className="mt-4">
         {choices.searchable && <CustomerSearch total={choices.total} q={cq} shown={customers.filter((c) => c.id !== customerId).length} keep={{ customerId }} />}
         <form action={createInquiry} className="space-y-5">

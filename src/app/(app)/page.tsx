@@ -115,8 +115,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             <LinkButton href="/capture" variant="secondary">
               <ScanLine /> 書類を取り込む
             </LinkButton>
-            <LinkButton href="/inquiries/new">
-              <Plus /> 問い合わせ登録
+            <LinkButton href="/inquiries/reception">
+              <Plus /> 問合せ登録
             </LinkButton>
           </>
         }

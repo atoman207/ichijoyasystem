@@ -463,7 +463,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 <ul className="space-y-1 text-xs text-ink-2">
                   <li><span className="font-mono text-[11px] break-all">POST {base}/api/integrations/phone-call</span></li>
                   <li className="text-ink-3">認証: ヘッダー Authorization: Bearer &lt;PHONE_INTAKE_SECRET&gt; (ヘッダーを設定できないシステムは URL の末尾に ?token=&lt;PHONE_INTAKE_SECRET&gt;)。{process.env.PHONE_INTAKE_SECRET ? "鍵は設定済みです。" : "鍵が未設定のため、受け付けていません。"} 受け取る項目: callId (通話 ID)・from (発信元)・to (着信先。店舗の電話番号と一致すればその店舗)・direction (inbound / outbound)・startedAt・duration (秒)・transcript (文字起こし。文字列か [{"{"}speaker, text{"}"}])・summary・recordingUrl (https)・extension (内線)・staff (受けた社員のメール・名前)・store (店舗)</li>
-                  <li className="text-ink-3">録音のファイルしか出せない電話機・録音装置は、問い合わせ →「受付を登録」→「通話の録音」でファイルを選ぶと文字にして読み取ります。<Link href="/inquiries/reception" className="text-accent hover:underline">受付を登録</Link></li>
+                  <li className="text-ink-3">録音のファイルしか出せない電話機・録音装置は、問い合わせ →「問合せ登録」→「通話の録音」でファイルを選ぶと文字にして読み取ります。<Link href="/inquiries/reception" className="text-accent hover:underline">問合せ登録</Link></li>
                 </ul>
               </Card>
               </>

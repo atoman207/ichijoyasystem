@@ -57,11 +57,14 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const { id } = await params;
   const { msg, err } = await searchParams;
   const user = await requireUser();
-  /** 管理者 (社長) の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
-  const own = skipsApproval(user);
+  /** 管理者・店長の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
+  const own = skipsApproval(user, "order");
   const db = getDb();
   const o = db.orders.find((x) => x.id === id);
   if (!o) notFound();
+  // 施工完了・請求済・入金済の受注 (確定した売上) の変更は、店長でも管理者の承認 (approval-decide.ts の touchesConfirmedSales)
+  const salesConfirmed = ["completed", "invoiced", "paid"].includes(o.status);
+  const ownChange = skipsApproval(user, "order_change") && (user.role === "admin" || !salesConfirmed);
   // ほかの店舗の記録は閲覧のみ (見られる範囲は閲覧の範囲の設定と案件の進み具合。承認制で申請できるときはお客様の画面の「閲覧の申請」へ。src/lib/case-access.ts)
   const info = orderAccessInfo(db, user, o);
   if (info.access === "none") redirect(deniedHref(info, "/orders", "案件"));
@@ -206,7 +209,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             <Card id="handover">
               <CardHeader
                 title="引取・納品の日程 (品目ごと)"
-                description={`品目ごとに引取日・納品日を入れます。予定表には引き取りの日と納品の日だけが載ります (間の日には出ません)。はじめて入れる日程はすぐに反映し、登録済みの日程の変更は${own ? "そのまま反映します (管理者のため承認不要)" : "店長 (店長の申請は管理者) の承認のあとに反映します"}`}
+                description={`品目ごとに引取日・納品日を入れます。予定表には引き取りの日と納品の日だけが載ります (間の日には出ません)。はじめて入れる日程はすぐに反映し、登録済みの日程の変更は${own ? "そのまま反映します (承認不要)" : "店長 (店長の申請は管理者) の承認のあとに反映します"}`}
               />
               {planEditable ? (
                 <HandoverEditor
@@ -642,7 +645,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
 
           {o.status !== "cancelled" && !pendingChange && !lock.locked && (
             <Card>
-              <CardHeader title={own ? "契約内容の変更 (管理者は承認不要)" : "契約内容の変更 (承認が必要)"} description={`${chain.quote ? "契約日を変更できます。金額は見積の画面の「変更を申請」で直します (版として残ります)" : "契約日・契約金額の変更を申請します。承認されると反映し、変更前後を履歴に残します"}${o.completedAt ? "。施工完了日・売上計上日の入力の誤りもここで直します (会計データ・経営ダッシュボードの月が変わります)" : ""}`} />
+              <CardHeader title={ownChange ? "契約内容の変更 (承認不要)" : "契約内容の変更 (承認が必要)"} description={`${chain.quote ? "契約日を変更できます。金額は見積の画面の「変更を申請」で直します (版として残ります)" : "契約日・契約金額の変更を申請します。承認されると反映し、変更前後を履歴に残します"}${o.completedAt ? "。施工完了日・売上計上日の入力の誤りもここで直します (会計データ・経営ダッシュボードの月が変わります)" : ""}`} />
               <form action={requestOrderChange.bind(null, o.id)} className="space-y-2">
                 <div className="grid grid-cols-2 gap-2">
                   <Field label="契約日"><Input type="date" name="contractDate" defaultValue={o.contractDate} /></Field>
@@ -655,7 +658,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
                   )}
                 </div>
                 <Field label="変更の理由" required><Input name="reason" required placeholder="例: お客様のご要望で追加工事" /></Field>
-                <Button type="submit" size="sm" variant="secondary">{own ? "契約内容を変更する (承認不要)" : "変更を申請する"}</Button>
+                <Button type="submit" size="sm" variant="secondary">{ownChange ? "契約内容を変更する (承認不要)" : "変更を申請する"}</Button>
               </form>
             </Card>
           )}

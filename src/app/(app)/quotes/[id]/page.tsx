@@ -42,7 +42,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
   const { msg, err } = await searchParams;
   const user = await requireUser();
   /** 管理者 (社長) の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
-  const own = skipsApproval(user);
+  const own = skipsApproval(user, "quote");
   const db = getDb();
   const q = db.quotes.find((x) => x.id === id);
   if (!q) notFound();
@@ -217,7 +217,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
           {/* アクション */}
           {q.status === "draft" && (
             <Card>
-              <CardHeader title="次のステップ" description={own ? "管理者の見積は承認不要です。内容を確認して確定してください" : "内容を確認して承認を申請してください"} />
+              <CardHeader title="次のステップ" description={own ? "承認不要です (管理者・店長の見積)。内容を確認して確定してください" : "内容を確認して承認を申請してください"} />
               <form className="flex flex-wrap gap-2">
                 <Button type="submit" formAction={submitQuote.bind(null, q.id)}>{own ? "確定する (承認不要)" : "承認を申請する"}</Button>
                 <Button type="submit" variant="danger" formAction={deleteQuote.bind(null, q.id)}>下書きを削除</Button>

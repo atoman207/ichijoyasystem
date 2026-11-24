@@ -26,6 +26,7 @@ import {
   type CaseCandidate,
 } from "@/lib/reception";
 import { providerLabel } from "@/lib/reception-docs";
+import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { ReceptionReview, type ReviewCase, type ReviewCustomer } from "@/components/reception/ReceptionReview";
 import { Badge, Card, CardHeader, Dl, Flash, Note, PageHeader } from "@/components/ui";
 
@@ -101,6 +102,7 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
         currentUserId={user.id}
         defaultAssigneeId={defaultAssigneeId}
         mediaDefault={mediaDefault}
+        canCreateCustomer={userCanCreateCustomer(db, user)}
       />
     );
   }
@@ -119,7 +121,8 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
         description={`${RECEPTION_SOURCE_LABEL[meta.source]} · ${CHANNEL_LABEL[meta.channel] ?? meta.channel} · ${fmtDateTime(call?.startedAt ?? doc.uploadedAt)} · 取り込み: ${userName(doc.uploadedBy)} · 読み取り: ${providerLabel(ex._provider)}${ex._model ? ` (${String(ex._model)})` : ""}`}
       />
       <div className="grid grid-cols-1 gap-5 @4xl:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
-        <div className="space-y-4">
+        {/* スマートフォンでは確認・登録 (お客様の紐付け) を先に、元のメモを後に */}
+        <div className="order-2 space-y-4 @4xl:order-1">
           <Card>
             <CardHeader title={meta.source === "photo" ? "元のメモ" : meta.source === "audio" || meta.source === "phone_api" ? "通話の文字起こし" : "入力した内容"} />
             {photo &&
@@ -156,7 +159,7 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
             </form>
           )}
         </div>
-        <Card className="min-w-0">
+        <Card className="order-1 min-w-0 @4xl:order-2">
           {pending ? (
             <>
               <CardHeader title="内容を確かめて登録する" description="AI の読み取り・判定は提案です。違っていれば直してから登録してください" />

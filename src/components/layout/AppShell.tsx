@@ -215,7 +215,7 @@ const NOTIFICATION_STYLE: Record<NotificationItem["kind"], { icon: LucideIcon; c
 };
 
 const CREATE_ITEMS: { href: string; label: string; desc: string; icon: LucideIcon }[] = [
-  { href: "/inquiries/new", label: "問い合わせを登録", desc: "電話・LINE・来店などの受付", icon: Inbox },
+  { href: "/inquiries/reception", label: "問合せ登録", desc: "手書きメモを撮影 → AI が読み取り (手入力・話して入力も)", icon: Inbox },
   { href: "/customers/new", label: "顧客を登録", desc: "新規のお客様・法人", icon: Users },
   { href: "/quotes/new", label: "見積を作成", desc: "商品マスタから単価を自動入力", icon: FileText },
   { href: "/schedule/new", label: "予定を登録", desc: "現地調査・施工・会議・社内行事など", icon: CalendarPlus },

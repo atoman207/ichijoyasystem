@@ -219,6 +219,9 @@ export async function registerCustomerFromInquiry(id: string, formData?: FormDat
     addAudit(db, { userId: user.id, action: "create", entity: "customer", entityId: customerId, entityLabel: inq.contactName, summary: `問い合わせ ${inq.number} から顧客を登録${needsConfirmation(dup) ? ` · 重複候補 ${candidateLabel(dup)} を確認済み` : ""}`, storeId: inq.storeId });
   });
   revalidatePath(back);
+  // 住所・電話がそろっていれば問い合わせの画面に戻る (次にやること: 依頼・日程)。足りなければ顧客の編集へ
+  const created = getDb().customers.find((c) => c.id === customerId);
+  if (created?.address && created.phone) redirect(withMsg(back, `新しいお客様 (${created.code} ${created.name}) として登録し、この問い合わせに紐づけました。`));
   redirect(withMsg(`/customers/${customerId}/edit`, "顧客として登録しました。住所など不足している情報を補完してください。"));
 }
 
@@ -421,4 +424,65 @@ export async function clearInquiryScheduleHold(id: string, formData: FormData) {
   revalidatePath(`/inquiries/${id}`);
   revalidatePath("/inquiries");
   redirect(withMsg(back, "日程未定を外しました。"));
+}
+
+/**
+ * 既存の案件にまとめる (お客様のご要望 2026-11-24「追加 ④」: AI 相談などの問い合わせが、すでにある案件 (問い合わせ・見積・受注) の連絡だったとき)。
+ * 問い合わせの内容を案件のやりとり (受注は経過メモにも) に残し、問い合わせの予定は案件の予定にして、問い合わせは「完了」(結果 = まとめた案件) にする。
+ * 同じお客様の案件だけ。見積を作った問い合わせはまとめない
+ */
+export async function mergeInquiryIntoCase(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const back = `/inquiries/${id}`;
+  const key = str(formData, "caseKey");
+  const [type, targetId] = key.split(":");
+  if (!targetId || (type !== "inquiry" && type !== "quote" && type !== "order")) fail(back, "まとめる案件を選んでください。");
+  let href = back;
+  let label = "";
+  await mutate((db) => {
+    const inq = db.inquiries.find((x) => x.id === id);
+    if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
+    assertCaseStore(user, inq.storeId, back);
+    if (!inq.customerId) fail(back, "先にお客様を紐づけてください (同じお客様の案件にまとめます)。");
+    if (inq.quoteId) fail(back, "見積を作成した問い合わせは、ほかの案件にまとめられません。");
+    if (type === "inquiry" && targetId === inq.id) fail(back, "同じ問い合わせです。");
+    const target = type === "order" ? db.orders.find((x) => x.id === targetId) : type === "quote" ? db.quotes.find((x) => x.id === targetId) : db.inquiries.find((x) => x.id === targetId);
+    if (!target) fail(back, "まとめる案件が見つかりません。");
+    if (target.customerId !== inq.customerId) fail(back, "同じお客様の案件にだけまとめられます。");
+    if (!canEditCaseStore(user, target.storeId)) fail(back, "この案件の店舗の記録を変更する権限がありません。");
+    const now = nowIso();
+    label = `${type === "order" ? "受注" : type === "quote" ? "見積" : "問い合わせ"} ${target.number}`;
+    href = `/${type === "order" ? "orders" : type === "quote" ? "quotes" : "inquiries"}/${target.id}`;
+    // 問い合わせの内容を案件のやりとりに残す
+    db.commLogs.push({ id: newId("cl"), customerId: inq.customerId, storeId: target.storeId, channel: inq.channel, direction: "inbound", subject: `問い合わせ ${inq.number}: ${inq.summary}`.slice(0, 120), body: inq.detail || inq.summary, at: inq.receivedAt, userId: user.id, relatedType: type, relatedId: target.id, contactName: inq.contactName });
+    if (type === "order") {
+      const o = db.orders.find((x) => x.id === targetId)!;
+      o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "note", body: `問い合わせ ${inq.number} (${CHANNEL_LABEL[inq.channel] ?? inq.channel}) をこの案件にまとめました: ${inq.summary}${inq.detail && inq.detail !== inq.summary ? `\n${inq.detail.slice(0, 1500)}` : ""}` });
+      o.updatedAt = now;
+    }
+    // 問い合わせの予定は、まとめた案件の予定にする
+    const order = type === "order" ? db.orders.find((x) => x.id === targetId) : undefined;
+    const quote = type === "quote" ? db.quotes.find((x) => x.id === targetId) : order?.quoteId ? db.quotes.find((x) => x.id === order.quoteId) : undefined;
+    const caseIds = { orderId: order?.id, quoteId: quote?.id, inquiryId: type === "inquiry" ? targetId : quote?.inquiryId };
+    for (const e of db.schedule) {
+      if (e.inquiryId !== inq.id) continue;
+      e.orderId = caseIds.orderId;
+      e.quoteId = caseIds.quoteId;
+      e.inquiryId = caseIds.inquiryId;
+      e.updatedAt = now;
+    }
+    closeScheduleRequests(db, inq.id, user.id, `既存の案件 ${label} にまとめました`);
+    const before = { status: inq.status, result: inq.result ?? null };
+    inq.status = "closed";
+    inq.result = `既存の案件 ${label} にまとめました`;
+    inq.nextAction = undefined;
+    inq.nextActionDue = undefined;
+    inq.scheduleHold = undefined;
+    inq.updatedAt = now;
+    addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `既存の案件 ${label} にまとめました`, storeId: inq.storeId, changes: [{ field: "status", before: before.status, after: "closed" }, { field: "result", before: before.result, after: inq.result }] });
+  });
+  revalidatePath(back);
+  revalidatePath(href);
+  revalidatePath("/inquiries");
+  redirect(withMsg(href, `問い合わせを ${label} にまとめました (内容はこの案件のやりとりに残しました)。`));
 }

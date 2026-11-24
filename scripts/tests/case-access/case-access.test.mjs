@@ -385,7 +385,7 @@ section("店長の変更の範囲 (全店舗の顧客・問い合わせ・見積
   ok(!P.canApprove(tamanaManager, ap) && !P.canApprove(koshiManager, ap) && P.canApprove(admin, ap), "店長の申請は管理者だけが承認できる (玉名店の店長・本人は承認できない)");
   const staffAp = { storeId: "tamana", requiredRole: "store_manager", requestedBy: tamanaStaff.id };
   ok(P.canApprove(tamanaManager, staffAp) && !P.canApprove(koshiManager, staffAp), "店長が承認できるのは所属店舗の「店長承認」だけ (今までどおり)");
-  ok(P.canApplyCustomerChange(koshiManager, "koshi") && !P.canApplyCustomerChange(koshiManager, "tamana"), "顧客の重要情報: 店長が承認なしで反映できるのは自店舗だけ (ほかの店舗は管理者の承認)");
+  ok(P.canApplyCustomerChange(koshiManager, "koshi") && P.canApplyCustomerChange(koshiManager, "tamana"), "顧客の重要情報: 店長は全店舗のお客様を承認なしで反映できる (お客様の決定 2026-11-24「追加 ①」)");
 
   // 権限一覧 (設定 → ユーザーと権限)
   const row = (key) => PT.permissionTable({ figures: "store", customers: "open", grantDays: 7 }).find((r) => r.key === key);

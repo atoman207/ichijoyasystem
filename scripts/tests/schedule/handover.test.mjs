@@ -329,15 +329,12 @@ r = await act(manager, () => apActions.decideApproval(ap2.id, "returned", form({
 ok(!r.err && db().approvals.find((a) => a.id === ap2.id).status === "returned", "差戻し");
 eq(evBrief(), ["pickup 12-02 08:30", "delivery 12-02 15:00", "delivery 12-05 10:00"], "差し戻した変更は予定表に反映しない");
 
-// f) 店長本人の変更 → 管理者の承認
+// f) 店長本人の変更 → 承認不要ですぐ反映 (お客様の決定 2026-11-24「追加 ①」: 店長の見積・受注の登録・変更は管理者の承認不要。記録は残る)
 const mv2 = order().handovers.map((x) => (x.item === "tatami_omote" ? { ...x, deliveryStart: "16:00", deliveryEnd: undefined } : x));
 r = await act(manager, () => hvActions.saveOrderHandovers("o_hvtest", form({ handovers: JSON.stringify(mv2), workerIds: [staff.id] })));
-const ap3 = db().approvals.find((a) => a.type === "handover_change" && a.status === "pending");
-ok(ap3?.requiredRole === "admin" && r.msg?.includes("管理者へ申請"), "店長本人の変更は管理者の承認");
-r = await act(manager, () => apActions.decideApproval(ap3.id, "approved", form({ returnTo: "/approvals" })));
-ok(r.err?.includes("自分が申請"), "自分の申請は承認できない");
-r = await act(admin, () => apActions.decideApproval(ap3.id, "approved", form({ returnTo: "/approvals" })));
-ok(!r.err && events().some((e) => e.kind === "delivery" && e.date === D("12-02") && e.startTime === "16:00"), "管理者が承認 → 畳の納品が 16:00 に");
+const ap3 = db().approvals.filter((a) => a.type === "handover_change").at(-1);
+ok(!db().approvals.some((a) => a.type === "handover_change" && a.status === "pending") && ap3?.status === "approved" && ap3.decisionComment?.includes("店長の申請"), `店長本人の変更は承認を省略 (承認の記録あり: ${r.msg ?? r.err})`);
+ok(events().some((e) => e.kind === "delivery" && e.date === D("12-02") && e.startTime === "16:00"), "店長の変更 → 畳の納品がすぐ 16:00 に");
 
 // g) 管理者の変更は承認を省略してすぐ反映 (記録は残る)
 const mv3 = order().handovers.map((x) => (x.item === "fusuma" ? { ...x, deliveryDate: D("12-06") } : x));

@@ -8,7 +8,9 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canAccessStore, canEditCaseStore, canSeeAllStores, canViewAuditEntry } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
-import { clearInquiryScheduleHold, linkInquiryFromForm, registerCustomerFromInquiry, requestInquiry, setInquiryScheduleHold, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
+import { clearInquiryScheduleHold, linkInquiryFromForm, mergeInquiryIntoCase, registerCustomerFromInquiry, requestInquiry, setInquiryScheduleHold, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
+import { customerCases } from "@/lib/reception";
+import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { taskStep } from "@/lib/actions/messages";
 import { caseFlow } from "@/lib/case-flow";
 import { CaseFlowBar } from "@/components/features/CaseFlowBar";
@@ -117,6 +119,9 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const tabParam = tab === "request" || tab === "schedule" || tab === "hold" ? (tab as ActionTab) : undefined;
   const defaultTab: ActionTab = tabParam ?? (state === "request_waiting" || (state === "overdue" && !flow.inquiryFlow?.request && !inq.scheduleHold) ? "request" : "schedule");
   const openPerson = requests.find((t) => isOpenRequest(t) && !t.assigneeStoreId && (t.assigneeIds ?? []).length === 1);
+  // 同じお客様の進行中の案件 (この問い合わせ以外)。既存の案件の連絡なら「この案件にまとめる」(お客様のご要望 2026-11-24「追加 ④」)
+  const canCreateCustomer = userCanCreateCustomer(db, user);
+  const otherCases = customer && canLink && !quote ? customerCases(db, customer.id).filter((c) => c.open && !(c.type === "inquiry" && c.id === inq.id) && canEditCaseStore(user, c.storeId)).slice(0, 5) : [];
   const scheduleKinds: ScheduleKind[] = order ? ["pickup", "delivery", "install", "site", "visit", "measure"] : ["survey", "onsite_quote", "site_survey", "measure", "visit", "pickup", "delivery", "install", "site"];
 
   return (
@@ -145,6 +150,69 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
 
       <div className="mt-4 grid grid-cols-1 gap-4 @3xl:grid-cols-3">
         <div className="space-y-4 @3xl:col-span-2">
+          {open && !quote && canLink && (!customer || otherCases.length > 0) && (
+            <Card id="customer-choice" className="border-accent/40">
+              <CardHeader
+                title={customer ? "既存の案件の連絡ですか？" : "お客様の確認: 既存のお客様に紐づける / 新しいお客様として登録"}
+                description={customer ? `${customer.name} 様の進行中の案件があります。同じ件の連絡なら、案件にまとめると二重の案件になりません (この問い合わせの内容は案件のやりとりに残ります)` : "顧客の二重登録を防ぐため、先に確かめてください。住所・電話番号が同じお客様が候補に出ます"}
+              />
+              {!customer && (
+                <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+                  <div className="rounded-xl border border-line p-3">
+                    <p className="mb-2 text-sm font-semibold text-ink">① 既存のお客様に紐づける</p>
+                    {candidates.length ? (
+                      <form action={linkInquiryFromForm} className="space-y-2">
+                        <input type="hidden" name="inquiryId" value={inq.id} />
+                        <input type="hidden" name="returnTo" value={here} />
+                        {candidates.slice(0, 3).map((m) => (
+                          <div key={m.id} className="rounded-lg bg-subtle/70 p-2 text-xs">
+                            <div className="text-sm font-medium text-ink">{m.name} <span className="text-xs font-normal text-ink-3">{m.code} · {storeName(m.storeId)}</span></div>
+                            <div className="text-ink-2">{m.address || (m.area ? `地区 ${m.area}` : "住所未登録")}</div>
+                            <div className="text-ink-3">{m.reasons.join("・")}</div>
+                            {canEditCaseStore(user, m.storeId) && <Button type="submit" name="customerId" value={m.id} size="sm" className="mt-1.5 w-full">このお客様に紐づける</Button>}
+                          </div>
+                        ))}
+                      </form>
+                    ) : (
+                      <p className="text-xs text-ink-3">住所・電話番号・お名前が同じお客様は見つかりませんでした。</p>
+                    )}
+                    <a href="#link-customer" className="mt-2 inline-block text-xs text-accent hover:underline">ほかのお客様を検索する</a>
+                  </div>
+                  <div className="rounded-xl border border-line p-3">
+                    <p className="mb-2 text-sm font-semibold text-ink">② 新しいお客様として登録</p>
+                    <p className="mb-2 text-xs text-ink-2">{[inq.contactName, inq.contactPhone ?? inq.intake?.phone, inq.intake?.address].filter(Boolean).join(" · ")}</p>
+                    {canCreateCustomer ? (
+                      <form action={registerCustomerFromInquiry.bind(null, inq.id)} className="space-y-2">
+                        {dup && needsConfirmation(dup) && (
+                          <label className="flex items-start gap-2 text-xs text-ink">
+                            <input type="checkbox" name="confirmDuplicate" value="1" required className="mt-0.5 h-4 w-4" />
+                            ①の候補とは別のお客様であることを確認した
+                          </label>
+                        )}
+                        <Button type="submit" size="sm" variant={candidates.length ? "secondary" : "primary"} className="w-full">新しいお客様として登録する</Button>
+                      </form>
+                    ) : (
+                      <p className="text-xs text-ink-3">顧客の新規登録は事務担当・店長が行います。担当の方に依頼してください。</p>
+                    )}
+                  </div>
+                </div>
+              )}
+              {customer && otherCases.length > 0 && (
+                <form action={mergeInquiryIntoCase.bind(null, inq.id)} className="space-y-1.5">
+                  {otherCases.map((c) => (
+                    <div key={`${c.type}:${c.id}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm">
+                      <span className="min-w-0 flex-1">
+                        <Link href={c.href} className="font-medium text-accent hover:underline">{c.type === "order" ? "受注" : c.type === "quote" ? "見積" : "問い合わせ"} {c.number}</Link> <span className="text-ink-2">{c.title}</span>
+                        <span className="block text-[11px] text-ink-3">{c.statusLabel} · {c.date}</span>
+                      </span>
+                      <Button type="submit" name="caseKey" value={`${c.type}:${c.id}`} size="sm" variant="secondary">この案件にまとめる</Button>
+                    </div>
+                  ))}
+                  <p className="text-[11px] text-ink-3">新しいご依頼なら、そのまま下の「次にやること」へ進んでください。</p>
+                </form>
+              )}
+            </Card>
+          )}
           {open && !quote && (
             <Card id="actions">
               <CardHeader title="次にやること: 依頼・日程" description="担当店舗・担当者への依頼 (期限つき) → 日程の登録 (予定表に自動で反映) までをこの画面で行います。すぐに日程が決まらないときは「日程未定」" />

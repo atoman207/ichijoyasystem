@@ -46,38 +46,30 @@ export function ReceptionInput({
     // 入口の初期値: 写真 = 来店・対面、話す = 担当者の携帯、録音 = 会社の電話
     setChannel(t === "photo" ? "visit" : t === "text" ? "mobile" : "phone");
   };
+  const channelSelect = (
+    <label className="block">
+      <span className="label">入口 (どこで受けたか)</span>
+      <select value={channel} onChange={(e) => setChannel(e.target.value as Channel)} className="field">
+        {(["visit", "event", "referral", "mobile", "phone", "mail", "unknown"] as Channel[]).map((c) => (
+          <option key={c} value={c}>{c === "phone" ? "電話 (会社・店舗の電話)" : c === "referral" ? "紹介 (現場・知人など)" : CHANNEL_LABEL[c]}</option>
+        ))}
+      </select>
+    </label>
+  );
   return (
-    <div className="space-y-4">
-      <div role="tablist" className="grid grid-cols-3 gap-2">
+    <div className="space-y-3">
+      {/* 登録の方法 (小さなタブ。スマートフォンでも「撮影する」の枠がスクロールせずに見えるように) */}
+      <div role="tablist" className="flex gap-1 rounded-xl border border-line bg-subtle/70 p-1">
         {TABS.map((t) => {
           const Icon = t.icon;
           const on = tab === t.key;
           return (
-            <button key={t.key} type="button" role="tab" aria-selected={on} onClick={() => choose(t.key)} className={`flex flex-col items-center gap-1 rounded-xl border px-2 py-3 text-xs font-medium transition ${on ? "border-accent bg-accent-soft text-accent-ink" : "border-line bg-panel text-ink-2 hover:border-accent/50"}`}>
-              <Icon className="h-6 w-6" />
+            <button key={t.key} type="button" role="tab" aria-selected={on} onClick={() => choose(t.key)} className={`flex flex-1 items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium whitespace-nowrap transition ${on ? "bg-panel text-accent-ink shadow-xs" : "text-ink-2 hover:text-ink"}`}>
+              <Icon className="h-4 w-4" aria-hidden />
               {t.label}
             </button>
           );
         })}
-      </div>
-      <p className="text-xs leading-relaxed text-ink-3">{TABS.find((t) => t.key === tab)?.note}</p>
-      <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
-        <label className="block">
-          <span className="label">入口 (どこで受けたか)</span>
-          <select value={channel} onChange={(e) => setChannel(e.target.value as Channel)} className="field">
-            {(["visit", "event", "referral", "mobile", "phone", "mail", "unknown"] as Channel[]).map((c) => (
-              <option key={c} value={c}>{c === "phone" ? "電話 (会社・店舗の電話)" : c === "referral" ? "紹介 (現場・知人など)" : CHANNEL_LABEL[c]}</option>
-            ))}
-          </select>
-        </label>
-        {tab !== "photo" && (
-          <label className="block">
-            <span className="label">受付の店舗</span>
-            <select value={storeId} onChange={(e) => setStoreId(e.target.value as StoreId)} disabled={!canChooseStore} className="field">
-              {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </label>
-        )}
       </div>
       {tab === "photo" && (
         <CaptureUploader
@@ -89,15 +81,31 @@ export function ReceptionInput({
           canChooseStore={canChooseStore}
           aiEnabled={aiEnabled}
           hidden={{ source: "photo", channel, ...(customer ? { customerId: customer.id } : {}) }}
+          zoneFirst
+          extra={channelSelect}
           labels={{
-            submit: "読み取って受付に入れる",
+            submit: "読み取って登録へ進む",
             pending: "AI がメモを読み取り中… (10〜20 秒)",
             sample: "サンプルのメモで試す",
-            drop: "メモを撮影するか、写真を選んでください",
+            drop: "手書きのメモを撮影してください",
             dropNote: "用紙全体が写るように、明るい場所で撮影してください (写真は自動で縮小)",
-            note: aiEnabled ? "読み取った内容は、登録する前に画面で確かめて直せます。読みにくい文字は黄色で表示します。" : "AI の API キーが未設定のため、サンプルの内容が表示されます。",
+            note: aiEnabled ? "AI がお名前・住所・電話・用件を読み取ります。同じ住所のお客様・進行中の案件があれば、次の画面で「このお客様に紐付ける」を押すだけで登録できます。" : "AI の API キーが未設定のため、サンプルの内容が表示されます。",
           }}
         />
+      )}
+      {tab !== "photo" && (
+        <>
+          <p className="text-xs leading-relaxed text-ink-3">{TABS.find((t) => t.key === tab)?.note}</p>
+          <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+            {channelSelect}
+            <label className="block">
+              <span className="label">受付の店舗</span>
+              <select value={storeId} onChange={(e) => setStoreId(e.target.value as StoreId)} disabled={!canChooseStore} className="field">
+                {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </label>
+          </div>
+        </>
       )}
       {tab === "text" && <TextInput action={action} channel={channel} storeId={storeId} voice={voice} customerId={customer?.id} />}
       {tab === "audio" && <AudioInput channel={channel} storeId={storeId} voice={voice} customerId={customer?.id} />}

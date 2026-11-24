@@ -293,8 +293,9 @@ ok(Q.customerTimeline(db(), custExisting).comms.some((c) => c.id === log7.id), "
 // 顧客として登録: 受け取った項目 (ふりがな・メール・住所) を顧客の情報に入れる
 const r14 = await record({ id: "p-14", From: "+81 90 7777 0014", name: "登録 十四", kana: "とうろく じゅうし", email: "j14@example.jp", postalCode: "861-1102", address: "熊本県合志市須屋 14", purpose: "畳の表替え", transcript: "お客様: 表替え", store: "合志店" }, "phone");
 const reg = await act(admin, () => inquiryActions.registerCustomerFromInquiry(r14.inquiry.id, form({})));
-ok(reg.path?.startsWith("/customers/") && reg.path.endsWith("/edit"), `顧客として登録 → 顧客の編集へ (${reg.msg ?? reg.err})`);
-const newCustId = reg.path.split("/")[2];
+// 住所・電話がそろっていれば問い合わせの画面に戻る (足りなければ顧客の編集へ)
+ok(reg.path === `/inquiries/${r14.inquiry.id}` && reg.msg?.includes("新しいお客様"), `顧客として登録 → 問い合わせの画面へ (${reg.msg ?? reg.err})`);
+const newCustId = db().inquiries.find((i) => i.id === r14.inquiry.id).customerId;
 const nc = db().customers.find((c) => c.id === newCustId);
 ok(nc && nc.name === "登録 十四" && nc.kana === "とうろく じゅうし" && nc.email === "j14@example.jp" && nc.postalCode === "861-1102" && nc.address === "熊本県合志市須屋 14" && nc.phone === "090-7777-0014", "名前・ふりがな・電話・メール・郵便番号・住所を AI 受付の項目から入れる");
 eq(nc.firstContactChannel, "ai_phone", "最初の接点 = AI 電話受付");

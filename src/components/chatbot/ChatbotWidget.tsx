@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import clsx from "clsx";
-import { Eraser, ExternalLink, History, Maximize2, MessageCircleQuestion, Minimize2, X } from "lucide-react";
+import { CalendarDays, Eraser, ExternalLink, History, Maximize2, MessageCircleQuestion, Minimize2, X } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { AssistantConversation, BotAvatar, useChatState } from "./AssistantChat";
 
@@ -69,25 +69,30 @@ export function ChatbotWidget({ userName, userId, avatarSrc, guest = false }: { 
 
   return (
     <>
-      <button
-        ref={launcherRef}
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-controls="chatbot-panel"
-        aria-label={open ? "チャットボットを閉じる" : "チャットボットに質問する"}
-        className={clsx(
-          "group fixed z-40 flex h-12 items-center gap-2 rounded-full bg-accent pr-4 pl-3 text-sm font-medium text-white shadow-pop transition-all hover:-translate-y-0.5 hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-          "bottom-[max(1rem,env(safe-area-inset-bottom))] left-[max(1rem,env(safe-area-inset-left))] sm:bottom-6 sm:left-6",
-          open && "invisible",
+      {/* 画面左下: 「質問する」と、スマートフォン・タブレットでは「予定表」(お客様のご要望 2026-11-24「追加 ⑤」: いつでもどこからでも予定表へ) */}
+      <div className={clsx("fixed z-40 flex items-center gap-2", "bottom-[max(1rem,env(safe-area-inset-bottom))] left-[max(1rem,env(safe-area-inset-left))] sm:bottom-6 sm:left-6", open && "invisible")}>
+        <button
+          ref={launcherRef}
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-controls="chatbot-panel"
+          aria-label={open ? "チャットボットを閉じる" : "チャットボットに質問する"}
+          className="group flex h-12 items-center gap-2 rounded-full bg-accent pr-4 pl-3 text-sm font-medium text-white shadow-pop transition-all hover:-translate-y-0.5 hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          <span className="relative grid h-7 w-7 place-items-center rounded-full bg-white/15">
+            {open ? <X className="h-4 w-4" aria-hidden /> : <MessageCircleQuestion className="h-4 w-4" aria-hidden />}
+            {!open && <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-accent bg-good" aria-hidden />}
+          </span>
+          <span>{open ? "閉じる" : "質問する"}</span>
+        </button>
+        {!guest && (
+          <Link href="/schedule" className="flex h-12 items-center gap-1.5 rounded-full border border-line bg-panel pr-4 pl-3 text-sm font-medium text-ink shadow-pop transition-all hover:-translate-y-0.5 hover:bg-subtle lg:hidden" data-testid="schedule-launcher">
+            <CalendarDays className="h-5 w-5 text-accent" aria-hidden />
+            予定表
+          </Link>
         )}
-      >
-        <span className="relative grid h-7 w-7 place-items-center rounded-full bg-white/15">
-          {open ? <X className="h-4 w-4" aria-hidden /> : <MessageCircleQuestion className="h-4 w-4" aria-hidden />}
-          {!open && <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-accent bg-good" aria-hidden />}
-        </span>
-        <span>{open ? "閉じる" : "質問する"}</span>
-      </button>
+      </div>
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-6">

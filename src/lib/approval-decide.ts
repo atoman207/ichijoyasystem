@@ -278,8 +278,19 @@ export function quoteInvoiced(db: Database, quoteId: string): boolean {
   return db.orders.some((o) => o.quoteId === quoteId && o.status !== "cancelled" && db.invoices.some((i) => i.id === o.invoiceId && i.status !== "void"));
 }
 
-/** 承認の記録に残す、承認を省略した理由 */
-export const AUTO_APPROVAL_NOTE = "管理者の申請のため承認を省略";
+/** 承認を省略したときの画面の言葉 (「…し、反映しました」) */
+export const AUTO_APPROVAL_NOTE = "承認不要の申請のため承認を省略";
+
+/** 確定した売上 (施工完了・請求済・入金済の受注) に関わる申請か。店長の申請でも承認を省略しない (お客様の決定 2026-11-24「追加 ①」) */
+export function touchesConfirmedSales(db: Database, a: Pick<Approval, "type" | "targetId" | "changes">): boolean {
+  const done = (status?: string) => status === "completed" || status === "invoiced" || status === "paid";
+  if (a.type === "order_change" || a.type === "handover_change") {
+    const o = db.orders.find((x) => x.id === a.targetId);
+    return done(o?.status) || (a.changes ?? []).some((c) => c.field === "completedAt" || c.field === "salesDate");
+  }
+  if (a.type === "quote_amend") return db.orders.some((o) => o.quoteId === a.targetId && done(o.status));
+  return false;
+}
 
 /**
  * 管理者 (社長) の申請は承認を省略する (permissions.ts の skipsApproval)。
@@ -287,13 +298,16 @@ export const AUTO_APPROVAL_NOTE = "管理者の申請のため承認を省略";
  * 省略したら true (呼び出し側は「承認を申請しました」ではなく「反映しました」と伝える)。管理者でなければ何もしない (false)
  */
 export function settleOwnApproval(db: Database, a: Approval, user: Pick<User, "id" | "role">, back: string): boolean {
-  if (!skipsApproval(user) || a.requestedBy !== user.id || a.status !== "pending") return false;
+  if (!skipsApproval(user, a.type) || a.requestedBy !== user.id || a.status !== "pending") return false;
+  // 店長の申請でも、確定した売上・入金に関わる変更は管理者の承認を待つ
+  if (user.role !== "admin" && touchesConfirmedSales(db, a)) return false;
+  const note = `${user.role === "admin" ? "管理者" : "店長"}の申請のため承認を省略`;
   if (a.type === "quote_amend" && quoteInvoiced(db, a.targetId)) fail(back, "請求書を発行済みの案件のため、金額変更を反映できません。入金前であれば請求書を無効化してから変更してください。");
   a.status = "approved";
   a.decidedBy = user.id;
   a.decidedAt = nowIso();
-  a.decisionComment = AUTO_APPROVAL_NOTE;
+  a.decisionComment = note;
   applyDecision(db, a, "approved", user.id, "", back);
-  addAudit(db, { userId: user.id, action: "approve", entity: "approval", entityId: a.id, entityLabel: a.title, summary: `${APPROVAL_TYPE_LABEL[a.type]}を承認 (${AUTO_APPROVAL_NOTE})`, storeId: a.storeId });
+  addAudit(db, { userId: user.id, action: "approve", entity: "approval", entityId: a.id, entityLabel: a.title, summary: `${APPROVAL_TYPE_LABEL[a.type]}を承認 (${note})`, storeId: a.storeId });
   return true;
 }

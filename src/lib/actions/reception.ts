@@ -2,14 +2,16 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { BACKEND, addAudit, getDb, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
+import { BACKEND, addAudit, getDb, mutate, newId, nextCustomerCode, nextNumber, nowIso } from "@/lib/db/store";
 import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
-import type { Attachment, CapturedDocument, CommLog, Database, Inquiry, InquiryIntake, Thread, User } from "@/lib/db/types";
+import type { Attachment, CapturedDocument, CommLog, Customer, Database, Inquiry, InquiryIntake, Thread, User } from "@/lib/db/types";
 import { attachmentsOf, detectType, discardStored, relinkDocumentAttachments, storeFile } from "@/lib/attachments";
 import { readObject } from "@/lib/storage";
 import { CHANNEL_LABEL } from "@/lib/constants";
 import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { createInquiryRequest } from "@/lib/inquiry-requests";
+import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
+import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { dueAtFrom } from "@/lib/inquiry-flow";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
@@ -264,7 +266,12 @@ export async function registerReception(formData: FormData) {
   const user = await requireActionUser();
   const id = str(formData, "id");
   const back = receptionHref(id);
-  const intent = choice(formData, "intent", ["save", "inquiry", "case", "record", "dismiss"] as const, "save");
+  // ワンタッチの登録 (確認の画面の上の「このお客様に紐付けて登録」「この案件のやりとりに追加」「新しいお客様として登録」。お客様のご要望 2026-11-24「追加 ③」)
+  const quick = str(formData, "quick");
+  const quickCustomer = quick.startsWith("inquiry:") ? quick.slice("inquiry:".length) : undefined;
+  const quickCase = quick.startsWith("case:") ? quick.slice("case:".length) : undefined;
+  const newCustomer = quick === "new";
+  const intent = quickCustomer !== undefined || newCustomer ? "inquiry" : quickCase ? "case" : choice(formData, "intent", ["save", "inquiry", "case", "record", "dismiss"] as const, "save");
   const db0 = getDb();
   const doc0 = findReception(db0, user, id);
   assertOpen(doc0, back);
@@ -321,7 +328,9 @@ export async function registerReception(formData: FormData) {
   if (intent === "inquiry") {
     if (!f.summary) fail(back, "用件 (要約) を入力してください。");
     const media = readMedia(formData, back);
-    const customerId = str(formData, "customerId");
+    const customerId = quickCustomer ?? (newCustomer ? "" : str(formData, "customerId"));
+    const canCreate = newCustomer && userCanCreateCustomer(db0, user);
+    let createdCustomer = "";
     const assigneeId = str(formData, "assignedUserId") || user.id;
     const handoff = formData.get("handoff") === "on";
     const inqId = newId("inq");
@@ -329,12 +338,47 @@ export async function registerReception(formData: FormData) {
     await mutate((d) => {
       const doc = findReception(d, user, id);
       assertOpen(doc, back);
-      const customer = customerId ? d.customers.find((c) => c.id === customerId) : undefined;
+      let customer = customerId ? d.customers.find((c) => c.id === customerId) : undefined;
       if (customerId && !customer) fail(back, "選んだお客様が見つかりません。");
       // 店長は全店舗のお客様の問い合わせを登録できる (問い合わせの店舗は自店舗。actions/inquiries.ts の createInquiry と同じ)
       if (customer) assertCaseStore(user, customer.storeId, back);
       const storeId = resolveStoreId(user, str(formData, "storeId"), customer?.storeId ?? doc.storeId);
       assertStore(user, storeId, back);
+      // 新しいお客様として登録 (顧客も同時に登録。二重登録を防ぐため、同じお客様の候補があれば「別のお客様」の確認が要る)
+      if (newCustomer && canCreate) {
+        const name = f.customerName || f.companyName;
+        if (!name) fail(back, "お名前 (または会社名) を入力してから「新しいお客様として登録」を押してください。");
+        const dup = findDuplicateCustomers(d, { name, phone: f.phone, otherPhones: [f.otherPhone].filter(Boolean), email: f.email, postalCode: f.postalCode, address: f.address });
+        if (needsConfirmation(dup) && formData.get("confirmDuplicate") !== "on") {
+          applyFields(doc, f, user, channel);
+          fail(back, `同じお客様の可能性がある顧客があります (${candidateLabel(dup)})。同じお客様なら「このお客様に紐付けて登録」を、別のお客様なら「上の候補とは別のお客様です」にチェックしてから押してください。`);
+        }
+        const now0 = nowIso();
+        const c: Customer = {
+          id: newId("cust"),
+          code: nextCustomerCode(d),
+          name,
+          kana: f.kana,
+          type: !f.customerName && f.companyName ? "corporate" : "individual",
+          phone: f.phone,
+          ...(f.otherPhone ? { contacts: [{ id: newId("ct"), relation: "その他", phone: f.otherPhone }] } : {}),
+          ...(f.email ? { email: f.email } : {}),
+          postalCode: f.postalCode,
+          address: f.address,
+          storeId,
+          assignedUserId: assigneeId,
+          preferredChannel: channel === "line" || channel === "email" ? channel : "phone",
+          firstContactChannel: channel,
+          tags: [],
+          notes: `問合せ登録 (${RECEPTION_SOURCE_LABEL[meta0.source]}) から登録`,
+          createdAt: now0,
+          updatedAt: now0,
+        };
+        d.customers.push(c);
+        customer = c;
+        createdCustomer = `${c.code} ${c.name}`;
+        addAudit(d, { userId: user.id, action: "create", entity: "customer", entityId: c.id, entityLabel: `${c.code} ${c.name}`, summary: `問合せ登録 (受付) から顧客を登録${needsConfirmation(dup) ? ` · 重複候補 ${candidateLabel(dup)} を確認済み` : ""}`, storeId });
+      }
       const contactName = customer?.name ?? f.customerName;
       if (!contactName) fail(back, "お客様のお名前を入力するか、登録済みのお客様を選んでください。");
       const assignee = d.users.find((u) => u.id === assigneeId && u.active);
@@ -399,11 +443,11 @@ export async function registerReception(formData: FormData) {
         notifyThreadId = t.id;
       }
       href = `/inquiries/${inqId}`;
-      message = `問い合わせ ${inq.number} を登録しました${notifyThreadId ? ` (${assignee.name} さんに引き継ぎました)` : ""}。${customer ? "" : "お客様が未登録のため、画面の「顧客として登録する」で登録できます。"}`;
+      message = `問い合わせ ${inq.number} を登録しました${createdCustomer ? `。新しいお客様 (${createdCustomer}) も登録しました` : customer ? ` (${customer.name} 様に紐付け)` : ""}${notifyThreadId ? ` (${assignee.name} さんに引き継ぎました)` : ""}。${customer ? "" : newCustomer ? "顧客の新規登録は事務担当が行います (問い合わせの画面の「顧客として登録する」)。" : "お客様が未登録のため、画面の「顧客として登録する」で登録できます。"}`;
     });
   } else if (intent === "case") {
-    const key = str(formData, "caseKey");
-    const ref = str(formData, "caseRef");
+    const key = quickCase ?? str(formData, "caseKey");
+    const ref = quickCase ? "" : str(formData, "caseRef");
     if (!key && !ref) fail(back, "やりとりを追加する案件を選ぶか、案件番号を入力してください。");
     const target0 = resolveCase(db0, ref ? "" : key, ref);
     if (!target0) fail(back, ref ? `案件番号「${ref}」が見つかりません (INQ-・Q-・O- などの番号)。` : "選んだ案件が見つかりません。");

@@ -24,7 +24,7 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
   const sp = await searchParams;
   const user = await requireUser();
   /** 管理者 (社長) の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
-  const own = skipsApproval(user);
+  const own = skipsApproval(user, "quote");
   const db = getDb();
   const allStores = canSeeAllStores(user);
   const inquiry = db.inquiries.find((i) => i.id === sp.inquiryId);

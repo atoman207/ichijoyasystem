@@ -67,7 +67,7 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title="問い合わせ" actions={<>{canImportData(user) && <LinkButton href="/data" variant="secondary">CSV 取込・書き出し</LinkButton>}<LinkButton href="/inquiries/new" variant="secondary">+ 手入力で登録</LinkButton><LinkButton href="/inquiries/reception">+ 受付を登録 (メモ・話す・録音)</LinkButton></>} />
+      <PageHeader title="問い合わせ" actions={<>{canImportData(user) && <LinkButton href="/data" variant="secondary">CSV 取込・書き出し</LinkButton>}<LinkButton href="/inquiries/new" variant="secondary">+ 手入力で登録</LinkButton><LinkButton href="/inquiries/reception">+ 問合せ登録 (メモを撮影)</LinkButton></>} />
       {pendingReceptions > 0 && (
         <div className="mb-4">
           <Note tone="warn">

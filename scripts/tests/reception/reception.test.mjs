@@ -316,7 +316,7 @@ let docId = "";
 {
   // 書類取込の画面からは受付メモを取り込まない
   const r = await act(koshiStaff, () => capture.uploadDocument(form({ kind: "reception", storeId: "koshi", sampleName: "x.jpg" })));
-  ok(r.err?.includes("受付を登録"), "書類取込で「受付メモ」を選ぶと受付の画面へ案内する");
+  ok(r.err?.includes("問合せ登録"), "書類取込で「受付メモ」を選ぶと問合せ登録の画面へ案内する");
 }
 
 /* ================================================================== */

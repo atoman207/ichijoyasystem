@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition, type FormEvent, type ReactNode } from "react";
 import { Camera, FileText, Upload, X } from "lucide-react";
 import type { DocumentKind, StoreId } from "@/lib/db/types";
 import { DOCUMENT_KIND_LABEL } from "@/lib/constants";
@@ -61,6 +61,8 @@ export function CaptureUploader({
   hideStore = false,
   hidden,
   labels = {},
+  zoneFirst = false,
+  extra,
 }: {
   action: (formData: FormData) => Promise<void>;
   defaultKind: DocumentKind;
@@ -75,6 +77,10 @@ export function CaptureUploader({
   /** 一緒に送る値 (mode・書類の ID など) */
   hidden?: Record<string, string>;
   labels?: UploaderLabels;
+  /** 撮影の欄 (点線の枠と「撮影する」) を一番上に置く (スマートフォンでもスクロールせずに撮影できるように。問合せ登録) */
+  zoneFirst?: boolean;
+  /** 撮影の欄のすぐ下に置く入力 (問合せ登録の入口など) */
+  extra?: ReactNode;
 }) {
   const touch = useTouchDevice();
   const pc = touch === false;
@@ -158,9 +164,8 @@ export function CaptureUploader({
     : (labels.dropNote ?? "カメラで撮影した写真をそのまま取り込めます (写真は自動で縮小。PDF は 4MB まで)");
   const btn = "inline-flex h-10 items-center justify-center gap-1.5 rounded-xl px-4 text-sm font-medium disabled:opacity-60";
 
-  return (
-    <form action={action} onSubmit={onSubmit} className="space-y-4">
-      {Object.entries(hidden ?? {}).map(([k, v]) => <input key={k} type="hidden" name={k} value={v} />)}
+  const selects = (
+    <>
       {fixedKind ? <input type="hidden" name="kind" value={kind} /> : (
       <label className="block">
         <span className="label">書類の種類</span>
@@ -191,7 +196,9 @@ export function CaptureUploader({
         </select>
       </label>
       )}
-
+    </>
+  );
+  const zone = (
       <div
         ref={zoneRef}
         data-capture-zone
@@ -244,6 +251,15 @@ export function CaptureUploader({
           <p className="mt-2 text-[11px] text-ink-3">このパソコンにはカメラが見つかりません。USB の Web カメラ・書画カメラをつなぐと撮影できます (ファイルの取込はこのまま使えます)。</p>
         )}
       </div>
+  );
+
+  return (
+    <form action={action} onSubmit={onSubmit} className="space-y-4">
+      {Object.entries(hidden ?? {}).map(([k, v]) => <input key={k} type="hidden" name={k} value={v} />)}
+      {!zoneFirst && selects}
+      {zone}
+      {zoneFirst && selects}
+      {extra}
 
       {camera && (
         <CameraDialog

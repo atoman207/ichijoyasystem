@@ -1,4 +1,4 @@
-import type { Approval, Attachment, AuditLog, CashEntry, DocDraft, Expense, FaxMessage, KnowledgeEntry, KnowledgeVisibility, MapDocument, PurchaseInvoice, PurchaseOrder, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
+import type { Approval, ApprovalType, Attachment, AuditLog, CashEntry, DocDraft, Expense, FaxMessage, KnowledgeEntry, KnowledgeVisibility, MapDocument, PurchaseInvoice, PurchaseOrder, Role, ScheduleEvent, StoreId, Thread, User } from "@/lib/db/types";
 import type { CasePost, TidyCheck } from "@/lib/db/types";
 
 /**
@@ -151,12 +151,19 @@ export function canApproveAll(user: User): boolean {
 }
 
 /**
- * 承認を省略して、自分の申請をそのまま反映する: 管理者 (社長)。
- * 管理者は最終の承認者で、ほかに承認できる人がいないため、見積・契約 (受注)・契約内容の変更・経費・仕入の支払の申請は
- * 申請と同時に承認済みになる (承認の記録は「管理者の申請のため承認を省略」として残す。src/lib/approval-decide.ts の settleOwnApproval)
+ * 店長が承認を省略できる申請の種類 (お客様の決定 2026-11-24「追加のお願い ①権限設定」: 店長の顧客情報の登録・変更、見積・受注の登録・変更は
+ * 管理者の承認不要。入金・確定した売上 (施工完了した受注) の変更、経費・仕入の支払は今までどおり承認。src/lib/approval-decide.ts の settleOwnApproval)
  */
-export function skipsApproval(user: Pick<User, "role">): boolean {
-  return user.role === "admin";
+export const MANAGER_SELF_APPROVE_TYPES: readonly ApprovalType[] = ["quote", "quote_amend", "order", "order_change", "handover_change", "customer_change"];
+
+/**
+ * 承認を省略して、自分の申請をそのまま反映する: 管理者 (社長) はすべて、店長は顧客・見積・受注 (MANAGER_SELF_APPROVE_TYPES)。
+ * 申請と同時に承認済みになる (承認の記録は「…の申請のため承認を省略」として残す)。種類を渡さなければ管理者だけ (経費・仕入・文書など)。
+ * 店長でも確定した売上 (施工完了した受注) に関わる変更は承認が要る (approval-decide.ts の touchesConfirmedSales)
+ */
+export function skipsApproval(user: Pick<User, "role">, type?: ApprovalType): boolean {
+  if (user.role === "admin") return true;
+  return user.role === "store_manager" && type !== undefined && MANAGER_SELF_APPROVE_TYPES.includes(type);
 }
 
 /** 承認申請の取下げ: 申請者本人と管理者 */
@@ -451,8 +458,10 @@ export function canViewAuditEntry(user: User, l: Pick<AuditLog, "userId" | "stor
 
 /** 変更履歴の書き出し (CSV): 管理者・本部スタッフ */
 /** 顧客の重要情報を承認なしで変更できる (その店舗の承認者 = 店長と管理者) */
-export function canApplyCustomerChange(user: User, storeId: StoreId): boolean {
-  return user.role === "admin" || (user.role === "store_manager" && user.storeId === storeId);
+/** 顧客の重要情報 (氏名・電話・住所など) の変更を承認なしで反映できる: 管理者と店長 (全店舗のお客様。お客様の決定 2026-11-24「追加 ①」)。店舗スタッフは設定しだいで承認の申請 */
+export function canApplyCustomerChange(user: User, _storeId: StoreId): boolean {
+  void _storeId;
+  return user.role === "admin" || user.role === "store_manager";
 }
 
 export function canExportAudit(user: User): boolean {
