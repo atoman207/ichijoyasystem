@@ -35,3 +35,34 @@ export function storeInquiryNotices(db: Pick<Database, "settings" | "customers">
     .join("\n");
   return groups.map((g) => ({ channel: "line" as const, to: g.id, toLabel: g.label || g.name || "店舗の LINE グループ", body, purpose: "notify" as const, relatedType: "inquiry" as const, relatedId: inq.id }));
 }
+
+/**
+ * 店舗への依頼 (問い合わせの担当者への依頼で、担当者を決めずに店舗へ依頼したとき) と、期限を過ぎたときの再通知を、
+ * その店舗の LINE グループに送る (お客様のご要望 2026-11-24「業務フロー ①②」: 今は LINE で依頼している)。
+ * 送り先は新しい問い合わせと同じグループ (店舗別グループ・「問い合わせを知らせる」)
+ */
+export function storeRequestNotices(
+  db: Pick<Database, "settings" | "customers">,
+  inq: Pick<Inquiry, "id" | "number" | "contactName" | "contactPhone" | "customerId" | "summary" | "intake">,
+  p: { storeId: string; what: "request" | "remind"; purpose: string; note?: string; due?: string; from?: string },
+): Outgoing[] {
+  const groups = lineGroups(db).filter((g) => g.status === "joined" && g.purpose === "store" && g.notifyInquiries && g.storeId === p.storeId);
+  if (!groups.length) return [];
+  const customer = inq.customerId ? db.customers.find((c) => c.id === inq.customerId) : undefined;
+  const body = [
+    p.what === "remind" ? `【期限を過ぎました】${inq.number}` : `【依頼】${p.purpose} ${inq.number}`,
+    p.from ? `依頼: ${p.from}` : "",
+    `お客様: ${customer?.name ?? inq.contactName} 様`,
+    (customer?.phone || inq.contactPhone) ? `電話: ${customer?.phone || inq.contactPhone}` : "",
+    (customer?.address || inq.intake?.address) ? `住所: ${customer?.address || inq.intake?.address}` : "",
+    `内容: ${inq.summary}`,
+    p.due ? `期限: ${p.due}` : "",
+    p.note ? `\n${p.note.slice(0, 500)}` : "",
+    "",
+    p.what === "remind" ? "日程が決まったら、問い合わせの画面の「日程を登録」で入れてください:" : "問い合わせの画面で確認・日程の登録をしてください:",
+    `${appBaseUrl()}/inquiries/${inq.id}`,
+  ]
+    .filter((l, i, a) => l || (i > 0 && a[i - 1]))
+    .join("\n");
+  return groups.map((g) => ({ channel: "line" as const, to: g.id, toLabel: g.label || g.name || "店舗の LINE グループ", body, purpose: "notify" as const, relatedType: "inquiry" as const, relatedId: inq.id }));
+}

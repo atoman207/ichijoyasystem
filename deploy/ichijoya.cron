@@ -20,5 +20,8 @@ TZ=Asia/Tokyo
 # 毎週にするときは「10 4 * * 1」
 10 4 1 * * ichijoya bash /srv/ichijoya/current/deploy/run-task.sh chatbot-eval >> /var/log/ichijoya/cron.log 2>&1
 
+# 期限を過ぎた問い合わせの依頼の再通知 8〜20 時の 10 分ごと (画面を開いている社員がいるときは画面の読み込みからも動く。二重には送らない)
+*/10 8-20 * * * ichijoya bash /srv/ichijoya/current/deploy/run-task.sh inquiry-followup >> /var/log/ichijoya/cron.log 2>&1
+
 # 死活監視 5 分ごと (止まっていたら再起動を試み、ログに残す)
 */5 * * * * root bash /srv/ichijoya/current/deploy/run-task.sh health >> /var/log/ichijoya/health.log 2>&1

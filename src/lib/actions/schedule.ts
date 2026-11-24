@@ -42,6 +42,9 @@ import { applyEventMove, parseHandoverRef } from "@/lib/handover";
 import { pendingHandoverChange, savePlan } from "@/lib/handover-save";
 import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { AUTO_APPROVAL_NOTE } from "@/lib/approval-decide";
+import { closeScheduleRequests } from "@/lib/inquiry-requests";
+import { taskNotices } from "@/lib/notify/events";
+import { sendAndRecord } from "@/lib/notify/send";
 import { fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
 /**
@@ -65,7 +68,7 @@ interface ParsedEvent {
   caseRef?: CaseRef;
 }
 
-const AUTO_START_KINDS: ScheduleKind[] = ["survey", "onsite_quote", "measure", "visit"];
+const AUTO_START_KINDS: ScheduleKind[] = ["survey", "site_survey", "onsite_quote", "measure", "visit"];
 
 const FIELD_LABEL: Record<string, string> = {
   title: "件名",
@@ -249,6 +252,8 @@ export async function createScheduleEvent(formData: FormData) {
   }
   let firstId = "";
   let autoStarted = false;
+  let closedRequests: string[] = [];
+  let holdCleared = false;
   await mutate((db) => {
     const now = nowIso();
     const seriesId = p.dates.length > 1 ? newId("ser") : undefined;
@@ -277,6 +282,17 @@ export async function createScheduleEvent(formData: FormData) {
         addAudit(db, { userId: user.id, action: "status", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `${kindLabel}の予定登録により「対応中」に変更`, storeId: inq.storeId, changes: [{ field: "status", before: "new", after: "in_progress" }] });
       }
     }
+    // 問い合わせ (案件) の日程が決まった: 日程未定を外し、日程の打ち合わせの依頼を完了にする (お客様のご要望 2026-11-24「業務フロー ②⑤」)
+    if (p.fields.inquiryId && SCHEDULE_KIND[p.fields.kind].group === "case") {
+      const inq = db.inquiries.find((x) => x.id === p.fields.inquiryId);
+      if (inq?.scheduleHold) {
+        addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `${kindLabel}の予定の登録により日程未定を外しました`, storeId: inq.storeId, changes: [{ field: "scheduleHold", before: inq.scheduleHold, after: null }] });
+        inq.scheduleHold = undefined;
+        inq.updatedAt = now;
+        holdCleared = true;
+      }
+      closedRequests = closeScheduleRequests(db, p.fields.inquiryId, user.id, `日程を登録: ${periodLabel(p.fields)} ${kindLabel}`).map((t) => t.id);
+    }
     addAudit(db, {
       userId: user.id,
       action: "create",
@@ -288,8 +304,19 @@ export async function createScheduleEvent(formData: FormData) {
     });
   });
   revalidateSchedule(p.fields);
+  if (closedRequests.length) {
+    const db1 = getDb();
+    const out = closedRequests.flatMap((tid) => {
+      const t = db1.threads.find((x) => x.id === tid);
+      return t ? taskNotices(db1, t, user.id, "report", `日程を登録しました: ${periodLabel(p.fields)} ${SCHEDULE_KIND[p.fields.kind].label}`) : [];
+    });
+    await sendAndRecord(out, user.id).catch((err) => console.warn("[schedule] request notice failed:", (err as Error).message));
+    revalidatePath("/messages");
+  }
   const msg = [
     p.dates.length > 1 ? `予定を ${p.dates.length} 件 (${SCHEDULE_REPEAT[p.repeat]}) 登録しました。` : "予定を登録しました。",
+    closedRequests.length ? "日程の打ち合わせの依頼を完了にしました (依頼した人に知らせました)。" : "",
+    holdCleared ? "日程未定を外しました。" : "",
     p.caseRef ? `案件 ${p.caseRef.number} と${p.fields.companyWide ? "全店舗" : "店舗"}のカレンダーに反映されています。` : "",
     autoStarted ? "問い合わせを「対応中」にしました。" : "",
     hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : "",

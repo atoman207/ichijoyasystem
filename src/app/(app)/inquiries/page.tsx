@@ -14,6 +14,8 @@ import { MediaTag } from "@/components/ops-reports/MediaFields";
 import { pendingReceptionCount } from "@/lib/reception";
 import { inquiryContact } from "@/lib/link-search";
 import { isPlaceholderCustomer } from "@/lib/customer-link";
+import { FLOW_STATE, FLOW_TABS, dueLabel, flowIndex, inquiryFlow, type FlowState } from "@/lib/inquiry-flow";
+import { Badge } from "@/components/ui";
 
 export default async function InquiriesPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -23,7 +25,13 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
   const today = toDateKey(new Date());
   const scoped = scopeByStore(user, db.inquiries);
   const status = sp.status as InquiryStatus | "open" | undefined;
+  // 対応状況 (担当者への依頼待ち・日程調整中・期限超過・お客様都合で日程未定・日程確定…。お客様のご要望 2026-11-24「業務フロー ⑥」。src/lib/inquiry-flow.ts)
+  const now = new Date();
+  const fix = flowIndex(db);
+  const flowOf = new Map(scoped.map((i) => [i.id, inquiryFlow(i, fix, now)]));
+  const flowParam = FLOW_TABS.includes(sp.flow as FlowState) ? (sp.flow as FlowState) : undefined;
   let rows = scoped;
+  if (flowParam) rows = rows.filter((i) => flowOf.get(i.id)?.state === flowParam);
   if (status === "open") rows = rows.filter((i) => i.status === "new" || i.status === "in_progress" || i.status === "quoted");
   else if (status && INQUIRY_STATUS[status as InquiryStatus]) rows = rows.filter((i) => i.status === status);
   if (sp.channel) rows = rows.filter((i) => i.channel === sp.channel);
@@ -49,10 +57,12 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
   const paged = paginate(rows, sp.page);
   const mediaOf = inquiryMediaMap(db, paged.items);
   const storeMap = new Map(db.stores.map((s) => [s.id, s]));
-  const count = (f: (s: InquiryStatus) => boolean) => scoped.filter((i) => f(i.status)).length;
   const base = "/inquiries";
   const pendingReceptions = pendingReceptionCount(db, user);
-  const current = status ? `${base}?status=${status}` : base;
+  const current = flowParam ? `${base}?flow=${flowParam}` : status ? `${base}?status=${status}` : base;
+  const flowCount = (f: FlowState) => scoped.filter((i) => flowOf.get(i.id)?.state === f).length;
+  const overdueCount = flowCount("overdue");
+  const waitingCount = flowCount("request_waiting");
 
   return (
     <div>
@@ -65,19 +75,31 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
           </Note>
         </div>
       )}
+      {(overdueCount > 0 || waitingCount > 0) && (
+        <div className="mb-3 flex flex-wrap gap-2 text-sm" data-testid="inquiry-flow-alert">
+          {overdueCount > 0 && (
+            <Link href={`${base}?flow=overdue`} className="rounded-lg bg-critical-soft px-3 py-1.5 font-medium text-critical-ink hover:underline">
+              期限超過 {overdueCount} 件 (日程の登録・返答がないまま期限を過ぎた問い合わせ)
+            </Link>
+          )}
+          {waitingCount > 0 && (
+            <Link href={`${base}?flow=request_waiting`} className="rounded-lg bg-warn-soft px-3 py-1.5 font-medium text-warn-ink hover:underline">
+              担当者への依頼待ち {waitingCount} 件
+            </Link>
+          )}
+        </div>
+      )}
       <LinkTabs
         current={current}
         items={[
           { href: base, label: "すべて", count: scoped.length },
-          { href: `${base}?status=new`, label: "未対応", count: count((s) => s === "new") },
-          { href: `${base}?status=in_progress`, label: "対応中", count: count((s) => s === "in_progress") },
-          { href: `${base}?status=quoted`, label: "見積提出済", count: count((s) => s === "quoted") },
-          { href: `${base}?status=won`, label: "受注", count: count((s) => s === "won") },
-          { href: `${base}?status=lost`, label: "失注", count: count((s) => s === "lost") },
+          ...FLOW_TABS.map((f) => ({ href: `${base}?flow=${f}`, label: f === "visited" ? "訪問済み" : FLOW_STATE[f].label, count: flowCount(f) })),
         ]}
       />
+      {status && <p className="mb-2 text-xs text-ink-3">状態「{status === "open" ? "対応中のすべて" : INQUIRY_STATUS[status as InquiryStatus]?.label}」で絞り込んでいます。<Link href={base} className="text-accent hover:underline">解除</Link></p>}
       <form method="get" className="mb-4 flex flex-wrap items-end gap-2">
         {status && <input type="hidden" name="status" value={status} />}
+        {flowParam && <input type="hidden" name="flow" value={flowParam} />}
         <div className="w-full @xl:w-72"><Input name="q" defaultValue={sp.q} placeholder="番号・お客様名・電話・住所・内容で検索" /></div>
         <Select name="channel" defaultValue={sp.channel ?? ""} className="w-auto">
           <option value="">すべての入口</option>
@@ -112,7 +134,7 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
             <Th>種別</Th>
             <Th>店舗</Th>
             <Th>担当</Th>
-            <Th>状態</Th>
+            <Th>対応状況</Th>
             <Th>次のアクション</Th>
           </tr>
         </thead>
@@ -148,7 +170,24 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
                 <Td className="text-xs text-ink-2">{CATEGORY_LABEL[i.category]}</Td>
                 <Td><StoreTag store={storeMap.get(i.storeId)} short /></Td>
                 <Td className="text-xs text-ink-2">{userName(i.assignedUserId)}</Td>
-                <Td><StatusBadge value={i.status} map={INQUIRY_STATUS} /></Td>
+                <Td className="min-w-[10rem]">
+                  {(() => {
+                    const f = flowOf.get(i.id);
+                    if (!f) return <StatusBadge value={i.status} map={INQUIRY_STATUS} />;
+                    return (
+                      <div className="space-y-0.5">
+                        <Link href={`/inquiries/${i.id}#actions`}><Badge tone={f.tone}>{f.label}</Badge></Link>
+                        {f.next && f.state !== "closed" && <div className="text-[11px] leading-snug text-ink-2">{f.next}</div>}
+                        {(f.who.length > 0 || f.dueAt) && (
+                          <div className={`text-[11px] ${f.overdue ? "font-medium text-critical-ink" : "text-ink-3"}`}>
+                            {f.who.join("・")}
+                            {f.dueAt ? `${f.who.length ? " · " : ""}期限 ${dueLabel(f.dueAt, now)}` : ""}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </Td>
                 <Td className="text-xs">
                   {i.nextAction ? (
                     <span className={overdue ? "text-critical" : "text-ink-2"}>{i.nextAction}{i.nextActionDue && <span className="ml-1 tnum">({fmtDate(i.nextActionDue)}{overdue ? " 期限超過" : ""})</span>}</span>

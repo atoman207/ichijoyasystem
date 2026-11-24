@@ -9,11 +9,13 @@ import { toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS } from "@/lib/constants";
 import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
-import { createHandoffTask, linkInquiryLogs } from "@/lib/ai-intake";
+import { linkInquiryLogs } from "@/lib/ai-intake";
+import { DUE_CHOICES, REQUEST_PURPOSE, dueAtFrom, dueLabel, type DueChoice } from "@/lib/inquiry-flow";
+import { closeScheduleRequests, createInquiryRequest } from "@/lib/inquiry-requests";
 import { moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
-import { storeInquiryNotices } from "@/lib/notify/store-line";
+import { storeInquiryNotices, storeRequestNotices } from "@/lib/notify/store-line";
 import { assertCaseStore, assertStore, choice, fail, isKeyOf, requireActionUser, resolveStoreId, safeReturn, str, withMsg } from "./guards";
 import { MEDIA_LABEL, isMediaKey, mapMediaText, readMediaRules } from "@/lib/media";
 import type { MediaKey } from "@/lib/db/types";
@@ -274,40 +276,149 @@ export async function linkInquiryToSelectedCustomer(id: string, formData: FormDa
 }
 
 /**
- * 担当者への引き継ぎ (AI 受付・電話番・他店舗からの引き継ぎなど)
- * 問い合わせの担当者を変え、引き継ぎ先に「業務依頼」(依頼 → 確認 → 報告 → 完了) を作って通知する
+ * 担当店舗・担当者への依頼 (お客様のご要望 2026-11-24「■ 問い合わせ受付後の業務フロー ①②」)
+ * 依頼先 = 店舗 (担当者を選ばなければ店舗の店長・スタッフ全員にメンション) か担当者。依頼の種類 (訪問日程の打ち合わせ・お客様へ連絡・その他) と
+ * 期限 (本日 12 時まで・本日中・明日中・日時を指定) を付けて「業務依頼」を作り、メンション・メール等・店舗の LINE グループで知らせる。
+ * 期限を過ぎても日程の登録・返答がなければ自動で再通知する (src/lib/inquiry-followup.ts)。ほかの店舗へ依頼すると問い合わせの担当店舗も移す
  */
-export async function handoffInquiry(id: string, formData: FormData) {
+export async function requestInquiry(id: string, formData: FormData) {
   const user = await requireActionUser();
-  const back = `/inquiries/${id}`;
+  const back = safeReturn(str(formData, "returnTo"), `/inquiries/${id}`);
+  const purpose = choice(formData, "purpose", REQUEST_PURPOSE, "schedule");
   const assigneeId = str(formData, "assigneeId");
-  const note = str(formData, "note").slice(0, 2000);
-  const dueDate = str(formData, "dueDate");
-  if (!assigneeId) fail(back, "引き継ぎ先を選んでください。");
-  if (!note) fail(back, "引き継ぐ内容 (お客様の状況・お願いしたい対応) を入力してください。");
-  if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) fail(back, "期限を正しく入力してください。");
+  const urgent = str(formData, "urgent") === "1";
+  const dueChoice = choice(formData, "due", Object.fromEntries(DUE_CHOICES.map((d) => [d.id, d.label])) as Record<DueChoice, string>, "today");
+  const due = dueAtFrom(dueChoice, str(formData, "dueCustom"), new Date());
+  if (due.error) fail(back, due.error);
+  const note = (str(formData, "note") || REQUEST_PURPOSE[purpose].text).slice(0, 2000);
+  if (!note) fail(back, "依頼の内容を入力してください。");
   let threadId = "";
+  let storeLabel = "";
+  let targetLabel = "";
   await mutate((db) => {
     const inq = db.inquiries.find((x) => x.id === id);
     if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
     assertCaseStore(user, inq.storeId, back);
-    const assignee = db.users.find((u) => u.id === assigneeId && u.active);
-    if (!assignee) fail(back, "引き継ぎ先の社員が見つかりません。");
-    if (!canSeeAllStores(user) && assignee.storeId !== inq.storeId && assignee.role !== "admin" && assignee.role !== "hq_staff") fail(back, "引き継ぎ先は、この問い合わせの店舗の社員か本部の社員から選んでください。");
-    const before = inq.assignedUserId;
-    inq.assignedUserId = assignee.id;
-    if (inq.status === "new") inq.status = "in_progress";
-    inq.updatedAt = nowIso();
-    addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `担当者に引き継ぎ (${db.users.find((u) => u.id === before)?.name ?? "未割当"} → ${assignee.name})`, storeId: inq.storeId, changes: before !== assignee.id ? [{ field: "assignedUserId", before: before ?? null, after: assignee.id }] : undefined });
-    const t = createHandoffTask(db, { inquiry: inq, assignee, requestedBy: user.id, note: `${note}\n\n問い合わせ: /inquiries/${inq.id}`, dueDate: dueDate || undefined, storeId: inq.storeId });
+    const storeId = str(formData, "storeId") || inq.storeId;
+    const store = db.stores.find((s) => s.id === storeId);
+    if (!store) fail(back, "依頼先の店舗が見つかりません。");
+    if (storeId !== inq.storeId && !canSeeAllStores(user) && !canEditCaseStore(user, storeId)) fail(back, "ほかの店舗への依頼は、本部・店長が行えます。");
+    const assignee = assigneeId ? db.users.find((u) => u.id === assigneeId && u.active) : undefined;
+    if (assigneeId && !assignee) fail(back, "依頼先の社員が見つかりません。");
+    if (assignee && assignee.storeId !== storeId && assignee.role !== "admin" && assignee.role !== "hq_staff" && !canSeeAllStores(user)) fail(back, "依頼先は、選んだ店舗の社員か本部の社員から選んでください。");
+    const now = nowIso();
+    const changes: { field: string; before: unknown; after: unknown }[] = [];
+    // ほかの店舗へ依頼したら、問い合わせの担当店舗もその店舗にする
+    if (storeId !== inq.storeId) {
+      changes.push({ field: "storeId", before: inq.storeId, after: storeId });
+      inq.storeId = storeId;
+    }
+    if (assignee && assignee.id !== inq.assignedUserId) {
+      changes.push({ field: "assignedUserId", before: inq.assignedUserId ?? null, after: assignee.id });
+      inq.assignedUserId = assignee.id;
+    }
+    if (inq.status === "new") {
+      changes.push({ field: "status", before: "new", after: "in_progress" });
+      inq.status = "in_progress";
+    }
+    inq.updatedAt = now;
+    targetLabel = assignee ? `${assignee.name} さん` : `${store.name}`;
+    storeLabel = store.name;
+    if (changes.length) addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `${REQUEST_PURPOSE[purpose].label}を依頼 (依頼先: ${targetLabel})`, storeId: inq.storeId, changes });
+    const t = createInquiryRequest(db, { inquiry: inq, requestedBy: user.id, storeId, assignee, purpose, note, dueAt: due.dueAt, urgent });
     threadId = t.id;
   });
   const db = getDb();
   const t = db.threads.find((x) => x.id === threadId);
-  if (t) {
-    await sendAndRecord(taskNotices(db, t, user.id, "request", note), user.id);
+  const inq = db.inquiries.find((x) => x.id === id);
+  if (t && inq) {
+    const dueText = t.dueAt ? dueLabel(t.dueAt, new Date()) : undefined;
+    await sendAndRecord(
+      [
+        ...taskNotices(db, t, user.id, "request", note),
+        ...storeRequestNotices(db, inq, { storeId: t.storeId ?? inq.storeId, what: "request", purpose: REQUEST_PURPOSE[purpose].label, note, due: dueText, from: `${user.name} → ${targetLabel}` }),
+      ],
+      user.id,
+    ).catch((err) => console.warn("[inquiry] request notice failed:", (err as Error).message));
   }
-  revalidatePath(back);
+  revalidatePath(`/inquiries/${id}`);
+  revalidatePath("/inquiries");
   revalidatePath("/messages");
-  redirect(withMsg(back, "担当者に引き継ぎました。引き継ぎ先の「業務依頼」に表示され、確認・報告の状況はこの画面で確認できます。"));
+  redirect(withMsg(back, `${targetLabel}${t?.assigneeStoreId ? " (店舗のメンバー全員)" : ""}に「${REQUEST_PURPOSE[purpose].label}」を依頼しました${t?.dueAt ? ` (期限: ${dueLabel(t.dueAt, new Date())})` : ""}。${t?.dueAt ? "期限までに日程の登録・返答がなければ自動で再通知します。" : ""}${storeLabel && t?.assigneeStoreId ? "" : ""}`));
+}
+
+/** 以前の「担当者への引き継ぎ」の入力 (assigneeId・note・dueDate) を新しい依頼として扱う */
+export async function handoffInquiry(id: string, formData: FormData) {
+  const fd = new FormData();
+  for (const [k, v] of formData.entries()) fd.append(k, v);
+  if (!fd.has("purpose")) fd.set("purpose", "other");
+  const dueDate = str(formData, "dueDate");
+  if (!fd.has("due")) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+      fd.set("due", "custom");
+      fd.set("dueCustom", `${dueDate}T23:59`);
+    } else fd.set("due", "none");
+  }
+  await requestInquiry(id, fd);
+}
+
+/**
+ * お客様都合で日程未定にする (お客様のご要望 2026-11-24「⑤」)。理由と次回の連絡予定日 (任意) を残し、日程の打ち合わせの依頼は完了にする。
+ * 次回の連絡予定日の朝に担当者へ知らせる。予定 (日程) を登録すると自動で外れる
+ */
+export async function setInquiryScheduleHold(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const back = safeReturn(str(formData, "returnTo"), `/inquiries/${id}`);
+  const reason = (str(formData, "reason") || "お客様都合により日程未定").slice(0, 200);
+  const nextContact = str(formData, "nextContact");
+  const today = toDateKey(new Date());
+  if (nextContact && (!/^\d{4}-\d{2}-\d{2}$/.test(nextContact) || nextContact < today)) fail(back, "次回の連絡予定日は今日以降の日付にしてください。");
+  await mutate((db) => {
+    const inq = db.inquiries.find((x) => x.id === id);
+    if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
+    assertCaseStore(user, inq.storeId, back);
+    const before = inq.scheduleHold ?? null;
+    inq.scheduleHold = { at: nowIso(), by: user.id, reason, ...(nextContact ? { nextContact } : {}) };
+    const prevAction = { nextAction: inq.nextAction ?? null, nextActionDue: inq.nextActionDue ?? null };
+    inq.nextAction = nextContact ? "お客様に日程の連絡" : "お客様からの日程の連絡待ち";
+    inq.nextActionDue = nextContact || undefined;
+    if (inq.status === "new") inq.status = "in_progress";
+    inq.updatedAt = nowIso();
+    addAudit(db, {
+      userId: user.id,
+      action: "update",
+      entity: "inquiry",
+      entityId: inq.id,
+      entityLabel: inq.number,
+      summary: `日程未定にしました (${reason}${nextContact ? ` / 次回の連絡 ${nextContact}` : ""})`,
+      storeId: inq.storeId,
+      changes: [
+        { field: "scheduleHold", before, after: inq.scheduleHold },
+        { field: "nextActionDue", before: prevAction.nextActionDue, after: inq.nextActionDue ?? null },
+      ],
+    });
+    closeScheduleRequests(db, inq.id, user.id, `${reason}${nextContact ? ` (次回の連絡 ${Number(nextContact.slice(5, 7))}/${Number(nextContact.slice(8, 10))})` : ""}`);
+  });
+  revalidatePath(`/inquiries/${id}`);
+  revalidatePath("/inquiries");
+  redirect(withMsg(back, `日程未定 (${reason}) にしました。${nextContact ? `次回の連絡予定日 (${nextContact}) の朝に担当者へ知らせます。` : ""}日程が決まったら「日程を登録」で予定に入れてください。`));
+}
+
+/** 日程未定を外す (日程の打ち合わせを再開する) */
+export async function clearInquiryScheduleHold(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const back = safeReturn(str(formData, "returnTo"), `/inquiries/${id}`);
+  await mutate((db) => {
+    const inq = db.inquiries.find((x) => x.id === id);
+    if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
+    assertCaseStore(user, inq.storeId, back);
+    if (!inq.scheduleHold) fail(back, "日程未定ではありません。");
+    const before = inq.scheduleHold;
+    inq.scheduleHold = undefined;
+    inq.updatedAt = nowIso();
+    addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: "日程未定を外しました (日程の打ち合わせを再開)", storeId: inq.storeId, changes: [{ field: "scheduleHold", before, after: null }] });
+  });
+  revalidatePath(`/inquiries/${id}`);
+  revalidatePath("/inquiries");
+  redirect(withMsg(back, "日程未定を外しました。"));
 }

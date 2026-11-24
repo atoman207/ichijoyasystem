@@ -9,7 +9,8 @@ import { attachmentsOf, detectType, discardStored, relinkDocumentAttachments, st
 import { readObject } from "@/lib/storage";
 import { CHANNEL_LABEL } from "@/lib/constants";
 import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
-import { createHandoffTask } from "@/lib/ai-intake";
+import { createInquiryRequest } from "@/lib/inquiry-requests";
+import { dueAtFrom } from "@/lib/inquiry-flow";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
 import { storeInquiryNotices } from "@/lib/notify/store-line";
@@ -392,7 +393,9 @@ export async function registerReception(formData: FormData) {
       // 担当者がほかの人なら業務依頼で引き継ぐ (依頼 → 確認 → 報告で進める)
       if (handoff && assignee.id !== user.id) {
         notifyNote = `${urgent ? "【至急】" : ""}受付から問い合わせを登録しました。内容を確認して、お客様へ${inq.nextAction?.includes("折返し") ? "折返し" : "連絡"}してください。対応したら「報告」で結果を書いてください。\n\n${detail}\n\n問い合わせ: /inquiries/${inqId}`;
-        const t = createHandoffTask(d, { inquiry: inq, assignee, requestedBy: user.id, note: notifyNote, dueDate: toDateKey(new Date()), storeId, urgent });
+        // 期限: 至急は本日 12 時まで (過ぎていれば本日中)、ほかは本日中。期限を過ぎて返答がなければ自動で再通知 (src/lib/inquiry-followup.ts)
+        const due = (urgent ? dueAtFrom("noon", undefined, new Date()) : {}).dueAt ?? dueAtFrom("today", undefined, new Date()).dueAt;
+        const t = createInquiryRequest(d, { inquiry: inq, requestedBy: user.id, storeId, assignee, purpose: inq.nextAction?.includes("折返し") ? "contact" : "schedule", note: notifyNote, dueAt: due, urgent });
         notifyThreadId = t.id;
       }
       href = `/inquiries/${inqId}`;

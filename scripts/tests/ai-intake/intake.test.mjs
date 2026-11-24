@@ -335,7 +335,7 @@ const conf8b = await act(koshiManager, () => messageActions.taskStep(t8.id, "con
 ok(conf8b.msg?.includes("完了"), "依頼者 (店長) が報告を確かめて完了");
 // 画面からの引き継ぎ (別の社員へ)
 const ho = await act(koshiManager, () => inquiryActions.handoffInquiry(inq7.id, form({ assigneeId: koshiStaff.id, note: "明日午前に折返し", dueDate: "2031-11-26" })));
-ok(ho.msg?.includes("引き継ぎました"), "問い合わせの画面から担当者に引き継ぐ");
+ok(ho.msg?.includes("依頼しました"), `問い合わせの画面から担当者に依頼する (以前の「引き継ぎ」の入力も使える: ${ho.msg ?? ho.err})`);
 const tm = db().threads.filter((t) => t.relatedId === inq7.id).find((t) => t.createdBy === koshiManager.id);
 ok(tm && db().messages.find((m) => m.threadId === tm.id)?.userId === koshiManager.id, "画面からの引き継ぎは操作した社員の名前で依頼");
 

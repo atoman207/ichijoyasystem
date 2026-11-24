@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/session";
 import { liveSignature } from "@/lib/notify-live";
+import { triggerInquiryFollowups } from "@/lib/inquiry-followup";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,5 +10,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: { "Cache-Control": "private, no-store" } });
+  // 期限を過ぎた問い合わせの依頼の再通知 (5 分に 1 回まで。応答は待たない。src/lib/inquiry-followup.ts)
+  triggerInquiryFollowups();
   return NextResponse.json(liveSignature(user), { headers: { "Cache-Control": "private, no-store" } });
 }

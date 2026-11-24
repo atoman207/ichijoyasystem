@@ -23,8 +23,10 @@ import { isHandoverEvent } from "@/lib/db/handover-events";
 import { orderEditable } from "@/lib/db/schedule";
 import { lastDay, shortDate } from "@/lib/calendar";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
-import { CasePlanCard } from "@/components/scheduling/CasePlanCard";
+import { CaseFlowBar } from "@/components/features/CaseFlowBar";
+import { caseFlow } from "@/lib/case-flow";
 import { formStores, formUsers } from "@/components/schedule/form-data";
+import { CasePlanCard } from "@/components/scheduling/CasePlanCard";
 import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { createQualityIssue } from "@/lib/actions/kpi";
 import { updateSiteInfo } from "@/lib/actions/cases";
@@ -159,6 +161,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
       )}
 
       {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} basis={info.basis} grantUntil={info.grantUntil} />}
+      <CaseFlowBar flow={caseFlow(db, { orderId: o.id }, new Date())} />
       {!viewOnly && completedCaseReason(db, o) && <CompletedLockBanner reason={completedCaseReason(db, o)} admin={!lock.locked} />}
 
       <ReadOnlyArea readOnly={viewOnly}>
@@ -200,7 +203,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
       <div className="grid grid-cols-1 gap-4 @3xl:grid-cols-3">
         <div className="space-y-4 @3xl:col-span-2">
           {planMode ? (
-            <Card>
+            <Card id="handover">
               <CardHeader
                 title="引取・納品の日程 (品目ごと)"
                 description={`品目ごとに引取日・納品日を入れます。予定表には引き取りの日と納品の日だけが載ります (間の日には出ません)。はじめて入れる日程はすぐに反映し、登録済みの日程の変更は${own ? "そのまま反映します (管理者のため承認不要)" : "店長 (店長の申請は管理者) の承認のあとに反映します"}`}
@@ -319,8 +322,23 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             today={today}
             newParams={`orderId=${o.id}`}
             returnTo={returnTo}
-            quickKinds={["pickup", "delivery", "install", "site", "visit", "measure", "survey", "onsite_quote"]}
+            quickKinds={["pickup", "delivery", "install", "site", "visit", "measure", "survey", "onsite_quote", "site_survey"]}
             canAdd={o.status !== "cancelled" && ownStore}
+            quickAdd={
+              planMode
+                ? undefined
+                : {
+                    caseRef: `order:${o.id}`,
+                    storeId: o.storeId,
+                    kinds: ["install", "site", "visit", "measure", "pickup", "delivery"],
+                    users: formUsers(db),
+                    stores: formStores(db),
+                    defaultAssigneeIds: o.workerIds.length ? [...o.workerIds] : [user.id],
+                    currentUserId: user.id,
+                    returnTo,
+                    fullHref: `/schedule/new?orderId=${o.id}&returnTo=${encodeURIComponent(returnTo)}`,
+                  }
+            }
             description="引き取り・納品・施工・顧客訪問などを案件に登録すると、担当者とともに店舗の共通カレンダーへ自動で反映されます。問い合わせ段階の現地調査も含みます"
           />
 
@@ -543,7 +561,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           {!viewOnly && <FaxHistoryCard db={db} user={user} faxes={orderFaxes} title="この案件の FAX (発注書の送信・仕入先の返信)" />}
 
           {active && (
-            <Card>
+            <Card id="complete">
               <CardHeader title="施工完了 → 売上計上" description={`完了を登録すると、施工完了日を売上計上日として売上に計上します (経営ダッシュボード・会計データとも)。${batchBilling ? "このお客様はまとめ請求のため、請求書は締め日にまとめて発行します" : "続けて請求書を発行できます (請求書の発行日は別に持ちます)"}`} />
               <form action={completeOrder.bind(null, o.id)} className="flex flex-wrap items-end gap-2">
                 <Field label="施工完了日 (= 売上計上日)"><Input type="date" name="completedAt" defaultValue={toDateKey(new Date())} /></Field>
@@ -565,7 +583,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             </Card>
           )}
           {o.status === "completed" && (
-            <Card>
+            <Card id="invoice">
               {batchBilling ? (
                 <details>
                   <summary className="cursor-pointer text-sm font-medium text-accent">この案件だけ請求書を発行する (必要なときだけ)</summary>

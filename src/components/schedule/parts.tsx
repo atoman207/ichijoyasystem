@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import type { ComponentType } from "react";
-import { CalendarDays, CalendarOff, ClipboardList, ClipboardPen, Hammer, Handshake, HardHat, Landmark, Megaphone, PackageOpen, PartyPopper, Ruler, TriangleAlert, Truck, Users } from "lucide-react";
+import { CalendarDays, CalendarOff, ClipboardList, ClipboardPen, Hammer, Handshake, HardHat, Landmark, Megaphone, PackageOpen, PartyPopper, Ruler, Search, TriangleAlert, Truck, Users } from "lucide-react";
 import type { ScheduleKind } from "@/lib/db/types";
 import { SCHEDULE_GROUP_LABEL, SCHEDULE_KIND, SCHEDULE_KINDS, type ScheduleGroup } from "@/lib/constants";
 import type { WorkToken } from "@/lib/work-summary";
@@ -26,6 +26,7 @@ export interface KindStyle {
 
 export const KIND_STYLE: Record<ScheduleKind, KindStyle> = {
   survey: { icon: ClipboardList, bar: "bg-[#2a78d6]", border: "border-l-[#2a78d6]", soft: "bg-[#eaf2fd]", ink: "text-[#1c5cab]" },
+  site_survey: { icon: Search, bar: "bg-[#3c6e9e]", border: "border-l-[#3c6e9e]", soft: "bg-[#e9f0f7]", ink: "text-[#2a5079]" },
   onsite_quote: { icon: ClipboardPen, bar: "bg-[#0e7490]", border: "border-l-[#0e7490]", soft: "bg-[#e3f4f8]", ink: "text-[#0b5567]" },
   measure: { icon: Ruler, bar: "bg-[#5b4fd6]", border: "border-l-[#5b4fd6]", soft: "bg-[#efedfc]", ink: "text-[#4338b0]" },
   pickup: { icon: PackageOpen, bar: "bg-[#c98500]", border: "border-l-[#c98500]", soft: "bg-[#fff5dc]", ink: "text-[#8a5a00]" },

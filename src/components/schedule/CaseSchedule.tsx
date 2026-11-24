@@ -5,6 +5,7 @@ import type { ScheduleEvent, ScheduleKind, Store, StoreId } from "@/lib/db/types
 import { compareEvents, findConflicts, lastDay, periodLabel } from "@/lib/calendar";
 import { Card, CardHeader } from "@/components/ui";
 import { ConflictBadge, KindBadge, kindLabel, kindStyle, KindIcon } from "./parts";
+import { ScheduleQuickAdd, type ScheduleQuickAddProps } from "./ScheduleQuickAdd";
 
 /**
  * 案件 (問い合わせ・見積・受注) や顧客の画面に置く「この案件の予定」カード。
@@ -23,6 +24,8 @@ export function CaseScheduleCard({
   quickKinds,
   canAdd,
   emptyText = "まだ予定はありません",
+  quickAdd,
+  id = "case-schedule",
 }: {
   title?: string;
   description?: string;
@@ -39,6 +42,9 @@ export function CaseScheduleCard({
   quickKinds: ScheduleKind[];
   canAdd: boolean;
   emptyText?: string;
+  /** この画面で日程を登録する (案件の画面。お客様のご要望 2026-11-24「業務フロー ③」)。なければ予定の登録の画面へのリンク */
+  quickAdd?: ScheduleQuickAddProps;
+  id?: string;
 }) {
   const upcoming = events.filter((e) => lastDay(e) >= today).sort(compareEvents);
   const past = events.filter((e) => lastDay(e) < today).sort((a, b) => compareEvents(b, a));
@@ -70,9 +76,20 @@ export function CaseScheduleCard({
     );
   };
   return (
-    <Card>
+    <Card id={id}>
       <CardHeader title={title} description={description} icon={<CalendarDays />} />
-      {canAdd && (
+      {canAdd && quickAdd && (
+        <details className="mb-3 rounded-xl border border-accent/30 bg-accent-soft/30 p-3" open={events.length === 0}>
+          <summary className="cursor-pointer text-sm font-semibold text-accent-ink">
+            <Plus className="mr-1 inline h-4 w-4" aria-hidden />
+            日程を登録 (この画面で)
+          </summary>
+          <div className="mt-3">
+            <ScheduleQuickAdd {...quickAdd} />
+          </div>
+        </details>
+      )}
+      {canAdd && !quickAdd && (
         <div className="mb-3 flex flex-wrap gap-1.5">
           {quickKinds.map((k) => (
             <Link

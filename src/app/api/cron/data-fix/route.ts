@@ -6,9 +6,9 @@ import { categoryName } from "@/lib/mgmt/categories";
 import { applyLineFixes, planLineFixes } from "@/lib/quote-line-normalize";
 import { isDateKey } from "@/lib/calendar";
 import { addDays, toDateKey } from "@/lib/format";
-import { isOnsiteQuoteText } from "@/lib/schedule-sheet/parse";
+import { isOnsiteQuoteText, isSiteSurveyText } from "@/lib/schedule-sheet/parse";
 import { SHEET_REF_PREFIX, eventFingerprint, sheetSettings, writeSheetSettings } from "@/lib/schedule-sheet/plan";
-import type { Database } from "@/lib/db/types";
+import type { Database, ScheduleKind } from "@/lib/db/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,8 +22,9 @@ export const maxDuration = 60;
  * 例: curl -X POST -H "Authorization: Bearer $CRON_SECRET" "http://127.0.0.1:3300/api/cron/data-fix?task=quote-line-units&from=2026-11-23&to=2026-11-23&apply=1"
  *   task = store-name: 店舗の名前・略称を変える (id・name・short。お客様のご要望 2026-11-23「本社」→「本部」。画面では 設定 → 店舗)。
  *     既定は確認だけ、apply=1 で書き込み、変更履歴を残す
- *   task = schedule-onsite: 予定表 (スプレッドシート) から取り込んだ「現見」の予定を、見積り (現地調査) から現場見積 (現見) にする
- *     (お客様のご要望 2026-11-24「■2」。種類を足す前に取り込んだ予定)。from = この日以降の予定 (既定は今日)。既定は確認だけ、apply=1 で書き込み、予定ごとに変更履歴
+ *   task = schedule-kinds (旧 schedule-onsite): 予定表 (スプレッドシート) から取り込んだ「現見」「現調」の予定を、見積りから
+ *     現場見積 (現見)・現地調査 (現調) にする (お客様のご要望 2026-11-24「■2」「業務フロー ③」。種類を足す前に取り込んだ予定)。
+ *     from = この日以降の予定 (既定は今日)。既定は確認だけ、apply=1 で書き込み、予定ごとに変更履歴
  */
 export async function POST(req: Request) {
   const secret = (process.env.CRON_SECRET ?? "").trim();
@@ -34,7 +35,7 @@ export async function POST(req: Request) {
   const url = new URL(req.url);
   const task = url.searchParams.get("task");
   if (task === "store-name") return storeName(url);
-  if (task === "schedule-onsite") return scheduleOnsite(url);
+  if (task === "schedule-onsite" || task === "schedule-kinds") return scheduleOnsite(url);
   if (task !== "quote-line-units") return NextResponse.json({ error: "unknown task" }, { status: 400 });
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? from;
@@ -96,14 +97,16 @@ async function storeName(url: URL) {
   return NextResponse.json({ ok: true, applied: true, plan, at: nowIso() });
 }
 
-/** 予定表から取り込んだ「現見」の予定 (見積り (現地調査) のまま) */
+/** 予定表から取り込んだ「現見」「現調」の予定 (見積りのまま) → 直す種類 */
+const KIND_TITLE: Partial<Record<ScheduleKind, string>> = { onsite_quote: "現場見積", site_survey: "現地調査" };
+function kindFix(e: { source?: string; kind: string; sourceRef?: string }): ScheduleKind | undefined {
+  if (e.source !== "import" || e.kind !== "survey" || !e.sourceRef?.startsWith(SHEET_REF_PREFIX)) return undefined;
+  // 印 = sheet:<日付>|<店舗>|<欄>|<…>|<書き込み>
+  const raw = e.sourceRef.slice(SHEET_REF_PREFIX.length).split("|").slice(4).join("|");
+  return isOnsiteQuoteText(raw) ? "onsite_quote" : isSiteSurveyText(raw) ? "site_survey" : undefined;
+}
 function onsiteTargets(db: Pick<Database, "schedule">, from: string) {
-  return db.schedule.filter((e) => {
-    if (e.source !== "import" || e.kind !== "survey" || e.date < from || !e.sourceRef?.startsWith(SHEET_REF_PREFIX)) return false;
-    // 印 = sheet:<日付>|<店舗>|<欄>|<…>|<書き込み>
-    const raw = e.sourceRef.slice(SHEET_REF_PREFIX.length).split("|").slice(4).join("|");
-    return isOnsiteQuoteText(raw);
-  });
+  return db.schedule.filter((e) => e.date >= from && kindFix(e));
 }
 
 async function scheduleOnsite(url: URL) {
@@ -111,17 +114,19 @@ async function scheduleOnsite(url: URL) {
   const from = isDateKey(fromParam) ? fromParam : toDateKey(new Date());
   const apply = url.searchParams.get("apply") === "1";
   const db0 = await syncDb();
-  const list = (db: Pick<Database, "schedule">) => onsiteTargets(db, from).map((e) => ({ id: e.id, date: e.date, title: e.title, ref: e.sourceRef }));
+  const list = (db: Pick<Database, "schedule">) => onsiteTargets(db, from).map((e) => ({ id: e.id, date: e.date, title: e.title, kind: kindFix(e), ref: e.sourceRef }));
   const plan = list(db0);
   if (!apply || !plan.length) return NextResponse.json({ ok: true, applied: false, from, events: plan });
   const done = await mutate((db) => {
     const targets = onsiteTargets(db, from);
     const settings = sheetSettings(db);
     const now = nowIso();
+    const out: { id: string; date: string; title: string; kind: string }[] = [];
     for (const e of targets) {
+      const kind = kindFix(e)!;
       const before = { kind: e.kind, title: e.title };
-      e.kind = "onsite_quote";
-      e.title = e.title.replace(/\s*現地調査・見積$/, " 現場見積");
+      e.kind = kind;
+      e.title = e.title.replace(/\s*(?:現地調査・見積|見積)$/, ` ${KIND_TITLE[kind]}`);
       e.updatedAt = now;
       // 取込で書いた予定の印も新しい内容にする (次の取込で「新システムで変えた予定」と取り違えない)
       const written = settings.written ?? {};
@@ -133,16 +138,17 @@ async function scheduleOnsite(url: URL) {
         entity: "schedule",
         entityId: e.id,
         entityLabel: e.title,
-        summary: "予定表の「現見」の予定を、見積り (現地調査) から現場見積 (現見) にしました (種類の追加にあわせて)",
+        summary: `予定表の「${kind === "onsite_quote" ? "現見" : "現調"}」の予定を、見積りから${kind === "onsite_quote" ? "現場見積 (現見)" : "現地調査 (現調)"}にしました (種類の追加にあわせて)`,
         storeId: e.storeId,
         changes: [
           { field: "kind", before: before.kind, after: e.kind },
           ...(before.title !== e.title ? [{ field: "title", before: before.title, after: e.title }] : []),
         ],
       });
+      out.push({ id: e.id, date: e.date, title: e.title, kind });
     }
     if (targets.length) writeSheetSettings(db, settings, SYSTEM_USER);
-    return targets.map((e) => ({ id: e.id, date: e.date, title: e.title }));
+    return out;
   });
   return NextResponse.json({ ok: true, applied: true, from, events: done });
 }

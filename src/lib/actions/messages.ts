@@ -8,7 +8,7 @@ import { canConfirmTask, canViewThread } from "@/lib/auth/permissions";
 import { TASK_STATUS, THREAD_KIND_LABEL } from "@/lib/constants";
 import { mentionNotices, taskNotices } from "@/lib/notify/events";
 import { sendAndRecord, type Outgoing } from "@/lib/notify/send";
-import { choice, fail, requireActionUser, str, withMsg } from "./guards";
+import { choice, fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 const RELATED: RelatedType[] = ["inquiry", "quote", "order", "invoice", "expense", "purchase", "customer", "supplier"];
 
@@ -131,7 +131,8 @@ const STEP: Record<TaskStep, { from: TaskStatus[]; to: TaskStatus; label: string
 /** 業務依頼の操作: 依頼先が「確認」「報告」、依頼者が「確認 (完了)」「差し戻し」 */
 export async function taskStep(threadId: string, step: TaskStep, formData: FormData) {
   const user = await requireActionUser();
-  const back = `/messages/${threadId}`;
+  // 問い合わせの画面の「確認しました」などからは、その画面に戻る
+  const back = safeReturn(str(formData, "returnTo"), `/messages/${threadId}`);
   const def = Object.prototype.hasOwnProperty.call(STEP, step) ? STEP[step] : undefined;
   if (!def) fail(back, "操作が正しくありません。");
   const body = str(formData, "body");

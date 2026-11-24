@@ -211,7 +211,7 @@ const NOTES: Record<string, string> = {
   order_staff: "受注と担当 (営業担当)。担当者別の集計はこの表を sales_orders と結合する (経営ダッシュボードの担当者別と同じ)",
   orders: "受注・施工の元の表。status = pending_approval/returned/confirmed/scheduled/in_progress/completed/invoiced/paid/cancelled。amounts = 種別の内訳 (JSON)、progress_notes = 経過 (JSON 配列。移行データは明細・担当者欄を含む)",
   customers: "顧客。code = 顧客コード、contacts = ほかの連絡先 (JSON 配列: relation・name・phone)、area = 地区、trade_stopped = 取引停止 (1)",
-  schedule_events: "予定。date〜end_date、start_time・end_time、kind = 予定の種類 (pickup=引き取り/delivery=納品/install=施工/survey=見積り (現地調査)/onsite_quote=現場見積 (現見: 現場で見積もりをしてそのまま工事)/visit=顧客訪問/site=現場管理/measure=採寸/meeting=会議/leave=休暇 など)、assignee_ids = 担当者の ID (JSON 配列。users.id と結合するときは json_each)",
+  schedule_events: "予定。date〜end_date、start_time・end_time、kind = 予定の種類 (pickup=引き取り/delivery=納品/install=施工/survey=見積り/site_survey=現地調査 (現調)/onsite_quote=現場見積 (現見: 現場で見積もりをしてそのまま工事)/visit=顧客訪問/site=現場管理/measure=採寸/meeting=会議/leave=休暇 など)、assignee_ids = 担当者の ID (JSON 配列。users.id と結合するときは json_each)",
   inquiries: "問い合わせ。received_at = 受付日時、channel = 受付経路、status = new/in_progress/quoted/won/lost/closed",
   quotes: "見積。items = 明細 (JSON)、status = draft/pending_approval/approved/sent/accepted/rejected/expired、order_id = 受注",
   invoices: "請求。total・paid_amount (税込)、status = issued/partially_paid/overdue/paid/void、due_date = 支払期限",

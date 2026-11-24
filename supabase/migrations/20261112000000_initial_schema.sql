@@ -123,7 +123,8 @@ create table if not exists inquiries (
   source_ref text,
   media text,
   promotion_id text,
-  intake jsonb
+  intake jsonb,
+  schedule_hold jsonb
 );
 comment on table inquiries is '問い合わせ';
 
@@ -434,7 +435,12 @@ create table if not exists threads (
   acknowledged_at timestamptz,
   reported_at timestamptz,
   confirmed_at timestamptz,
-  confirmed_by text
+  confirmed_by text,
+  due_at timestamptz,
+  assignee_store_id text,
+  purpose text,
+  reminded_at timestamptz,
+  remind_count integer
 );
 comment on table threads is '社内連絡 (スレッド)';
 
@@ -1716,6 +1722,7 @@ alter table inquiries add column if not exists source_ref text;
 alter table inquiries add column if not exists media text;
 alter table inquiries add column if not exists promotion_id text;
 alter table inquiries add column if not exists intake jsonb;
+alter table inquiries add column if not exists schedule_hold jsonb;
 alter table products add column if not exists category text not null;
 alter table products add column if not exists name text not null;
 alter table products add column if not exists grade text;
@@ -1955,6 +1962,11 @@ alter table threads add column if not exists acknowledged_at timestamptz;
 alter table threads add column if not exists reported_at timestamptz;
 alter table threads add column if not exists confirmed_at timestamptz;
 alter table threads add column if not exists confirmed_by text;
+alter table threads add column if not exists due_at timestamptz;
+alter table threads add column if not exists assignee_store_id text;
+alter table threads add column if not exists purpose text;
+alter table threads add column if not exists reminded_at timestamptz;
+alter table threads add column if not exists remind_count integer;
 alter table messages add column if not exists thread_id text not null references threads(id) on delete cascade;
 alter table messages add column if not exists user_id text not null;
 alter table messages add column if not exists body text not null;

@@ -153,6 +153,8 @@ export const TABLES: TableDef[] = [
       ["promotionId", "text"],
       // 既存の AI システムから受け取った項目 (src/lib/ai-intake.ts。お名前・ふりがな・メール・住所・希望日・緊急度・受付 ID など)
       ["intake", "jsonb"],
+      // お客様都合で日程未定 (理由・次回の連絡予定日。src/lib/inquiry-flow.ts)
+      ["scheduleHold", "jsonb"],
     ],
     orderBy: ["received_at"],
     indexes: [["store_id"], ["status"], ["customer_id"]],
@@ -526,6 +528,12 @@ export const TABLES: TableDef[] = [
       ["reportedAt", ts],
       ["confirmedAt", ts],
       ["confirmedBy", "text"],
+      // 問い合わせの依頼 (期限の日時・依頼先の店舗・依頼の種類・期限を過ぎたときの再通知。src/lib/inquiry-flow.ts)
+      ["dueAt", ts],
+      ["assigneeStoreId", "text"],
+      ["purpose", "text"],
+      ["remindedAt", ts],
+      ["remindCount", "integer"],
     ],
     orderBy: ["created_at"],
   },

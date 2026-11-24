@@ -23,6 +23,9 @@ import { MapInfoCard } from "@/components/maps/MapInfoCard";
 import { SiteInfoCard } from "@/components/features/SiteInfo";
 import { setQuoteDiscussing, updateSiteInfo } from "@/lib/actions/cases";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
+import { CaseFlowBar } from "@/components/features/CaseFlowBar";
+import { caseFlow } from "@/lib/case-flow";
+import { formStores, formUsers } from "@/components/schedule/form-data";
 import { CasePlanCard } from "@/components/scheduling/CasePlanCard";
 import { caseEvents } from "@/lib/db/schedule";
 import { hasHandoverItems } from "@/lib/handover";
@@ -75,6 +78,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
         }
       />
       {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what="見積" basis={info.basis} grantUntil={info.grantUntil} />}
+      <CaseFlowBar flow={caseFlow(db, { quoteId: q.id }, new Date())} />
       {!viewOnly && lock.reason && <CompletedLockBanner reason={lock.reason} admin={!lock.locked} />}
       <ReadOnlyArea readOnly={viewOnly || lock.locked}>
 
@@ -233,7 +237,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
                   <Button type="submit" variant={q.status === "sent" ? "secondary" : "primary"}>{q.status === "sent" ? "再送付を記録" : "送付を記録"}</Button>
                 </form>
               </Card>
-              <Card>
+              <Card id="to-order">
                 <CardHeader title="受注 (契約) 登録" description="お客様の承諾後に登録。契約は承認後に確定します" />
                 <form action={convertQuoteToOrder.bind(null, q.id)} className="space-y-2">
                   <div className="grid grid-cols-2 gap-2">
@@ -288,8 +292,19 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
             today={toDateKey(new Date())}
             newParams={chain.order ? `orderId=${chain.order.id}` : `quoteId=${q.id}`}
             returnTo={returnTo}
-            quickKinds={chain.order ? ["pickup", "delivery", "install", "site", "visit"] : ["visit", "measure", "survey", "onsite_quote"]}
+            quickKinds={chain.order ? ["pickup", "delivery", "install", "site", "visit"] : ["visit", "measure", "survey", "onsite_quote", "site_survey"]}
             canAdd={!["rejected", "expired"].includes(q.status) && canAccessStore(user, q.storeId)}
+            quickAdd={{
+              caseRef: chain.order ? `order:${chain.order.id}` : `quote:${q.id}`,
+              storeId: chain.order?.storeId ?? q.storeId,
+              kinds: chain.order ? ["pickup", "delivery", "install", "site", "visit", "measure"] : ["visit", "measure", "survey", "onsite_quote", "site_survey", "pickup", "delivery", "install", "site"],
+              users: formUsers(db),
+              stores: formStores(db),
+              defaultAssigneeIds: [q.estimatorId && db.users.some((u) => u.id === q.estimatorId && u.active) ? q.estimatorId : user.id],
+              currentUserId: user.id,
+              returnTo,
+              fullHref: `/schedule/new?${chain.order ? `orderId=${chain.order.id}` : `quoteId=${q.id}`}&returnTo=${encodeURIComponent(returnTo)}`,
+            }}
             description="見積の説明・再採寸などの訪問を担当者つきで登録すると、店舗の共通カレンダーに自動で反映されます。問い合わせ段階の現地調査も表示します"
           />
 

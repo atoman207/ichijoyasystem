@@ -185,6 +185,7 @@ eq(oiwa?.production, ["製造: 裏 6枚 / 縁 麻の葉橙 / サイズ 61"], "�
 eq([find("(須屋)大岩", "shiki")?.kind, find("(須屋)大岩", "shiki")?.slot], ["delivery", "pm"], "シキ: 午後の納品");
 eq([find("（植木町）早川　現見")?.kind, find("（植木町）早川　現見")?.name, find("（植木町）早川　現見")?.countText], ["onsite_quote", "早川", "障子 張替8"], "「現見」は枚数があっても現場見積 (現見。見積の数量は仕事内容に。お客様のご要望 2026-11-24「■2」)");
 eq(["(大窪)後藤 現見かも", "(大窪)後藤 PM 現見になるかも", "(須屋)西岡 現見", "(大津)角田 現見確定"].map((t) => P.kindOf("hagi", t, 0, true)), ["survey", "survey", "onsite_quote", "onsite_quote"], "「現見かも」「現見になるかも」(まだ決まっていない) は通常の見積り、決まった「現見」は現場見積");
+eq(["(荒尾)黒田現調大牟田No.158", "(須屋)原口見積", "(花園)田上 下見", "(中)高木 現調・見積"].map((t) => P.kindOf("hagi", t, 0, true)), ["site_survey", "survey", "site_survey", "survey"], "「現調」「下見」は現地調査、「見積」は見積 (両方あれば見積。お客様のご要望 2026-11-24 業務フロー ③)");
 const newbie = find("(幾久富)新規田", "hagi");
 eq([newbie?.countText, newbie?.herinashi, newbie?.startTime], ["畳 新調4", 4, "10:00"], "製造の表のヘリ「無し」= へり無し畳の枚数・「10時」");
 eq([find("(高平)大西", "shiki")?.kind, find("(高平)大西", "shiki")?.startTime], ["delivery", "15:00"], "枚数のないシキは納品・午後の「3~5」は 15:00");

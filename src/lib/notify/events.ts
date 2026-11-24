@@ -128,11 +128,12 @@ export function mentionNotices(db: Database, t: Thread, m: Message): Outgoing[] 
 }
 
 /** 業務依頼の通知: 依頼・差し戻しは担当者へ、確認・報告は依頼者へ、完了は担当者へ */
-export function taskNotices(db: Database, t: Thread, actorId: string, what: "request" | "ack" | "report" | "confirm" | "reopen", note?: string): Outgoing[] {
+export function taskNotices(db: Database, t: Thread, actorId: string, what: "request" | "ack" | "report" | "confirm" | "reopen" | "remind", note?: string, extra: User[] = []): Outgoing[] {
   const assignees = db.users.filter((u) => (t.assigneeIds ?? []).includes(u.id) && u.id !== actorId);
   const requester = db.users.filter((u) => u.id === t.createdBy && u.id !== actorId);
-  const to = what === "ack" || what === "report" ? requester : assignees;
+  const to = [...(what === "ack" || what === "report" ? requester : assignees), ...extra.filter((u) => u.id !== actorId && !(t.assigneeIds ?? []).includes(u.id))];
   const head: Record<typeof what, string> = {
+    remind: "依頼の期限を過ぎました。対応 (日程の登録・報告) をお願いします",
     request: "業務の依頼があります",
     ack: "依頼を確認しました (対応中)",
     report: "依頼の対応を報告しました",
@@ -145,7 +146,7 @@ export function taskNotices(db: Database, t: Thread, actorId: string, what: "req
     "task",
     to,
     `業務依頼: ${t.title}`,
-    `${actorId === "system" ? "システム (外部連携の自動の依頼)" : `${nameOf(db, actorId)} さん`}: ${head[what]}${t.dueDate ? `\n期限: ${t.dueDate}` : ""}${status ? `\n状態: ${status}` : ""}${note ? `\n\n${note.slice(0, 1000)}` : ""}`,
+    `${what === "remind" ? "自動の再通知" : actorId === "system" ? "システム (外部連携の自動の依頼)" : `${nameOf(db, actorId)} さん`}: ${head[what]}${t.dueAt ? `\n期限: ${new Date(t.dueAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : t.dueDate ? `\n期限: ${t.dueDate}` : ""}${status ? `\n状態: ${status}` : ""}${note ? `\n\n${note.slice(0, 1000)}` : ""}`,
     `/messages/${t.id}`,
     { relatedType: "thread", relatedId: t.id },
   );

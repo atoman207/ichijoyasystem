@@ -8,14 +8,21 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canAccessStore, canEditCaseStore, canSeeAllStores, canViewAuditEntry } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
-import { handoffInquiry, linkInquiryFromForm, registerCustomerFromInquiry, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
+import { clearInquiryScheduleHold, linkInquiryFromForm, registerCustomerFromInquiry, requestInquiry, setInquiryScheduleHold, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
+import { taskStep } from "@/lib/actions/messages";
+import { caseFlow } from "@/lib/case-flow";
+import { CaseFlowBar } from "@/components/features/CaseFlowBar";
+import { InquiryActions, type ActionTab } from "@/components/inquiries/InquiryActions";
+import { REQUEST_PURPOSE, dueLabel, isInquiryRequest, isOpenRequest, jstHour, requestTargetLabel, flowIndex } from "@/lib/inquiry-flow";
+import { formStores, formUsers } from "@/components/schedule/form-data";
+import type { ScheduleKind } from "@/lib/db/types";
 import { findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
 import { addCommLog } from "@/lib/actions/customers";
 import { CustomerLinkSearch } from "@/components/features/LinkSearch";
 import { isPlaceholderCustomer, relinkBlocker } from "@/lib/customer-link";
 import { inquiryContact } from "@/lib/link-search";
-import { fmtDate, fmtDateTime, yen } from "@/lib/format";
-import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, ORDER_STATUS, QUOTE_STATUS, TASK_STATUS } from "@/lib/constants";
+import { fmtDate, fmtDateTime } from "@/lib/format";
+import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, TASK_STATUS } from "@/lib/constants";
 import { Badge, Button, Card, CardHeader, ChannelTag, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
 import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
@@ -28,9 +35,9 @@ import { MediaSelect, MediaTag, PromotionSelect, promotionOptions } from "@/comp
 import { inquiryMediaMap } from "@/lib/ops-reports/promo-analysis";
 import { MEDIA_SOURCE_LABEL, mediaLabel } from "@/lib/media";
 
-export default async function InquiryDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string; cq?: string }> }) {
+export default async function InquiryDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string; cq?: string; tab?: string }> }) {
   const { id } = await params;
-  const { msg, err, cq } = await searchParams;
+  const { msg, err, cq, tab } = await searchParams;
   const user = await requireUser();
   const db = getDb();
   const inq = db.inquiries.find((x) => x.id === id);
@@ -92,15 +99,25 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
         ["送信元 ID", ik.senderId],
       ].filter(([, v]) => v !== undefined && v !== "") as [string, ReactNode][])
     : [];
-  // 担当者への引き継ぎ (業務依頼)。依頼先の最後の報告も出す
-  const handoffs = db.threads.filter((t) => t.kind === "request" && t.relatedType === "inquiry" && t.relatedId === inq.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const lastReport = (threadId: string) => db.messages.filter((m) => m.threadId === threadId && m.event === "report").sort((a, b) => b.at.localeCompare(a.at))[0];
-  const handoffUsers = db.users.filter((u) => u.active && (u.storeId === inq.storeId || u.role === "admin" || u.role === "hq_staff" || canSeeAllStores(user)));
   // 媒体 (当社を知ったきっかけ): 入力がなければ過去の記録からの推定 (src/lib/media.ts)
   const media = inquiryMediaMap(db, [inq]).get(inq.id)!;
   const promotion = inq.promotionId ? (db.promotions ?? []).find((p) => p.id === inq.promotionId) : undefined;
   // きっかけの販促: 全社 (本部)・自店舗・この問い合わせの店舗の販促 (actions/inquiries.ts の updateInquiry と同じ)
   const promotions = promotionOptions(db.promotions ?? [], (sid) => sid === "hq" || sid === inq.storeId || canAccessStore(user, sid), inq.promotionId);
+
+  // 案件の流れと次にやること・対応状況 (お客様のご要望 2026-11-24「■ 問い合わせ受付後の業務フロー」。src/lib/case-flow.ts・src/lib/inquiry-flow.ts)
+  const now = new Date();
+  const flow = caseFlow(db, { inquiryId: inq.id }, now);
+  const state = flow.inquiryFlow?.state;
+  const fix = flowIndex(db);
+  const requests = db.threads.filter((t) => isInquiryRequest(t) && t.relatedId === inq.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const canAct = !viewOnly && canEditCaseStore(user, inq.storeId);
+  const canSchedule = !viewOnly && canAccessStore(user, inq.storeId);
+  const tabParam = tab === "request" || tab === "schedule" || tab === "hold" ? (tab as ActionTab) : undefined;
+  const defaultTab: ActionTab = tabParam ?? (state === "request_waiting" || (state === "overdue" && !flow.inquiryFlow?.request && !inq.scheduleHold) ? "request" : "schedule");
+  const openPerson = requests.find((t) => isOpenRequest(t) && !t.assigneeStoreId && (t.assigneeIds ?? []).length === 1);
+  const scheduleKinds: ScheduleKind[] = order ? ["pickup", "delivery", "install", "site", "visit", "measure"] : ["survey", "onsite_quote", "site_survey", "measure", "visit", "pickup", "delivery", "install", "site"];
 
   return (
     <div>
@@ -120,12 +137,85 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
       {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what="問い合わせ" basis={info.basis} grantUntil={info.grantUntil} />}
       <ReadOnlyArea readOnly={viewOnly}>
 
+      <CaseFlowBar flow={flow} />
+
       {fromAi && (
         <Note tone="accent">この問い合わせは{CHANNEL_LABEL[inq.channel]}から自動登録されました。内容を確認し、担当者の割当と{inq.channel === "ai_chat" ? "お客様への連絡" : "折返し対応"}を行ってください。顧客として登録すると、その後の見積・施工・請求まで情報が引き継がれます。</Note>
       )}
 
       <div className="mt-4 grid grid-cols-1 gap-4 @3xl:grid-cols-3">
         <div className="space-y-4 @3xl:col-span-2">
+          {open && !quote && (
+            <Card id="actions">
+              <CardHeader title="次にやること: 依頼・日程" description="担当店舗・担当者への依頼 (期限つき) → 日程の登録 (予定表に自動で反映) までをこの画面で行います。すぐに日程が決まらないときは「日程未定」" />
+              {requests.length > 0 && (
+                <ul className="mb-4 space-y-1.5 text-sm" data-testid="inquiry-requests">
+                  {requests.slice(0, 5).map((t) => {
+                    const late = Boolean(t.dueAt && Date.parse(t.dueAt) <= now.getTime() && isOpenRequest(t) && (t.taskStatus === "requested" || t.taskStatus === "acknowledged"));
+                    const mine = (t.assigneeIds ?? []).includes(user.id);
+                    return (
+                      <li key={t.id} className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border px-3 py-2 ${late ? "border-critical/40 bg-critical-soft/40" : "border-line"}`}>
+                        <span className="font-medium text-ink">{REQUEST_PURPOSE[t.purpose ?? "other"].label}</span>
+                        <span className="text-xs text-ink-2">→ {requestTargetLabel(t, fix)}</span>
+                        {t.dueAt && <span className={`text-xs ${late ? "font-semibold text-critical-ink" : "text-ink-2"}`}>期限 {dueLabel(t.dueAt, now)}{late ? " (過ぎています)" : ""}</span>}
+                        {t.taskStatus && <StatusBadge value={t.taskStatus} map={TASK_STATUS} />}
+                        {(t.remindCount ?? 0) > 0 && <span className="text-[11px] text-ink-3">再通知 {t.remindCount} 回</span>}
+                        <span className="text-[11px] text-ink-3">依頼 {userName(t.createdBy)} · {fmtDateTime(t.createdAt)}</span>
+                        {(() => {
+                          const r = lastReport(t.id);
+                          return r ? <p className="w-full text-xs whitespace-pre-wrap text-ink-2">報告 ({userName(r.userId)} · {fmtDateTime(r.at)}): {r.body.slice(0, 300)}</p> : null;
+                        })()}
+                        <span className="ml-auto flex items-center gap-2">
+                          {mine && t.taskStatus === "requested" && (
+                            <form action={taskStep.bind(null, t.id, "ack")}>
+                              <input type="hidden" name="returnTo" value={here} />
+                              <Button type="submit" size="sm" variant="secondary">確認しました</Button>
+                            </form>
+                          )}
+                          <Link href={`/messages/${t.id}`} className="text-xs text-accent hover:underline">{mine && isOpenRequest(t) ? "報告・やりとり" : "やりとりを開く"}</Link>
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {canAct ? (
+                <InquiryActions
+                  defaultTab={defaultTab}
+                  requestAction={requestInquiry.bind(null, inq.id)}
+                  holdAction={setInquiryScheduleHold.bind(null, inq.id)}
+                  clearHoldAction={clearInquiryScheduleHold.bind(null, inq.id)}
+                  returnTo={here}
+                  stores={db.stores.map((s) => ({ id: s.id, name: s.name }))}
+                  requestStoreIds={db.stores.filter((s) => s.id === inq.storeId || canSeeAllStores(user) || canEditCaseStore(user, s.id)).map((s) => s.id)}
+                  users={db.users.filter((u) => u.active).map((u) => ({ id: u.id, name: u.name, storeId: u.storeId, role: u.role }))}
+                  inquiryStoreId={inq.storeId}
+                  noonPassed={jstHour(now) >= 12}
+                  today={toDateKey(now)}
+                  hold={inq.scheduleHold ? { reason: inq.scheduleHold.reason, nextContact: inq.scheduleHold.nextContact } : undefined}
+                  schedule={
+                    canSchedule
+                      ? {
+                          caseRef: `inquiry:${inq.id}`,
+                          storeId: inq.storeId,
+                          kinds: scheduleKinds,
+                          defaultKind: scheduleKinds[0],
+                          users: formUsers(db),
+                          stores: formStores(db),
+                          defaultAssigneeIds: openPerson ? [...(openPerson.assigneeIds ?? [])] : inq.assignedUserId && db.users.some((u) => u.id === inq.assignedUserId && u.active) ? [inq.assignedUserId] : [user.id],
+                          currentUserId: user.id,
+                          location: customer ? "" : (inq.intake?.address ?? ""),
+                          returnTo: here,
+                          fullHref: `/schedule/new?${caseParam}&returnTo=${encodeURIComponent(here)}`,
+                        }
+                      : undefined
+                  }
+                />
+              ) : (
+                <p className="text-xs text-ink-3">この問い合わせの店舗の担当者・本部が依頼・日程の登録を行います。</p>
+              )}
+            </Card>
+          )}
           <Card>
             <CardHeader title="問い合わせ内容" />
             <p className="whitespace-pre-wrap text-sm text-ink">{inq.detail || "(詳細なし)"}</p>
@@ -151,40 +241,6 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             </Card>
           )}
 
-          <Card>
-            <CardHeader title="担当者への引き継ぎ" description="引き継ぎ先に「業務依頼」を作って通知します。相手が確認 → 対応の報告 → 依頼者の確認で完了になります" />
-            {handoffs.length > 0 && (
-              <ul className="mb-3 space-y-1.5 text-sm">
-                {handoffs.map((t) => (
-                  <li key={t.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line px-3 py-2">
-                    <span className="min-w-0">
-                      <Link href={`/messages/${t.id}`} className="font-medium text-accent hover:underline">{(t.assigneeIds ?? []).map((a) => userName(a)).join("・")}</Link>
-                      <span className="ml-2 text-xs text-ink-3">依頼 {userName(t.createdBy)} · {fmtDateTime(t.createdAt)}{t.dueDate ? ` · 期限 ${fmtDate(t.dueDate)}` : ""}</span>
-                    </span>
-                    {t.taskStatus && <StatusBadge value={t.taskStatus} map={TASK_STATUS} />}
-                    {(() => {
-                      const r = lastReport(t.id);
-                      return r ? <p className="w-full text-xs whitespace-pre-wrap text-ink-2">報告 ({userName(r.userId)} · {fmtDateTime(r.at)}): {r.body.slice(0, 400)}</p> : null;
-                    })()}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {open && (
-              <form action={handoffInquiry.bind(null, inq.id)} className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
-                <Field label="引き継ぎ先" required>
-                  <Select name="assigneeId" defaultValue={inq.assignedUserId ?? ""} required>
-                    <option value="">選んでください</option>
-                    {handoffUsers.map((u) => <option key={u.id} value={u.id}>{u.name} ({storeName(u.storeId)})</option>)}
-                  </Select>
-                </Field>
-                <Field label="期限"><Input type="date" name="dueDate" defaultValue={toDateKey(new Date())} /></Field>
-                <Field label="引き継ぐ内容" className="@xl:col-span-2" required><Textarea name="note" required placeholder="例: 6畳の表替えのご相談。明日の午前中に折返しを希望されています。" /></Field>
-                <div className="@xl:col-span-2"><Button type="submit" size="sm">引き継ぐ</Button></div>
-              </form>
-            )}
-          </Card>
-
           <CasePlanCard recordType="inquiry" recordId={inq.id} user={user} />
           <CaseScheduleCard
             events={events}
@@ -194,9 +250,9 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             today={toDateKey(new Date())}
             newParams={caseParam}
             returnTo={`/inquiries/${inq.id}`}
-            quickKinds={order ? ["pickup", "delivery", "install", "site", "visit"] : ["survey", "onsite_quote", "measure", "visit"]}
-            canAdd={(open || Boolean(order)) && canAccessStore(user, inq.storeId)}
-            emptyText={open ? "まだ予定はありません。現地調査・採寸の日程が決まったら登録してください (未対応の問い合わせは「対応中」になります)" : "予定はありません"}
+            quickKinds={order ? ["pickup", "delivery", "install", "site", "visit"] : ["survey", "onsite_quote", "site_survey", "measure", "visit"]}
+            canAdd={(Boolean(quote) || Boolean(order)) && canAccessStore(user, inq.storeId)}
+            emptyText={open && !quote ? "まだ予定はありません。日程が決まったら上の「日程を登録」で入れてください (予定表に自動で載ります)" : "予定はありません"}
             description="現地調査・採寸・顧客訪問を担当者つきで登録すると、店舗の共通カレンダーに自動で反映されます。見積・受注に進んでも同じ案件の予定として引き継がれます"
           />
 
@@ -344,16 +400,6 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                 </form>
               </div>
             )}
-          </Card>
-          <Card>
-            <CardHeader title="この案件の進行" />
-            <ol className="space-y-2 text-sm">
-              <li className="flex items-center gap-2"><Badge tone="good">1</Badge> 問い合わせ <span className="text-xs text-ink-3">{fmtDate(inq.receivedAt)}</span></li>
-              <li className="flex items-center gap-2"><Badge tone={quote ? "good" : "neutral"}>2</Badge> 見積 {quote ? <Link href={`/quotes/${quote.id}`} className="text-accent hover:underline">{quote.number}</Link> : <span className="text-xs text-ink-3">未作成</span>}{quote && <StatusBadge value={quote.status} map={QUOTE_STATUS} />}</li>
-              <li className="flex items-center gap-2"><Badge tone={order ? "good" : "neutral"}>3</Badge> 受注・施工 {order ? <Link href={`/orders/${order.id}`} className="text-accent hover:underline">{order.number}</Link> : <span className="text-xs text-ink-3">-</span>}{order && <StatusBadge value={order.status} map={ORDER_STATUS} />}</li>
-              <li className="flex items-center gap-2"><Badge tone={order?.invoiceId ? "good" : "neutral"}>4</Badge> 請求・入金 {order?.invoiceId ? <Link href={`/invoices/${order.invoiceId}`} className="text-accent hover:underline">請求書</Link> : <span className="text-xs text-ink-3">-</span>}</li>
-            </ol>
-            {quote && <p className="mt-3 text-xs text-ink-3">見積金額 {yen(quote.total)} (税込)</p>}
           </Card>
           <Card>
             <CardHeader title="変更履歴" />

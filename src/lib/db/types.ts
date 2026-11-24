@@ -210,6 +210,19 @@ export interface Inquiry {
   promotionId?: string;
   /** 既存の AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) から受け取った項目 (src/lib/ai-intake.ts)。顧客の登録・重複の確認に使う */
   intake?: InquiryIntake;
+  /** お客様都合で日程未定 (お客様のご要望 2026-11-24「⑤」。次回の連絡予定日。予定を登録すると外す。src/lib/inquiry-flow.ts) */
+  scheduleHold?: InquiryScheduleHold;
+}
+
+export interface InquiryScheduleHold {
+  at: string;
+  by: string;
+  /** 理由 (既定「お客様都合により日程未定」) */
+  reason: string;
+  /** 次回の連絡予定日 (YYYY-MM-DD) */
+  nextContact?: string;
+  /** 連絡予定日の知らせを送った日 */
+  remindedOn?: string;
 }
 
 /** AI 受付で受け取った項目 (受け取ったまま。電話番号だけ国内の形にそろえる) */
@@ -917,6 +930,15 @@ export interface Thread {
   assigneeIds?: string[];
   /** 業務依頼の期限 */
   dueDate?: string;
+  /** 期限の日時 (本日 12 時まで・本日中・明日中・日時を指定。src/lib/inquiry-flow.ts)。過ぎたら自動で再通知する */
+  dueAt?: string;
+  /** 依頼先の店舗 (担当者を決めずに店舗へ依頼したとき。依頼先 assigneeIds は店舗のメンバー) */
+  assigneeStoreId?: StoreId;
+  /** 依頼の種類 (schedule = 訪問日程の打ち合わせ / contact = お客様へ連絡 / other) */
+  purpose?: "schedule" | "contact" | "other";
+  /** 期限を過ぎたときの自動の再通知 (最後の日時・回数) */
+  remindedAt?: string;
+  remindCount?: number;
   taskStatus?: TaskStatus;
   acknowledgedAt?: string;
   reportedAt?: string;
@@ -1035,8 +1057,11 @@ export interface Delivery {
  * - 社内・その他の予定: 案件と関係なく自由に登録する (会議〜その他)
  */
 export type ScheduleKind =
+  /** 見積り (お客様のお宅で見積もり。お客様の言い方の「見積」「見積予定」) */
   | "survey"
-  /** 現場見積 (現見): 現場で見積もりをして、そのまま工事に移る (お客様のご要望 2026-11-24「■2」。通常の見積り (現地調査) と分けて表示) */
+  /** 現地調査 (現調。工事の前に現場を調べる。お客様のご要望 2026-11-24「■ 問い合わせ受付後の業務フロー ③」= 見積・現見・現調を分ける) */
+  | "site_survey"
+  /** 現場見積 (現見): 現場で見積もりをして、そのまま工事に移る (お客様のご要望 2026-11-24「■2」。通常の見積り・現地調査と分けて表示) */
   | "onsite_quote"
   | "measure"
   | "pickup"

@@ -67,7 +67,7 @@ export const emptyUnits = (): Units => ({ tatamiOmote: 0, tatamiNew: 0, fusumaRe
 /** 作業日報の欄: 引取 / 納品 / 見積 (現地調査・採寸) / 施工 */
 export type LineKind = "pickup" | "delivery" | "survey" | "install";
 export const LINE_KIND_LABEL: Record<LineKind, string> = { pickup: "引取", delivery: "納品", survey: "見積", install: "施工" };
-export const LINE_KIND_OF: Partial<Record<ScheduleKind, LineKind>> = { pickup: "pickup", delivery: "delivery", survey: "survey", onsite_quote: "survey", measure: "survey", install: "install" };
+export const LINE_KIND_OF: Partial<Record<ScheduleKind, LineKind>> = { pickup: "pickup", delivery: "delivery", survey: "survey", site_survey: "survey", onsite_quote: "survey", measure: "survey", install: "install" };
 
 export interface WorkLine {
   eventId: string;

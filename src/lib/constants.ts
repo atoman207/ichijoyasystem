@@ -271,7 +271,8 @@ export const SCHEDULE_GROUP_LABEL: Record<ScheduleGroup, string> = {
  * survey は見積り (現地調査・見積) の予定 (お客様の言い方は「見積予定」)
  */
 export const SCHEDULE_KIND: Record<ScheduleKind, { label: string; short: string; tone: Tone; group: ScheduleGroup; minutes: number }> = {
-  survey: { label: "見積り (現地調査)", short: "見積り", tone: "info", group: "case", minutes: 60 },
+  survey: { label: "見積り", short: "見積", tone: "info", group: "case", minutes: 60 },
+  site_survey: { label: "現地調査 (現調)", short: "現調", tone: "info", group: "case", minutes: 60 },
   onsite_quote: { label: "現場見積 (現見)", short: "現見", tone: "info", group: "case", minutes: 120 },
   measure: { label: "採寸", short: "採寸", tone: "info", group: "case", minutes: 60 },
   pickup: { label: "引き取り", short: "引取", tone: "warn", group: "case", minutes: 60 },

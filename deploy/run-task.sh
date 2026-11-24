@@ -4,6 +4,7 @@
 #   fax:            FAX の定期処理 (送信の状態の確認・通信エラーの自動の再送・AI の判定待ちの読み直し)。FAX_PROVIDER が未設定なら何もしない
 #   chatbot-eval:   AI アシスタントの精度の評価 (正解付きの質問を AI に聞いて採点する。結果は AI アシスタント →「品質・費用」)
 #   survey-workbook: お客様アンケート集計表 (Google スプレッドシート) の同期。KPI → スプレッドシートの取込 で「定期の同期」がオンのときだけ取り込む
+#   inquiry-followup: 期限を過ぎた問い合わせの依頼の再通知 (日本時間 8〜20 時だけ送る)
 #   health:         /api/health を確かめ、2 回続けて応答がなければアプリを再起動する
 set -uo pipefail
 ENV_FILE=/etc/ichijoya/ichijoya.env
@@ -47,6 +48,15 @@ case "${1:-}" in
     [[ -n "${CRON_SECRET:-}" ]] || { echo "[$(date '+%F %T')] CRON_SECRET が未設定"; exit 1; }
     out=$(curl -sS -m 60 -X POST -H "Authorization: Bearer $CRON_SECRET" "$DATA_BASE/api/cron/survey-workbook")
     echo "[$(date '+%F %T')] survey-workbook: $out"
+    ;;
+  inquiry-followup)
+    # 期限を過ぎた問い合わせの依頼の再通知 (src/lib/inquiry-followup.ts。画面を開いている社員がいるときは画面の読み込みからも動く)
+    # shellcheck source=deploy/lib.sh
+    . "$(dirname "$(readlink -f "$0")")/lib.sh"
+    load_env "$ENV_FILE" || exit 1
+    [[ -n "${CRON_SECRET:-}" ]] || { echo "[$(date '+%F %T')] CRON_SECRET が未設定"; exit 1; }
+    out=$(curl -sS -m 60 -X POST -H "Authorization: Bearer $CRON_SECRET" "$DATA_BASE/api/cron/inquiry-followup")
+    echo "[$(date '+%F %T')] inquiry-followup: $out"
     ;;
   health)
     if curl -fsS -m 20 "$BASE/api/health" >/dev/null 2>&1; then exit 0; fi
