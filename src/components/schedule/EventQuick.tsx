@@ -60,7 +60,8 @@ function EventQuickDialog({ id, returnTo, onClose }: { id: string; returnTo: str
       .then(async (res) => {
         const body = (await res.json().catch(() => null)) as (EventQuickData & { error?: string }) | null;
         if (!alive) return;
-        if (!res.ok || !body || body.error) setError(body?.error ?? "予定を読み込めませんでした。");
+        if (res.redirected || res.status === 401) setError("ログインが切れました。画面を読み込み直してください。");
+        else if (!res.ok || !body || body.error) setError(body?.error ?? "予定を読み込めませんでした。");
         else setData(body);
       })
       .catch(() => alive && setError("予定を読み込めませんでした (通信を確かめてください)。"));

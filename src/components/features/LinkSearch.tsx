@@ -31,7 +31,9 @@ function useSearch<T>(endpoint: string, initial: T[] = [], initialQuery = "") {
         const res = await fetch(`${endpoint}${endpoint.includes("?") ? "&" : "?"}q=${encodeURIComponent(term)}`, { cache: "no-store" });
         const body = (await res.json().catch(() => null)) as { items?: T[]; error?: string } | null;
         if (my !== seq.current) return;
-        if (!res.ok) throw new Error(body?.error === "unauthorized" ? "ログインし直してください。" : "検索できませんでした。");
+        // ログインが切れているとログインの画面に回される (JSON でない)
+        if (res.redirected || !body || res.status === 401) throw new Error("ログインが切れました。画面を読み込み直してください。");
+        if (!res.ok) throw new Error("検索できませんでした。");
         setItems(body?.items ?? []);
         setError("");
       } catch (err) {
