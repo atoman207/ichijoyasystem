@@ -6,6 +6,8 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
+import { staffForStore } from "@/lib/staff-choices";
+import { areaStoreOf } from "@/lib/store-area";
 import { canAccessStore, canEditCaseStore, canSeeAllStores, canViewAuditEntry } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
 import { clearInquiryScheduleHold, linkInquiryFromForm, mergeInquiryIntoCase, registerCustomerFromInquiry, requestInquiry, setInquiryScheduleHold, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
@@ -53,7 +55,10 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const quote = db.quotes.find((q) => q.id === inq.quoteId);
   const order = quote ? db.orders.find((o) => o.quoteId === quote.id) : undefined;
   const store = db.stores.find((s) => s.id === inq.storeId);
-  const users = db.users.filter((u) => u.active && (canSeeAllStores(user) || u.storeId === inq.storeId));
+  // 担当者の選択肢: 担当店舗の社員 + 本部の社員 (全店舗共通。お客様のご要望 2026-11-24「④」)
+  const users = canSeeAllStores(user) ? db.users.filter((u) => u.active) : staffForStore(db, inq.storeId, [inq.assignedUserId]);
+  // 住所 (お客様の住所・受付で聞いた住所) の担当エリアの店舗 (お客様のご要望 2026-11-24「③」。src/lib/store-area.ts)
+  const areaStore = areaStoreOf(db, inquiryContact(inq, customer).address);
   const isAiChannel = (ch: string) => ch === "ai_phone" || ch === "ai_chat" || ch === "ai_voice";
   // 受付 (メモの写真・話して入力・通話の文字起こし。src/lib/reception.ts) から登録した問い合わせ
   const receptionId = inq.sourceRef?.startsWith("reception:") ? inq.sourceRef.slice("reception:".length) : undefined;
@@ -337,9 +342,16 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                   {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </Select>
               </Field>
-              <Field label="担当店舗" hint="本部・他店舗で受けた問い合わせは、担当の店舗へ回せます (担当者は回した先で決めます)">
+              <Field
+                label="担当店舗 (施工・売上計上の店舗)"
+                hint={
+                  areaStore
+                    ? `住所の担当エリア: ${areaStore.storeName} (「${areaStore.town}」の地域)${areaStore.storeId !== inq.storeId ? "。今の担当店舗と違います (必要なら変更してください)" : ""}`
+                    : "本部・他店舗で受けた問い合わせは、担当の店舗へ回せます (担当者は回した先で決めます)"
+                }
+              >
                 <Select name="storeId" defaultValue={inq.storeId}>
-                  {db.stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  {db.stores.map((s) => <option key={s.id} value={s.id}>{s.name}{s.id === areaStore?.storeId ? " (住所の担当エリア)" : ""}</option>)}
                 </Select>
               </Field>
               <Field label="種別">

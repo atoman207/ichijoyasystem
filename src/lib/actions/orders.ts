@@ -168,6 +168,7 @@ export async function createInvoiceFromOrder(id: string, formData: FormData) {
       title: o.title,
       items,
       taxIncluded: q && q.total === o.total ? q.taxIncluded : undefined,
+      taxExempt: q && q.total === o.total ? q.taxExempt : undefined,
       notes,
       createdBy: user.id,
       createdAt: now,

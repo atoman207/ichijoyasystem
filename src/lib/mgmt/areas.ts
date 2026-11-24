@@ -111,10 +111,15 @@ export function planAreaImport(db: Pick<Database, "stores">, input: { store: str
 }
 
 /**
- * 取り込んだ地域一覧で置き換える (mutate の中で呼ぶ)。前に取り込んだ行・手で足した行は、適用開始日の前日で閉じる
+ * 取り込んだ地域一覧で置き換える (mutate の中で呼ぶ)。前に取り込んだ行は、適用開始日の前日で閉じる。
+ * 手で足した行 (地域一覧にない地域。お客様のご指示 2026-11-24「③」の郡・市など) は残す (同じ地域を取り込んだときだけ閉じる)
  */
 export function applyAreaImport(db: Database, plan: AreaImportPlan, validFrom: string, userId: string, now: string, makeId: () => string, sourceName: string): number {
-  for (const a of db.salesAreas) if (!a.validTo || a.validTo >= validFrom) a.validTo = a.validFrom >= validFrom ? prevDay(a.validFrom) : prevDay(validFrom);
+  const imported = new Set(plan.rows.map((r) => r.town));
+  for (const a of db.salesAreas) {
+    if (a.source === "manual" && !imported.has(a.town.replace(/[\s　]/g, ""))) continue;
+    if (!a.validTo || a.validTo >= validFrom) a.validTo = a.validFrom >= validFrom ? prevDay(a.validFrom) : prevDay(validFrom);
+  }
   for (const r of plan.rows) {
     db.salesAreas.push({ id: makeId(), municipality: "", town: r.town, storeId: r.storeId, validFrom, source: "import", sourceRef: `${sourceName} ${r.sourceRef}`, createdBy: userId, createdAt: now });
   }

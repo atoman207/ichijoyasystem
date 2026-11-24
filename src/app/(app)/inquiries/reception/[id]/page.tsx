@@ -28,6 +28,8 @@ import {
 import { providerLabel } from "@/lib/reception-docs";
 import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { ReceptionReview, type ReviewCase, type ReviewCustomer } from "@/components/reception/ReceptionReview";
+import { areaStoreOf } from "@/lib/store-area";
+import { isCommonStaff } from "@/lib/staff-choices";
 import { Badge, Card, CardHeader, Dl, Flash, Note, PageHeader } from "@/components/ui";
 
 const KIND_LABEL: Record<CaseCandidate["type"], string> = { inquiry: "問い合わせ", quote: "見積", order: "受注" };
@@ -73,12 +75,17 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
     const cases: ReviewCase[] = list.slice(0, 20).map((c) => ({ key: caseKey(c), number: c.number, kindLabel: KIND_LABEL[c.type], title: c.title, statusLabel: c.statusLabel, date: c.date, href: c.href, open: c.open, reason: c.reason, customerId: c.customerId, customerName: custName(c.customerId), ownerId: c.ownerId }));
     const matchedSuppliers = new Set(m.suppliers.map((s) => s.id));
     const suppliers = [...m.suppliers, ...db.suppliers.filter((s) => !matchedSuppliers.has(s.id))].slice(0, 400).map((s) => ({ id: s.id, name: s.name, matched: matchedSuppliers.has(s.id) }));
+    // 担当店舗: 住所 (読み取った住所 → 候補のお客様の住所) の担当エリア > お客様の店舗 > 受付の店舗 (お客様のご要望 2026-11-24「③」。src/lib/store-area.ts)
+    const suggested = m.customers.find((c) => c.customer.id === m.suggestion.customerId)?.customer;
+    const custStore = suggested?.storeId;
+    const area = areaStoreOf(db, f.address || suggested?.address);
+    const target = area?.storeId ?? custStore ?? doc.storeId;
+    const storeChoices = allStores ? db.stores.map((s) => s.id) : [...new Set([user.storeId, target, ...(area ? [area.storeId] : [])])];
+    // 担当者の選択肢: 自店舗・担当店舗の社員 + 本部の社員 (全店舗共通。お客様のご要望 2026-11-24「④」)
     const users = db.users
-      .filter((u) => u.active && (allStores || u.storeId === user.storeId || u.role === "admin" || u.role === "hq_staff"))
+      .filter((u) => u.active && (allStores || u.storeId === user.storeId || u.storeId === target || u.role === "admin" || u.role === "hq_staff" || isCommonStaff(db, u)))
       .map((u) => ({ id: u.id, label: `${u.name} (${storeName(u.storeId)}${u.title ? `・${u.title}` : ""})` }));
     // 担当者の初期値: 自分の店舗の受付は自分。本部などがほかの店舗の受付を登録するときは、その店舗の店長
-    const custStore = m.customers.find((c) => c.customer.id === m.suggestion.customerId)?.customer.storeId;
-    const target = custStore ?? doc.storeId;
     const manager = db.stores.find((s) => s.id === target)?.managerUserId;
     const defaultAssigneeId = target !== user.storeId && manager && db.users.some((u) => u.id === manager && u.active) ? manager : user.id;
     const mapped = mapMediaText(readMediaRules(db).rules, f.mediaText);
@@ -99,6 +106,8 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
         stores={db.stores.map((s) => ({ id: s.id, name: s.name }))}
         storeId={target}
         canChooseStore={allStores}
+        storeChoices={storeChoices}
+        areaStore={area ? { id: area.storeId, name: area.storeName, town: area.town } : undefined}
         currentUserId={user.id}
         defaultAssigneeId={defaultAssigneeId}
         mediaDefault={mediaDefault}

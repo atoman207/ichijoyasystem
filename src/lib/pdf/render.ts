@@ -382,6 +382,8 @@ interface Sums {
   total: number;
   /** 単価・小計が税込 (消費税は内税として表示) */
   taxIncluded?: boolean;
+  /** 非課税 (消費税 0。「非課税」と表示) */
+  taxExempt?: boolean;
 }
 
 const TOTALS_W = 236;
@@ -400,9 +402,9 @@ function totalsHeight(sums: Sums, breakdown: boolean): number {
 /** 小計・値引き・消費税・合計 (請求書は税率別内訳も)。下端を返す */
 function drawTotals(s: Sheet, x: number, top: number, width: number, sums: Sums, breakdown: boolean): number {
   const labelW = 104;
-  const rows: [string, string][] = [[sums.taxIncluded ? "小計 (税込)" : "小計", fmtYen(sums.subtotal)]];
+  const rows: [string, string][] = [[sums.taxIncluded && !sums.taxExempt ? "小計 (税込)" : "小計", fmtYen(sums.subtotal)]];
   if (sums.discount > 0) rows.push(["値引き", fmtYen(-sums.discount)]);
-  rows.push([sums.taxIncluded ? "うち消費税 (10%)" : "消費税 (10%)", fmtYen(sums.tax)]);
+  rows.push(sums.taxExempt ? ["消費税", "非課税"] : [sums.taxIncluded ? "うち消費税 (10%)" : "消費税 (10%)", fmtYen(sums.tax)]);
   let t = top;
   for (const [label, value] of rows) {
     s.rect(x, t, labelW, TOTAL_ROW_H, { fill: C.fill });
@@ -412,7 +414,7 @@ function drawTotals(s: Sheet, x: number, top: number, width: number, sums: Sums,
     s.hline(x, x + width, t, { width: 0.4, color: C.ruleLight });
   }
   s.rect(x, t, labelW, GRAND_H, { fill: C.ink });
-  s.text(sums.taxIncluded ? "合計 (税込)" : "合計", x + 8, centerBaseline(t, GRAND_H, 10), { size: 10, weight: "bold", color: C.white });
+  s.text(sums.taxExempt ? "合計 (非課税)" : sums.taxIncluded ? "合計 (税込)" : "合計", x + 8, centerBaseline(t, GRAND_H, 10), { size: 10, weight: "bold", color: C.white });
   s.text(fmtYen(sums.total), x + width - 8, centerBaseline(t, GRAND_H, 12.5), {
     size: 12.5,
     weight: "bold",
@@ -423,16 +425,16 @@ function drawTotals(s: Sheet, x: number, top: number, width: number, sums: Sums,
   s.hline(x, x + width, t, { width: 0.8, color: C.ink });
   s.rect(x, top, width, t + GRAND_H - top, { stroke: C.ink, lineWidth: 0.8 });
   t += GRAND_H;
-  if (breakdown) t = drawTaxBreakdown(s, x, t + BREAKDOWN_GAP, width, sums.taxIncluded ? sums.total - sums.tax : sums.subtotal - sums.discount, sums.tax);
+  if (breakdown) t = sums.taxExempt ? drawTaxBreakdown(s, x, t + BREAKDOWN_GAP, width, sums.total, 0, "非課税") : drawTaxBreakdown(s, x, t + BREAKDOWN_GAP, width, sums.taxIncluded ? sums.total - sums.tax : sums.subtotal - sums.discount, sums.tax);
   return t;
 }
 
 /** 適格請求書の税率別内訳: 10% 対象の金額 (税抜) と消費税額。下端を返す */
-function drawTaxBreakdown(s: Sheet, x: number, top: number, width: number, taxable: number, tax: number): number {
+function drawTaxBreakdown(s: Sheet, x: number, top: number, width: number, taxable: number, tax: number, kind: "10%対象" | "非課税" = "10%対象"): number {
   const first = 62;
   const widths = [first, (width - first) * 0.55, (width - first) * 0.45];
-  const heads = ["税率区分", "対象金額 (税抜)", "消費税額"];
-  const values = ["10%対象", fmtYen(taxable), fmtYen(tax)];
+  const heads = ["税率区分", kind === "非課税" ? "対象金額" : "対象金額 (税抜)", "消費税額"];
+  const values = [kind, fmtYen(taxable), kind === "非課税" ? "-" : fmtYen(tax)];
   const rowTop = top + BREAKDOWN_HEAD_H;
   s.rect(x, top, width, BREAKDOWN_HEAD_H, { fill: C.fill });
   let cx = x;
@@ -535,9 +537,9 @@ export async function renderQuotePdf(data: QuotePdfData): Promise<Uint8Array> {
       staffName: data.staffName,
     }) + 18;
 
-  itemsTable(s, data.items ?? [], Boolean(data.taxIncluded));
+  itemsTable(s, data.items ?? [], Boolean(data.taxIncluded) && !data.taxExempt);
 
-  const sums: Sums = { subtotal: num(data.subtotal), discount: num(data.discount), tax: num(data.tax), total: num(data.total), taxIncluded: Boolean(data.taxIncluded) };
+  const sums: Sums = { subtotal: num(data.subtotal), discount: num(data.discount), tax: num(data.tax), total: num(data.total), taxIncluded: Boolean(data.taxIncluded), taxExempt: Boolean(data.taxExempt) };
   s.y += 12;
   s.ensure(totalsHeight(sums, false));
   s.y = drawTotals(s, RIGHT - TOTALS_W, s.y, TOTALS_W, sums, false);
@@ -602,10 +604,10 @@ export async function renderInvoicePdf(data: InvoicePdfData): Promise<Uint8Array
       company: data.company,
     }) + 18;
 
-  itemsTable(s, data.items ?? [], Boolean(data.taxIncluded));
+  itemsTable(s, data.items ?? [], Boolean(data.taxIncluded) && !data.taxExempt);
 
   // 合計・税率別内訳 (右) とお振込先 (左) を並べる
-  const sums: Sums = { subtotal: num(data.subtotal), discount: num(data.discount), tax: num(data.tax), total, taxIncluded: Boolean(data.taxIncluded) };
+  const sums: Sums = { subtotal: num(data.subtotal), discount: num(data.discount), tax: num(data.tax), total, taxIncluded: Boolean(data.taxIncluded), taxExempt: Boolean(data.taxExempt) };
   const banks = (data.company.bankAccounts ?? []).filter((b) => b && (s.ts.clean(b.bank) || s.ts.clean(b.number)));
   const height = Math.max(bankHeight(banks.length), totalsHeight(sums, true));
   s.y += 12;
@@ -642,8 +644,15 @@ function receiptAmountBox(s: Sheet, x: number, top: number, width: number, amoun
 function receiptDetails(s: Sheet, x: number, top: number, width: number, data: ReceiptPdfData): number {
   let t = sectionHeading(s, x, top, width, "内訳");
   const rows: [string, string][] = [
-    ["税抜金額", fmtYen(num(data.taxable))],
-    ["消費税額 (10%)", fmtYen(num(data.tax))],
+    ...((data.taxExempt
+      ? [
+          ["非課税", fmtYen(num(data.taxable))],
+          ["消費税額", "-"],
+        ]
+      : [
+          ["税抜金額", fmtYen(num(data.taxable))],
+          ["消費税額 (10%)", fmtYen(num(data.tax))],
+        ]) as [string, string][]),
   ];
   for (const [label, value] of rows) {
     t += 16;

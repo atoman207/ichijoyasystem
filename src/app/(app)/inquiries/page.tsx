@@ -124,52 +124,28 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
       <Table>
         <thead>
           <tr>
-            <Th>受付日時</Th>
-            <Th>入口</Th>
-            <Th>媒体</Th>
-            <Th>お客様</Th>
-            <Th>電話</Th>
+            {/* 列の順 (お客様のご要望 2026-11-24「⑨」): 対応状況 → お客様名 → 住所 → 電話 → 内容 → 店舗 → 担当 → 入口 → 媒体 → 受付日時 → 次のアクション。種別は内容の下に */}
+            <Th>対応状況</Th>
+            <Th>お客様名</Th>
             <Th>住所</Th>
+            <Th>電話</Th>
             <Th>内容</Th>
-            <Th>種別</Th>
             <Th>店舗</Th>
             <Th>担当</Th>
-            <Th>対応状況</Th>
+            <Th>入口</Th>
+            <Th>媒体</Th>
+            <Th>受付日時</Th>
             <Th>次のアクション</Th>
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={12} />}
+          {rows.length === 0 && <EmptyRow colSpan={11} />}
           {paged.items.map((i) => {
             const customer = i.customerId ? customerMap.get(i.customerId) : undefined;
             const ct = contactOf(i);
             const overdue = i.nextActionDue && i.nextActionDue < today && ["new", "in_progress"].includes(i.status);
             return (
               <Tr key={i.id}>
-                <Td className="text-xs text-ink-2 tnum">{fmtDateTime(i.receivedAt)}<div className="font-mono text-[10px] text-ink-3">{i.number}</div></Td>
-                <Td><ChannelTag channel={i.channel} /></Td>
-                <Td>{mediaOf.get(i.id) && <MediaTag {...mediaOf.get(i.id)!} />}</Td>
-                <Td>
-                  {customer ? (
-                    <span>
-                      <Link href={`/customers/${customer.id}`} className="hover:text-accent">{customer.name}</Link>
-                      {isPlaceholderCustomer(customer) && (
-                        <Link href={`/inquiries/${i.id}#link-customer`} className="ml-1 text-[10px] text-warn-ink hover:underline">(仮・紐づける)</Link>
-                      )}
-                    </span>
-                  ) : (
-                    <span>
-                      {i.contactName}{" "}
-                      <Link href={`/inquiries/${i.id}#link-customer`} className="text-[10px] text-accent hover:underline">(未登録・紐づける)</Link>
-                    </span>
-                  )}
-                </Td>
-                <Td className="text-xs whitespace-nowrap text-ink-2 tnum">{ct.phone ? <a href={`tel:${ct.phone.replace(/[^0-9+]/g, "")}`} className="hover:text-accent">{ct.phone}</a> : <span className="text-ink-3">-</span>}</Td>
-                <Td className="max-w-[14rem] text-xs text-ink-2">{ct.address ? <span className="line-clamp-2">{ct.address}</span> : <span className="text-ink-3">-</span>}</Td>
-                <Td><Link href={`/inquiries/${i.id}`} className="font-medium text-ink hover:text-accent">{i.summary}</Link></Td>
-                <Td className="text-xs text-ink-2">{CATEGORY_LABEL[i.category]}</Td>
-                <Td><StoreTag store={storeMap.get(i.storeId)} short /></Td>
-                <Td className="text-xs text-ink-2">{userName(i.assignedUserId)}</Td>
                 <Td className="min-w-[10rem]">
                   {(() => {
                     const f = flowOf.get(i.id);
@@ -188,6 +164,29 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
                     );
                   })()}
                 </Td>
+                <Td>
+                  {customer ? (
+                    <span>
+                      <Link href={`/customers/${customer.id}`} className="hover:text-accent">{customer.name}</Link>
+                      {isPlaceholderCustomer(customer) && (
+                        <Link href={`/inquiries/${i.id}#link-customer`} className="ml-1 text-[10px] text-warn-ink hover:underline">(仮・紐づける)</Link>
+                      )}
+                    </span>
+                  ) : (
+                    <span>
+                      {i.contactName}{" "}
+                      <Link href={`/inquiries/${i.id}#link-customer`} className="text-[10px] text-accent hover:underline">(未登録・紐づける)</Link>
+                    </span>
+                  )}
+                </Td>
+                <Td className="max-w-[14rem] text-xs text-ink-2">{ct.address ? <span className="line-clamp-2">{ct.address}</span> : <span className="text-ink-3">-</span>}</Td>
+                <Td className="text-xs whitespace-nowrap text-ink-2 tnum">{ct.phone ? <a href={`tel:${ct.phone.replace(/[^0-9+]/g, "")}`} className="hover:text-accent">{ct.phone}</a> : <span className="text-ink-3">-</span>}</Td>
+                <Td className="min-w-[10rem]"><Link href={`/inquiries/${i.id}`} className="font-medium text-ink hover:text-accent">{i.summary}</Link><div className="text-[10px] text-ink-3">{CATEGORY_LABEL[i.category]}</div></Td>
+                <Td><StoreTag store={storeMap.get(i.storeId)} short /></Td>
+                <Td className="text-xs text-ink-2">{userName(i.assignedUserId)}</Td>
+                <Td><ChannelTag channel={i.channel} /></Td>
+                <Td>{mediaOf.get(i.id) && <MediaTag {...mediaOf.get(i.id)!} />}</Td>
+                <Td className="text-xs text-ink-2 tnum">{fmtDateTime(i.receivedAt)}<div className="font-mono text-[10px] text-ink-3">{i.number}</div></Td>
                 <Td className="text-xs">
                   {i.nextAction ? (
                     <span className={overdue ? "text-critical" : "text-ink-2"}>{i.nextAction}{i.nextActionDue && <span className="ml-1 tnum">({fmtDate(i.nextActionDue)}{overdue ? " 期限超過" : ""})</span>}</span>

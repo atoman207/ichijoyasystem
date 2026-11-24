@@ -1,10 +1,12 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
+import { staffForStore } from "@/lib/staff-choices";
 import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { customerOptions } from "@/lib/db/queries";
 import { createInquiry } from "@/lib/actions/inquiries";
 import { CustomerSearch } from "@/components/features/CustomerSearch";
+import { AreaStoreFields } from "@/components/features/AreaStoreFields";
 import { DuplicateWatcher } from "@/components/features/DuplicateWatcher";
 import { checkCustomerDuplicates } from "@/lib/actions/customers";
 import { customerOptionLabel } from "@/lib/duplicates";
@@ -20,7 +22,8 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
   // 選べるお客様: 自店舗 (全店舗ロールは全店舗)、店長は全店舗 (permissions.ts の canEditCaseStore)。受付店舗は自店舗のまま
   const choices = customerOptions(db.customers.filter((c) => canEditCaseStore(user, c.storeId)), cq, customerId);
   const customers = choices.options;
-  const users = db.users.filter((u) => u.active && (allStores || u.storeId === user.storeId));
+  // 担当者の選択肢: 自店舗の社員 + 本部の社員 (全店舗共通。お客様のご要望 2026-11-24「④」)
+  const users = allStores ? db.users.filter((u) => u.active) : staffForStore(db, user.storeId);
   const promotions = promotionOptions(db.promotions ?? [], (sid) => sid === "hq" || canAccessStore(user, sid));
   return (
     <div className="max-w-3xl">
@@ -68,11 +71,8 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
                 ))}
               </Select>
             </Field>
-            <Field label="受付店舗">
-              <Select name="storeId" defaultValue={user.storeId} disabled={!allStores}>
-                {db.stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </Select>
-            </Field>
+            {/* 住所から担当店舗 (施工・売上計上の店舗) を自動で選ぶ (お客様のご要望 2026-11-24「③」)。手で変えられる */}
+            <AreaStoreFields stores={db.stores.map((s) => ({ id: s.id, name: s.name }))} defaultStoreId={user.storeId} canChooseAny={allStores} hint="町名まで入れると担当店舗が決まります (番地はあとからでも可)" />
             <Field label="担当者">
               <Select name="assignedUserId" defaultValue={user.id}>
                 {users.map((u) => <option key={u.id} value={u.id}>{u.name} ({u.title})</option>)}

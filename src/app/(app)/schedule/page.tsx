@@ -23,6 +23,7 @@ import { holidayResolver } from "@/lib/holiday-calendar";
 import { expireHoldsNow } from "@/lib/actions/scheduling";
 import { eventLabeler } from "@/lib/schedule-label";
 import { EventQuickHost } from "@/components/schedule/EventQuick";
+import { initialsByUser } from "@/lib/schedule-sheet/initials";
 
 type View = "month" | "week" | "staff" | "day" | "list";
 
@@ -137,11 +138,13 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   const production = productionRows(db, { from, to, today }).filter((r) => !storeFilter || r.storeId === storeFilter);
   const productionDays = productionByDay(production.filter((r) => r.date && r.date >= from && r.date <= to));
   const productionHref = (d: string) => `/schedule/production?date=${d}&days=1${storeFilter ? `&store=${storeFilter}` : ""}`;
+  // 担当者の略称 (予定表のスプレッドシートと同じ 1 文字。お客様のご要望 2026-11-24「⑥」)
+  const initials = initialsByUser(db.users.filter((u) => u.active));
   const ctx: CalendarContext = {
     today,
     nowMinutes: now.getHours() * 60 + now.getMinutes(),
     stores: new Map(db.stores.map((s) => [s.id, s])),
-    users: new Map(db.users.map((u) => [u.id, { id: u.id, name: u.name, title: u.title, storeId: u.storeId }])),
+    users: new Map(db.users.map((u) => [u.id, { id: u.id, name: u.name, title: u.title, storeId: u.storeId, initial: initials.get(u.id) }])),
     byId: new Map(inRange.map((e) => [e.id, e])),
     conflicts: byEvent,
     caseOf: (e) => {
@@ -365,7 +368,8 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
           <CardHeader title="凡例・使い方" />
           <KindLegend />
           <ul className="mt-4 space-y-1.5 text-xs leading-relaxed text-ink-2">
-            <li>・<span className="font-semibold text-ink">予定を押すと、予定表の上で日時・内容・種類 (アイコン) を変えられます</span> (お客様の電話・住所もここで確かめられます)。担当者・場所は「詳しく変更」、別の画面で開くときは Ctrl (Mac は ⌘) を押しながら。</li>
+            <li>・<span className="font-semibold text-ink">予定を押すと、予定表の上で地図 (Google マップ・住宅地図)・担当者 (最大 4 名)・納品予定 (引取・現見の予定) と、日時・内容・種類 (アイコン) を変えられます</span> (お客様の電話・住所もここで確かめられます)。場所・案件は「詳しく変更」、別の画面で開くときは Ctrl (Mac は ⌘) を押しながら。</li>
+            <li>・チップの丸の文字は担当者の略称 (予定表のスプレッドシートと同じ 1 文字)、丸の色はその人の店舗の色です (ほかの店舗の応援が分かります)。丸に指を合わせると名前が出ます。</li>
             <li>・件名の頭の「（築地）」は現場の町名です (施工場所 → 問い合わせで聞いた住所 → お客様の住所。業者の案件はお客様の住所を使いません)。</li>
             <li>・予定の左の色のアイコンが種類 (引き取り・納品・見積・現調 (現地調査)・現見 (現場見積)・顧客訪問など)、その右が店舗名 (全社の表示のとき)。お客様の名前の右は仕事内容と数量です (タ = 畳・フ = 襖・シ = 障子・ア = 網戸。<span className="font-semibold text-critical-ink">(縁無)</span> はへり無し畳)。受注の見積の明細、移行した予定表の枚数、メモの「タ6フ1」から表示します。</li>
             <li>・日の見出しの「<span className="font-semibold">製 タ12</span>」はその日の畳製造予定 (押すとその日の製造予定。繰り越し・製造日未定・製造済みを記録できます)。</li>

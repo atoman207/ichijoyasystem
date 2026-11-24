@@ -2,6 +2,8 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
+import { staffForStore } from "@/lib/staff-choices";
+import { areaStoreOf } from "@/lib/store-area";
 import { canAccessStore, canEditProduction, canManageFinance, canManagePurchaseOrders, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
 import { TatamiRoomsCard } from "@/components/schedule/TatamiRoomsCard";
 import { saveOrderTatamiRooms } from "@/lib/actions/tatami-rooms";
@@ -115,7 +117,10 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const survey = db.surveys.find((x) => x.orderId === o.id);
   const issues = db.qualityIssues.filter((x) => x.orderId === o.id).sort((a, b) => b.occurredOn.localeCompare(a.occurredOn));
   const qp = kpiSettings(db).qualityPoints;
-  const staffChoices = db.users.filter((u) => u.active && (u.storeId === o.storeId || o.workerIds.includes(u.id))).sort((a, b) => Number(o.workerIds.includes(b.id)) - Number(o.workerIds.includes(a.id)));
+  // 施工担当の選択肢: 担当店舗の社員 + 本部の社員 (全店舗共通。お客様のご要望 2026-11-24「④」) + 今の担当
+  // 施工場所 (なければお客様の住所) の担当エリアの店舗 (お客様のご要望 2026-11-24「③」。担当店舗の変更の目安)
+  const orderArea = areaStoreOf(db, o.siteAddress || customer?.address);
+  const staffChoices = staffForStore(db, o.storeId, o.workerIds).sort((a, b) => Number(o.workerIds.includes(b.id)) - Number(o.workerIds.includes(a.id)));
   const AMOUNT_LABEL: [keyof NonNullable<typeof o.amounts>, string][] = [["tatami", "畳"], ["fusuma", "襖"], ["shoji", "障子"], ["amido", "網戸"], ["curtain", "カーテン"], ["cloth", "クロス・工事"], ["own", "自社商品"], ["misc", "諸経費"], ["discount", "値引"]];
 
   // 案件ごとの請求書の発行 (まとめ請求のお客様は折りたたんで出す)
@@ -615,9 +620,9 @@ export default async function OrderDetailPage({ params, searchParams }: { params
                     {(Object.keys(CATEGORY_LABEL) as (keyof typeof CATEGORY_LABEL)[]).map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
                   </Select>
                 </Field>
-                <Field label="担当店舗">
+                <Field label="担当店舗 (売上計上)" hint={orderArea ? `施工場所の担当エリア: ${orderArea.storeName}${orderArea.storeId !== o.storeId ? " (今の担当店舗と違います)" : ""}` : undefined}>
                   <Select name="storeId" defaultValue={o.storeId} disabled={!canSeeAllStores(user) || ["invoiced", "paid", "cancelled"].includes(o.status)}>
-                    {db.stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {db.stores.map((s) => <option key={s.id} value={s.id}>{s.name}{s.id === orderArea?.storeId ? " (担当エリア)" : ""}</option>)}
                   </Select>
                 </Field>
               </div>

@@ -184,6 +184,7 @@ export async function recordCollection(orderId: string, formData: FormData) {
         title: o.title,
         items: q && q.total === o.total ? q.items.map((i) => ({ ...i })) : [{ id: newId("qi"), name: o.title, qty: 1, unit: "式", unitPrice: net, amount: net }],
         taxIncluded: q && q.total === o.total ? q.taxIncluded : undefined,
+        taxExempt: q && q.total === o.total ? q.taxExempt : undefined,
         notes: "納品時に集金 (請求書の送付なし)",
         createdBy: user.id,
         createdAt: now,

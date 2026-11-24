@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
-import { addAudit, mutate, nowIso, syncDb } from "@/lib/db/store";
+import { addAudit, mutate, newId, nowIso, syncDb } from "@/lib/db/store";
 import { SYSTEM_USER } from "@/lib/notify/inbound";
 import { categoryName } from "@/lib/mgmt/categories";
 import { applyLineFixes, planLineFixes } from "@/lib/quote-line-normalize";
@@ -8,6 +8,8 @@ import { isDateKey } from "@/lib/calendar";
 import { addDays, toDateKey } from "@/lib/format";
 import { isOnsiteQuoteText, isSiteSurveyText } from "@/lib/schedule-sheet/parse";
 import { SHEET_REF_PREFIX, eventFingerprint, sheetSettings, writeSheetSettings } from "@/lib/schedule-sheet/plan";
+import { applyAreaImport, planAreaImport, storeIdOfName } from "@/lib/mgmt/areas";
+import { prevDay } from "@/lib/mgmt/rules";
 import type { Database, ScheduleKind } from "@/lib/db/types";
 
 export const runtime = "nodejs";
@@ -25,6 +27,9 @@ export const maxDuration = 60;
  *   task = schedule-kinds (旧 schedule-onsite): 予定表 (スプレッドシート) から取り込んだ「現見」「現調」の予定を、見積りから
  *     現場見積 (現見)・現地調査 (現調) にする (お客様のご要望 2026-11-24「■2」「業務フロー ③」。種類を足す前に取り込んだ予定)。
  *     from = この日以降の予定 (既定は今日)。既定は確認だけ、apply=1 で書き込み、予定ごとに変更履歴
+ *   task = sales-areas: 営業エリア (住所 → 担当店舗。お客様のご要望 2026-11-24「③」。src/lib/store-area.ts) を登録する。
+ *     本文 (JSON) = { rows: [{ store, town }] (予定表の「地域一覧」), manual: [{ store, town, note? }] (地域一覧にない地域), validFrom?, sourceName? }。
+ *     エリアは社外秘のためコードに書かず、ここで受け取る (画面では 管理会計 → 設定 → 営業エリア)。既定は確認だけ、apply=1 で書き込み、変更履歴
  */
 export async function POST(req: Request) {
   const secret = (process.env.CRON_SECRET ?? "").trim();
@@ -35,6 +40,7 @@ export async function POST(req: Request) {
   const url = new URL(req.url);
   const task = url.searchParams.get("task");
   if (task === "store-name") return storeName(url);
+  if (task === "sales-areas") return salesAreas(url, req);
   if (task === "schedule-onsite" || task === "schedule-kinds") return scheduleOnsite(url);
   if (task !== "quote-line-units") return NextResponse.json({ error: "unknown task" }, { status: 400 });
   const from = url.searchParams.get("from") ?? "";
@@ -95,6 +101,34 @@ async function storeName(url: URL) {
     addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "store", entityId: id, entityLabel: name, summary: `店舗の名前を変更 (${plan.before.name} → ${name}・略称 ${plan.before.shortName} → ${short})`, changes });
   });
   return NextResponse.json({ ok: true, applied: true, plan, at: nowIso() });
+}
+
+/** 営業エリアの登録 (地域一覧の取込 + 手で足す地域) */
+async function salesAreas(url: URL, req: Request) {
+  const apply = url.searchParams.get("apply") === "1";
+  const body = (await req.json().catch(() => null)) as { rows?: { store: string; town: string }[]; manual?: { store: string; town: string; note?: string }[]; validFrom?: string; sourceName?: string } | null;
+  if (!body || (!body.rows?.length && !body.manual?.length)) return NextResponse.json({ error: "rows か manual を JSON で送ってください" }, { status: 400 });
+  const validFrom = body.validFrom && isDateKey(body.validFrom) ? body.validFrom : toDateKey(new Date());
+  const sourceName = (body.sourceName ?? "地域一覧").slice(0, 80);
+  const db0 = await syncDb();
+  const plan = planAreaImport(db0, (body.rows ?? []).map((r, i) => ({ store: String(r.store ?? ""), town: String(r.town ?? ""), ref: `${i + 2}行目` })));
+  const manual = (body.manual ?? []).map((m) => ({ storeId: storeIdOfName(db0, String(m.store ?? "")), town: String(m.town ?? "").replace(/[\s　]/g, "").slice(0, 40), note: m.note?.slice(0, 200) }));
+  const badManual = manual.filter((m) => !m.storeId || !m.town);
+  if (badManual.length) return NextResponse.json({ error: "manual に店舗・地域の分からない行があります", badManual }, { status: 400 });
+  const summary = { validFrom, imported: plan.rows.length, byStore: plan.byStore, problems: plan.problems, manual: manual.map((m) => `${m.town} → ${m.storeId}`), before: db0.salesAreas.length };
+  if (!apply) return NextResponse.json({ ok: true, applied: false, ...summary });
+  let n = 0;
+  await mutate((db) => {
+    const now = nowIso();
+    if (plan.rows.length) n = applyAreaImport(db, plan, validFrom, SYSTEM_USER, now, () => newId("sa"), sourceName);
+    for (const m of manual) {
+      // 同じ地域の行は前日で閉じてから足す (履歴が残る)
+      for (const a of db.salesAreas) if (a.town === m.town && (!a.validTo || a.validTo >= validFrom)) a.validTo = a.validFrom >= validFrom ? prevDay(a.validFrom) : prevDay(validFrom);
+      db.salesAreas.push({ id: newId("sa"), municipality: "", town: m.town, storeId: m.storeId!, validFrom, source: "manual", note: m.note, createdBy: SYSTEM_USER, createdAt: now });
+    }
+    addAudit(db, { userId: SYSTEM_USER, action: "import", entity: "sales_area", entityId: "import", entityLabel: sourceName, summary: `営業エリアを登録: 地域一覧 ${n} 件・地域一覧にない地域 ${manual.length} 件 (${validFrom} から)` });
+  });
+  return NextResponse.json({ ok: true, applied: true, ...summary, at: nowIso() });
 }
 
 /** 予定表から取り込んだ「現見」「現調」の予定 (見積りのまま) → 直す種類 */

@@ -66,6 +66,7 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
             title: q.title,
             items: q.items,
             taxIncluded: q.taxIncluded,
+            taxExempt: q.taxExempt,
             subtotal: q.subtotal,
             discount: q.discount,
             tax: q.tax,
@@ -90,6 +91,9 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
         q.total = pc.total;
         if (pc.title !== undefined && pc.title) q.title = pc.title;
         if (pc.taxIncluded !== undefined) q.taxIncluded = pc.taxIncluded || undefined;
+        // 非課税: 申請に書かれていれば反映 (以前の申請は taxExempt がない = 変えない。内税・外税の申請なら外す)
+        if (pc.taxExempt !== undefined) q.taxExempt = pc.taxExempt || undefined;
+        else if (pc.taxIncluded) q.taxExempt = undefined;
         if (pc.workDetails !== undefined) q.workDetails = pc.workDetails || undefined;
         if (pc.notes !== undefined) q.notes = pc.notes || undefined;
         q.version += 1;

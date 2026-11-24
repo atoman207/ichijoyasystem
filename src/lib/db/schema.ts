@@ -213,6 +213,7 @@ export const TABLES: TableDef[] = [
       ["workDetails", "text"],
       ["revisions", "jsonb"],
       ["taxIncluded", "boolean"],
+      ["taxExempt", "boolean"],
       ["siteInfo", "jsonb"],
       ["paperNo", "text"],
       ["handedOver", "boolean"],
@@ -305,6 +306,7 @@ export const TABLES: TableDef[] = [
       ["title", "text"],
       ["items", "jsonb"],
       ["taxIncluded", "boolean"],
+      ["taxExempt", "boolean"],
       ["notes", "text"],
       // Phase 4: 入金予定
       ["expectedDate", "date"],

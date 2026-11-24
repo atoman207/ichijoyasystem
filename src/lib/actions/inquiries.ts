@@ -16,8 +16,10 @@ import { moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
 import { storeInquiryNotices, storeRequestNotices } from "@/lib/notify/store-line";
-import { assertCaseStore, assertStore, choice, fail, isKeyOf, requireActionUser, resolveStoreId, safeReturn, str, withMsg } from "./guards";
+import { assertCaseStore, choice, fail, isKeyOf, requireActionUser, safeReturn, str, withMsg } from "./guards";
 import { MEDIA_LABEL, isMediaKey, mapMediaText, readMediaRules } from "@/lib/media";
+import { isCommonStaff } from "@/lib/staff-choices";
+import { newCaseStore } from "@/lib/store-area";
 import type { MediaKey } from "@/lib/db/types";
 
 /** 媒体 (当社を知ったきっかけ) は必須。選択肢に「不明」がある */
@@ -53,12 +55,16 @@ export async function createInquiry(formData: FormData) {
   const media = readMedia(formData, back);
   const promotionId = str(formData, "promotionId") || undefined;
   const id = newId("inq");
+  let areaNote = "";
   await mutate((db) => {
     const customer = db.customers.find((c) => c.id === str(formData, "customerId"));
-    // 店舗のロールは自店舗のお客様だけを選べる (店長は全店舗のお客様。受付店舗は自店舗のまま)
+    // 店舗のロールは自店舗のお客様だけを選べる (店長は全店舗のお客様)
     if (customer) assertCaseStore(user, customer.storeId, back);
-    const storeId = resolveStoreId(user, str(formData, "storeId"), customer?.storeId);
-    assertStore(user, storeId, back);
+    // 担当店舗: 手で選んだ店舗 > 住所 (入力した住所 → お客様の住所) の担当エリア > お客様の店舗 > 自店舗 (お客様のご要望 2026-11-24「③」。src/lib/store-area.ts)
+    const address = str(formData, "address").slice(0, 200);
+    const pick = newCaseStore(db, user, { requested: str(formData, "storeId"), auto: str(formData, "storeAuto") === "1", address, customer });
+    const storeId = pick.storeId;
+    if (pick.byArea && pick.area && storeId !== user.storeId) areaNote = ` 住所の担当エリアのため${pick.area.storeName}の担当にしました (${pick.area.storeName}に知らせます)。`;
     const contactName = customer?.name ?? str(formData, "contactName");
     if (!contactName) fail(back, "お客様名を入力するか、既存顧客を選択してください。");
     const now = nowIso();
@@ -81,6 +87,8 @@ export async function createInquiry(formData: FormData) {
       createdBy: user.id,
       updatedAt: now,
       media,
+      // 新規のお客様の住所 (問い合わせ一覧の住所・「顧客として登録する」に使う)
+      intake: address && !customer ? { address } : undefined,
     };
     if (promotionId) {
       const promo = (db.promotions ?? []).find((p) => p.id === promotionId);
@@ -96,7 +104,7 @@ export async function createInquiry(formData: FormData) {
   });
   await notifyStoreGroup(id, user.id);
   revalidatePath("/inquiries");
-  redirect(withMsg(`/inquiries/${id}`, "問い合わせを登録しました。届いた書類・写真は下の「資料・写真」から添付できます。"));
+  redirect(withMsg(`/inquiries/${id}`, `問い合わせを登録しました。${areaNote}届いた書類・写真は下の「資料・写真」から添付できます。`));
 }
 
 export async function updateInquiry(id: string, formData: FormData) {
@@ -135,7 +143,7 @@ export async function updateInquiry(id: string, formData: FormData) {
       inq.storeId = storeId as Inquiry["storeId"];
       const assignee = db.users.find((u) => u.id === inq.assignedUserId);
       // 担当者が回した先の店舗の人でなければ外す (回した先の店舗で担当を決める)
-      if (assignee && assignee.storeId !== inq.storeId && !canSeeAllStores(assignee)) inq.assignedUserId = undefined;
+      if (assignee && assignee.storeId !== inq.storeId && !canSeeAllStores(assignee) && !isCommonStaff(db, assignee)) inq.assignedUserId = undefined;
       moved = !canEditCaseStore(user, inq.storeId);
     }
     inq.updatedAt = nowIso();

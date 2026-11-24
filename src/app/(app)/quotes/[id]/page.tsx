@@ -5,6 +5,7 @@ import { logRecordView } from "@/lib/record-views";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
+import { staffForStore } from "@/lib/staff-choices";
 import { canAccessStore, canApprove, canEditProduction, skipsApproval } from "@/lib/auth/permissions";
 import { TatamiRoomsCard } from "@/components/schedule/TatamiRoomsCard";
 import { saveQuoteTatamiRooms } from "@/lib/actions/tatami-rooms";
@@ -57,7 +58,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
   const chain = quoteChain(db, q);
   const pending = chain.approvals.find((a) => a.status === "pending" && (a.type === "quote" || a.type === "quote_amend"));
   const canDecide = pending ? canApprove(user, pending) : false;
-  const workers = db.users.filter((u) => u.active && u.storeId === q.storeId);
+  const workers = staffForStore(db, q.storeId);
   const returnTo = `/quotes/${id}`;
   const doc = db.documents.find((d) => d.id === q.documentId);
 
@@ -142,10 +143,10 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
                 ))}
               </tbody>
               <tfoot className="text-sm">
-                <tr className="border-t border-line"><td colSpan={4} className="px-5 py-1.5 text-right text-ink-2">小計 ({q.taxIncluded ? "税込" : "税抜"})</td><td className="px-5 py-1.5 text-right tnum">{yen(q.subtotal)}</td></tr>
+                <tr className="border-t border-line"><td colSpan={4} className="px-5 py-1.5 text-right text-ink-2">小計{q.taxExempt ? "" : q.taxIncluded ? " (税込)" : " (税抜)"}</td><td className="px-5 py-1.5 text-right tnum">{yen(q.subtotal)}</td></tr>
                 {q.discount > 0 && <tr><td colSpan={4} className="px-5 py-1.5 text-right text-ink-2">値引き</td><td className="px-5 py-1.5 text-right tnum">-{yen(q.discount)}</td></tr>}
-                <tr><td colSpan={4} className="px-5 py-1.5 text-right text-ink-2">{q.taxIncluded ? "うち消費税 (10%)" : "消費税 (10%)"}</td><td className="px-5 py-1.5 text-right tnum">{yen(q.tax)}</td></tr>
-                <tr className="border-t border-line font-semibold"><td colSpan={4} className="px-5 py-2 text-right">合計 (税込)</td><td className="px-5 py-2 text-right text-base tnum">{yen(q.total)}</td></tr>
+                <tr><td colSpan={4} className="px-5 py-1.5 text-right text-ink-2">{q.taxExempt ? "消費税" : q.taxIncluded ? "うち消費税 (10%)" : "消費税 (10%)"}</td><td className="px-5 py-1.5 text-right tnum">{q.taxExempt ? "非課税" : yen(q.tax)}</td></tr>
+                <tr className="border-t border-line font-semibold"><td colSpan={4} className="px-5 py-2 text-right">{q.taxExempt ? "合計 (非課税)" : "合計 (税込)"}</td><td className="px-5 py-2 text-right text-base tnum">{yen(q.total)}</td></tr>
               </tfoot>
             </table>
             {q.workDetails && <div className="border-t border-line px-5 py-3 text-xs text-ink-2"><div className="font-medium text-ink">施工内容</div><p className="mt-1 whitespace-pre-wrap">{q.workDetails}</p></div>}

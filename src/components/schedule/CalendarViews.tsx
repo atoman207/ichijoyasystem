@@ -36,6 +36,30 @@ export interface CalUser {
   name: string;
   title: string;
   storeId: StoreId;
+  /** 予定表に出す略称 (1 文字。src/lib/schedule-sheet/initials.ts の initialsByUser) */
+  initial?: string;
+}
+
+/**
+ * 担当者の略称の丸 (お客様のご要望 2026-11-24「⑥」: 予定表でも誰が現場へ行くか分かるように)。
+ * 丸の色 = その人の店舗の色 (ほかの店舗の応援が分かる)。名前は title (押すと予定の画面で全員の名前)
+ */
+export function StaffMarks({ ids, ctx, max = 4, className }: { ids: string[]; ctx: Pick<CalendarContext, "users" | "stores">; max?: number; className?: string }) {
+  const list = ids.map((id) => ctx.users.get(id)).filter((u): u is CalUser => Boolean(u));
+  if (!list.length) return null;
+  return (
+    <span className={clsx("inline-flex shrink-0 items-center gap-px", className)} title={`担当: ${list.map((u) => u.name).join("・")}`} data-testid="staff-marks">
+      {list.slice(0, max).map((u) => {
+        const color = ctx.stores.get(u.storeId)?.color ?? "#94a3b8";
+        return (
+          <span key={u.id} className="grid h-4 min-w-4 place-items-center rounded-full border px-px text-[9px] leading-none font-bold text-ink" style={{ borderColor: color, background: `color-mix(in srgb, ${color} 22%, white)` }}>
+            {u.initial ?? [...u.name][0]}
+          </span>
+        );
+      })}
+      {list.length > max && <span className="pl-0.5 text-[9px] leading-none text-ink-3 tnum">+{list.length - max}</span>}
+    </span>
+  );
 }
 
 export interface CalendarContext {
@@ -175,6 +199,7 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
         <span className="shrink-0 font-medium text-ink-2 tnum">{shortTime(e)}</span>
         <span className="min-w-0 truncate">{titleOf(ctx, e)}</span>
         <WorkTokens tokens={tokens} />
+        {variant === "month" && <StaffMarks ids={e.assigneeIds} ctx={ctx} max={3} className="ml-auto hidden @5xl:inline-flex" />}
         {conflict && <TriangleAlert className="ml-auto h-3 w-3 shrink-0 text-critical" aria-hidden />}
       </Link>
     );
@@ -217,7 +242,12 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
             全社
           </span>
         )}
-        {people.length > 0 && <span className="min-w-0 truncate">{people.map(shortName).join("・")}</span>}
+        {people.length > 0 && (
+          <span className="inline-flex min-w-0 items-center gap-1">
+            <StaffMarks ids={e.assigneeIds} ctx={ctx} />
+            <span className="min-w-0 truncate">{people.map(shortName).join("・")}</span>
+          </span>
+        )}
         {c && (
           <span className="inline-flex items-center gap-0.5 text-ink-3">
             <Link2 className="h-3 w-3" aria-hidden />
@@ -774,7 +804,10 @@ function ListRow({ e, d, ctx }: { e: ScheduleEvent; d: string; ctx: CalendarCont
             </span>
           )}
         </div>
-        <div className="mt-0.5 truncate">{e.assigneeIds.map((id) => ctx.users.get(id)?.name).filter(Boolean).join("・") || (e.companyWide ? "全員" : "担当者なし")}</div>
+        <div className="mt-0.5 flex min-w-0 items-center gap-1">
+          <StaffMarks ids={e.assigneeIds} ctx={ctx} />
+          <span className="truncate">{e.assigneeIds.map((id) => ctx.users.get(id)?.name).filter(Boolean).join("・") || (e.companyWide ? "全員" : "担当者なし")}</span>
+        </div>
       </div>
     </li>
   );

@@ -73,6 +73,7 @@ export function quotePdfData(db: Database, q: Quote, version?: number): QuotePdf
       total: q.total,
       notes: joinNotes(q.notes, settings.quoteNote),
       taxIncluded: q.taxIncluded,
+      taxExempt: q.taxExempt,
       revisionLabel: q.version > 1 ? `第${q.version}版${q.approvedAt ? ` (${day(q.approvedAt)} 改訂)` : ""}` : undefined,
       draft: q.status === "draft" || q.status === "pending_approval",
     };
@@ -93,6 +94,7 @@ export function quotePdfData(db: Database, q: Quote, version?: number): QuotePdf
     total: r.total,
     notes: joinNotes(r.notes, settings.quoteNote),
     taxIncluded: r.taxIncluded,
+    taxExempt: r.taxExempt,
     revisionLabel: `第${r.version}版 (${day(r.replacedAt)} に第${r.version + 1}版へ改訂済み)`,
     draft: false,
   };
@@ -119,6 +121,7 @@ export function invoicePdfData(db: Database, inv: Invoice): InvoicePdfData {
   const quote = order?.quoteId ? db.quotes.find((q) => q.id === order.quoteId) : undefined;
   const taxIncluded = inv.taxIncluded ?? (!inv.items?.length && quote && quote.total === inv.total ? quote.taxIncluded : undefined);
   const batch = Boolean(inv.orderLines?.length);
+  const taxExempt = Boolean(inv.taxExempt ?? (!inv.items?.length && quote && quote.total === inv.total ? quote.taxExempt : undefined)) || undefined;
   return {
     number: inv.number,
     issuedOn: inv.issueDate,
@@ -137,6 +140,7 @@ export function invoicePdfData(db: Database, inv: Invoice): InvoicePdfData {
     // 値引き = 明細の合計 − (税抜: 請求の税抜額 / 税込: 請求の合計)
     discount: Math.max(0, sum - (taxIncluded ? inv.total : inv.subtotal)),
     taxIncluded: taxIncluded || undefined,
+    taxExempt,
     tax: inv.tax,
     total: inv.total,
     paidAmount: inv.paidAmount > 0 ? inv.paidAmount : undefined,
@@ -153,7 +157,8 @@ export function receiptPdfData(db: Database, inv: Invoice): ReceiptPdfData | nul
   const order = db.orders.find((o) => o.id === inv.orderId);
   const payments = db.payments.filter((p) => p.invoiceId === inv.id).sort((a, b) => a.date.localeCompare(b.date));
   const full = inv.paidAmount === inv.total;
-  const tax = full ? inv.tax : Math.floor((inv.paidAmount * 10) / 110);
+  // 非課税の請求書は消費税なし
+  const tax = inv.taxExempt ? 0 : full ? inv.tax : Math.floor((inv.paidAmount * 10) / 110);
   const methods = [...new Set(payments.map((p) => PAYMENT_METHOD_LABEL[p.method]))];
   return {
     number: inv.number.replace(/^INV/, "RCPT"),
@@ -168,6 +173,7 @@ export function receiptPdfData(db: Database, inv: Invoice): ReceiptPdfData | nul
     paymentMethod: methods.join("・") || undefined,
     invoiceNumber: inv.number,
     company: pdfCompany(db, inv.storeId),
+    taxExempt: inv.taxExempt || undefined,
   };
 }
 

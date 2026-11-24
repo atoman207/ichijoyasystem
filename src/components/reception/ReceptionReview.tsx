@@ -61,6 +61,8 @@ export function ReceptionReview({
   stores,
   storeId,
   canChooseStore,
+  storeChoices,
+  areaStore,
   currentUserId,
   defaultAssigneeId,
   mediaDefault,
@@ -78,6 +80,10 @@ export function ReceptionReview({
   stores: { id: StoreId; name: string }[];
   storeId: StoreId;
   canChooseStore: boolean;
+  /** 選べる店舗 (全店舗のロールはすべて。ほかの人は自店舗と住所の担当エリアの店舗) */
+  storeChoices?: StoreId[];
+  /** 住所の担当エリアの店舗 (お客様のご要望 2026-11-24「③」) */
+  areaStore?: { id: StoreId; name: string; town: string };
   currentUserId: string;
   defaultAssigneeId: string;
   mediaDefault?: MediaKey;
@@ -196,11 +202,19 @@ export function ReceptionReview({
         {act === "inquiry" && (
           <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
             <label className="block">
-              <span className="label">受付店舗</span>
-              <select name="storeId" defaultValue={storeId} disabled={!canChooseStore} className="field">
-                {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-              {!canChooseStore && <input type="hidden" name="storeId" value={storeId} />}
+              <span className="label">担当店舗 (施工・売上計上の店舗)</span>
+              {(() => {
+                const list = stores.filter((s) => canChooseStore || !storeChoices || storeChoices.includes(s.id));
+                return (
+                  <>
+                    <select name="storeId" defaultValue={storeId} disabled={list.length < 2} className="field" data-testid="reception-store">
+                      {list.map((s) => <option key={s.id} value={s.id}>{s.name}{s.id === areaStore?.id ? " (住所の担当エリア)" : ""}</option>)}
+                    </select>
+                    {list.length < 2 && <input type="hidden" name="storeId" value={storeId} />}
+                  </>
+                );
+              })()}
+              <span className="mt-1 block text-[11px] text-ink-3">{areaStore ? `住所から自動: ${areaStore.name} (「${areaStore.town}」の地域)。案件ごとに変えられます` : "住所から担当店舗を決められませんでした (住所が未入力・地域一覧にない地域)。必要なら選んでください"}</span>
             </label>
             <label className="block">
               <span className="label">担当者</span>

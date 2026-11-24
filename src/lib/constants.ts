@@ -72,6 +72,12 @@ export const CHANNEL_LABEL: Record<Channel, string> = {
   unknown: "未登録",
 };
 
+/** 予定表の小さな画面で選べる担当者の数 (お客様のご要望 2026-11-24「⑥」: 最大 4 名) */
+export const QUICK_MAX_ASSIGNEES = 4;
+
+/** 問合せ登録 (受付) の入口の選択肢。初期値は電話 (お客様のご要望 2026-11-24「⑤」: 来店・AI 受付などに変えられる) */
+export const RECEPTION_CHANNELS: Channel[] = ["phone", "mobile", "visit", "ai_phone", "ai_chat", "ai_voice", "web", "event", "referral", "mail", "email", "line", "unknown"];
+
 export const CATEGORY_LABEL: Record<ServiceCategory, string> = {
   tatami: "畳",
   fusuma: "襖",

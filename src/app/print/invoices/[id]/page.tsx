@@ -70,7 +70,7 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
           <tfoot>
             {discount > 0 && <tr><td colSpan={3} className="px-2 py-1 text-right">値引き</td><td className="px-2 py-1 text-right tnum">-{yen(discount)}</td></tr>}
             <tr><td colSpan={3} className="px-2 py-1 text-right">小計 (税抜・10%対象)</td><td className="px-2 py-1 text-right tnum">{yen(inv.subtotal)}</td></tr>
-            <tr><td colSpan={3} className="px-2 py-1 text-right">消費税 (10%){taxIncluded ? " (内税)" : ""}</td><td className="px-2 py-1 text-right tnum">{yen(inv.tax)}</td></tr>
+            <tr><td colSpan={3} className="px-2 py-1 text-right">{inv.taxExempt ? "消費税" : `消費税 (10%)${taxIncluded ? " (内税)" : ""}`}</td><td className="px-2 py-1 text-right tnum">{inv.taxExempt ? "非課税" : yen(inv.tax)}</td></tr>
             <tr className="border-t border-ink font-semibold"><td colSpan={3} className="px-2 py-1.5 text-right">合計 (税込)</td><td className="px-2 py-1.5 text-right tnum">{yen(inv.total)}</td></tr>
           </tfoot>
         </table>

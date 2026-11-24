@@ -52,9 +52,10 @@ export function syncHandoverEvents(db: Database, o: Order, actorId: string, opts
   const now = nowIso();
   const today = toDateKey(new Date());
   const inquiryId = quote?.inquiryId;
+  // 予定表から移行した予定と、予定表の小さな画面で引取・現見から足した納品 (sourceRef = "pair:…"。src/lib/schedule-pair.ts) は使い回す
   const adoptable = db.schedule.filter(
     (e) =>
-      e.source === "import" &&
+      (e.source === "import" || (e.source === "manual" && e.kind === "delivery" && Boolean(e.sourceRef?.startsWith("pair:")))) &&
       e.date >= today &&
       (e.kind === "pickup" || e.kind === "delivery") &&
       (!e.orderId || e.orderId === o.id) &&

@@ -175,6 +175,7 @@ create table if not exists quotes (
   work_details text,
   revisions jsonb,
   tax_included boolean,
+  tax_exempt boolean,
   site_info jsonb,
   paper_no text,
   handed_over boolean,
@@ -252,6 +253,7 @@ create table if not exists invoices (
   title text,
   items jsonb,
   tax_included boolean,
+  tax_exempt boolean,
   notes text,
   expected_date date,
   expected_amount numeric,
@@ -1761,6 +1763,7 @@ alter table quotes add column if not exists updated_at timestamptz not null;
 alter table quotes add column if not exists work_details text;
 alter table quotes add column if not exists revisions jsonb;
 alter table quotes add column if not exists tax_included boolean;
+alter table quotes add column if not exists tax_exempt boolean;
 alter table quotes add column if not exists site_info jsonb;
 alter table quotes add column if not exists paper_no text;
 alter table quotes add column if not exists handed_over boolean;
@@ -1826,6 +1829,7 @@ alter table invoices add column if not exists updated_at timestamptz not null;
 alter table invoices add column if not exists title text;
 alter table invoices add column if not exists items jsonb;
 alter table invoices add column if not exists tax_included boolean;
+alter table invoices add column if not exists tax_exempt boolean;
 alter table invoices add column if not exists notes text;
 alter table invoices add column if not exists expected_date date;
 alter table invoices add column if not exists expected_amount numeric;

@@ -6,6 +6,7 @@ import { CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { SYSTEM_USER, buildInquiry } from "@/lib/notify/inbound";
 import { contactLabel, contactOfPhone, customerHasPhone } from "@/lib/customer-contacts";
 import { mapMediaText, readMediaRules } from "@/lib/media";
+import { areaStoreOf } from "@/lib/store-area";
 
 /**
  * 既存の AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) からの受付情報の取込
@@ -333,7 +334,8 @@ export function recordAiIntake(db: Database, input: IntakeInput, settings = aiIn
   const matches = db.customers.filter((c) => phones.some((d) => customerHasPhone(c, d)) || (email && c.email?.toLowerCase() === email));
   const customer = [...matches].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))[0];
   const store = db.stores.find((s) => s.id === input.store || s.name === input.store || s.shortName === input.store || (input.store && s.name.includes(input.store)));
-  const storeId: StoreId = store?.id ?? customer?.storeId ?? settings.defaultStore;
+  // 担当店舗: 指定の店舗 > 住所の担当エリア (お客様のご要望 2026-11-24「③」。src/lib/store-area.ts) > お客様の店舗 > 既定の店舗
+  const storeId: StoreId = store?.id ?? areaStoreOf(db, input.address || customer?.address)?.storeId ?? customer?.storeId ?? settings.defaultStore;
   const receivedAt = input.receivedAt ?? nowIso();
   const summary = (input.purpose || input.summary || input.detail || input.transcript || label).split(/\r?\n/)[0].slice(0, 60);
   const media = input.mediaText ? mapMediaText(readMediaRules(db).rules, input.mediaText) : null;

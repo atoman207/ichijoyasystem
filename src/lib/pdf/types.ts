@@ -29,6 +29,8 @@ export interface QuotePdfData {
   draft?: boolean;
   /** 単価・小計が税込 (消費税は内税) */
   taxIncluded?: boolean;
+  /** 非課税 (消費税 0) */
+  taxExempt?: boolean;
 }
 
 export interface InvoicePdfData {
@@ -42,6 +44,8 @@ export interface InvoicePdfData {
   /** Corrected (訂正) invoice → small label "訂正版" next to the title */ corrected?: boolean;
   /** 単価・小計が税込 (消費税は内税) */
   taxIncluded?: boolean;
+  /** 非課税 (消費税 0) */
+  taxExempt?: boolean;
 }
 
 export interface ReceiptPdfData {
@@ -49,6 +53,7 @@ export interface ReceiptPdfData {
   amount: number; /** tax-exclusive amount and tax for the 10% rate breakdown */ taxable: number; tax: number;
   /** e.g. "畳工事代として" */ purpose: string; paymentMethod?: string; invoiceNumber?: string;
   company: PdfCompany; reissue?: boolean;
+  /** 非課税の取引 (内訳を「非課税」で表示) */ taxExempt?: boolean;
 }
 
 /**

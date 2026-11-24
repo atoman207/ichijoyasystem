@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Database, ScheduleEvent, ScheduleKind, StoreId, User } from "@/lib/db/types";
-import { SCHEDULE_KIND, SCHEDULE_KINDS, SCHEDULE_REPEAT, type ScheduleRepeat } from "@/lib/constants";
+import { QUICK_MAX_ASSIGNEES, SCHEDULE_KIND, SCHEDULE_KINDS, SCHEDULE_REPEAT, type ScheduleRepeat } from "@/lib/constants";
 import { canAccessStore, canEditEvent, canManageCompanyEvents, canManageSettings } from "@/lib/auth/permissions";
 import {
   addMonths,
@@ -44,6 +44,8 @@ import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { AUTO_APPROVAL_NOTE } from "@/lib/approval-decide";
 import { closeScheduleRequests } from "@/lib/inquiry-requests";
 import { taskNotices } from "@/lib/notify/events";
+import { PAIR_PREFIX, eventPair } from "@/lib/schedule-pair";
+import { stripKindWords } from "@/lib/work-summary";
 import { sendAndRecord } from "@/lib/notify/send";
 import { fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
@@ -489,7 +491,9 @@ export async function quickUpdateScheduleEvent(id: string, formData: FormData) {
   }
   fd.set("storeId", e.storeId);
   if (e.companyWide) fd.set("companyWide", "1");
-  for (const a of e.assigneeIds) fd.append("assigneeIds", a);
+  // 担当者: 小さな画面の「担当者」で選んだとき (assigneesSent) はその人たち。それ以外は今のまま (お客様のご要望 2026-11-24「⑥」)
+  const assignees = str(formData, "assigneesSent") === "1" ? [...new Set(formData.getAll("assigneeIds").map(String))] : e.assigneeIds;
+  for (const a of assignees) fd.append("assigneeIds", a);
   if (ref) fd.set("caseRef", caseValue(ref));
   if (e.customerId) fd.set("customerId", e.customerId);
   fd.set("locationMode", currentEventMode(db, e));
@@ -499,6 +503,110 @@ export async function quickUpdateScheduleEvent(id: string, formData: FormData) {
   fd.set("back", returnTo);
   fd.set("returnTo", returnTo);
   return updateScheduleEvent(id, fd);
+}
+
+/**
+ * 引取・現見の予定から「納品予定を追加」(お客様のご要望 2026-11-24「⑦」。src/lib/schedule-pair.ts)
+ * - 受注の引取・納品の日程と連動する引取で、納品日の決まっていない品目がある: 受注の日程にその品目の納品日を入れる (はじめて入れる日程は承認なし)。
+ *   納品の予定は受注の日程から作り、担当は選んだ人
+ * - それ以外: 同じ案件・お客様の納品の予定を登録する (sourceRef = "pair:<引取・現見の予定 ID>" で組にする)。
+ *   あとで受注の日程を保存すると、この納品の予定を使い回す (handover-events.ts の adoptable。二重にしない)
+ */
+export async function addPairedDelivery(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const returnTo = safePath(str(formData, "returnTo")) ?? "/schedule";
+  const db = getDb();
+  const origin = db.schedule.find((x) => x.id === id);
+  if (!origin) fail(returnTo, "予定が見つかりません (削除された可能性があります)。");
+  if (!canEditEvent(user, origin)) fail(returnTo, "この予定から納品予定を追加する権限がありません (登録者・担当者・店舗のメンバーが追加できます)。");
+  const info = eventPair(db, origin);
+  if (!info || info.want !== "delivery") fail(returnTo, "納品予定を追加できるのは、引き取り・現場見積 (現見) の予定です。");
+  const date = str(formData, "date");
+  if (!isDateKey(date)) fail(returnTo, "納品日を入れてください。");
+  const mode = str(formData, "timeMode");
+  const startTime = mode === "time" ? normTime(str(formData, "startTime")) : undefined;
+  if (mode === "time" && !startTime) fail(returnTo, "納品の時刻を正しく入れてください。");
+  const endTime = startTime ? normTime(str(formData, "endTime")) : undefined;
+  if (startTime && endTime && toMinutes(endTime) <= toMinutes(startTime)) fail(returnTo, "終了時刻は開始時刻より後にしてください。");
+  const slot: "am" | "pm" | undefined = !startTime && (mode === "am" || mode === "pm") ? mode : undefined;
+  const active = new Set(db.users.filter((u) => u.active).map((u) => u.id));
+  const assigneeIds = [...new Set(formData.getAll("assigneeIds").map(String))].filter((a) => active.has(a)).slice(0, QUICK_MAX_ASSIGNEES);
+  if (!assigneeIds.length) fail(returnTo, "納品の担当者を 1 人以上選んでください。");
+  const allowOverlap = str(formData, "allowOverlap") === "1";
+  const memo = str(formData, "memo").slice(0, 2000) || undefined;
+  const when = periodLabel({ date, startTime, endTime, slot });
+
+  // 受注の日程の品目に納品日を入れる
+  if (info.order && info.undatedRows.length && orderEditable(info.order)) {
+    const o0 = info.order;
+    const hits = findConflicts({ date, startTime, endTime, slot, assigneeIds, orderId: o0.id, quoteId: o0.quoteId, inquiryId: origin.inquiryId }, db.schedule);
+    if (hits.length && !allowOverlap) fail(returnTo, `担当者の予定が重複しています: ${describeConflicts(db, hits)}。日時・担当者を見直すか、「重複を承知で登録する」にチェックしてください。`);
+    let followUps: string[] = [];
+    await mutate((db) => {
+      const o = db.orders.find((x) => x.id === o0.id);
+      if (!o) fail(returnTo, "受注が見つかりません。");
+      const rowIds = info.undatedRows;
+      const r = savePlan(db, user, o, applyEventMove(o.handovers, { role: "delivery", rowIds }, { date, start: startTime, end: endTime, slot }), { back: returnTo, reason: "予定表から納品予定を追加", via: "schedule" });
+      followUps = r.followUps;
+      // 受注の日程から作った納品の予定の担当を、選んだ人にする
+      for (const ev of db.schedule) {
+        const ref = parseHandoverRef(ev.sourceRef);
+        if (ev.orderId === o.id && ref?.role === "delivery" && ref.rowIds.some((x) => rowIds.includes(x))) {
+          const before = [...ev.assigneeIds];
+          ev.assigneeIds = [...assigneeIds];
+          if (memo && !ev.memo?.includes(memo)) ev.memo = [ev.memo, memo].filter(Boolean).join("\n").slice(0, 2000);
+          ev.updatedBy = user.id;
+          ev.updatedAt = nowIso();
+          if (before.join() !== ev.assigneeIds.join()) addAudit(db, { userId: user.id, action: "update", entity: "schedule", entityId: ev.id, entityLabel: ev.title, summary: "予定表から納品予定を追加 (担当者)", storeId: ev.storeId, changes: [{ field: "assigneeIds", before, after: ev.assigneeIds }] });
+        }
+      }
+    });
+    revalidateSchedule(o0);
+    redirect(withMsg(returnTo, `受注の引取・納品の日程に納品日 (${when}) を入れ、予定表に納品の予定を登録しました (担当: ${names(getDb(), assigneeIds)})。${followUps.join("")}`));
+  }
+
+  if (info.events.length > 0) fail(returnTo, "この案件にはもう納品の予定があります。納品の予定を開いて日時・担当者を変えてください。");
+  // 案件・お客様の納品の予定 (案件があれば案件の店舗・お客様・場所)
+  const resolver = createCaseResolver(db);
+  const ref = resolver.ofEvent(origin);
+  const fd = new FormData();
+  fd.set("kind", "delivery");
+  fd.set("date", date);
+  if (startTime) {
+    fd.set("startTime", startTime);
+    if (endTime) fd.set("endTime", endTime);
+  } else if (slot) fd.set("slot", slot);
+  else fd.set("allDay", "1");
+  fd.set("storeId", origin.storeId);
+  for (const a of assigneeIds) fd.append("assigneeIds", a);
+  if (ref) fd.set("caseRef", caseValue(ref));
+  if (origin.customerId) fd.set("customerId", origin.customerId);
+  fd.set("locationMode", currentEventMode(db, origin));
+  fd.set("location", origin.location ?? "");
+  fd.set("title", ref ? "" : `${stripKindWords(origin.title, origin.kind)} 納品`.trim());
+  if (memo) fd.set("memo", memo);
+  const p = parseEventForm(db, user, fd, returnTo, { allowRepeat: false });
+  // 案件の店舗が自店舗でない担当者の予定 (canEditEvent で開けた予定) も、元の予定と同じ店舗に登録する
+  p.fields.storeId = ref?.storeId ?? origin.storeId;
+  const hits = conflictsOf(db, p.fields, [date]);
+  if (hits.length && !allowOverlap) fail(returnTo, `担当者の予定が重複しています: ${describeConflicts(db, hits)}。日時・担当者を見直すか、「重複を承知で登録する」にチェックしてください。`);
+  const newEventId = newId("ev");
+  await mutate((db) => {
+    const now = nowIso();
+    const ev: ScheduleEvent = { id: newEventId, ...p.fields, source: "manual", sourceRef: `${PAIR_PREFIX}${origin.id}`, createdBy: user.id, createdAt: now, updatedBy: user.id, updatedAt: now };
+    db.schedule.push(ev);
+    if (mapTablesReady() && (ev.customerId || p.caseRef)) saveEventLocationMode(db, user, ev, p.locationMode);
+    if (ev.orderId) {
+      const o = db.orders.find((x) => x.id === ev.orderId);
+      if (o) {
+        o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "note", body: `予定を登録: ${periodLabel(ev)} 納品 (担当: ${names(db, ev.assigneeIds)}・${SCHEDULE_KIND[origin.kind].label} ${shortDate(origin.date)} から)` });
+        o.updatedAt = now;
+      }
+    }
+    addAudit(db, { userId: user.id, action: "create", entity: "schedule", entityId: newEventId, entityLabel: ev.title, summary: `予定表から納品予定を追加 (${periodLabel(ev)} / ${SCHEDULE_KIND[origin.kind].label} ${shortDate(origin.date)} の納品${p.caseRef ? ` / 案件 ${p.caseRef.number}` : ""}${hits.length ? " / 重複を承知で登録" : ""})`, storeId: ev.storeId });
+  });
+  revalidateSchedule(p.fields);
+  redirect(withMsg(returnTo, `納品の予定 (${when}) を登録しました (担当: ${names(getDb(), assigneeIds)})。${hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : ""}`));
 }
 
 export async function deleteScheduleEvent(id: string, formData: FormData) {

@@ -301,6 +301,8 @@ export interface QuoteChange {
   total: number;
   /** 単価が税込 */
   taxIncluded?: boolean;
+  /** 非課税 */
+  taxExempt?: boolean;
   /** 件名・施工内容・備考の変更 (省略時は変更なし) */
   title?: string;
   workDetails?: string;
@@ -316,6 +318,7 @@ export interface QuoteRevision {
   title: string;
   items: QuoteItem[];
   taxIncluded?: boolean;
+  taxExempt?: boolean;
   subtotal: number;
   discount: number;
   tax: number;
@@ -415,6 +418,8 @@ export interface Quote {
   revisions?: QuoteRevision[];
   /** 単価・小計が税込 (手書き見積書の「税込」)。消費税は合計から内税で計算する */
   taxIncluded?: boolean;
+  /** 非課税 (消費税 0。業者様への見積など。お客様のご要望 2026-11-24「①」。src/lib/quote-calc.ts) */
+  taxExempt?: boolean;
   /** 現場情報・引継ぎ事項 */
   siteInfo?: SiteInfo;
   /** 畳の製造の仕様 (部屋ごと。src/lib/tatami-spec.ts)。空なら見積の明細から自動で作る */
@@ -621,6 +626,8 @@ export interface Invoice {
   notes?: string;
   /** 明細が税込 (税込の見積から発行) */
   taxIncluded?: boolean;
+  /** 非課税 (非課税の見積から発行。消費税 0) */
+  taxExempt?: boolean;
   /** 入金予定日 (お客様と約束した日) */
   expectedDate?: string;
   /** 入金予定額 (分割・一部の入金のときは今回の予定額。空は残高の全額) */

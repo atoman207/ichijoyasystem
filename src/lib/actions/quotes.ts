@@ -17,7 +17,7 @@ import { quoteHandoverLines } from "@/lib/handover-save";
 import { approverLabel, approverRole, canSeeAllStores } from "@/lib/auth/permissions";
 import { relinkDocumentAttachments } from "@/lib/attachments";
 import { documentSettings } from "@/lib/doc-settings";
-import { quoteTotals } from "@/lib/quote-calc";
+import { parseTaxMode, quoteTotals, taxFields, taxModeOf, type TaxMode } from "@/lib/quote-calc";
 import { siteInfoFromForm } from "@/lib/site-info";
 import { plannedFromSiteInfo } from "@/lib/case-status";
 import { syncHandoverMemo } from "@/lib/db/schedule";
@@ -105,9 +105,12 @@ function applySiteFields(db: Database, q: Quote, next: { siteAddress?: string; r
   return changes.map((c) => c.field);
 }
 
-function calc(items: QuoteItem[], discount: number, taxIncluded = false) {
-  return quoteTotals(items, discount, taxIncluded);
+function calc(items: QuoteItem[], discount: number, mode: TaxMode = "excluded") {
+  return quoteTotals(items, discount, mode);
 }
+
+/** フォームの税の書き方 (内税・外税・非課税。src/lib/quote-calc.ts) */
+const taxModeIn = (fd: FormData): TaxMode => parseTaxMode({ taxMode: str(fd, "taxMode"), taxIncluded: str(fd, "taxIncluded") });
 
 /** 見積から作った受注に、有効な (無効化していない) 請求書があるか。あれば金額は変えられない */
 function hasActiveInvoice(db: Database, quoteId: string): boolean {
@@ -189,8 +192,8 @@ export async function createQuote(formData: FormData) {
     assertCaseStore(user, storeId, back);
     const today = toDateKey(new Date());
     const now = nowIso();
-    const taxIncluded = str(formData, "taxIncluded") === "1";
-    const t = calc(items, Number(str(formData, "discount")) || 0, taxIncluded);
+    const taxMode = taxModeIn(formData);
+    const t = calc(items, Number(str(formData, "discount")) || 0, taxMode);
     if (t.total <= 0) fail(back, "合計が 0 円以下です。明細を確認してください。");
     const estimator = str(formData, "estimatorId");
     const quoteDate = str(formData, "quoteDate");
@@ -213,7 +216,7 @@ export async function createQuote(formData: FormData) {
       workDetails: str(formData, "workDetails") || undefined,
       source: choice(formData, "source", ["manual", "ocr", "ai_phone"] as const, "manual"),
       documentId: str(formData, "documentId") || undefined,
-      taxIncluded: taxIncluded || undefined,
+      ...taxFields(taxMode),
       siteInfo: siteInfoFromForm(formData),
       paperNo: str(formData, "paperNo") || undefined,
       estimatorId: estimator && db.users.some((u) => u.id === estimator) ? estimator : user.id,
@@ -260,14 +263,17 @@ export async function updateQuote(id: string, formData: FormData) {
     assertCaseStore(user, q.storeId, back);
     const lock = quoteCompletedLock(db, user, q);
     if (lock.locked) fail(`/quotes/${id}`, completedLockMessage(lock.reason));
-    const taxIncluded = str(formData, "taxIncluded") === "1";
-    const t = calc(items, Number(str(formData, "discount")) || 0, taxIncluded);
+    const taxMode = taxModeIn(formData);
+    const taxIncluded = taxMode === "included";
+    const taxExempt = taxMode === "exempt";
+    const t = calc(items, Number(str(formData, "discount")) || 0, taxMode);
     if (t.total <= 0) fail(back, "合計が 0 円以下です。明細を確認してください。");
     const now = nowIso();
     const site = siteFieldsOf(formData);
     if (q.status === "draft") {
       if (site) applySiteFields(db, q, site, user);
       q.taxIncluded = taxIncluded || undefined;
+      q.taxExempt = taxExempt || undefined;
       const est = str(formData, "estimatorId");
       if (est && db.users.some((u) => u.id === est)) q.estimatorId = est;
       q.title = str(formData, "title") || q.title;
@@ -290,7 +296,7 @@ export async function updateQuote(id: string, formData: FormData) {
       const workDetails = str(formData, "workDetails");
       const notes = str(formData, "notes");
       const sameItems = JSON.stringify(items.map((i) => [i.name, i.spec ?? "", i.qty, i.unit, i.unitPrice])) === JSON.stringify(q.items.map((i) => [i.name, i.spec ?? "", i.qty, i.unit, i.unitPrice]));
-      const sameContent = sameItems && t.discount === q.discount && taxIncluded === Boolean(q.taxIncluded) && title === q.title && workDetails === (q.workDetails ?? "") && notes === (q.notes ?? "");
+      const sameContent = sameItems && t.discount === q.discount && taxMode === taxModeOf(q) && title === q.title && workDetails === (q.workDetails ?? "") && notes === (q.notes ?? "");
       const siteChanged = Boolean(site) && ((site!.siteAddress ?? "") !== (q.siteAddress ?? "") || (site!.receiptName ?? "") !== (q.receiptName ?? ""));
       const cats = sameItems ? categoryChanges(q.items, items) : [];
       // 施工場所・領収書の宛名・明細の品目 (管理会計の分類) だけの変更は、承認・変更理由なしで反映する (金額・契約内容に関わらない)
@@ -316,7 +322,7 @@ export async function updateQuote(id: string, formData: FormData) {
       const reason = str(formData, "reason");
       if (!reason) fail(back, "確定済みの見積を変更するには変更理由が必要です。");
       if (siteChanged) applySiteFields(db, q, site!, user);
-      q.pendingChange = { items, ...t, taxIncluded, title, workDetails, notes, reason, requestedBy: user.id, requestedAt: now };
+      q.pendingChange = { items, ...t, taxIncluded, taxExempt, title, workDetails, notes, reason, requestedBy: user.id, requestedAt: now };
       q.updatedAt = now;
       const role = requiredRole(db, q.storeId, Math.max(t.total, q.total), user.id);
       const amend: Approval = {

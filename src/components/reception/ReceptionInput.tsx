@@ -3,7 +3,7 @@
 import { useRef, useState, useSyncExternalStore, useTransition, type FormEvent } from "react";
 import { Camera, FileAudio, Mic, PenLine, Square } from "lucide-react";
 import type { Channel, StoreId } from "@/lib/db/types";
-import { CHANNEL_LABEL } from "@/lib/constants";
+import { CHANNEL_LABEL, RECEPTION_CHANNELS } from "@/lib/constants";
 import { CaptureUploader } from "@/components/features/CaptureUploader";
 import { browserCanListen, canRecord, useRecorder, type VoiceMode } from "@/components/chatbot/voice";
 
@@ -39,18 +39,15 @@ export function ReceptionInput({
   customer?: { id: string; name: string };
 }) {
   const [tab, setTab] = useState<Tab>("photo");
-  const [channel, setChannel] = useState<Channel>("visit");
+  // 入口の初期値は「電話」(お客様のご要望 2026-11-24「⑤」。問い合わせの多くは電話のため)。来店・AI 受付などは選び直す
+  const [channel, setChannel] = useState<Channel>("phone");
   const [storeId, setStoreId] = useState<StoreId>(defaultStoreId);
-  const choose = (t: Tab) => {
-    setTab(t);
-    // 入口の初期値: 写真 = 来店・対面、話す = 担当者の携帯、録音 = 会社の電話
-    setChannel(t === "photo" ? "visit" : t === "text" ? "mobile" : "phone");
-  };
+  const choose = (t: Tab) => setTab(t);
   const channelSelect = (
     <label className="block">
       <span className="label">入口 (どこで受けたか)</span>
       <select value={channel} onChange={(e) => setChannel(e.target.value as Channel)} className="field">
-        {(["visit", "event", "referral", "mobile", "phone", "mail", "unknown"] as Channel[]).map((c) => (
+        {RECEPTION_CHANNELS.map((c) => (
           <option key={c} value={c}>{c === "phone" ? "電話 (会社・店舗の電話)" : c === "referral" ? "紹介 (現場・知人など)" : CHANNEL_LABEL[c]}</option>
         ))}
       </select>

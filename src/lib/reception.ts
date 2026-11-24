@@ -62,7 +62,8 @@ export const RECEPTION_SOURCE_LABEL: Record<ReceptionSource, string> = {
 };
 
 /** 受付の入口 (問い合わせの入口 Channel のうち、この画面で選ぶもの) */
-export const RECEPTION_CHANNELS: Channel[] = ["phone", "mobile", "visit", "event", "referral", "mail", "email", "line", "unknown"];
+/** 受付の入口の選択肢 (constants.ts。初期値は電話) */
+export { RECEPTION_CHANNELS } from "@/lib/constants";
 
 /** 読み取った項目 (documents.extracted。AI の項目名と同じ。src/lib/ai/reception.ts の SCHEMA) */
 export interface ReceptionFields {

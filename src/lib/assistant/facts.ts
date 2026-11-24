@@ -98,8 +98,8 @@ export function parseLedgerItems(body: string, date: string): ItemFact[] | null 
   return out;
 }
 
-function itemsFromQuote(items: QuoteItem[], taxIncluded: boolean | undefined, date: string, cat: AmountKey, products: Map<string, Product>, serviceCategory: Order["category"]): ItemFact[] {
-  const factor = taxIncluded ? 1 : 1 + taxRate(date);
+function itemsFromQuote(items: QuoteItem[], taxIncluded: boolean | undefined, date: string, cat: AmountKey, products: Map<string, Product>, serviceCategory: Order["category"], taxExempt?: boolean): ItemFact[] {
+  const factor = taxIncluded || taxExempt ? 1 : 1 + taxRate(date);
   return items.map((i) => {
     const product = i.productId ? products.get(i.productId) : undefined;
     const productKey = product ? (CATEGORY_TO_AMOUNT[product.category] ?? "misc") : undefined;
@@ -150,11 +150,11 @@ function buildOrderFacts(db: Database): OrderFact[] {
       const q = o.quoteId ? quoteById.get(o.quoteId) : undefined;
       const inv = invoiceByOrder.get(o.id);
       if (q && q.total === o.total && q.items.length) {
-        items = itemsFromQuote(q.items, q.taxIncluded, date, mainCat, products, o.category);
-        if (q.discount > 0) items.push({ cat: "discount", product: "値引", qty: 1, unitPrice: -Math.round(q.discount * (q.taxIncluded ? 1 : 1 + taxRate(date))), amount: -Math.round(q.discount * (q.taxIncluded ? 1 : 1 + taxRate(date))) });
+        items = itemsFromQuote(q.items, q.taxIncluded, date, mainCat, products, o.category, q.taxExempt);
+        if (q.discount > 0) items.push({ cat: "discount", product: "値引", qty: 1, unitPrice: -Math.round(q.discount * (q.taxIncluded || q.taxExempt ? 1 : 1 + taxRate(date))), amount: -Math.round(q.discount * (q.taxIncluded || q.taxExempt ? 1 : 1 + taxRate(date))) });
         itemSource = "quote";
       } else if (inv?.items?.length) {
-        items = itemsFromQuote(inv.items, inv.taxIncluded, date, mainCat, products, o.category);
+        items = itemsFromQuote(inv.items, inv.taxIncluded, date, mainCat, products, o.category, inv.taxExempt);
         itemSource = "invoice";
       }
     }

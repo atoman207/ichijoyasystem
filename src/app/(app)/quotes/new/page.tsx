@@ -16,6 +16,7 @@ import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { SiteInfoFields } from "@/components/features/SiteInfo";
 import type { QuoteItem, ServiceCategory } from "@/lib/db/types";
 import { QuoteEditor } from "@/components/features/QuoteEditor";
+import type { TaxMode } from "@/lib/quote-calc";
 import { itemCategoryProps } from "@/lib/mgmt/categories";
 import { dokoChoiceInfo } from "@/lib/mgmt/costing";
 import { Button, Card, Field, Flash, FormActions, Input, LinkButton, Note, PageHeader, Select, Textarea } from "@/components/ui";
@@ -60,7 +61,8 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
   // 手書き見積書: 担当者・税込・現場情報 (備考欄以下)・お渡し済み
   const handwritten = doc?.kind === "handwritten_quote";
   const estimatorDefault = matchStaff(db.users, exText("staffName"), customer?.storeId ?? user.storeId)[0] ?? user.id;
-  const taxIncludedDefault = ex.taxIncluded === true || ex.taxMode === "税込";
+  // 見積は内税 (税込) が標準 (お客様のご要望 2026-11-24「①」)。読み取った見積書が「税抜」のときだけ外税
+  const taxModeDefault: TaxMode = ex.taxMode === "税抜" || (ex.taxMode !== "税込" && ex.taxIncluded === false) ? "excluded" : "included";
   const siteDefaults = doc ? toSiteInfo({ ...ex, remarks: ex.note }) : undefined;
   const canRegisterCustomer = userCanCreateCustomer(db, user);
   const newCustomerHref = `/customers/new?${new URLSearchParams({ ...(exText("customerName") ? { name: exText("customerName") } : {}), ...(exText("furigana") ? { kana: exText("furigana") } : {}), ...(exText("phone") ? { phone: exText("phone") } : {}), ...(exText("siteAddress") ? { address: exText("siteAddress") } : {}), returnTo: `/quotes/new?documentId=${doc?.id ?? ""}` })}`;
@@ -120,7 +122,7 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
           </div>
           <div>
             <div className="label">明細</div>
-            <QuoteEditor products={db.products} defaultCategory={docCategoryValue} initialItems={initialItems} autoOnLoad initialDiscount={typeof ex.discount === "number" ? ex.discount : 0} initialTaxIncluded={taxIncludedDefault} {...itemCategoryProps(db, docCategoryValue)} doko={dokoChoiceInfo(db, toDateKey(new Date()))} />
+            <QuoteEditor products={db.products} defaultCategory={docCategoryValue} initialItems={initialItems} autoOnLoad initialDiscount={typeof ex.discount === "number" ? ex.discount : 0} initialTaxMode={taxModeDefault} {...itemCategoryProps(db, docCategoryValue)} doko={dokoChoiceInfo(db, toDateKey(new Date()))} />
           </div>
           <Field label="施工内容 (見積書に印字し、受注に引き継ぎます)" hint="例: 和室6畳 表替え (さくら)。家具の移動・古畳の引取を含みます">
             <Textarea name="workDetails" rows={3} defaultValue={defaultWork} />

@@ -19,6 +19,7 @@ export function MapDocUploader({
   replaceLabel,
   defaultShareable,
   compact,
+  onDone,
 }: {
   targetType: string;
   targetId: string;
@@ -27,6 +28,8 @@ export function MapDocUploader({
   replaceLabel?: string;
   defaultShareable?: boolean;
   compact?: boolean;
+  /** 登録できたとき (予定表の小さな画面: 画面を移らずに地図の一覧を読み直す)。なければ画面の上のお知らせに出す */
+  onDone?: (message: string) => void;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -84,6 +87,10 @@ export function MapDocUploader({
       setResult({ ok: true, text });
       form.reset();
       setPicked("");
+      if (onDone) {
+        onDone(text);
+        return;
+      }
       // 画面の上のお知らせ (msg) に結果を出す (差し替えると、この欄は新しい版の行に置き換わるため)
       const url = new URL(window.location.href);
       url.searchParams.delete("err");

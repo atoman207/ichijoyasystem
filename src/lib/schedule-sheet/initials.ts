@@ -65,3 +65,29 @@ export function staffInitials(users: Staff[]): (ch: string, storeId?: string) =>
     return m;
   };
 }
+
+/**
+ * 予定表に出す担当者の略称 (1 文字。お客様のご要望 2026-11-24「⑥」: 予定表でも誰がその現場へ行くか分かるように)
+ * 予定表のスプレッドシートの書き方 (上の staffInitials) で、その 1 文字からその人に決まる文字を選ぶ:
+ *   名字の 1 文字目 → 名前の 1 文字目 → 名字の 2 文字目以降 → 名前の 2 文字目以降 (社長は「社」)。どれも決まらなければ名字の 1 文字目
+ */
+export function initialsByUser(users: Staff[]): Map<string, string> {
+  const find = staffInitials(users);
+  const out = new Map<string, string>();
+  for (const u of users) {
+    const [surname = "", ...given] = nk(u.name).split(/\s+/);
+    const g = given.join("");
+    const sur = [...surname];
+    const giv = [...g];
+    let pick = "";
+    if (/社長/.test(u.title ?? "") && !/副社長/.test(u.title ?? "") && find("社").userId === u.id) pick = "社";
+    for (const c of pick ? [] : [sur[0], giv[0], ...sur.slice(1), ...giv.slice(1)]) {
+      if (c && find(c).userId === u.id) {
+        pick = c;
+        break;
+      }
+    }
+    out.set(u.id, pick || sur[0] || [...u.name][0] || "?");
+  }
+  return out;
+}

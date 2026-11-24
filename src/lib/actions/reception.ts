@@ -11,6 +11,8 @@ import { CHANNEL_LABEL } from "@/lib/constants";
 import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { createInquiryRequest } from "@/lib/inquiry-requests";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
+import { newCaseStore } from "@/lib/store-area";
+import { isCommonStaff } from "@/lib/staff-choices";
 import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { dueAtFrom } from "@/lib/inquiry-flow";
 import { taskNotices } from "@/lib/notify/events";
@@ -340,10 +342,10 @@ export async function registerReception(formData: FormData) {
       assertOpen(doc, back);
       let customer = customerId ? d.customers.find((c) => c.id === customerId) : undefined;
       if (customerId && !customer) fail(back, "選んだお客様が見つかりません。");
-      // 店長は全店舗のお客様の問い合わせを登録できる (問い合わせの店舗は自店舗。actions/inquiries.ts の createInquiry と同じ)
+      // 店長は全店舗のお客様の問い合わせを登録できる
       if (customer) assertCaseStore(user, customer.storeId, back);
-      const storeId = resolveStoreId(user, str(formData, "storeId"), customer?.storeId ?? doc.storeId);
-      assertStore(user, storeId, back);
+      // 担当店舗: 選んだ店舗 (自店舗・住所の担当エリアの店舗。全店舗のロールはすべて) > 住所の担当エリア > お客様の店舗 > 受付の店舗 (お客様のご要望 2026-11-24「③」)
+      const storeId = newCaseStore(d, user, { requested: str(formData, "storeId") || (customer?.storeId ?? doc.storeId), address: f.address, customer }).storeId;
       // 新しいお客様として登録 (顧客も同時に登録。二重登録を防ぐため、同じお客様の候補があれば「別のお客様」の確認が要る)
       if (newCustomer && canCreate) {
         const name = f.customerName || f.companyName;
@@ -383,7 +385,7 @@ export async function registerReception(formData: FormData) {
       if (!contactName) fail(back, "お客様のお名前を入力するか、登録済みのお客様を選んでください。");
       const assignee = d.users.find((u) => u.id === assigneeId && u.active);
       if (!assignee) fail(back, "担当者が見つかりません。");
-      if (!canSeeAllStores(user) && assignee.storeId !== storeId && assignee.role !== "admin" && assignee.role !== "hq_staff") fail(back, "担当者は、この店舗の社員か本部の社員から選んでください。");
+      if (!canSeeAllStores(user) && assignee.storeId !== storeId && assignee.role !== "admin" && assignee.role !== "hq_staff" && !isCommonStaff(d, assignee)) fail(back, `担当者は、担当店舗 (${d.stores.find((s) => s.id === storeId)?.name ?? storeId}) の社員か本部の社員から選んでください (自分で担当するときは、担当店舗を自店舗にしてください)。`);
       applyFields(doc, f, user, channel);
       const now = nowIso();
       const detail = [
