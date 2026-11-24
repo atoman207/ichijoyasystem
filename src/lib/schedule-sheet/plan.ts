@@ -18,6 +18,7 @@ import { addAudit, newId, nextCustomerCode, nextNumber, nowIso } from "@/lib/db/
 import { stripKindWords } from "@/lib/work-summary";
 import { addDays, toDateKey } from "@/lib/format";
 import { foldName, staffMatcher, type StaffAliases } from "@/lib/survey-workbook/staff";
+import { staffInitials } from "./initials";
 import { fold, nk, splitName, withoutTime, type SheetEvent, type SheetMonth } from "./parse";
 
 export const SHEET_SETTINGS_ID = "schedule_sheet";
@@ -195,8 +196,12 @@ function memoOf(ev: SheetEvent, unknownStaff: string[]): string | undefined {
 /** 「時間・担当」の欄で名前ではない言葉 */
 const STAFF_STOP = /^(仮|済|済み|未定|未|現金|振込|確認|予定|TEL|電話|連絡|集金|持参|かえ|替え|人|名|可|不可|頃|以降|まで|から|午前|午後|AM|PM|納品|引取|引き取り|ハギ|シキ|当日|翌日|朝|夕方|昼|夜)$/i;
 
-/** 「時間・担当」の欄の名前 → 社員 (時刻・数字・記号を除いて区切る。区切りのない「田中中村」は知っている名前で前から分ける) */
-function staffOf(text: string | undefined, match: ReturnType<typeof staffMatcher>, known: string[]): { ids: string[]; unknown: string[] } {
+/**
+ * 「時間・担当」の欄の名前 → 社員 (時刻・数字・記号を除いて区切る)。
+ * 区切りのない書き方 (「田中中村」「緒菅」「立見」「マ上」) は前から、知っている名前 (2 文字以上) → 対応表 → 略称 (1 文字。initials.ts) の順に分ける。
+ * 全部の文字が社員に当たったときだけ担当にする (当たらない文字があれば、その書き方は「社員に当たらない名前」)
+ */
+export function staffOf(text: string | undefined, match: ReturnType<typeof staffMatcher>, known: string[], initial: ReturnType<typeof staffInitials>, storeId?: StoreId): { ids: string[]; unknown: string[] } {
   const ids: string[] = [];
   const unknown: string[] = [];
   if (!text) return { ids, unknown };
@@ -204,27 +209,44 @@ function staffOf(text: string | undefined, match: ReturnType<typeof staffMatcher
     .replace(/\d{1,2}(?::\d{2})?\s*(?:時半?)?\s*[〜～~\-ー－]\s*(?:\d{1,2}(?::\d{2})?\s*時?半?)?/g, " ")
     .replace(/\d{1,2}:\d{2}|\d{1,2}時半?|頃|以降|から|まで|AM|PM|午前|午後/gi, " ")
     .replace(/[0-9０-９:：()（）\[\]【】.。、,，・/／&＆+＋→]/g, " ");
+  const add = (id: string) => {
+    if (!ids.includes(id)) ids.push(id);
+  };
   for (const tok of cleaned.split(/\s+/).filter(Boolean)) {
     if (STAFF_STOP.test(tok)) continue;
+    // 「社」「社長」= 肩書きに社長のある社員 (foldName は「社長」を敬称として消すため先に見る)
+    if (tok === "社" || tok === "社長") {
+      const im = initial(tok, storeId);
+      if (im.userId) add(im.userId);
+      else unknown.push(tok);
+      continue;
+    }
     const m = match(tok);
     if (m.userId) {
-      if (!ids.includes(m.userId)) ids.push(m.userId);
+      add(m.userId);
       continue;
     }
     if (m.via === "ignored") continue;
-    // 区切りのない名前 (知っている名前で前から)
+    // 区切りのない名前・略称 (前から: 知っている名前 → 1 文字の対応表 → 略称)
     let rest = foldName(tok);
     const found: string[] = [];
     while (rest) {
       const k = known.find((w) => rest.startsWith(w));
-      if (!k) break;
-      const u = match(k).userId;
-      if (u && !found.includes(u)) found.push(u);
-      rest = rest.slice(k.length);
+      const ku = k ? match(k).userId : undefined;
+      if (k && ku) {
+        if (!found.includes(ku)) found.push(ku);
+        rest = rest.slice(k.length);
+        continue;
+      }
+      const ch = [...rest][0];
+      const cm = match(ch);
+      const cu = cm.userId ?? initial(ch, storeId).userId;
+      if (!cu) break;
+      if (!found.includes(cu)) found.push(cu);
+      rest = rest.slice(ch.length);
     }
-    if (found.length && !rest) {
-      for (const u of found) if (!ids.includes(u)) ids.push(u);
-    } else if (tok.length <= 8 && !/[^\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]/u.test(tok)) unknown.push(tok);
+    if (found.length && !rest) for (const u of found) add(u);
+    else if (tok.length <= 8 && !/[^\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]/u.test(tok)) unknown.push(tok);
   }
   return { ids, unknown };
 }
@@ -243,6 +265,7 @@ export function planSheetImport(db: Database, months: SheetMonth[], opts: PlanOp
   const settings = sheetSettings(db);
   const users = db.users.filter((u) => !u.id.startsWith("u_review"));
   const match = staffMatcher(users, settings.aliases);
+  const initial = staffInitials(users);
   const known = [
     ...new Set(
       [
@@ -288,11 +311,11 @@ export function planSheetImport(db: Database, months: SheetMonth[], opts: PlanOp
         } else if (pm.via !== "ignored") unknown.push(ev.person);
       }
       if (ev.side === "hagi" || ev.side === "shiki" || ev.side === "memo") {
-        const st = staffOf(ev.staffText, match, known);
+        const st = staffOf(ev.staffText, match, known, initial, ev.storeId);
         assigneeIds = [...new Set([...assigneeIds, ...st.ids])];
         unknown.push(...st.unknown);
         if (ev.kind === "leave") {
-          const who = staffOf(ev.raw.replace(/有休|有給|公休|振休|代休|休み|お休|欠勤|特休|慶弔|午前|午後|AM|PM/gi, " "), match, known);
+          const who = staffOf(ev.raw.replace(/有休|有給|公休|振休|代休|休み|お休|欠勤|特休|慶弔|午前|午後|AM|PM/gi, " "), match, known, initial, ev.storeId);
           assigneeIds = [...new Set([...assigneeIds, ...who.ids])];
         } else if (ev.side === "memo") {
           // 「社長 3450 オイル交換」「上原 4134 車検」: 先頭の名前が社員ならその人の予定

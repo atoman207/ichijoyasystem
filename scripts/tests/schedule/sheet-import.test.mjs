@@ -381,6 +381,47 @@ eq([pick?.source, pick?.orderId, pick?.kind, pick?.date], ["order", o?.id, "pick
 eq(evs().filter((e) => e.customerId === newCust.id && e.kind === "pickup").length, 1, "引き取りの予定は 1 件のまま (二重にしない)");
 ok(evs().filter((e) => e.customerId === newCust.id).length <= beforeCount + 1, "増えたのは納品の予定 (後日) だけ");
 
+/* ================================================================== */
+section("5. 担当欄の略称 (社員の名前の頭文字。2026-11-24)");
+{
+  const IN = await imp("lib/schedule-sheet/initials.ts");
+  const ST = await imp("lib/survey-workbook/staff.ts");
+  // 架空の社員 (12 名の会社と同じ書き方: 名字の 1 文字目・名前の 1 文字目・名字の 2 文字目・読み・社長)
+  const staff = [
+    { id: "s_kame", name: "架井 慎一", storeId: "koshi", active: true, title: "代表取締役 社長" },
+    { id: "s_matu", name: "松木 孝", storeId: "koshi", active: true, title: "施工", kana: "まつき たかし" },
+    { id: "s_ue", name: "上野 真", storeId: "koshi", active: true, title: "営業", kana: "ウエノ マコト" },
+    { id: "s_oga", name: "緒川 和", storeId: "nishi", active: true, title: "店長" },
+    { id: "s_suga", name: "菅田 史", storeId: "nishi", active: true, title: "営業" },
+    { id: "s_tami", name: "髙美 慎吾", storeId: "tamana", active: true, title: "店長" },
+    { id: "s_tamo", name: "高杜", storeId: "tamana", active: true, title: "施工" },
+    { id: "s_tate", name: "立川 賢", storeId: "tamana", active: true, title: "営業" },
+    { id: "s_hira", name: "平原 光子", storeId: "hq", active: true, title: "事務" },
+    { id: "s_old", name: "緒田 昔", storeId: "nishi", active: false, title: "" },
+  ];
+  const ini = IN.staffInitials(staff);
+  eq(["緒", "菅", "立", "上"].map((c) => ini(c).userId), ["s_oga", "s_suga", "s_tate", "s_ue"], "名字の 1 文字目 (退職した社員は数えない)");
+  eq([ini("光").userId, ini("慎", "koshi").userId, ini("慎", "tamana").userId], ["s_hira", "s_kame", "s_tami"], "名前の 1 文字目 (同じ文字の 2 人は予定の店舗の社員)");
+  eq([ini("慎").userId, ini("慎").ambiguous, ini("慎", "nishi").ambiguous], [undefined, true, true], "店舗でも決まらなければ決めない");
+  eq([ini("美").userId, ini("杜").userId, ini("高").ambiguous], ["s_tami", "s_tamo", true], "名字の 1 文字目が同じ 2 人は 2 文字目 (髙/高 は同じ字)");
+  eq([ini("マ").userId, ini("ウ").userId], ["s_matu", "s_ue"], "カタカナは読みの頭文字 (名字の読みが先。ひらがなの読みも)");
+  eq([ini("社").userId, ini("社長").userId], ["s_kame", "s_kame"], "「社」「社長」は肩書きの社長");
+  eq([ini("森").userId, ini("キ").userId], [undefined, undefined], "当たらない文字は決めない");
+  const match = ST.staffMatcher(staff, {});
+  const known = ["立川", "緒川", "菅田", "上野", "髙美", "高杜", "松木", "架井"].map(ST.foldName);
+  const so = (t, store) => PL.staffOf(t, match, known, ini, store);
+  eq(so("緒菅", "nishi"), { ids: ["s_oga", "s_suga"], unknown: [] }, "続けて書いた 2 人 (緒菅)");
+  eq(so("立美", "tamana").ids, ["s_tate", "s_tami"], "立美 = 立川 + 髙美");
+  eq(so("マ上", "koshi").ids, ["s_matu", "s_ue"], "マ上 = 読み + 名字");
+  eq(so("慎上", "koshi").ids, ["s_kame", "s_ue"], "慎上 = 名前 + 名字 (店舗で決める)");
+  eq(so("社+1", "koshi").ids, ["s_kame"], "社+1 = 社長");
+  eq(so("13:00~ 立川", "tamana").ids, ["s_tate"], "名字の書き方は従来どおり");
+  eq(so("立今", "tamana"), { ids: [], unknown: ["立今"] }, "当たらない文字が混じる書き方は担当にしない (社員に当たらない名前)");
+  eq(so("今村", "hq"), { ids: [], unknown: ["今村"] }, "社員でない名前は担当にしない");
+  const withAlias = ST.staffMatcher(staff, { マ: "s_ue" });
+  eq(PL.staffOf("マ", withAlias, known, ini, "koshi").ids, ["s_ue"], "対応表に書いた略称は対応表が優先");
+}
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 fs.rmSync(work, { recursive: true, force: true });
 if (fails.length) {
