@@ -479,13 +479,6 @@ export class Sheet {
     return LOGO_VIEWBOX.height * scale;
   }
 
-  /** 押印欄 (社印): 薄い枠と「印」 */
-  sealBox(x: number, top: number, size: number): void {
-    this.rect(x, top, size, size, { stroke: C.faint, lineWidth: 0.6 });
-    const labelSize = Math.min(11, size * 0.3);
-    this.text("印", x + size / 2, centerBaseline(top, size, labelSize), { size: labelSize, color: C.faint, align: "center" });
-  }
-
   /** ページ中央に斜めの透かし */
   private watermark(page: PDFPage, mark: Watermark): void {
     const text = this.ts.clean(mark.text);

@@ -20,7 +20,7 @@ import type { InvoicePdfData, PdfBankAccount, PdfCompany, PdfLine, PurchaseOrder
  * 帳票 PDF (御見積書・請求書・領収書)
  * ------------------------------------------------------------
  * Route Handler (Node ランタイム) から呼ぶ。ブラウザは使わず pdf-lib で A4 縦に描く。
- * - 1 ページ目: 表題 (中央)・番号と日付 (右上)・宛名と金額 (左)・会社と押印欄 (右)
+ * - 1 ページ目: 表題 (中央)・番号と日付 (右上)・宛名と金額 (左)・会社と押印の余白 (右)
  * - 明細表: 入りきらなければ次のページへ続け、見出し行を繰り返す (ページ上部に「(続き)」)
  * - 合計・税率別内訳・お振込先・施工内容・備考は明細のあと (入らなければ次のページ)
  * - 2 ページ以上のときは下中央に「1 / 2」。下書きの見積・無効の請求書は斜めの透かし
@@ -168,7 +168,7 @@ function amountRows(s: Sheet, x: number, top: number, width: number, rows: Amoun
   return t;
 }
 
-/** 会社 (ロゴ・押印欄・社名・住所・連絡先・登録番号・担当店舗・担当者)。下端を返す */
+/** 会社 (ロゴ・押印の余白・社名・住所・連絡先・登録番号・担当店舗・担当者)。下端を返す */
 function companyBlock(
   s: Sheet,
   x: number,
@@ -178,7 +178,7 @@ function companyBlock(
   o: { logoWidth: number; seal: number; staffName?: string },
 ): number {
   const logoH = s.logo(x, top, o.logoWidth);
-  s.sealBox(x + width - o.seal, top - 2, o.seal);
+  // 押印欄: 枠と「印」は描かず、押す場所 (ロゴの右・o.seal 四方) だけを空けておく (お客様のご要望 2026-11-24: 当面は印鑑なしで運用)
   let t = top + Math.max(logoH, o.seal - 2) + 4;
   t += 14;
   s.text(c.name, x, t, { size: 10.5, weight: "bold", maxWidth: width, shrinkTo: 8 });
