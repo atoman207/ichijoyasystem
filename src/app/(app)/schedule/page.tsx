@@ -3,8 +3,9 @@ import clsx from "clsx";
 import { CalendarDays, CalendarOff, ChartGantt, ChevronLeft, ChevronRight, Columns3, Factory, FileSpreadsheet, Gauge, LayoutGrid, List, Plus, Route, Rows3, TriangleAlert, UserRound } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
+import { defaultScheduleStore } from "@/lib/schedule-default";
 import type { ScheduleEvent, ScheduleKind, StoreId } from "@/lib/db/types";
-import { canAccessStore, canImportScheduleSheet, canSeeAllStores, canViewCompanySchedule } from "@/lib/auth/permissions";
+import { canAccessStore, canImportScheduleSheet, canViewCompanySchedule } from "@/lib/auth/permissions";
 import { redirect } from "next/navigation";
 import { createCaseResolver, orderEditable, type CaseRef } from "@/lib/db/schedule";
 import { isHandoverEvent } from "@/lib/db/handover-events";
@@ -47,8 +48,8 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
 
   const view: View = VIEWS.some((v) => v.id === sp.view) ? (sp.view as View) : "week";
   const anchor = isDateKey(sp.date) ? sp.date : today;
-  // 店舗: 指定がなければ、店舗ロールは自店舗・全店舗ロールは全社 (どちらも全店舗の予定を閲覧可)
-  const storeParam = sp.store === "all" || db.stores.some((s) => s.id === sp.store) ? (sp.store as string) : canSeeAllStores(user) ? "all" : user.storeId;
+  // 店舗: 指定がなければ初期表示 = 所属店舗だけ (管理者・本部の所属は全社)。タブでほかの店舗・全社に切り替えられる (src/lib/schedule-default.ts)
+  const storeParam = sp.store === "all" || db.stores.some((s) => s.id === sp.store) ? (sp.store as string) : defaultScheduleStore(db, user);
   const storeFilter = storeParam === "all" ? undefined : (storeParam as StoreId);
   const userParam = sp.user === "me" ? user.id : sp.user && db.users.some((u) => u.id === sp.user) ? sp.user : "";
   const kindParam = sp.kind === "case" || sp.kind === "internal" || SCHEDULE_KINDS.includes(sp.kind as ScheduleKind) ? (sp.kind as string) : "";

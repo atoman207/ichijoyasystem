@@ -351,6 +351,23 @@ mr = RC.matchReception(db(), staffUser, fields({ customerName: "", address: "", 
 eq(mr.customers[0] && [mr.customers[0].customer.id, mr.customers[0].level], ["cm_a", "phone"], "追加した番号でも次から紐付けの候補に出る");
 eq(LS.searchCustomers(db(), staffUser, "080-7777-6666")[0]?.id, "cm_a", "追加した番号で顧客を検索できる");
 
+section("予定表の初期表示の店舗 (お客様のご要望 2026-11-24: 所属店舗だけ / 管理者・本部は全店舗)");
+{
+  const SD = await imp("lib/schedule-default.ts");
+  const stores = db().stores;
+  const u = (role, storeId) => ({ id: `u_${role}_${storeId}`, role, storeId, name: "x", email: "x", active: true });
+  const real = stores.filter((s) => s.kind !== "hq");
+  ok(real.length >= 4 && real.every((s) => SD.defaultScheduleStore(db(), u("store_staff", s.id)) === s.id), "店舗スタッフ → 所属店舗だけ (合志・中央・西・玉名)");
+  ok(real.every((s) => SD.defaultScheduleStore(db(), u("store_manager", s.id)) === s.id), "店長 → 所属店舗だけ");
+  eq(SD.defaultScheduleStore(db(), u("admin", real[0].id)), "all", "管理者 (店舗の所属でも) → 全店舗");
+  eq(SD.defaultScheduleStore(db(), u("hq_staff", "hq")), "all", "本部スタッフ → 全店舗");
+  const hq = stores.find((s) => s.kind === "hq");
+  eq(SD.defaultScheduleStore(db(), u("store_staff", hq.id)), "all", "本部の店舗に所属する社員 (ロールが店舗スタッフでも) → 全店舗");
+  eq(SD.defaultScheduleStore(db(), u("store_staff", "gone")), "all", "所属の店舗が見つからない → 全店舗");
+  const page = fs.readFileSync(path.join(root, "src/app/(app)/schedule/page.tsx"), "utf8");
+  ok(/sp\.store === "all" \|\| db\.stores\.some\(\(s\) => s\.id === sp\.store\) \? \(sp\.store as string\) : defaultScheduleStore\(db, user\)/.test(page), "予定表は URL の店舗 (タブで切り替えたもの) を優先し、なければ初期表示");
+}
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   for (const f of fails) console.log("  ✗", f);
