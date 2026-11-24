@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
@@ -78,7 +79,9 @@ function EventQuickDialog({ id, returnTo, onClose }: { id: string; returnTo: str
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  return (
+  // 画面 (body) に直接出す: 本文の枠 (@container・表示のアニメーションの transform) の中だと fixed が本文の枠を基準にしてしまい、
+  // 長い予定表では小さな画面が画面の外 (本文の真ん中・下端) に出て操作できなかった (2026-11-24 お客様のご連絡)
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-6">
       <button type="button" tabIndex={-1} aria-label="閉じる" className="absolute inset-0 bg-ink/40 backdrop-blur-[1px]" onClick={onClose} />
       <section
@@ -114,7 +117,8 @@ function EventQuickDialog({ id, returnTo, onClose }: { id: string; returnTo: str
           {data && <QuickBody data={data} returnTo={returnTo} />}
         </div>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

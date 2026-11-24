@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "@/components/ui/Link";
 import { ChevronLeft, ChevronRight, Download, FileText, Trash2, X } from "lucide-react";
 import type { AttachmentView } from "@/lib/attachments";
@@ -94,7 +95,9 @@ export function AttachmentGallery({ items, deleteAction, returnTo, showParent = 
         </ul>
       )}
 
-      {current && (
+      {/* 画面 (body) に直接出す (本文の枠の中だと fixed が本文の枠を基準にしてしまう。EventQuick.tsx と同じ) */}
+      {current &&
+        createPortal(
         <div role="dialog" aria-modal="true" aria-label={`写真 ${open! + 1} / ${photos.length}`} className="fixed inset-0 z-50 flex flex-col bg-black/90 text-white" onClick={close}>
           <div className="flex flex-wrap items-center gap-2 px-4 py-3 text-xs" onClick={(e) => e.stopPropagation()}>
             <div className="min-w-0 flex-1">
@@ -118,8 +121,9 @@ export function AttachmentGallery({ items, deleteAction, returnTo, showParent = 
               </>
             )}
           </div>
-        </div>
-      )}
+        </div>,
+          document.body,
+        )}
     </div>
   );
 }
