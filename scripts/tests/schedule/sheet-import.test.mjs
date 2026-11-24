@@ -420,6 +420,16 @@ section("5. 担当欄の略称 (社員の名前の頭文字。2026-11-24)");
   eq(so("今村", "hq"), { ids: [], unknown: ["今村"] }, "社員でない名前は担当にしない");
   const withAlias = ST.staffMatcher(staff, { マ: "s_ue" });
   eq(PL.staffOf("マ", withAlias, known, ini, "koshi").ids, ["s_ue"], "対応表に書いた略称は対応表が優先");
+  // カタカナの略称 (漢字の略称の読み・呼び名。お客様の一覧 2026-11-24 と同じ書き方: オ・スガ・タチ・ミ・モリ・ヒカリ・シャ、オスガ・タチミ・マガミ) は対応表に書く
+  const kataAliases = { オ: "s_oga", スガ: "s_suga", タチ: "s_tate", ミ: "s_tami", モリ: "s_tamo", ヒカリ: "s_hira", シャ: "s_kame", マ: "s_matu", ガミ: "s_ue" };
+  const kata = ST.staffMatcher(staff, kataAliases);
+  // planSheetImport と同じ: 2 文字以上の対応表の名前も「知っている名前」に入れる
+  const kKnown = [...new Set([...known, ...Object.keys(kataAliases).map(ST.foldName).filter((x) => x.length >= 2)])].sort((a, b) => b.length - a.length);
+  const ks = (t, store) => PL.staffOf(t, kata, kKnown, ini, store).ids;
+  eq(["オ", "スガ", "タチ", "ミ", "モリ", "ヒカリ", "シャ"].map((t) => ks(t)), [["s_oga"], ["s_suga"], ["s_tate"], ["s_tami"], ["s_tamo"], ["s_hira"], ["s_kame"]], "カタカナの略称 (対応表)");
+  eq([ks("オスガ", "nishi"), ks("タチミ", "tamana"), ks("マガミ", "koshi")], [["s_oga", "s_suga"], ["s_tate", "s_tami"], ["s_matu", "s_ue"]], "続けて書いたカタカナの略称 (オスガ・タチミ・マガミ)");
+  eq([ks("緒菅", "nishi"), ks("マ上", "koshi"), ks("社+1", "koshi")], [["s_oga", "s_suga"], ["s_matu", "s_ue"], ["s_kame"]], "カタカナの対応表があっても漢字の略称は今までどおり");
+  eq([ks("シャッター"), ks("スガワラ"), ks("ミーティング")], [[], [], []], "略称で始まるだけの言葉は担当にしない");
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);
