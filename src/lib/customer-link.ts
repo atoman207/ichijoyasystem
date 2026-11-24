@@ -1,6 +1,17 @@
-import type { Customer, Database, Inquiry } from "@/lib/db/types";
+import type { Customer, Database, Inquiry, User } from "@/lib/db/types";
+import { canEditCaseStore, canReadStoreRecords } from "@/lib/auth/permissions";
+import { policyReader } from "@/lib/access-policy";
 import { addAudit, nowIso } from "@/lib/db/store";
 import { linkInquiryLogs } from "@/lib/ai-intake";
+
+/**
+ * 問い合わせ (受付) を紐付けられるお客様: 顧客の一覧で見られるお客様 (閲覧の範囲の設定。初期設定は全社員が全店舗) と、変更できる店舗のお客様。
+ * 紐付けはお客様の記録を変えない (問い合わせの店舗・担当はそのまま) ため、ほかの店舗・本部で登録したお客様にも紐付けられる
+ * (お客様のご要望 2026-11-24「顧客の二重登録を防ぐ」: 顧客検索で見つかるお客様が紐付けの候補に出なかった)
+ */
+export function canLinkToCustomer(db: Pick<Database, "settings">, user: User, c: Pick<Customer, "storeId">): boolean {
+  return canEditCaseStore(user, c.storeId) || canReadStoreRecords(policyReader(db, user), c.storeId);
+}
 
 /**
  * 問い合わせ (案件) と既存の顧客のひも付け (お客様のご要望 2026-11-24「■3」「■5」「■6」)

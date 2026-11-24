@@ -166,7 +166,7 @@ section("2. 照合と登録先の提案");
 {
   const f = (o) => R.normalizeReception({ callType: "new_inquiry", ...o });
   const m1 = R.matchReception(db(), koshiStaff, f({ phone: "09081010001", customerName: "受付 一郎" }));
-  eq(m1.customers.map((c) => [c.customer.id, c.level]), [["cust_rc1", "phone"]], "電話番号 (ハイフンなし) でお客様を見つける");
+  eq(m1.customers.map((c) => [c.customer.id, c.level]), [["cust_rc1", "phone"], ["cust_rc2", "name"]], "電話番号 (ハイフンなし) でお客様を見つける (電話の一致が先、名字の一致はそのあと)");
   eq(m1.suggestion.action, "inquiry", "新しい問い合わせ → 問い合わせとして登録");
   eq(m1.suggestion.customerId, "cust_rc1", "登録済みのお客様を選ぶ");
   ok(m1.cases.some((c) => c.id === "ord_rc1" && c.open) && !m1.cases.some((c) => c.id === "ord_rc2"), "進行中の受注は候補、半年より前に終わった受注は出さない");
@@ -188,13 +188,18 @@ section("2. 照合と登録先の提案");
   eq(R.matchReception(db(), koshiStaff, f({ callType: "sales" })).suggestion.action, "dismiss", "営業電話 → 記録しない");
 
   const m6 = R.matchReception(db(), koshiStaff, f({ phone: "090-8102-0002" }));
-  ok(m6.customers.length === 0 && m6.otherStores[0]?.storeId === "nishi" && m6.warnings.some((w) => w.includes("西")), "ほかの店舗のお客様は候補に出さず、店舗名だけ知らせる");
+  eq(m6.customers[0]?.customer.id, "cust_rc2", "ほかの店舗のお客様も候補に出す (顧客の一覧で見られるお客様。閲覧の範囲の初期設定 = 全社員)");
+  // 閲覧の範囲を「進行中の案件だけ」にしたときは、ほかの店舗のお客様は候補に出さず、店舗名だけ知らせる
+  await store.mutate((d) => d.settings.push({ id: "access_policy", value: { figures: "all", customers: "open", grantDays: 7 }, updatedAt: "2026-01-01T00:00:00Z" }));
+  const m6c = R.matchReception(db(), koshiStaff, f({ phone: "090-8102-0002" }));
+  ok(m6c.customers.length === 0 && m6c.otherStores[0]?.storeId === "nishi" && m6c.warnings.some((w) => w.includes("西")), "閲覧の範囲の外のお客様は候補に出さず、店舗名だけ知らせる");
+  await store.mutate((d) => (d.settings = d.settings.filter((x) => x.id !== "access_policy")));
   const m6b = R.matchReception(db(), admin, f({ phone: "090-8102-0002" }));
   eq(m6b.customers[0]?.customer.id, "cust_rc2", "全店舗を見られる人には候補に出す");
 
   ok(R.matchReception(db(), koshiStaff, f({ phone: "090-8103-0003" })).warnings.some((w) => w.includes("取引停止")), "取引停止のお客様は知らせる");
   const m7 = R.matchReception(db(), koshiStaff, f({ customerName: "受付 一郎", phone: "" }));
-  eq(m7.customers.map((c) => c.level), ["name"], "電話番号がなければお名前で候補を出す (自動では選ばない)");
+  eq(m7.customers.map((c) => [c.customer.id, c.level]), [["cust_rc1", "name"], ["cust_rc2", "name"]], "電話番号がなければお名前・名字で候補を出す (お名前のままの一致が先。自動では選ばない)");
   eq(m7.suggestion.customerId, undefined, "お名前だけの一致はお客様を選ばない");
 
   const m8 = R.matchReception(db(), koshiStaff, f({ customerName: "受付 一郎", phone: "", address: "合志市須屋 1-1" }));

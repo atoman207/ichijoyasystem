@@ -63,9 +63,17 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
       m.suggestion = { action: "inquiry", customerId: preset.id, reason: `${preset.name} 様の画面から取り込んだ受付です (お客様は決まっています)。読み取った内容を確かめて「問い合わせとして登録」してください` };
       m.customers = m.customers.filter((c) => c.customer.id !== preset.id);
     }
+    // 候補のカードにお名前・住所・電話を出す (正しいお客様かその場で確かめる。お客様のご要望 2026-11-24)
+    const view = (c: (typeof db.customers)[number]) => ({
+      name: c.name,
+      address: c.address || (c.area ? `地区 ${c.area}` : ""),
+      phone: [c.phone, ...(c.contacts ?? []).map((x) => x.phone)].filter(Boolean).slice(0, 2).join(" / "),
+      code: c.code,
+      storeName: storeName(c.storeId),
+    });
     const customers: ReviewCustomer[] = [
-      ...(preset ? [{ id: preset.id, label: custLabel(preset), level: "preset" as const, reason: "顧客の画面から登録" }] : []),
-      ...m.customers.slice(0, 8).map((c) => ({ id: c.customer.id, label: custLabel(c.customer), level: c.level, reason: c.reason })),
+      ...(preset ? [{ id: preset.id, label: custLabel(preset), level: "preset" as const, reason: "顧客の画面から登録", ...view(preset) }] : []),
+      ...m.customers.map((c) => ({ id: c.customer.id, label: custLabel(c.customer), level: c.level, reason: c.reason, ...view(c.customer) })),
     ];
     // 案件: 住所・電話で一致したお客様の案件 + お名前で一致したお客様の案件 (選んだときに出す)
     const list: CaseCandidate[] = [...m.cases];

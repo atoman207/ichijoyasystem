@@ -254,6 +254,66 @@ globalThis.__testUser = undefined;
 const data = await res.json();
 eq([res.status, data.pair?.want, data.pair?.events.length > 0, data.staff[0].group, data.staff.some((s) => s.group === "common"), typeof data.map], [200, "delivery", true, "store", true, "object"], "小さな画面: 地図・担当者の選択肢 (予定の店舗が先・本部)・納品の予定");
 
+/* ================================================================== */
+section("問合せ登録の紐付け候補 (住所 → 電話 → 名字。ほかの店舗のお客様も)");
+const CM = await imp("lib/customer-match.ts");
+eq(
+  [
+    CM.addressMatch("見本町台33", "熊本県見本郡見本町台33"),
+    CM.addressMatch("北区ためし万石5丁目9-17", "熊本市北区ためし万石5-9-17"),
+    CM.addressMatch("熊本市ためし町岩野123の4", "熊本市北区ためし町岩野123-4"),
+    CM.addressMatch("みほん台2127", "見本市みほん台2127-120"),
+    CM.addressMatch("白見本2-3-81 ハイム見本1409", "熊本市南区白見本2丁目3-81 ハイム見本 1201号"),
+    CM.addressMatch("白見本2-3-81 ハイム見本1409", "熊本市南区白見本2丁目3-81 ハイム見本1409号"),
+    CM.addressMatch("みほん台2127", "見本市みほん台3000"),
+    CM.addressMatch("みほん台2", "見本市みほん台2-1-5"),
+    CM.addressMatch("ためし町1", "見本町1"),
+  ],
+  ["exact", "exact", "exact", "partial", "building", "exact", "town", "town", undefined],
+  "住所の一致: 県・郡・市・区の省略・「の」・号の省略・同じ建物のほかの部屋・町名だけ",
+);
+eq(
+  [
+    CM.nameMatch({ name: "見本" }, { name: "見本 一郎", kana: "" }),
+    CM.nameMatch({ name: "見本一郎" }, { name: "見本 一郎", kana: "" }),
+    CM.nameMatch({ name: "見本 次郎様" }, { name: "見本 一郎", kana: "" }),
+    CM.nameMatch({ name: "ミホン" }, { name: "見本 一郎", kana: "ミホン イチロウ" }),
+    CM.nameMatch({ name: "みほん いちろう" }, { name: "見本 一郎", kana: "ミホン イチロウ" }),
+    CM.nameMatch({ name: "林田" }, { name: "林", kana: "" }),
+    CM.nameMatch({ name: "林" }, { name: "林", kana: "" }),
+    CM.nameMatch({ name: "見本" }, { name: "試験 花子", kana: "" }),
+  ],
+  ["surname", "full", "surname", "surname", "full", undefined, "full", undefined],
+  "名字の一致: 空白なし・敬称・かな (ふりがな)・1 文字の名字",
+);
+const RC = await imp("lib/reception.ts");
+const far = db().stores.find((x) => x.kind === "store" && x.id !== staffUser.storeId);
+const mkCust = (id, name, address, extra = {}) => ({ id, code: id.toUpperCase(), name, kana: "", type: "individual", phone: "", postalCode: "", address, storeId: far.id, tags: [], createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", ...extra });
+await store.mutate((x) => {
+  x.customers.push(
+    mkCust("cm_a", "見本 一郎", "熊本県見本郡見本町台33", { kana: "ミホン イチロウ" }),
+    mkCust("cm_b", "見本", "", { area: "見本町" }),
+    mkCust("cm_c", "試験 花子", "熊本県見本郡見本町台500"),
+    mkCust("cm_d", "見本 二郎", "熊本県見本郡見本町台200"),
+    mkCust("cm_e", "電話 太郎", "熊本県ほか市ほか町1", { phone: "090-1111-2222" }),
+  );
+});
+const fields = (o) => ({ ...RC.receptionFieldsOf({ extracted: {} }), ...o });
+let mr = RC.matchReception(db(), staffUser, fields({ customerName: "見本", address: "見本町台33", phone: "090-1111-2222" }));
+eq(mr.customers.map((c) => `${c.level}:${c.customer.id}`).filter((x) => x.includes("cm_")), ["address:cm_a", "phone:cm_e", "name:cm_b", "name:cm_d"], "① 住所 → ② 電話 → ③ 名字 (お名前のまま一致・同じ町の方が先)。町名だけ同じほかの名字のお宅は出さない");
+ok(/住所が一致・名字も一致/.test(mr.customers[0].reason) && mr.suggestion.customerId === "cm_a", `住所が一致するお客様を選んだ状態 (${mr.customers[0].reason})`);
+ok(far.id !== staffUser.storeId, "ほかの店舗のお客様も候補に出る (顧客の一覧で見られるお客様)");
+mr = RC.matchReception(db(), staffUser, fields({ customerName: "ミホン", address: "" }));
+ok(mr.customers.some((c) => c.customer.id === "cm_a" && c.level === "name"), "かなのお名前はふりがなと比べる");
+const LS = await imp("lib/link-search.ts");
+eq(LS.searchCustomers(db(), staffUser, "北区見本町台33")[0]?.id ?? LS.searchCustomers(db(), staffUser, "見本町台33")[0]?.id, "cm_a", "検索: 住所 (県・郡の書き方が違っても) でほかの店舗のお客様も探せる");
+const RAct = await imp("lib/actions/reception.ts");
+r = await act(staffUser, () => RAct.createReception(form({ source: "text", channel: "phone", storeId: staffUser.storeId, text: "見本様より電話。見本町台33。畳の表替え。" })));
+const rdoc = db().documents.filter((x) => x.kind === "reception").at(-1);
+r = await act(staffUser, () => RAct.registerReception(form({ id: rdoc.id, quick: "inquiry:cm_a", media: "repeat", confirmedUncertain: "on" })));
+const linked = db().inquiries.at(-1);
+eq([r.err, linked.customerId], [null, "cm_a"], `ほかの店舗のお客様にワンタッチで紐付けて登録 (${r.msg ?? r.err})`);
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   for (const f of fails) console.log("  ✗", f);

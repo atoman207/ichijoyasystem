@@ -64,7 +64,7 @@ export function CustomerLinkSearch({ action, inquiryId, returnTo, initialQuery =
     <div className="space-y-2" data-testid="customer-link-search">
       <SearchBox value={s.q} onChange={s.setQ} busy={s.busy} label="既存の顧客を検索" placeholder="お名前・フリガナ・町名・住所・電話番号で検索 (例: 山田 / 須屋 / 0968)" />
       {s.error && <p className="text-xs text-critical-ink">{s.error}</p>}
-      {s.q.trim() && !s.busy && s.items.length === 0 && !s.error && <p className="text-xs text-ink-3">「{s.q.trim()}」に当たるお客様はいません (ひも付けを変更できる店舗のお客様から探しています)。</p>}
+      {s.q.trim() && !s.busy && s.items.length === 0 && !s.error && <p className="text-xs text-ink-3">「{s.q.trim()}」に当たるお客様はいません (顧客の一覧で見られるお客様から探しています)。</p>}
       {s.items.length > 0 && (
         <form action={action}>
           <input type="hidden" name="inquiryId" value={inquiryId} />
@@ -93,6 +93,43 @@ export function CustomerLinkSearch({ action, inquiryId, returnTo, initialQuery =
             ))}
           </ul>
         </form>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 問合せ登録 (受付) の確認の画面: 候補にないお客様を検索して、その場で紐付けて登録する (お客様のご要望 2026-11-24「候補に表示されない場合でも検索して紐付け」)。
+ * 受付の確認のフォームの中に置く (結果のボタンは quick = inquiry:<顧客> を送る = 候補の「このお客様に紐付けて登録」と同じ)
+ */
+export function ReceptionCustomerSearch({ initialQuery = "" }: { initialQuery?: string }) {
+  const s = useSearch<CustomerHit>("/api/customers/search", [], initialQuery);
+  return (
+    <div className="space-y-2" data-testid="reception-customer-search">
+      <SearchBox value={s.q} onChange={s.setQ} busy={s.busy} label="既存のお客様を検索" placeholder="住所・お名前・フリガナ・電話番号で検索 (例: ○○町 123 / 山田 / 0968)" />
+      {s.error && <p className="text-xs text-critical-ink">{s.error}</p>}
+      {s.q.trim() && !s.busy && s.items.length === 0 && !s.error && <p className="text-xs text-ink-3">「{s.q.trim()}」に当たるお客様はいません。</p>}
+      {s.items.length > 0 && (
+        <ul className="max-h-80 divide-y divide-line overflow-y-auto rounded-lg border border-line bg-panel">
+          {s.items.map((c) => (
+            <li key={c.id} className="flex flex-wrap items-start gap-2 px-3 py-2">
+              <div className="min-w-0 flex-1 text-xs">
+                <div className="flex flex-wrap items-center gap-1.5 text-sm">
+                  <span className="font-semibold text-ink">{c.name} 様</span>
+                  <span className="text-ink-3">{c.code} · {c.storeName}</span>
+                  {c.corporate && <Badge tone="info" dot={false}>法人・業者</Badge>}
+                  {c.placeholder && <Badge tone="warn" dot={false}>予定表から登録 (仮)</Badge>}
+                  {c.open > 0 && <Badge tone="accent" dot={false}>進行中 {c.open}</Badge>}
+                </div>
+                <div className="mt-0.5 text-sm text-ink">{c.address || "住所未登録"}</div>
+                <div className="text-ink-3">{c.phone || "電話未登録"}</div>
+              </div>
+              <Button type="submit" name="quick" value={`inquiry:${c.id}`} size="sm" className="w-full shrink-0 @xl:w-auto">
+                このお客様に紐付けて登録
+              </Button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

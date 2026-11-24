@@ -12,7 +12,7 @@ import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib
 import { linkInquiryLogs } from "@/lib/ai-intake";
 import { DUE_CHOICES, REQUEST_PURPOSE, dueAtFrom, dueLabel, type DueChoice } from "@/lib/inquiry-flow";
 import { closeScheduleRequests, createInquiryRequest } from "@/lib/inquiry-requests";
-import { moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
+import { canLinkToCustomer, moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
 import { storeInquiryNotices, storeRequestNotices } from "@/lib/notify/store-line";
@@ -249,7 +249,7 @@ export async function linkInquiryToCustomer(id: string, customerId: string, retu
     const c = db.customers.find((x) => x.id === customerId);
     if (!c) fail(back, "顧客が見つかりません。");
     if (inq.customerId === c.id) fail(back, `すでに ${c.name} 様に紐づいています。`);
-    if (!canEditCaseStore(user, c.storeId)) fail(back, "他店舗の顧客には紐づけられません。店舗または本部に依頼してください。");
+    if (!canLinkToCustomer(db, user, c)) fail(back, "このお客様は閲覧の範囲の外のため紐づけられません。店舗または本部に依頼してください。");
     if (inq.customerId) {
       const blocker = relinkBlocker(db, inq);
       if (blocker) fail(back, blocker);

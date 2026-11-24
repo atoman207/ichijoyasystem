@@ -12,6 +12,7 @@ import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/pe
 import { createInquiryRequest } from "@/lib/inquiry-requests";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
 import { newCaseStore } from "@/lib/store-area";
+import { canLinkToCustomer } from "@/lib/customer-link";
 import { isCommonStaff } from "@/lib/staff-choices";
 import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { dueAtFrom } from "@/lib/inquiry-flow";
@@ -39,7 +40,7 @@ import {
   type ReceptionSource,
 } from "@/lib/reception";
 import { newReceptionDoc, providerLabel, pushReceptionDoc, receptionExtracted } from "@/lib/reception-docs";
-import { assertCaseStore, assertStore, choice, fail, requireActionUser, resolveStoreId, str, withErr, withMsg } from "./guards";
+import { assertStore, choice, fail, requireActionUser, resolveStoreId, str, withErr, withMsg } from "./guards";
 
 /**
  * 受付 (すべての問い合わせの共通の入口。src/lib/reception.ts)
@@ -342,8 +343,8 @@ export async function registerReception(formData: FormData) {
       assertOpen(doc, back);
       let customer = customerId ? d.customers.find((c) => c.id === customerId) : undefined;
       if (customerId && !customer) fail(back, "選んだお客様が見つかりません。");
-      // 店長は全店舗のお客様の問い合わせを登録できる
-      if (customer) assertCaseStore(user, customer.storeId, back);
+      // 紐付けられるお客様 = 顧客の一覧で見られるお客様 (ほかの店舗・本部で登録したお客様も。src/lib/customer-link.ts)
+      if (customer && !canLinkToCustomer(d, user, customer)) fail(back, "このお客様は閲覧の範囲の外のため紐付けられません。店舗または本部に依頼してください。");
       // 担当店舗: 選んだ店舗 (自店舗・住所の担当エリアの店舗。全店舗のロールはすべて) > 住所の担当エリア > お客様の店舗 > 受付の店舗 (お客様のご要望 2026-11-24「③」)
       const storeId = newCaseStore(d, user, { requested: str(formData, "storeId") || (customer?.storeId ?? doc.storeId), address: f.address, customer }).storeId;
       // 新しいお客様として登録 (顧客も同時に登録。二重登録を防ぐため、同じお客様の候補があれば「別のお客様」の確認が要る)

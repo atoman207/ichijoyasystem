@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { Channel, MediaKey, StoreId } from "@/lib/db/types";
 import { CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { MediaSelect } from "@/components/ops-reports/MediaFields";
+import { ReceptionCustomerSearch } from "@/components/features/LinkSearch";
 import {
   RECEPTION_ACTION_LABEL,
   RECEPTION_CHANNELS,
@@ -20,6 +21,12 @@ export interface ReviewCustomer {
   /** preset = 顧客の画面から取り込んだ受付のお客様 (決まっている) */
   level: "preset" | "phone" | "address" | "name";
   reason: string;
+  /** 候補のカードに出すお名前・住所・電話・顧客コード・店舗 (正しいお客様かその場で確かめる) */
+  name: string;
+  address: string;
+  phone: string;
+  code: string;
+  storeName: string;
 }
 
 export interface ReviewCase {
@@ -310,9 +317,12 @@ export function ReceptionReview({
  * ボタンは quick = inquiry:<顧客> / case:<案件> / new を送る (actions/reception.ts の registerReception)
  */
 function MatchPanel({ customers, cases, canCreateCustomer, mediaDefault, fields }: { customers: ReviewCustomer[]; cases: ReviewCase[]; canCreateCustomer: boolean; mediaDefault?: MediaKey; fields: ReceptionFields }) {
-  const strong = customers.filter((c) => c.level !== "name");
-  const weak = customers.filter((c) => c.level === "name");
+  // 候補の順 (お客様のご要望 2026-11-24): ① 住所の一致 → ② 電話番号の一致 → ③ 名字の一致
   const preset = customers.find((c) => c.level === "preset");
+  const byAddress = customers.filter((c) => c.level === "address");
+  const byPhone = customers.filter((c) => c.level === "phone");
+  const byName = customers.filter((c) => c.level === "name");
+  const strong = [...byAddress, ...byPhone];
   const btn = "inline-flex min-h-10 items-center justify-center rounded-lg px-3 py-2 text-sm font-medium";
   const caseButtons = (cid: string) => {
     const list = cases.filter((k) => k.customerId === cid && k.open).slice(0, 3);
@@ -328,39 +338,88 @@ function MatchPanel({ customers, cases, canCreateCustomer, mediaDefault, fields 
       </div>
     );
   };
+  const LEVEL: Record<ReviewCustomer["level"], { label: string; cls: string }> = {
+    preset: { label: "このお客様", cls: "bg-accent text-white" },
+    address: { label: "住所が一致", cls: "bg-good-soft text-good-ink" },
+    phone: { label: "電話番号が一致", cls: "bg-info-soft text-info-ink" },
+    name: { label: "名字が一致", cls: "bg-subtle text-ink-2" },
+  };
   const card = (c: ReviewCustomer, primary: boolean) => (
-    <li key={c.id} className="rounded-lg border border-line bg-panel p-3">
-      <div className="text-sm font-medium text-ink">{c.label}</div>
-      <div className="text-[11px] text-ink-3">{c.level === "preset" ? "顧客の画面から登録" : c.reason}</div>
+    <li key={c.id} className={`rounded-lg border bg-panel p-3 ${primary ? "border-accent/60 ring-1 ring-accent/30" : "border-line"}`} data-testid="reception-candidate">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${LEVEL[c.level].cls}`}>{LEVEL[c.level].label}</span>
+        <span className="text-base font-semibold text-ink">{c.name} 様</span>
+        <span className="text-[11px] text-ink-3">{c.code} · {c.storeName}</span>
+      </div>
+      <div className="mt-1 text-sm text-ink">{c.address || <span className="text-ink-3">住所未登録</span>}</div>
+      {c.phone && <div className="text-xs text-ink-2 tnum">{c.phone}</div>}
+      <div className="mt-0.5 text-[11px] text-ink-3">{c.level === "preset" ? "顧客の画面から登録" : c.reason}</div>
       <button type="submit" name="quick" value={`inquiry:${c.id}`} className={`${btn} mt-2 w-full ${primary ? "bg-accent text-white hover:bg-accent-hover" : "border border-accent/50 bg-panel text-accent-ink hover:bg-accent-soft"}`}>
         このお客様に紐付けて登録
       </button>
       {caseButtons(c.id)}
     </li>
   );
+  const memoName = fields.customerName.split(/[\s　]/)[0]?.replace(/(様|さま|さん)$/, "") ?? "";
   return (
     <section className="space-y-3 rounded-xl border-2 border-accent/40 bg-accent-soft/25 p-4" data-testid="reception-match">
       <h3 className="text-sm font-semibold text-ink">お客様・案件の確認</h3>
       {preset ? (
         <p className="text-sm text-ink">お客様は決まっています。読み取った内容を確かめて登録してください。</p>
-      ) : strong.length ? (
-        <p className="text-sm font-medium text-ink">同じ住所・電話番号のお客様がいます。こちらのお客様に紐付けますか？</p>
+      ) : byAddress.length ? (
+        <p className="text-sm font-medium text-ink">住所が一致するお客様がいます。このお客様に紐付けますか？ (お名前と住所を確かめてください)</p>
+      ) : byPhone.length ? (
+        <p className="text-sm font-medium text-ink">電話番号が一致するお客様がいます。このお客様に紐付けますか？ (住所を確かめてください)</p>
+      ) : byName.length ? (
+        <p className="text-sm text-ink">住所・電話番号が一致するお客様は見つかりませんでした。名字が同じお客様がいます (住所を確かめて、同じお客様なら紐付けてください){fields.address ? "" : "。住所が読み取れていません。住所を直して「修正を保存」すると探し直します"}。</p>
       ) : (
-        <p className="text-sm text-ink">同じ住所・電話番号のお客様は見つかりませんでした{fields.address ? "" : " (住所が読み取れていません。住所を直して「修正を保存」すると探し直します)"}。</p>
+        <p className="text-sm text-ink">既存のお客様は見つかりませんでした{fields.address ? "" : " (住所が読み取れていません。住所を直して「修正を保存」すると探し直します)"}。下の検索でも探せます。</p>
       )}
-      {strong.length > 0 && <ul className="grid grid-cols-1 gap-2 @xl:grid-cols-2">{strong.slice(0, 4).map((c, i) => card(c, i === 0))}</ul>}
-      {weak.length > 0 && (
-        <details>
-          <summary className="cursor-pointer text-xs text-ink-2">お名前だけ一致するお客様 {weak.length} 件 (住所が違う可能性があります)</summary>
-          <ul className="mt-2 grid grid-cols-1 gap-2 @xl:grid-cols-2">{weak.slice(0, 6).map((c) => card(c, false))}</ul>
+      {preset && <ul className="grid grid-cols-1 gap-2">{card(preset, true)}</ul>}
+      {byAddress.length > 0 && (
+        <div>
+          <p className="mb-1 text-xs font-semibold text-good-ink">① 住所が一致</p>
+          <ul className="grid grid-cols-1 gap-2 @xl:grid-cols-2">{byAddress.slice(0, 6).map((c, i) => card(c, i === 0))}</ul>
+        </div>
+      )}
+      {byPhone.length > 0 && (
+        <div>
+          <p className="mb-1 text-xs font-semibold text-info-ink">② 電話番号が一致</p>
+          <ul className="grid grid-cols-1 gap-2 @xl:grid-cols-2">{byPhone.slice(0, 4).map((c, i) => card(c, !byAddress.length && i === 0))}</ul>
+        </div>
+      )}
+      {byName.length > 0 &&
+        (strong.length ? (
+          <details>
+            <summary className="cursor-pointer text-xs font-semibold text-ink-2">③ 名字が一致するお客様 {byName.length} 件 (住所が違う可能性があります)</summary>
+            <ul className="mt-2 grid grid-cols-1 gap-2 @xl:grid-cols-2">{byName.slice(0, 8).map((c) => card(c, false))}</ul>
+          </details>
+        ) : (
+          <div>
+            <p className="mb-1 text-xs font-semibold text-ink-2">③ 名字が一致 (同じ町名・最近の取引の順)</p>
+            <ul className="grid grid-cols-1 gap-2 @xl:grid-cols-2">{byName.slice(0, 4).map((c) => card(c, false))}</ul>
+            {byName.length > 4 && (
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs text-ink-2">ほか {byName.length - 4} 件</summary>
+                <ul className="mt-2 grid grid-cols-1 gap-2 @xl:grid-cols-2">{byName.slice(4, 8).map((c) => card(c, false))}</ul>
+              </details>
+            )}
+          </div>
+        ))}
+      {!preset && (
+        <details className="rounded-lg border border-line bg-panel/70 p-3" open={!strong.length}>
+          <summary className="cursor-pointer text-sm font-medium text-ink">候補にないときは: 既存のお客様を検索して紐付ける</summary>
+          <div className="mt-2">
+            <ReceptionCustomerSearch initialQuery={strong.length ? "" : memoName} />
+          </div>
         </details>
       )}
       {!preset && (
         <div className="rounded-lg border border-dashed border-line-strong bg-panel/70 p-3">
-          {strong.length > 0 && (
+          {customers.length > 0 && (
             <label className="mb-2 flex items-start gap-2 text-xs text-ink">
               <input type="checkbox" name="confirmDuplicate" className="mt-0.5 h-4 w-4" />
-              上の候補とは別のお客様です
+              上の候補・検索のお客様とは別のお客様です
             </label>
           )}
           <button type="submit" name="quick" value="new" className={`${btn} w-full ${strong.length ? "border border-line bg-panel text-ink hover:bg-subtle" : "bg-accent text-white hover:bg-accent-hover"}`}>

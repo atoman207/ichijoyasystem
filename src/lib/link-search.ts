@@ -2,14 +2,15 @@ import type { Customer, Database, Inquiry, User } from "@/lib/db/types";
 import { canEditCaseStore } from "@/lib/auth/permissions";
 import { customerPhoneDigits, customerPhoneIncludes, phoneDigits } from "@/lib/customer-contacts";
 import { normName } from "@/lib/duplicates";
-import { isPlaceholderCustomer, relinkBlocker } from "@/lib/customer-link";
+import { canLinkToCustomer, isPlaceholderCustomer, relinkBlocker } from "@/lib/customer-link";
+import { addressMatch } from "@/lib/customer-match";
 import { INQUIRY_STATUS } from "@/lib/constants";
 
 /**
  * 問い合わせと既存の顧客をひも付けるときの検索 (お客様のご要望 2026-11-24「■5」「■6」: 少ない操作で検索・選択してひも付ける)
  * - 問い合わせの画面: 既存の顧客を、お名前・フリガナ・住所・町名・電話番号・顧客コードで探す (入力するたびに候補)
  * - 顧客の画面: このお客様にひも付けられる問い合わせ (お客様が未登録・予定表の取込の仮の顧客・見積の前) を、電話・お名前・地区の一致の順に出す
- * 候補はひも付けを登録・変更できる店舗の記録だけ (permissions.ts の canEditCaseStore。店長は全店舗)
+ * 顧客の候補は顧客の一覧で見られるお客様 (customer-link.ts の canLinkToCustomer)。問い合わせの候補はひも付けを変更できる店舗の記録だけ (canEditCaseStore)
  */
 
 export interface CustomerHit {
@@ -33,13 +34,16 @@ const OPEN_ORDER = new Set(["pending_approval", "returned", "confirmed", "schedu
 const compact = (s: string | undefined) => (s ?? "").normalize("NFKC").replace(/[\s　]+/g, "").toLowerCase();
 
 /** 既存の顧客の検索 (問い合わせ → 顧客)。q が空なら [] */
-export function searchCustomers(db: Pick<Database, "customers" | "stores" | "inquiries" | "orders">, user: User, q: string, limit = 20): CustomerHit[] {
+export function searchCustomers(db: Pick<Database, "customers" | "stores" | "inquiries" | "orders" | "settings">, user: User, q: string, limit = 20): CustomerHit[] {
   const term = compact(q);
   if (term.length < 1) return [];
   const digits = phoneDigits(q);
   const scored: { c: Customer; score: number }[] = [];
+  // 住所で探す (「○○町△△117」「北区○○5丁目9-17」: 県・市区郡の書き方が違っても同じ住所。src/lib/customer-match.ts)
+  const addrQuery = /\d/.test(term) && /[^\d-]/.test(term) && digits.length < 9;
   for (const c of db.customers) {
-    if (!canEditCaseStore(user, c.storeId)) continue;
+    // 顧客の一覧で見られるお客様 (ほかの店舗・本部で登録したお客様も。紐付けはお客様の記録を変えない)
+    if (!canLinkToCustomer(db, user, c)) continue;
     const name = compact(c.name);
     const kana = compact(c.kana);
     let score = 0;
@@ -48,6 +52,8 @@ export function searchCustomers(db: Pick<Database, "customers" | "stores" | "inq
     else if (name.includes(term) || kana.includes(term)) score = 60;
     else if (compact(c.code) === term) score = 90;
     else if (digits.length >= 3 && customerPhoneIncludes(c, digits)) score = digits.length >= 9 ? 95 : 55;
+    else if (addrQuery && c.address && addressMatch(q, c.address) === "exact") score = 85;
+    else if (addrQuery && c.address && (addressMatch(q, c.address) === "partial" || addressMatch(q, c.address) === "building")) score = 70;
     else if (compact(c.address).includes(term) || compact(c.area).includes(term)) score = 50;
     if (!score) continue;
     // 仮の顧客 (電話・住所なし) は後ろに

@@ -192,7 +192,12 @@ const byPhone = S.searchCustomers(db(), staff, real.phone);
 eq(byPhone[0]?.id, real.id, "電話番号で既存の顧客を探す (いちばん上)");
 const sei = real.name.split(/\s+/)[0];
 ok(S.searchCustomers(db(), staff, sei).some((c) => c.id === real.id), `お名前 (${sei}) で探す`);
-ok(S.searchCustomers(db(), staff, sei).every((c) => db().customers.find((x) => x.id === c.id).storeId === "koshi"), "店舗スタッフは自店舗のお客様だけ (紐づけを変えられる範囲)");
+// 紐付けはお客様の記録を変えないため、顧客の一覧で見られるお客様 (閲覧の範囲の初期設定 = 全社員が全店舗) から探す (お客様のご要望 2026-11-24)
+const anyStore = (list) => new Set(list.map((c) => db().customers.find((x) => x.id === c.id).storeId));
+ok(anyStore(S.searchCustomers(db(), staff, sei, 200)).size > 1 || db().customers.every((c) => !c.name.startsWith(sei) || c.storeId === "koshi"), "店舗スタッフもほかの店舗のお客様を探せる (閲覧の範囲の初期設定)");
+await store.mutate((d) => d.settings.push({ id: "access_policy", value: { figures: "all", customers: "open", grantDays: 7 }, updatedAt: "2026-01-01T00:00:00Z" }));
+ok(S.searchCustomers(db(), staff, sei).every((c) => db().customers.find((x) => x.id === c.id).storeId === "koshi"), "閲覧の範囲を「進行中の案件だけ」にすると、店舗スタッフは自店舗のお客様だけ");
+await store.mutate((d) => (d.settings = d.settings.filter((x) => x.id !== "access_policy")));
 eq(S.searchCustomers(db(), staff, ""), [], "空の検索は候補なし");
 await store.mutate((x) => {
   x.inquiries.push({ id: "inq_cand", number: "INQ-T-4", contactName: real.name.split(/\s+/)[0], contactPhone: real.phone, channel: "phone", storeId: "koshi", category: "tatami", summary: "畳の相談", detail: "", status: "new", receivedAt: nowIso, createdBy: staff.id, updatedAt: nowIso });
