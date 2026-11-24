@@ -5,6 +5,7 @@ import { readXlsx } from "@/lib/xlsx";
 import { xlsxRows } from "@/lib/survey-workbook/read";
 import { nk, nkTight, parseMonth, parseNum, parseYear, storeOfLabel } from "@/lib/survey-workbook/tabs";
 import { normPostcardNo } from "@/lib/survey";
+import { staffMatcher, type StaffAliases } from "@/lib/survey-workbook/staff";
 import { kpiBasis, monthKey, type KpiBasis } from "./kpi-basis";
 import { compareStoreIds } from "@/lib/store-order";
 
@@ -14,7 +15,9 @@ import { compareStoreIds } from "@/lib/store-order";
  * 1. 年間チラシ計画 (Google スプレッドシート) の「個人件数売上」タブ → 店舗 × 月の個人件数 (返信率の分母)
  *    表「個人売上目標・実績（2025年度）」(年度 = 7 月〜翌 6 月) の店舗ごとの「本年度実績」の「件数」の列。空欄の月 (まだ記入していない月) は読まない
  * 2. アンケートハガキ（回答）の「フォームの回答 1」タブ → 移行したはがき (sourceRef = …#フォームの回答 1!<行>) の集計月 (「年」「月」の列)。
- *    「年」が空欄の行 (2024 年) は入力日 (タイムスタンプ) から決める (前月のはがきを月初に入力していたため、月が入力日の月より後なら前年)
+ *    「年」が空欄の行 (2024 年) は入力日 (タイムスタンプ) から決める (前月のはがきを月初に入力していたため、月が入力日の月より後なら前年)。
+ *    移行 (10/16 の写し) のあとにフォームに入力したはがき (システムにない行) は、新しいはがきとして登録する (移行と同じ列の読み方。
+ *    同じハガキ№ のはがきがシステムにあれば登録しない = 写真・手入力で登録済み)
  * 一方向 (シート → システム)。手入力した個人件数は取り込みで上書きしない。読み取った内容は storage.ts の imports/kpi-basis/ に一時保存する
  */
 
@@ -42,6 +45,22 @@ export interface CardMonthRow {
   at?: string;
   /** タイムスタンプも ハガキ№ もない行 (2 人目以降の担当を手で書き足した行) の内容 */
   attached?: { at?: string; salesName?: string; salesScore?: number; craftsmanName?: string; craftsmanScore?: number };
+  /** タイムスタンプのある行 (はがき 1 枚) の内容 (システムにない行を新しいはがきとして登録するとき) */
+  card?: CardContent;
+}
+
+/** はがき 1 枚の回答 (フォームの列。scripts/import/extract-client-data.mjs の移行と同じ読み方) */
+export interface CardContent {
+  store?: StoreId;
+  phoneScore?: number;
+  salesName?: string;
+  salesScore?: number;
+  craftsmanName?: string;
+  craftsmanScore?: number;
+  finishScore?: number;
+  priorities?: string;
+  media?: string;
+  wouldUseAgain?: string;
 }
 
 export interface BasisPreview {
@@ -149,7 +168,7 @@ export function parseCardMonthSheet(rows: string[][], sheetName = "フォーム�
   const problems: string[] = [];
   const head = rows[0]?.map(nkTight) ?? [];
   const col = (re: RegExp) => head.findIndex((h) => re.test(h));
-  const c = { ts: col(/タイムスタンプ/), month: col(/^月$/), year: col(/^年$/), store: col(/^店舗$/), salesP: col(/^営業担当者$/), sales: col(/^営業対応$/), craftP: col(/^担当職人$/), craft: col(/^職人対応$/) };
+  const c = { ts: col(/タイムスタンプ/), month: col(/^月$/), year: col(/^年$/), store: col(/^店舗$/), phone: col(/電話対応/), salesP: col(/^営業担当者$/), sales: col(/^営業対応$/), craftP: col(/^担当職人$/), craft: col(/^職人対応$/), finish: col(/仕上り|仕上がり/), priority: col(/重視/), media: col(/情報媒体|何を見て/), again: col(/次回/) };
   if (c.ts < 0 || c.month < 0) return { rows: [], problems: [`${sheetName}: 見出し (タイムスタンプ・月) が見つかりません`] };
   // ハガキ№ の列 (見出しが空欄のことがある): タイムスタンプの次の列
   const noCol = head.findIndex((h) => /ハガキ/.test(h)) >= 0 ? head.findIndex((h) => /ハガキ/.test(h)) : c.ts + 1;
@@ -169,8 +188,26 @@ export function parseCardMonthSheet(rows: string[][], sheetName = "フォーム�
     const at = parseStamp(r[c.ts] ?? "");
     const mo = parseMonth(r[c.month]);
     if (!at && mo === undefined) continue;
+    const text = (k: number) => (k >= 0 ? nk(r[k]) || undefined : undefined);
+    const content = (): CardContent => {
+      const st = c.store >= 0 ? storeOfLabel(nk(r[c.store])) : undefined;
+      return {
+        store: st && st !== "office" ? st : undefined,
+        phoneScore: c.phone >= 0 ? score(r[c.phone]) : undefined,
+        salesName: text(c.salesP),
+        salesScore: c.sales >= 0 ? score(r[c.sales]) : undefined,
+        craftsmanName: text(c.craftP),
+        craftsmanScore: c.craft >= 0 ? score(r[c.craft]) : undefined,
+        finishScore: c.finish >= 0 ? score(r[c.finish]) : undefined,
+        priorities: text(c.priority),
+        media: text(c.media),
+        wouldUseAgain: text(c.again),
+      };
+    };
     if (mo === undefined) {
       noMonth++;
+      // 集計月は決められないが、はがき 1 枚として登録できるように残す (集計月は入力日の月)
+      if (at) out.push({ row: i + 1, month: "", postcardNo: normPostcardNo(nk(r[noCol]).replace(/^(\d+)\.0+$/, "$1")) || undefined, at, card: content() });
       continue;
     }
     let y = c.year >= 0 ? parseYear(r[c.year]) : undefined;
@@ -184,7 +221,7 @@ export function parseCardMonthSheet(rows: string[][], sheetName = "フォーム�
     if (!y) continue;
     // .xlsx の数値のセルは「14144.0」と読めることがある
     const no = normPostcardNo(nk(r[noCol]).replace(/^(\d+)\.0+$/, "$1"));
-    const row: CardMonthRow = { row: i + 1, month: `${y}-${String(mo).padStart(2, "0")}`, postcardNo: no || undefined, at };
+    const row: CardMonthRow = { row: i + 1, month: `${y}-${String(mo).padStart(2, "0")}`, postcardNo: no || undefined, at, card: at ? content() : undefined };
     if (!at && !no) {
       // 書き足した行: 移行 (タイムスタンプのある行だけを読んだ) で漏れているため、②③ の評価の行として足せるように内容も残す
       row.attached = {
@@ -295,6 +332,24 @@ export interface CardMonthPlan {
   adds: AttachedAdd[];
   /** 書き足した行のうち、担当者が社員のアカウントに決まらない行 (足さない) */
   unresolved: number;
+  /** 移行のあとにフォームに入力したはがき (システムにない行)。新しいはがきとして登録する */
+  newCards: NewCard[];
+  /** システムにない行だが、同じハガキ№ のはがきがシステムにある (写真・手入力で登録済み。登録しない) */
+  registered: number;
+}
+
+export interface NewCard extends CardContent {
+  row: number;
+  /** 集計月 (「月」が空欄なら空 = 入力日の月) */
+  month: string;
+  at: string;
+  postcardNo?: string;
+  salesUserId?: string;
+  craftsmanUserId?: string;
+  orderId?: string;
+  customerId?: string;
+  /** 社員のアカウントに決まらなかった担当の名前 (名前の文字は残す) */
+  unresolvedNames: string[];
 }
 
 export interface AttachedAdd {
@@ -315,7 +370,7 @@ export interface BasisPlan {
   counts: { individual: Record<ValueAction, number> };
 }
 
-type PlanDb = Pick<Database, "surveys" | "settings"> & Partial<Pick<Database, "users">>;
+type PlanDb = Pick<Database, "surveys" | "settings"> & Partial<Pick<Database, "users" | "orders">>;
 
 /** はがきの行番号 (sourceRef = …アンケートハガキ（回答）.xlsx#フォームの回答 1!<行>) */
 function surveyRow(s: Pick<SurveyResponse, "sourceRef">, sheet: string): number | undefined {
@@ -333,7 +388,7 @@ export function planBasisImport(db: PlanDb, p: Pick<BasisPreview, "individual" |
     counts.individual[action]++;
     return { ...v, action, current: cur?.individual };
   });
-  const cards: CardMonthPlan = { changes: [], unchanged: 0, notInSystem: 0, mismatch: 0, byMonth: [], adds: [], unresolved: 0 };
+  const cards: CardMonthPlan = { changes: [], unchanged: 0, notInSystem: 0, mismatch: 0, byMonth: [], adds: [], unresolved: 0, newCards: [], registered: 0 };
   if (p.cardMonths.length) {
     const sheet = p.cardSheet ?? "フォームの回答 1";
     const byRow = new Map<number, SurveyResponse>();
@@ -346,10 +401,42 @@ export function planBasisImport(db: PlanDb, p: Pick<BasisPreview, "individual" |
       if (s.salesName && s.salesUserId) salesBy.set(nkTight(s.salesName), s.salesUserId);
       if (s.craftsmanName && s.craftsmanUserId) craftBy.set(nkTight(s.craftsmanName), s.craftsmanUserId);
     }
+    // 新しいはがき: 担当者は移行の対応 → 社員の名前 (お客様アンケート集計表の取込と同じ対応表)、案件は売上台帳のハガキ欄の番号
+    // 担当者の名前の対応表 (KPI → スプレッドシートの取込 の設定 survey_workbook の staffAliases。survey-workbook/plan.ts の workbookSettings と同じ値)
+    const wb = (db.settings.find((x) => x.id === "survey_workbook")?.value ?? {}) as { staffAliases?: unknown };
+    const aliases = wb.staffAliases && typeof wb.staffAliases === "object" && !Array.isArray(wb.staffAliases) ? (wb.staffAliases as StaffAliases) : {};
+    const match = staffMatcher((db.users ?? []).filter((u) => !u.id.startsWith("u_review")), aliases);
+    const personOf = (name: string | undefined, known: Map<string, string>): { id?: string; unresolved?: string } => {
+      if (!name) return {};
+      const hit = known.get(nkTight(name));
+      if (hit) return { id: hit };
+      for (const part of nk(name).split(/[\s・、,，/／&＆]+/).filter(Boolean)) {
+        const m = match(part);
+        if (m.userId) return { id: m.userId };
+      }
+      return { unresolved: name };
+    };
+    const cardNo = (v: string | undefined) => normPostcardNo(v).replace(/^[A-Z]+/, "");
+    const registeredNos = new Set(db.surveys.map((x) => cardNo(x.postcardNo)).filter(Boolean));
+    const orderByNo = new Map((db.orders ?? []).filter((o) => o.postcardNo && o.status !== "cancelled").map((o) => [cardNo(o.postcardNo), o]));
     const after = new Map<string, number>();
     const before = new Map<string, number>();
     for (const row of p.cardMonths) {
       const s = byRow.get(row.row);
+      if (!s && row.at && row.card) {
+        const no = cardNo(row.postcardNo);
+        if (no && registeredNos.has(no)) {
+          cards.registered++;
+          continue;
+        }
+        const sales = personOf(row.card.salesName, salesBy);
+        const craft = personOf(row.card.craftsmanName, craftBy);
+        const o = no ? orderByNo.get(no) : undefined;
+        cards.newCards.push({ ...row.card, row: row.row, month: row.month, at: row.at, postcardNo: row.postcardNo, salesUserId: sales.id, craftsmanUserId: craft.id, orderId: o?.id, customerId: o?.customerId, unresolvedNames: [sales.unresolved, craft.unresolved].filter((x): x is string => Boolean(x)) });
+        if (no) registeredNos.add(no);
+        if (row.postcardNo && row.month) after.set(row.month, (after.get(row.month) ?? 0) + 1);
+        continue;
+      }
       if (!s) {
         const a = row.attached;
         if (a && ((a.craftsmanName && a.craftsmanScore !== undefined) || (a.salesName && a.salesScore !== undefined))) {
@@ -369,6 +456,11 @@ export function planBasisImport(db: PlanDb, p: Pick<BasisPreview, "individual" |
       const sameAt = Number.isNaN(diff) ? undefined : diff <= 120000 || Math.abs(diff - 9 * 3600000) <= 120000;
       if (sameNo === false || (sameNo === undefined && sameAt === false)) {
         cards.mismatch++;
+        continue;
+      }
+      // 「月」が空欄の行: 集計月は書かない (入力日の月のまま)
+      if (!row.month) {
+        cards.unchanged++;
         continue;
       }
       if (s.postcardNo) {
@@ -391,12 +483,14 @@ export interface BasisApplyResult {
   individual: number;
   cardMonths: number;
   added: number;
+  /** 新しいはがき (移行のあとにフォームに入力した行) */
+  newCards: number;
   summary: string;
   changedMonths: { field: string; before: number | null; after: number }[];
 }
 
 /** 取り込む (mutate の中で呼ぶ)。計画はここで作り直す */
-export function applyBasisImport(db: Pick<Database, "surveys" | "settings">, p: Pick<BasisPreview, "individual" | "cardMonths" | "cardSheet" | "label">, opts: { userId: string; now: string }): { basis: KpiBasis; result: BasisApplyResult } {
+export function applyBasisImport(db: Pick<Database, "surveys" | "settings"> & Partial<Pick<Database, "users" | "orders">>, p: Pick<BasisPreview, "individual" | "cardMonths" | "cardSheet" | "label">, opts: { userId: string; now: string }): { basis: KpiBasis; result: BasisApplyResult } {
   const basis = kpiBasis(db);
   const plan = planBasisImport(db, p, basis);
   const changedMonths: BasisApplyResult["changedMonths"] = [];
@@ -443,11 +537,42 @@ export function applyBasisImport(db: Pick<Database, "surveys" | "settings">, p: 
     });
     added++;
   }
+  // 移行のあとにフォームに入力したはがき (新しいはがき 1 枚ずつ)
+  let newCards = 0;
+  for (const c of plan.cards.newCards) {
+    const sourceRef = `${prefix}#${sheet}!${c.row}`;
+    db.surveys.push({
+      id: `sv_${createHash("sha256").update(sourceRef).digest("hex").slice(0, 12)}`,
+      receivedAt: c.at,
+      postcardNo: c.postcardNo,
+      storeId: c.store ?? "hq",
+      orderId: c.orderId,
+      customerId: c.customerId,
+      countMonth: c.month || undefined,
+      phoneScore: c.phoneScore,
+      salesName: c.salesName,
+      salesUserId: c.salesUserId,
+      salesScore: c.salesScore,
+      craftsmanName: c.craftsmanName,
+      craftsmanUserId: c.craftsmanUserId,
+      craftsmanScore: c.craftsmanScore,
+      finishScore: c.finishScore,
+      priorities: c.priorities,
+      media: c.media,
+      wouldUseAgain: c.wouldUseAgain,
+      sourceRef,
+      source: "import",
+      createdBy: opts.userId,
+      createdAt: opts.now,
+      updatedAt: opts.now,
+    });
+    newCards++;
+  }
   const parts = [
     p.individual.length ? `個人件数 ${individual} か月分 (変更なし ${plan.counts.individual.unchanged}・手入力のため取り込まない ${plan.counts.individual.manual})` : "",
-    p.cardMonths.length ? `はがきの集計月 ${cardMonths} 行 (変更なし ${plan.cards.unchanged}・システムにない行 ${plan.cards.notInSystem}・行が合わない ${plan.cards.mismatch})${added ? `・移行で漏れた 2 人目以降の担当の行を追加 ${added} 行` : ""}` : "",
+    p.cardMonths.length ? `はがきの集計月 ${cardMonths} 行 (変更なし ${plan.cards.unchanged}・システムにない行 ${plan.cards.notInSystem}・行が合わない ${plan.cards.mismatch})${added ? `・移行で漏れた 2 人目以降の担当の行を追加 ${added} 行` : ""}${newCards ? `・新しいはがき ${newCards} 枚` : ""}${plan.cards.registered ? `・登録済みのため取り込まない ${plan.cards.registered} 枚` : ""}` : "",
   ].filter(Boolean);
   const summary = parts.join(" / ") || "変更はありませんでした";
   basis.lastImport = { at: opts.now, by: opts.userId, label: p.label, summary };
-  return { basis, result: { individual, cardMonths, added, summary, changedMonths } };
+  return { basis, result: { individual, cardMonths, added, newCards, summary, changedMonths } };
 }

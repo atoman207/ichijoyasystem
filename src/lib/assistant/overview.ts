@@ -81,8 +81,8 @@ export function businessOverview(db: Database, user: User, opts: { from?: string
   L.push("## お客様の評価・品質 (KPI と同じ集計)");
   // storeKpi の率は % の値 (49.2 = 49.2%)。pct は割合 (0.492) を % にするため 100 で割って渡す
   const rate = (v: number | null) => pct(v === null ? null : v / 100);
-  L.push(`- アンケート ${k.surveys} 枚 (返信率 ${rate(k.replyRate)} = はがき ÷ 個人件数 ${k.individualOrders}。個人件数は約 1 か月以内のリピートを 1 件) / 平均: ${SCORE_QUESTIONS.map((q) => `${q.no}${q.label} ${num(k.scores[q.key])}`).join("・")} / また利用したい ${k.againAnswered ? pct(k.againYes / k.againAnswered) : "-"}`);
-  L.push(`- クレーム・手直し (経営管理の指標。÷ 全案件数 ${k.orders}): クレーム ${k.issues.claims} 件 (${rate(k.issueRates.claims)})・手直し ${k.issues.reworks} 件 (${rate(k.issueRates.reworks)})・合計 ${k.issues.total} 件 (${rate(k.issueRates.total)}) / インセンティブのポイント ${k.qualityPoints} 点 (ポイント率 ${rate(k.qualityRate)}。同じ案件は最大 ${qualityCaseMax(db)} 点) / Google 口コミ ${k.reviews} 件`);
+  L.push(`- アンケート ${k.surveys} 枚 (返信率 ${rate(k.replyRate)} = はがき ÷ 個人件数 ${k.individualOrders}。個人件数は同じお客様・同じ店舗の 30 日以内のリピートを 1 件) / 平均: ${SCORE_QUESTIONS.map((q) => `${q.no}${q.label} ${num(k.scores[q.key])}`).join("・")} / また利用したい ${k.againAnswered ? pct(k.againYes / k.againAnswered) : "-"}`);
+  L.push(`- クレーム・手直し (経営管理の指標。÷ 全案件数 ${k.orders}): クレーム ${k.issues.claims} 件 (${rate(k.issueRates.claims)})・手直し ${k.issues.reworks} 件 (${rate(k.issueRates.reworks)})・合計 ${k.issues.total} 件 (${rate(k.issueRates.total)}) / インセンティブのポイント ${k.qualityPoints} 点 (ポイント率 ${rate(k.qualityRate)}。同じ案件の同じ月は最大 ${qualityCaseMax(db)} 点) / Google 口コミ ${k.reviews} 件`);
   // いま対応が要るもの
   const stores = new Set<StoreId>(store ? [store.id] : allowed);
   const pending = db.approvals.filter((a) => a.status === "pending" && stores.has(a.storeId));

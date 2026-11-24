@@ -98,7 +98,7 @@ export default async function KpiPage({ searchParams }: { searchParams: Promise<
         <ul className="space-y-0.5 px-5 py-3 text-[11px] text-ink-3">
           {basisNotes(basis).map((t, i) => <li key={i}>・{t}</li>)}
           <li>・①〜④ は 5 段階評価の平均 (括弧内は平均の分母)。① は全社 (事務)、② は営業担当 (見積り)、③ は担当職人、④ は店舗の評価です。⑤⑥⑦ は「アンケート」タブで集計しています</li>
-          <li>・クレーム・手直しのポイント (インセンティブ): 手直し {settings.qualityPoints.rework} / クレーム {settings.qualityPoints.claim} / クレーム＋手直し {settings.qualityPoints.claim_rework} 点{settings.qualityCaseMax > 0 ? `、同じ案件は最大 ${settings.qualityCaseMax} 点` : ""}。クレーム・手直しの件数と率 (経営管理の指標) = 件数 ÷ 全案件数 × 100 (クレーム＋手直しはそれぞれに 1 件)。合計・発生した案件は「クレーム・手直し」タブ</li>
+          <li>・クレーム・手直しのポイント (インセンティブ): 手直し {settings.qualityPoints.rework} / クレーム {settings.qualityPoints.claim} / クレーム＋手直し {settings.qualityPoints.claim_rework} 点{settings.qualityCaseMax > 0 ? `、同じ案件の同じ月は最大 ${settings.qualityCaseMax} 点` : ""}。クレーム・手直しの件数と率 (経営管理の指標) = 件数 ÷ 全案件数 × 100 (クレーム＋手直しはそれぞれに 1 件)。合計・発生した案件は「クレーム・手直し」タブ</li>
           <li>・全案件数・個人件数の数字にカーソルを置くと、どの月が年間チラシ計画・手入力・自動の値かを表示します。販促の KPI (チラシの反響・個人の売上・客単価) は経営分析用のため、インセンティブには入れず「販促と媒体の分析」で見ます</li>
         </ul>
       </Card>

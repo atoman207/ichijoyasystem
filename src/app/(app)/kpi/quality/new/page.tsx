@@ -52,7 +52,7 @@ export default async function NewQualityPage({ searchParams }: { searchParams: P
             <ul className="mt-3 space-y-0.5 border-t border-line pt-2 text-xs text-ink-2">
               {guess.kind && <li>・区分の候補: <span className="font-medium">{QUALITY_KIND_LABEL[guess.kind]} ({qp[guess.kind]} 点)</span> ({guess.reason}から。確かめて選び直してください)</li>}
               {matchedOrder && <li>・案件の候補: <span className="font-medium">{matchedOrder.number}</span> (現場名「{site}」と店舗・発生月から 1 件に決まりました。違うときは受注番号を消してください)</li>}
-              {others.length > 0 && <li className="text-warn-ink">・この案件には登録済みのクレーム・手直しが {others.length} 件あります。同じ案件のポイントは合わせて最大 {ks.qualityCaseMax} 点です</li>}
+              {others.length > 0 && <li className="text-warn-ink">・この案件には登録済みのクレーム・手直しが {others.length} 件あります。同じ案件・同じ月のポイントは合わせて最大 {ks.qualityCaseMax} 点です</li>}
               {guess.recordOnly && <li className="text-warn-ink">・点検 DM・点検の電話がきっかけのようです。クレーム・手直しの定義では「記録のみ (集計しない)」になります</li>}
             </ul>
           )}

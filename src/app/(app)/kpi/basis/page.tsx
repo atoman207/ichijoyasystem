@@ -102,7 +102,7 @@ function RulesCard({ basis, admin }: { basis: KpiBasis; admin: boolean }) {
                 {(Object.keys(INDIVIDUAL_SOURCE_LABEL) as (keyof typeof INDIVIDUAL_SOURCE_LABEL)[]).map((k) => <option key={k} value={k}>{INDIVIDUAL_SOURCE_LABEL[k]}{k === "plan" ? " (既定)" : ""}</option>)}
               </Select>
             </Field>
-            <Field label="リピートを 1 件にまとめる日数" hint={`同じお客様の、はがきを渡した案件から この日数以内の次の案件は個人件数に数えません (売上は 1 件ずつ)。既定 31 日 (約 1 か月)。0 = まとめない`}>
+            <Field label="リピートを 1 件にまとめる日数" hint={`同じお客様・同じ店舗の、はがきを渡した案件から この日数以内の次の案件は個人件数に数えません (別の店舗の案件・売上は 1 件ずつ)。既定 30 日。0 = まとめない`}>
               <input type="number" name="repeatDays" min={0} max={MAX_REPEAT_DAYS} step={1} defaultValue={basis.repeatDays} className="field" />
             </Field>
             <Field label="全案件数 (クレーム・手直し率の分母) の数え方">
@@ -136,7 +136,7 @@ function MonthTable({ db, basis, fy, months, stores, fyOptions, startMonth }: { 
       <div className="px-5 pt-5">
         <CardHeader
           title={`店舗 × 月の個人件数・全案件数 (${fy}年度 ${range.from.replace(/-/g, "/")}〜${range.to.replace(/-/g, "/")})`}
-          description={`個人件数 = 返信率の分母 (年間チラシ計画の本年度実績。空欄の月は自動 = 個人のお客様の案件 − ${basis.repeatDays > 0 ? `同じお客様の ${basis.repeatDays} 日以内のリピート` : "リピート (まとめない設定)"})。全案件数 = クレーム・手直し率の分母 (${CASES_SOURCE_LABEL[basis.casesSource]})。入力欄の下に、自動の値・作業日報の納品件数を出しています`}
+          description={`個人件数 = 返信率の分母 (年間チラシ計画の本年度実績。空欄の月は自動 = 個人のお客様の案件 − ${basis.repeatDays > 0 ? `同じお客様・同じ店舗の ${basis.repeatDays} 日以内のリピート` : "リピート (まとめない設定)"})。全案件数 = クレーム・手直し率の分母 (${CASES_SOURCE_LABEL[basis.casesSource]})。入力欄の下に、自動の値・作業日報の納品件数を出しています`}
         />
         <form method="get" action="/kpi/basis" className="mb-3 flex flex-wrap items-end gap-2">
           <label className="block"><span className="label">年度</span><select name="fy" defaultValue={String(fy)} className="field h-9 py-1 text-sm">{[...new Set([fy, ...fyOptions])].sort((a, b) => b - a).map((y) => { const r = fiscalRange(y, startMonth); return <option key={y} value={y}>{y}年度 ({r.from.slice(0, 7)}〜{r.to.slice(0, 7)})</option>; })}</select></label>
@@ -217,7 +217,7 @@ function MonthTable({ db, basis, fy, months, stores, fyOptions, startMonth }: { 
         </div>
         <div className="flex flex-wrap items-center gap-3 px-5 py-3">
           <Button type="submit" size="sm" variant="secondary">個人件数・全案件数を保存</Button>
-          <span className="text-[11px] text-ink-3">入れた値は「手入力」になり、取り込みで上書きしません。空欄にすると年間チラシ計画の取込・自動の値に戻ります。自動の個人件数は、案件 (売上台帳の現場名の行 + 新システムで完了した受注) のうち個人のお客様の件数から、同じお客様の {basis.repeatDays} 日以内のリピートを除いた数です (はがきを渡した案件から数えます)。「案件」= 全案件数の自動の値、「納品」= 作業日報の納品件数 (予定表の納品の予定) です。</span>
+          <span className="text-[11px] text-ink-3">入れた値は「手入力」になり、取り込みで上書きしません。空欄にすると年間チラシ計画の取込・自動の値に戻ります。自動の個人件数は、案件 (売上台帳の現場名の行 + 新システムで完了した受注) のうち個人のお客様の件数から、同じお客様・同じ店舗の {basis.repeatDays} 日以内のリピートを除いた数です (はがきを渡した案件から数えます。別の店舗の案件は 1 件ずつ)。「案件」= 全案件数の自動の値、「納品」= 作業日報の納品件数 (予定表の納品の予定) です。</span>
         </div>
       </form>
       {basis.denominator === "system" && <div className="px-5 pb-4"><Note tone="warn">いまの設定は「{DENOMINATOR_LABEL.system}」のため、この表の値は集計に使っていません。</Note></div>}
@@ -236,7 +236,9 @@ function fiscalRangeEnd(months: string[]): string {
 function PlanView({ plan, preview, hash, stores }: { plan: BasisPlan; preview: BasisPreview; hash: string; stores: Store[] }) {
   const ind = plan.individual;
   const c = plan.cards;
-  const nothing = !ind.some((i) => i.action === "create" || i.action === "update") && !c.changes.length && !c.adds.length;
+  const nothing = !ind.some((i) => i.action === "create" || i.action === "update") && !c.changes.length && !c.adds.length && !c.newCards.length;
+  const unresolvedNames = [...new Set(c.newCards.flatMap((x) => x.unresolvedNames))];
+  const newByMonth = [...c.newCards.reduce((m, x) => m.set(x.month || "(月なし)", (m.get(x.month || "(月なし)") ?? 0) + 1), new Map<string, number>())].sort();
   // 個人件数: 年度 × 店舗の表 (新しい月から 24 か月)
   const indMonths = [...new Set(ind.map((i) => i.month))].sort().reverse().slice(0, 24);
   const byKey = new Map(ind.map((i) => [monthKey(i.storeId, i.month), i]));
@@ -248,9 +250,17 @@ function PlanView({ plan, preview, hash, stores }: { plan: BasisPlan; preview: B
           <Badge tone="info" dot={false}>個人件数 {ind.length} か月分 (新規 {plan.counts.individual.create}・更新 {plan.counts.individual.update}・変更なし {plan.counts.individual.unchanged}・手入力のため取り込まない {plan.counts.individual.manual})</Badge>
           {preview.cardMonths.length > 0 && <Badge tone="info" dot={false}>はがきの集計月 {c.changes.length} 行 (変更なし {c.unchanged})</Badge>}
           {c.adds.length > 0 && <Badge tone="good" dot={false}>移行で漏れた担当の行を追加 {c.adds.length} 行</Badge>}
+          {c.newCards.length > 0 && <Badge tone="good" dot={false}>新しいはがき (移行のあとに入力した行) {c.newCards.length} 枚</Badge>}
+          {c.registered > 0 && <Badge tone="neutral" dot={false}>同じハガキ№ が登録済みのため取り込まない {c.registered} 枚</Badge>}
           {(c.notInSystem > 0 || c.mismatch > 0 || c.unresolved > 0) && <Badge tone="warn" dot={false}>システムにない行 {c.notInSystem} · 行が合わない {c.mismatch} · 担当者が決まらない {c.unresolved}</Badge>}
         </div>
         {preview.problems.length > 0 && <div className="mt-3 space-y-1">{preview.problems.map((p, i) => <p key={i} className="text-xs text-warn-ink">・{p}</p>)}</div>}
+        {c.newCards.length > 0 && (
+          <div className="mt-3 text-xs text-ink-2">
+            <p>新しいはがき (集計月ごと): {newByMonth.map(([m, n]) => `${m === "(月なし)" ? m : monthLabel(m)} ${n} 枚`).join("・")}</p>
+            {unresolvedNames.length > 0 && <p className="mt-1 text-warn-ink">社員のアカウントに決まらない担当の名前 (名前の文字のまま登録し、②③ の個人の評価には入りません): {unresolvedNames.slice(0, 20).join("・")}。取り込んだあと、はがきの画面 (KPI → アンケート) で担当者を選べます</p>}
+          </div>
+        )}
         <div className="mt-4 flex flex-wrap items-end gap-3">
           <form action={applyKpiBasisImport}>
             <input type="hidden" name="hash" value={hash} />

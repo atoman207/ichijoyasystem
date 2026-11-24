@@ -64,7 +64,7 @@ export default async function IncentivesPage({ searchParams }: { searchParams: P
         <div className="px-5 pt-5"><CardHeader title="店舗・事務の評価値" description={`はがき返信率が ${settings.incentive.replyGate}% 未満の店舗は、はがきの項目 (返信率・②③④・関連の MVP) を支給しません`} /></div>
         <ul className="space-y-0.5 px-5 pb-3 text-[11px] text-ink-3">
           {basisNotes(result.basis).map((t, i) => <li key={i}>・{t}</li>)}
-          <li>・クレーム・手直しはクレーム {settings.qualityPoints.claim} 点・手直し {settings.qualityPoints.rework} 点{settings.qualityCaseMax > 0 ? `、同じ案件は最大 ${settings.qualityCaseMax} 点` : ""}。販促の KPI (チラシの反響・個人の売上・客単価など) は経営分析用の別の指標で、インセンティブには入れません (<Link href="/promotions" className="text-accent hover:underline">販促と媒体の分析</Link>)</li>
+          <li>・クレーム・手直しはクレーム {settings.qualityPoints.claim} 点・手直し {settings.qualityPoints.rework} 点{settings.qualityCaseMax > 0 ? `、同じ案件の同じ月は最大 ${settings.qualityCaseMax} 点` : ""}。販促の KPI (チラシの反響・個人の売上・客単価など) は経営分析用の別の指標で、インセンティブには入れません (<Link href="/promotions" className="text-accent hover:underline">販促と媒体の分析</Link>)</li>
           {canImportData(user) && <li>・分母 (店舗 × 月の個人件数・全案件数) の登録と、スプレッドシートの KPI シートとの照合は <Link href={`/kpi/basis?fy=${fy}`} className="text-accent hover:underline">分母・照合</Link> / <Link href="/kpi/basis/check" className="text-accent hover:underline">支給前の照合</Link></li>}
         </ul>
         <div className="overflow-x-auto">

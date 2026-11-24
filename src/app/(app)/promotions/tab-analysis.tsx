@@ -74,7 +74,7 @@ export function AnalysisTab({ db, user, report: r, periodValue, periodLabel, sta
         <div className="px-5 pt-5">
           <CardHeader
             title="販促 KPI (経営分析用)"
-            description="チラシの反響・個人の売上・客単価などの販促の指標です。経営分析に使う別の指標で、インセンティブの計算には使いません。個人件数は売上の実績どおり 1 件ずつ数えます (アンケート返信率の分母は、約 1 か月以内のリピートを 1 件にまとめた別の数字です)"
+            description="チラシの反響・個人の売上・客単価などの販促の指標です。経営分析に使う別の指標で、インセンティブの計算には使いません。個人件数は売上の実績どおり 1 件ずつ数えます (アンケート返信率の分母は、同じお客様・同じ店舗の 30 日以内のリピートを 1 件にまとめた別の数字です)"
             action={<Csv href={csv("kpi")} />}
           />
         </div>

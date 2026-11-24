@@ -6,9 +6,10 @@ import { countedOrder, deliveryOf, inPeriod, isCard, orderDate, surveyKpiDate, t
  * ------------------------------------------------------------
  * お客様のご要望 (2026-11-23「■9. KPI・インセンティブ集計」・2026-11-24「KPI・インセンティブ集計について」):
  *  - ハガキ返信率 = 戻ってきたハガキ件数 ÷ 個人件数 × 100。個人件数は年間チラシ計画「個人件数売上」の本年度実績の件数が基準。
- *    約 1 か月以内に同じお客様からリピート受注があったときは、最初の工事ではがきを渡し 2 回目は渡さないため、
+ *    約 1 か月 (30 日) 以内に同じお客様から同じ店舗でリピート受注があったときは、最初の工事ではがきを渡し 2 回目は渡さないため、
  *    売上はそれぞれ数えるが返信率の分母は「1 件」(これまで手計算)。システムでは自動で数える:
- *    個人件数の自動の値 = 個人のお客様の案件 − リピート (同じお客様の、はがきを渡した案件から repeatDays 日以内の次の案件)。
+ *    個人件数の自動の値 = 個人のお客様の案件 − リピート (同じお客様・同じ店舗の、はがきを渡した案件から repeatDays 日以内の次の案件。
+ *    別の店舗で施工したときはそれぞれの店舗ではがきを渡すため、店舗ごとに 1 件ずつ数える = お客様のご指示 2026-11-24)。
  *    年間チラシ計画の値 (取込・手入力) がある月はその値 (手計算で調整済み) を使い、ない月 (新システムの月) は自動の値 (設定で いつも自動 にもできる)
  *  - クレーム・手直しポイント率 = (クレームポイント + 手直しポイント) ÷ 全案件数 × 100。全案件数は作業日報の納品件数をもとに手計算していた。
  *    システムでは 案件の件数 (売上台帳の現場名の行 + 新システムで完了した受注。KPI シートの分母と一致) を既定とし、
@@ -65,8 +66,8 @@ export interface KpiBasis extends KpiBasisRules {
   preview?: { hash: string; at: string; by: string; label: string };
 }
 
-/** リピートをまとめる日数の既定 (「約 1 か月以内」= 31 日以内) */
-export const DEFAULT_REPEAT_DAYS = 31;
+/** リピートをまとめる日数の既定 (お客様のご指示 2026-11-24「30 日以内で問題ありません」) */
+export const DEFAULT_REPEAT_DAYS = 30;
 export const MAX_REPEAT_DAYS = 120;
 
 export const DEFAULT_KPI_BASIS_RULES: KpiBasisRules = { denominator: "sheet", requireStaffNames: true, average: "sheet", individualSource: "plan", repeatDays: DEFAULT_REPEAT_DAYS, casesSource: "cases" };
@@ -220,7 +221,7 @@ export interface CaseUnit {
   orderId: string;
   /** ledger = 移行した売上台帳の行 / system = 新システムで完了した受注 */
   origin: "ledger" | "system";
-  /** 同じお客様の、はがきを渡した案件から repeatDays 日以内の次の案件 (返信率の分母で数えない) */
+  /** 同じお客様・同じ店舗の、はがきを渡した案件から repeatDays 日以内の次の案件 (返信率の分母で数えない) */
   repeat: boolean;
 }
 
@@ -259,7 +260,8 @@ const dayDiff = (from: string, to: string): number => (Date.parse(`${to.slice(0,
  * - 新システムの受注: 施工完了日 (売上計上日) に 1 件。完了していない受注は数えない。
  *   その店舗の売上台帳の取込の最後の日までの受注は台帳の行で数える (二重にしない)
  * - 販売管理ソフトから移行した伝票の受注・キャンセルは数えない
- * リピート: お客様ごとに日付の順に並べ、はがきを渡した案件から repeatDays 日以内の次の案件を repeat にする
+ * リピート: お客様 × 店舗ごとに日付の順に並べ、はがきを渡した案件から repeatDays 日以内の次の案件を repeat にする
+ * (別の店舗の案件はその店舗ではがきを渡すため、まとめない)
  * (その次は、はがきを渡した案件からの日数で決める。同じ日の追加工事の行もリピート)
  */
 export function caseUnits(orders: Order[], repeatDays: number): CaseUnit[] {
@@ -289,7 +291,11 @@ export function caseUnits(orders: Order[], repeatDays: number): CaseUnit[] {
   }
   if (repeatDays > 0) {
     const byCustomer = new Map<string, CaseUnit[]>();
-    for (const u of units) if (u.customerId) byCustomer.set(u.customerId, [...(byCustomer.get(u.customerId) ?? []), u]);
+    for (const u of units) {
+      if (!u.customerId) continue;
+      const k = `${u.customerId}|${u.storeId}`;
+      byCustomer.set(k, [...(byCustomer.get(k) ?? []), u]);
+    }
     for (const list of byCustomer.values()) {
       if (list.length < 2) continue;
       list.sort((a, b) => a.date.localeCompare(b.date) || a.orderId.localeCompare(b.orderId));
@@ -549,7 +555,7 @@ export function personScores(surveys: SurveyResponse[], p: Period | null, rules:
 export function basisNotes(b: KpiBasisRules): string[] {
   return [
     b.denominator === "sheet"
-      ? `返信率 = はがきの枚数 ÷ 個人件数。個人件数 = ${b.individualSource === "plan" ? "年間チラシ計画の本年度実績の件数 (取込・手入力)。値のない月は自動" : "自動 (手入力した月は手入力の値)"}${b.repeatDays > 0 ? ` (自動 = 個人のお客様の案件。同じお客様の ${b.repeatDays} 日以内のリピートは 1 件。売上は 1 件ずつ数えます)` : " (自動 = 個人のお客様の案件。リピートもまとめない)"}`
+      ? `返信率 = はがきの枚数 ÷ 個人件数。個人件数 = ${b.individualSource === "plan" ? "年間チラシ計画の本年度実績の件数 (取込・手入力)。値のない月は自動" : "自動 (手入力した月は手入力の値)"}${b.repeatDays > 0 ? ` (自動 = 個人のお客様の案件。同じお客様・同じ店舗の ${b.repeatDays} 日以内のリピートは 1 件。別の店舗・売上は 1 件ずつ数えます)` : " (自動 = 個人のお客様の案件。リピートもまとめない)"}`
       : "返信率 = はがきの枚数 ÷ 期間内の個人のお客様の受注の件数 (リピートの調整なし)",
     b.denominator === "sheet"
       ? `クレーム・手直しポイント率・発生率 = ÷ 全案件数。全案件数 = ${CASES_SOURCE_LABEL[b.casesSource]} (手入力した月は手入力の値。事務は 4 店舗の合計)`

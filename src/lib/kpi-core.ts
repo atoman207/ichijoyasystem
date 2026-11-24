@@ -67,8 +67,14 @@ export interface IssuePoints {
 }
 
 /**
+ * 上限を当てる単位: 同じ案件 (issueCaseKey) の同じ発生月。クレーム・手直しは月締めで集計していて (KPI シート「月締めで集計」)、
+ * 同じ案件でも別の月に起きた別のクレーム・手直しはそれぞれ数える (お客様アンケート集計表の KPI シートの手計算と同じ)
+ */
+export const issueCapKey = (q: Pick<QualityIssue, "id" | "orderId" | "storeId" | "occurredOn" | "siteName">): string => `${issueCaseKey(q)}#${q.occurredOn.slice(0, 7)}`;
+
+/**
  * クレーム・手直しのポイントの合計 (お客様のご指示 2026-11-24「クレーム 2 点・手直し 1 点・同一案件で両方発生した場合は最大 3 点」)。
- * 同じ案件 (issueCaseKey) の記録の点数を足し、案件ごとに caseMax 点までにする (0 以下 = 上限なし)。
+ * 同じ案件・同じ月 (issueCapKey) の記録の点数を足し、caseMax 点までにする (0 以下 = 上限なし)。
  * 単位 (店舗・事務・担当者) ごとに絞った記録を渡す
  */
 export function issuePoints(issues: Pick<QualityIssue, "id" | "orderId" | "storeId" | "occurredOn" | "siteName" | "points">[], caseMax: number): IssuePoints {
@@ -76,7 +82,7 @@ export function issuePoints(issues: Pick<QualityIssue, "id" | "orderId" | "store
   let raw = 0;
   for (const q of issues) {
     raw += q.points;
-    const k = issueCaseKey(q);
+    const k = issueCapKey(q);
     byCase.set(k, (byCase.get(k) ?? 0) + q.points);
   }
   if (!(caseMax > 0)) return { points: raw, raw, cappedCases: 0 };

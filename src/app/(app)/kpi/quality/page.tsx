@@ -107,7 +107,7 @@ export default async function QualityPage({ searchParams }: { searchParams: Prom
       </Card>
 
       <Card className="mt-4" padded={false}>
-        <div className="px-5 pt-5"><CardHeader title={`インセンティブ用 · ポイントとポイント率 (${rp.label})`} description={`ポイント率 = 合計ポイント ÷ 全案件数 × 100 (年間インセンティブのクレーム・手直しポイント率と同じ)。クレーム ${settings.qualityPoints.claim} 点・手直し ${settings.qualityPoints.rework} 点・クレーム＋手直し ${settings.qualityPoints.claim_rework} 点${settings.qualityCaseMax > 0 ? `、同じ案件は最大 ${settings.qualityCaseMax} 点` : ""}。事務の分母は 4 店舗の合計`} /></div>
+        <div className="px-5 pt-5"><CardHeader title={`インセンティブ用 · ポイントとポイント率 (${rp.label})`} description={`ポイント率 = 合計ポイント ÷ 全案件数 × 100 (年間インセンティブのクレーム・手直しポイント率と同じ)。クレーム ${settings.qualityPoints.claim} 点・手直し ${settings.qualityPoints.rework} 点・クレーム＋手直し ${settings.qualityPoints.claim_rework} 点${settings.qualityCaseMax > 0 ? `、同じ案件の同じ月は最大 ${settings.qualityCaseMax} 点` : ""}。事務の分母は 4 店舗の合計`} /></div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-sm">
             <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-4 py-2 text-left font-medium">単位</th><th className="px-2 py-2 text-right font-medium">全案件数</th><th className="px-2 py-2 text-right font-medium">記録の件数</th><th className="px-2 py-2 text-right font-medium">ポイント</th><th className="px-4 py-2 text-right font-medium">ポイント率</th></tr></thead>
@@ -124,7 +124,7 @@ export default async function QualityPage({ searchParams }: { searchParams: Prom
             </tbody>
           </table>
         </div>
-        <p className="px-5 py-3 text-[11px] text-ink-3">同じ案件 (受注。案件のない記録は 店舗・月・現場名) のクレームと手直しは合わせて最大 {settings.qualityCaseMax} 点です (設定 → KPI・インセンティブ で変更)。「記録のみ」(点検 DM・点検電話から分かったもの、お客様が原因のものなど) は集計に入れません。LINE の報告を「記録にする」と、区分に応じたポイントが自動で付き、この表と年間インセンティブに反映されます。</p>
+        <p className="px-5 py-3 text-[11px] text-ink-3">同じ案件 (受注。案件のない記録は 店舗・現場名) で同じ月のクレームと手直しは合わせて最大 {settings.qualityCaseMax} 点です (月締めで集計。別の月に起きた別の手直しはそれぞれ数えます。設定 → KPI・インセンティブ で変更)。「記録のみ」(点検 DM・点検電話から分かったもの、お客様が原因のものなど) は集計に入れません。LINE の報告を「記録にする」と、区分に応じたポイントが自動で付き、この表と年間インセンティブに反映されます。</p>
       </Card>
 
       {reports.length > 0 && (
