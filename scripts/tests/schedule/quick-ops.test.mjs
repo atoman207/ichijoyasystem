@@ -129,6 +129,13 @@ eq(SA.areaStoreOf(db(), "熊本県テスト郡ためし町1-2")?.storeId, other.
 eq(SA.areaStoreOf(db(), "見本市中央区2-3")?.storeId, third.id, "市の名前で決まる");
 eq(SA.areaStoreOf(db(), "熊本県見本市北区かがみ町5")?.storeId, other.id, "長く一致した地域 (区・町名) を優先");
 eq([SA.areaStoreOf(db(), "どこか県どこか町"), SA.areaStoreOf(db(), "")], [undefined, undefined], "当たらない・空の住所は決めない");
+await store.mutate((x) => {
+  const row = (id, town, storeId) => ({ id, municipality: "", town, storeId, validFrom: day, source: "manual", createdBy: admin.id, createdAt: day });
+  x.salesAreas.push(row("sa_t4", "ためし", other.id), row("sa_t5", "岡辺町", third.id), row("sa_t6", "みほん村", other.id), row("sa_t7", "みほん", third.id), row("sa_t8", "椿", other.id));
+});
+eq(SA.areaStoreOf(db(), "熊本県ためし市七城町岡辺1")?.storeId, other.id, "市の名前 (住所の頭) を、あとの町名 (ほかの店舗の町) より優先");
+eq([SA.areaStoreOf(db(), "熊本県阿蘇郡みほん村2")?.storeId, SA.areaStoreOf(db(), "熊本市東区みほん1丁目")?.storeId], [other.id, third.id], "「○○村」と町名「○○」: 名前のまま当たった方");
+eq([SA.areaStoreOf(db(), "熊本市北区椿5丁目")?.storeId, SA.areaStoreOf(db(), "熊本市北区大椿町")], [other.id, undefined], "1 文字の町名は市区のすぐあとだけ");
 const pickA = SA.newCaseStore(db(), staffUser, { auto: true, address: "テスト郡ためし町1", requested: staffUser.storeId });
 eq([pickA.storeId, pickA.byArea], [other.id, true], "店舗スタッフでも、住所の担当エリアの店舗にできる (自動)");
 eq(SA.newCaseStore(db(), staffUser, { auto: false, address: "テスト郡ためし町1", requested: staffUser.storeId }).storeId, staffUser.storeId, "手で選んだ自店舗はそのまま");

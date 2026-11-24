@@ -31,7 +31,13 @@ export function storeIdOfName(db: Pick<Database, "stores">, name: string): Store
   return STORE_ALIASES[key] ?? db.stores.find((s) => key && (s.name.startsWith(key) || s.shortName === key))?.id;
 }
 
-const norm = (s: string) => cleanAddressText(s).replace(/[\s　]/g, "").replace(/^熊本県/, "");
+const norm = (s: string) => cleanAddressText(s).replace(/[\s　]/g, "").replace(/^(東京都|北海道|(?:京都|大阪)府|[^\d]{2,3}?県)/, "");
+
+/**
+ * 住所の頭の市区町村 (「菊池市」「菊池郡菊陽町」「熊本市北区」「嘉島町」)。ここに当たる地域 (市町村の名前) を、そのあとの町名より優先する
+ * (地域一覧は「菊池」「山鹿」のような市町村の名前と、熊本市の町名が混ざっている。「菊池市七城町岡田」の「岡田」(熊本市の町名) を取らない)
+ */
+const HEAD = /^(?:[^\d]{1,6}?郡[^\d]{1,5}?[町村]|[^\d]{1,6}?市(?:[^\d]{1,4}?区)?|[^\d]{1,5}?[町村])/;
 
 /** 地域の名前の比べ方 (末尾の「町」「村」は付いていてもいなくても同じ) */
 const variants = (town: string) => {
@@ -52,23 +58,38 @@ export interface AreaMatch {
   candidates: { storeId: StoreId; town: string }[];
 }
 
-/** 住所 (施工場所またはお客様の住所) から営業エリアの担当店舗を判定する */
+/**
+ * 住所 (施工場所またはお客様の住所) から営業エリアの担当店舗を判定する。
+ * 決め方: 住所の頭の市区町村に当たる地域 > そのあとの町名に当たる地域、同じなら長く一致した地域 > 住所の前のほうに当たる地域 > 名前のまま当たった地域。
+ * 1 文字の町名 (「楠」) は市区のすぐあとに書かれているときだけ当てる
+ */
 export function matchArea(db: Pick<Database, "salesAreas">, address: string | undefined, date: string): AreaMatch {
   const addr = norm(address ?? "");
   if (!addr) return { status: "no_address", candidates: [] };
-  let best = 0;
+  const head = HEAD.exec(addr)?.[0].length ?? 0;
+  // exact = 地域の名前のまま当たった (「西原村」の「村」を外した「西原」より、町名の「西原」を取る)
+  type Score = { tier: number; len: number; start: number; exact: number };
+  const better = (x: Score, y: Score) => x.tier - y.tier || x.len - y.len || y.start - x.start || x.exact - y.exact;
+  let best: Score | undefined;
   let hits: { storeId: StoreId; town: string }[] = [];
   for (const a of activeAreas(db, date)) {
     const where = a.municipality ? `${norm(a.municipality)}${norm(a.town)}` : "";
-    for (const v of variants(a.town)) {
-      const hit = (where && addr.includes(where)) || addr.includes(v);
-      if (!hit) continue;
-      const len = where && addr.includes(where) ? where.length : v.length;
-      if (len > best) {
-        best = len;
-        hits = [{ storeId: a.storeId, town: a.town }];
-      } else if (len === best && !hits.some((h) => h.storeId === a.storeId && h.town === a.town)) hits.push({ storeId: a.storeId, town: a.town });
+    const t = norm(a.town);
+    const keys = [...(where ? [where] : []), ...variants(a.town), ...(t.length === 1 && head > 0 ? [t] : [])];
+    let mine: Score | undefined;
+    for (const v of keys) {
+      const start = addr.indexOf(v);
+      if (start < 0) continue;
+      if (v.length === 1 && start !== head) continue;
+      const sc = { tier: start < head ? 1 : 0, len: v.length, start, exact: v === t || v === where ? 1 : 0 };
+      if (!mine || better(sc, mine) > 0) mine = sc;
     }
+    if (!mine) continue;
+    const cmp = best ? better(mine, best) : 1;
+    if (cmp > 0) {
+      best = mine;
+      hits = [{ storeId: a.storeId, town: a.town }];
+    } else if (cmp === 0 && !hits.some((h) => h.storeId === a.storeId && h.town === a.town)) hits.push({ storeId: a.storeId, town: a.town });
   }
   const stores = [...new Set(hits.map((h) => h.storeId))];
   if (!hits.length) return { status: "unmatched", candidates: [] };
