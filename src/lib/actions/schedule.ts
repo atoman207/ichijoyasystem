@@ -29,11 +29,11 @@ import {
   type Slot,
 } from "@/lib/calendar";
 import { addDays, daysBetween } from "@/lib/format";
-import { createCaseResolver, orderEditable, type CaseRef } from "@/lib/db/schedule";
+import { caseValue, createCaseResolver, orderEditable, type CaseRef } from "@/lib/db/schedule";
 import { suggestScheduleDates, type SuggestResult, type SuggestSlot } from "@/lib/schedule-suggest";
 import { readCapacitySettings, SCHEDULE_CAPACITY_ID, SUGGEST_KINDS, type CapacitySettings } from "@/lib/schedule-capacity";
 import { basePlaceOfEvent } from "@/lib/maps/resolve";
-import { mapTablesReady, propagateOrderSite, saveEventLocationMode } from "@/lib/maps/store";
+import { currentEventMode, mapTablesReady, propagateOrderSite, saveEventLocationMode } from "@/lib/maps/store";
 import { changeImpacts, moveBookingsWithEvent } from "@/lib/scheduling/impact";
 import { replanProductionForPickup } from "@/lib/scheduling/production";
 import { prefetchForStore } from "@/lib/scheduling/prefetch";
@@ -65,7 +65,7 @@ interface ParsedEvent {
   caseRef?: CaseRef;
 }
 
-const AUTO_START_KINDS: ScheduleKind[] = ["survey", "measure", "visit"];
+const AUTO_START_KINDS: ScheduleKind[] = ["survey", "onsite_quote", "measure", "visit"];
 
 const FIELD_LABEL: Record<string, string> = {
   title: "件名",
@@ -430,6 +430,48 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
   const freed = changed && p.fields.date > current.date && SUGGEST_KINDS.includes(current.kind) ? ` 空いた ${shortDate(current.date)} に入れられる予定は 予定表 →「計画」で確かめられます。` : "";
   const msg = `${changed ? "予定を更新しました。" : "変更はありませんでした。"}${synced && changed ? "受注の施工予定にも反映しました。" : ""}${hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : ""}${followUps.join("")}${changed && impacts.length ? ` 注意: ${impacts.join(" / ")}。` : ""}${freed}`;
   redirect(withMsg(returnTo ?? `/schedule/${id}`, msg));
+}
+
+/**
+ * 予定表の上での変更 (予定を押したときの小さな画面。お客様のご要望 2026-11-24「■4」: 別の画面に移らずに日時・内容・種類を変える)。
+ * 画面に出していない項目 (担当者・店舗・案件・場所) は今の値のまま、updateScheduleEvent と同じ処理で保存する
+ * (権限・重複の確認・受注との連動・引取・納品の日程の変更の申請・変更履歴は「変更」の画面と同じ)
+ */
+export async function quickUpdateScheduleEvent(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const returnTo = safePath(str(formData, "returnTo")) ?? "/schedule";
+  const db = getDb();
+  const e = db.schedule.find((x) => x.id === id);
+  if (!e) fail(returnTo, "予定が見つかりません (削除された可能性があります)。");
+  if (!canEditEvent(user, e)) fail(returnTo, "この予定を変更する権限がありません (登録者・担当者・店舗のメンバーが変更できます)。");
+  const ref = createCaseResolver(db).ofEvent(e);
+  const fd = new FormData();
+  const pick = (k: string, fallback: string | undefined) => (formData.has(k) ? str(formData, k) : (fallback ?? ""));
+  fd.set("title", pick("title", e.title));
+  fd.set("kind", e.source === "order" ? e.kind : pick("kind", e.kind));
+  fd.set("date", pick("date", e.date));
+  fd.set("endDate", pick("endDate", e.endDate));
+  const mode = pick("timeMode", e.startTime ? "time" : e.slot ?? "allday");
+  if (mode === "time") {
+    fd.set("startTime", pick("startTime", e.startTime));
+    fd.set("endTime", pick("endTime", e.endTime));
+  } else if (mode === "am" || mode === "pm") {
+    fd.set("slot", mode);
+  } else {
+    fd.set("allDay", "1");
+  }
+  fd.set("storeId", e.storeId);
+  if (e.companyWide) fd.set("companyWide", "1");
+  for (const a of e.assigneeIds) fd.append("assigneeIds", a);
+  if (ref) fd.set("caseRef", caseValue(ref));
+  if (e.customerId) fd.set("customerId", e.customerId);
+  fd.set("locationMode", currentEventMode(db, e));
+  fd.set("location", e.location ?? "");
+  fd.set("memo", pick("memo", e.memo));
+  if (str(formData, "allowOverlap") === "1") fd.set("allowOverlap", "1");
+  fd.set("back", returnTo);
+  fd.set("returnTo", returnTo);
+  return updateScheduleEvent(id, fd);
 }
 
 export async function deleteScheduleEvent(id: string, formData: FormData) {

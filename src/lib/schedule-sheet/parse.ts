@@ -118,6 +118,10 @@ export function monthOfLabel(label: string): { year: number; month: number } | u
 const SKIP_RE = /^繰り?越|工場ストップ|^上限|まで$|^※|係数|翌日持越|集金準備|指示書|^AM$|^PM$|^計$|^合計|^現場名|^ハギ$|^シキ$|^無し$|^人$|^表$|^新$/;
 const LEAVE_RE = /有休|有給|公休|振休|代休|休み|お休|欠勤|特休|慶弔/;
 const SURVEY_RE = /現見|現調|見積(?!書)|見積のみ|下見/;
+/** 現場見積 (現見 = 現場で見積もりをして、そのまま工事)。「現見かも」「現見になるかも」(まだ決まっていない) は通常の見積り (現地調査) のまま */
+const ONSITE_RE = /現見(?![^、。\s]{0,8}かも)/;
+/** 予定表の書き込みが現場見積 (現見) か (取り込み済みの予定の種類の直しにも使う) */
+export const isOnsiteQuoteText = (raw: string): boolean => ONSITE_RE.test(nk(raw));
 /** 現場管理 (工事・施工の現場の確認・立ち会い・取り付けの立ち会い) */
 const SITE_RE = /現場管理|現場確認|工事|立会|立ち会|取り?付け?|施工確認|養生/;
 const MEASURE_RE = /採寸/;
@@ -212,9 +216,10 @@ export function splitName(raw: string): { area?: string; name?: string; extra?: 
 }
 
 /** 予定の種類 */
-function kindOf(side: SheetSide, raw: string, total: number, customerLike: boolean): ScheduleKind {
+export function kindOf(side: SheetSide, raw: string, total: number, customerLike: boolean): ScheduleKind {
   const s = nk(raw);
   if (LEAVE_RE.test(s) && !/^\(/.test(s)) return "leave";
+  if (ONSITE_RE.test(s)) return "onsite_quote";
   if (SURVEY_RE.test(s)) return "survey";
   if (MEASURE_RE.test(s)) return "measure";
   // お客様の現場の工事・取り付けの確認 (枚数のある引き取り・納品の行は除く)

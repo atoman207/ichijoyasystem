@@ -65,11 +65,18 @@ export interface CalendarContext {
   workTextOf?: (e: ScheduleEvent) => string | undefined;
   /** 畳製造予定の日ごとの合計と、その日の製造予定の画面へのリンク (src/lib/production/plan.ts) */
   production?: { byDay: Map<string, DayTotal>; href: (d: string) => string };
+  /** 予定表に出す件名「（町名）お客様」(src/lib/schedule-label.ts)。なければ件名から種類の言葉を外したもの */
+  labelOf?: (e: ScheduleEvent) => string;
 }
 
 /** 予定表に出す件名 (「引き取り」「納品」などの言葉は出さない。種類はアイコンと色で表す) */
 export function eventTitle(e: Pick<ScheduleEvent, "title" | "kind">): string {
   return stripKindWords(e.title, e.kind);
+}
+
+/** 予定表に出す件名: 現場の町名つき「（築地）村田」(お客様のご要望 2026-11-24「■1」) */
+export function titleOf(ctx: Pick<CalendarContext, "labelOf">, e: ScheduleEvent): string {
+  return ctx.labelOf?.(e) ?? eventTitle(e);
 }
 
 /** 畳製造予定の日のリンク (予定表の日の見出しに置く) */
@@ -129,7 +136,7 @@ function describe(ctx: CalendarContext, e: ScheduleEvent, day: string | undefine
   return [
     `${day ? shortDate(day) : shortDate(e.date)} ${dayTimeLabel(e, day)}`,
     kindLabel(e.kind),
-    e.title,
+    titleOf(ctx, e),
     ctx.workTextOf?.(e) ? `仕事内容: ${ctx.workTextOf(e)}` : "",
     people.length ? `担当: ${people.join("・")}` : e.companyWide ? "全社共通" : "",
     store ? `${store.name}` : "",
@@ -152,6 +159,7 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
     return (
       <Link
         href={href}
+        data-ev={e.id}
         title={label}
         aria-label={label}
         className={clsx(
@@ -165,7 +173,7 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
         <KindMark kind={e.kind} />
         {ctx.showStore && store && <span className="shrink-0 font-medium text-ink-2">{store.shortName}</span>}
         <span className="shrink-0 font-medium text-ink-2 tnum">{shortTime(e)}</span>
-        <span className="min-w-0 truncate">{eventTitle(e)}</span>
+        <span className="min-w-0 truncate">{titleOf(ctx, e)}</span>
         <WorkTokens tokens={tokens} />
         {conflict && <TriangleAlert className="ml-auto h-3 w-3 shrink-0 text-critical" aria-hidden />}
       </Link>
@@ -176,6 +184,7 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
   return (
     <Link
       href={href}
+      data-ev={e.id}
       title={label}
       aria-label={label}
       className={clsx(
@@ -198,7 +207,7 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
         {conflict && <ConflictBadge className="ml-auto" />}
       </span>
       <span className="mt-0.5 block font-medium">
-        <span className="line-clamp-2">{eventTitle(e)}</span>
+        <span className="line-clamp-2">{titleOf(ctx, e)}</span>
         {tokens?.length ? <WorkTokens tokens={tokens} className="mt-0.5 flex-wrap text-[12px]" /> : null}
       </span>
       <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-ink-2">
@@ -662,6 +671,7 @@ function DayBar({ e, ctx, day, userId, style }: { e: ScheduleEvent; ctx: Calenda
   return (
     <Link
       href={eventHref(e)}
+      data-ev={e.id}
       title={label}
       aria-label={label}
       className={clsx(
@@ -676,7 +686,7 @@ function DayBar({ e, ctx, day, userId, style }: { e: ScheduleEvent; ctx: Calenda
       <KindMark kind={e.kind} />
       {ctx.showStore && ctx.stores.get(e.storeId) && <span className="shrink-0 font-medium text-ink-2">{ctx.stores.get(e.storeId)!.shortName}</span>}
       <span className="shrink-0 font-medium text-ink-2 tnum">{dayTimeLabel(e, day)}</span>
-      <span className="truncate">{eventTitle(e)}</span>
+      <span className="truncate">{titleOf(ctx, e)}</span>
       <WorkTokens tokens={ctx.workOf?.(e)} />
       {conflict && <TriangleAlert className="h-3 w-3 shrink-0 text-critical" aria-hidden />}
     </Link>
@@ -733,8 +743,8 @@ function ListRow({ e, d, ctx }: { e: ScheduleEvent; d: string; ctx: CalendarCont
         {conflict && <ConflictBadge />}
       </div>
       <div className="min-w-0">
-        <Link href={eventHref(e)} className="font-medium text-ink hover:text-accent hover:underline">
-          {eventTitle(e)}
+        <Link href={eventHref(e)} data-ev={e.id} className="font-medium text-ink hover:text-accent hover:underline">
+          {titleOf(ctx, e)}
         </Link>
         <WorkTokens tokens={ctx.workOf?.(e)} className="ml-2 text-sm" />
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-ink-3">
@@ -798,11 +808,11 @@ export function ConflictList({ pairs, ctx, limit = 8, moreHref }: { pairs: Confl
                 <span className="truncate">{ctx.users.get(p.userId)?.name}</span>
               </div>
               <div className="flex min-w-0 flex-col gap-1 @xl:flex-row @xl:items-center @xl:gap-2">
-                <PairLink e={a} />
+                <PairLink e={a} ctx={ctx} />
                 <span className="hidden text-ink-3 @xl:inline" aria-hidden>
                   ⇄
                 </span>
-                <PairLink e={b} />
+                <PairLink e={b} ctx={ctx} />
               </div>
             </li>
           );
@@ -817,12 +827,12 @@ export function ConflictList({ pairs, ctx, limit = 8, moreHref }: { pairs: Confl
   );
 }
 
-function PairLink({ e }: { e: ScheduleEvent }) {
+function PairLink({ e, ctx }: { e: ScheduleEvent; ctx: CalendarContext }) {
   return (
-    <Link href={eventHref(e)} className={clsx("inline-flex min-w-0 items-center gap-1 rounded-md border-l-[3px] px-1.5 py-0.5 text-ink hover:underline", kindStyle(e.kind).soft, kindStyle(e.kind).border)}>
+    <Link href={eventHref(e)} data-ev={e.id} className={clsx("inline-flex min-w-0 items-center gap-1 rounded-md border-l-[3px] px-1.5 py-0.5 text-ink hover:underline", kindStyle(e.kind).soft, kindStyle(e.kind).border)}>
       <KindIcon kind={e.kind} className={clsx("h-3 w-3", kindStyle(e.kind).ink)} />
       <span className="shrink-0 tnum text-ink-2">{timeLabel(e)}</span>
-      <span className="truncate">{e.title}</span>
+      <span className="truncate">{titleOf(ctx, e)}</span>
     </Link>
   );
 }

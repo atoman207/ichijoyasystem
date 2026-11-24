@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { CalendarDays, ExternalLink, Globe, History, Link2, MapPin, Pencil, Repeat, TriangleAlert, Users, ClipboardList } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canEditEvent } from "@/lib/auth/permissions";
+import { canAccessStore, canEditCaseStore, canEditEvent } from "@/lib/auth/permissions";
 import { caseEvents, createCaseResolver, orderEditable } from "@/lib/db/schedule";
 import { deleteScheduleEvent } from "@/lib/actions/schedule";
 import { parseHandoverRef } from "@/lib/handover";
@@ -16,6 +16,7 @@ import { ConflictBadge, KindBadge, KindIcon, kindStyle } from "@/components/sche
 import { MapInfoCard } from "@/components/maps/MapInfoCard";
 import { SUGGEST_KINDS } from "@/lib/schedule-capacity";
 import { mapsSearchUrl } from "@/lib/maps/google";
+import { eventLabeler } from "@/lib/schedule-label";
 
 export const metadata: Metadata = { title: "予定の詳細" };
 
@@ -29,7 +30,10 @@ export default async function EventDetailPage({ params, searchParams }: { params
 
   const userMap = new Map(db.users.map((u) => [u.id, u]));
   const store = db.stores.find((s) => s.id === e.storeId);
-  const customer = e.customerId ? db.customers.find((c) => c.id === e.customerId) : undefined;
+  // お客様は案件 (受注 → 見積 → 問い合わせ) から引く。問い合わせを既存の顧客にひも付けたあとは、その顧客 (お客様のご要望 2026-11-24「■3」)
+  const labeler = eventLabeler(db);
+  const customer = labeler.customerOf(e);
+  const label = labeler.label(e);
   const ref = createCaseResolver(db).ofEvent(e);
   const order = e.orderId ? db.orders.find((o) => o.id === e.orderId) : undefined;
   const synced = e.source === "order";
@@ -50,7 +54,7 @@ export default async function EventDetailPage({ params, searchParams }: { params
     <div>
       <Flash msg={msg} err={err} />
       <PageHeader
-        title={e.title}
+        title={label.text}
         badge={
           <span className="flex flex-wrap items-center gap-1.5">
             <KindBadge kind={e.kind} />
@@ -146,7 +150,29 @@ export default async function EventDetailPage({ params, searchParams }: { params
                     "紐づけなし"
                   ),
                 ],
-                ["お客様", customer ? canAccessStore(user, customer.storeId) ? <Link key="cu" href={`/customers/${customer.id}`} className="text-accent hover:underline">{customer.name}</Link> : customer.name : "-"],
+                [
+                  "お客様",
+                  customer ? (
+                    <span key="cu" className="flex flex-col gap-0.5">
+                      {canAccessStore(user, customer.storeId) || canEditCaseStore(user, customer.storeId) ? (
+                        <Link href={`/customers/${customer.id}`} className="font-medium text-accent hover:underline">
+                          {customer.name} 様
+                        </Link>
+                      ) : (
+                        <span className="font-medium">{customer.name} 様</span>
+                      )}
+                      {[customer.phone, ...(customer.contacts ?? []).map((x) => x.phone)].filter((p): p is string => Boolean(p?.trim())).slice(0, 2).map((p) => (
+                        <a key={p} href={`tel:${p.replace(/[^0-9+]/g, "")}`} className="text-xs text-accent tnum hover:underline">
+                          {p}
+                        </a>
+                      ))}
+                      {customer.address && <span className="text-xs text-ink-2">{customer.address}</span>}
+                    </span>
+                  ) : (
+                    "-"
+                  ),
+                ],
+                ["現場の町名", label.area ?? (customer?.type === "corporate" ? "現場の住所が未登録 (業者の案件は見積・受注の施工場所に現場の住所を入れてください)" : "-")],
                 [
                   "場所",
                   e.location ? (

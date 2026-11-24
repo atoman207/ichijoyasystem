@@ -1,7 +1,7 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
+import { canAccessStore, canEditCaseStore, canSeeAllStores, scopeByStore } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
 import { aiStatus, voiceEnabled } from "@/lib/ai/provider";
 import { createReception } from "@/lib/actions/reception";
@@ -17,7 +17,7 @@ export const maxDuration = 60;
  * 受付 (すべての問い合わせの共通の入口): 手書きメモの写真・話して入力・通話の録音 → AI の読み取り → 確認待ち → 問い合わせ・案件へ
  * 電話のシステムからの通話 (/api/integrations/phone-call) もここの確認待ちに入る
  */
-export default async function ReceptionPage({ searchParams }: { searchParams: Promise<{ msg?: string; err?: string; tab?: string }> }) {
+export default async function ReceptionPage({ searchParams }: { searchParams: Promise<{ msg?: string; err?: string; tab?: string; customer?: string }> }) {
   const sp = await searchParams;
   const user = await requireUser();
   const db = getDb();
@@ -29,26 +29,34 @@ export default async function ReceptionPage({ searchParams }: { searchParams: Pr
   const tab = sp.tab === "done" ? "done" : "pending";
   const rows = tab === "done" ? done : pending;
   const storeMap = new Map(db.stores.map((s) => [s.id, s]));
+  // 顧客の画面の「メモを撮影して問い合わせ」から開いたとき: お客様が決まっている (お客様のご要望 2026-11-24「■6」)
+  const preset = sp.customer ? db.customers.find((c) => c.id === sp.customer && canEditCaseStore(user, c.storeId)) : undefined;
 
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader
         title="受付を登録"
-        description="来店・イベント・現場の紹介・担当者の携帯・会社の電話など、どこで受けた問い合わせも、ここから受付一覧 (問い合わせ) に入れます"
-        back={{ href: "/inquiries", label: "問い合わせ一覧" }}
+        description={preset ? `${preset.name} 様の新しい問い合わせを、手書きのメモの写真・話した内容から登録します。お客様は決まっているので、AI が読み取った内容を確かめて直すだけで登録できます` : "来店・イベント・現場の紹介・担当者の携帯・会社の電話など、どこで受けた問い合わせも、ここから受付一覧 (問い合わせ) に入れます"}
+        back={preset ? { href: `/customers/${preset.id}`, label: `${preset.name} 様` } : { href: "/inquiries", label: "問い合わせ一覧" }}
         actions={<LinkButton href="/inquiries/new" variant="secondary">手入力の画面で登録</LinkButton>}
       />
       <div className="grid grid-cols-1 gap-5 @4xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
         <Card>
-          <CardHeader title="受付の内容を入れる" description="AI が読み取り、確認待ちに入ります。登録は内容を確かめてから" />
+          <CardHeader title={preset ? `${preset.name} 様の問い合わせ` : "受付の内容を入れる"} description="AI が読み取り、確認待ちに入ります。登録は内容を確かめてから" />
+          {preset && (
+            <div className="mb-3 rounded-lg bg-accent-soft px-3 py-2 text-xs text-accent-ink" data-testid="reception-preset">
+              お客様: <span className="font-semibold">{preset.name} 様</span> ({preset.code}{preset.address ? ` · ${preset.address}` : ""})。この画面から登録する受付は、このお客様の問い合わせになります。
+            </div>
+          )}
           <ReceptionInput
             action={createReception}
             stores={db.stores.map((s) => ({ id: s.id, name: s.name }))}
-            defaultStoreId={user.storeId}
+            defaultStoreId={preset && canAccessStore(user, preset.storeId) ? preset.storeId : user.storeId}
             canChooseStore={allStores}
             aiEnabled={ai.enabled}
             voice={voiceEnabled()}
+            customer={preset ? { id: preset.id, name: preset.name } : undefined}
           />
         </Card>
         <div className="min-w-0">

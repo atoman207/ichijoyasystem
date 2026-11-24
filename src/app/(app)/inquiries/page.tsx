@@ -12,6 +12,8 @@ import { MEDIA_KEYS, MEDIA_LABEL, MEDIA_NONE, UNCLASSIFIED, isMediaKey } from "@
 import { filterInquiries, inquiryMediaMap } from "@/lib/ops-reports/promo-analysis";
 import { MediaTag } from "@/components/ops-reports/MediaFields";
 import { pendingReceptionCount } from "@/lib/reception";
+import { inquiryContact } from "@/lib/link-search";
+import { isPlaceholderCustomer } from "@/lib/customer-link";
 
 export default async function InquiriesPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -26,8 +28,18 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
   else if (status && INQUIRY_STATUS[status as InquiryStatus]) rows = rows.filter((i) => i.status === status);
   if (sp.channel) rows = rows.filter((i) => i.channel === sp.channel);
   if (allStores && sp.store) rows = rows.filter((i) => i.storeId === sp.store);
+  // お客様の電話・住所 (顧客にひも付いていれば顧客の情報、なければ受付で聞いた情報。お客様のご要望 2026-11-24「■5」)
+  const customerMap = new Map(db.customers.map((c) => [c.id, c]));
+  const contactOf = (i: (typeof rows)[number]) => inquiryContact(i, i.customerId ? customerMap.get(i.customerId) : undefined);
   const q = (sp.q ?? "").trim().toLowerCase();
-  if (q) rows = rows.filter((i) => [i.number, i.contactName, i.summary, i.detail].join(" ").toLowerCase().includes(q));
+  const qDigits = q.replace(/[^0-9]/g, "");
+  if (q)
+    rows = rows.filter((i) => {
+      const c = i.customerId ? customerMap.get(i.customerId) : undefined;
+      const ct = contactOf(i);
+      if ([i.number, i.contactName, c?.name, c?.kana, i.summary, i.detail, ct.address].join(" ").toLowerCase().includes(q)) return true;
+      return qDigits.length >= 3 && ct.phone.replace(/[^0-9]/g, "").includes(qDigits);
+    });
   // 媒体 (入力 + 過去の記録からの推定)・受付日の絞り込み (販促と媒体の分析と同じ判定。件数が一致する)
   const mediaParam = sp.media === MEDIA_NONE || isMediaKey(sp.media) ? sp.media : "";
   const fromParam = isDateKey(sp.from) ? sp.from : "";
@@ -66,7 +78,7 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
       />
       <form method="get" className="mb-4 flex flex-wrap items-end gap-2">
         {status && <input type="hidden" name="status" value={status} />}
-        <div className="w-full @xl:w-64"><Input name="q" defaultValue={sp.q} placeholder="番号・お客様名・内容で検索" /></div>
+        <div className="w-full @xl:w-72"><Input name="q" defaultValue={sp.q} placeholder="番号・お客様名・電話・住所・内容で検索" /></div>
         <Select name="channel" defaultValue={sp.channel ?? ""} className="w-auto">
           <option value="">すべての入口</option>
           {(Object.keys(CHANNEL_LABEL) as (keyof typeof CHANNEL_LABEL)[]).map((c) => (
@@ -94,6 +106,8 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
             <Th>入口</Th>
             <Th>媒体</Th>
             <Th>お客様</Th>
+            <Th>電話</Th>
+            <Th>住所</Th>
             <Th>内容</Th>
             <Th>種別</Th>
             <Th>店舗</Th>
@@ -103,8 +117,10 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={10} />}
+          {rows.length === 0 && <EmptyRow colSpan={12} />}
           {paged.items.map((i) => {
+            const customer = i.customerId ? customerMap.get(i.customerId) : undefined;
+            const ct = contactOf(i);
             const overdue = i.nextActionDue && i.nextActionDue < today && ["new", "in_progress"].includes(i.status);
             return (
               <Tr key={i.id}>
@@ -112,8 +128,22 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
                 <Td><ChannelTag channel={i.channel} /></Td>
                 <Td>{mediaOf.get(i.id) && <MediaTag {...mediaOf.get(i.id)!} />}</Td>
                 <Td>
-                  {i.customerId ? <Link href={`/customers/${i.customerId}`} className="hover:text-accent">{i.contactName}</Link> : <span>{i.contactName} <span className="text-[10px] text-ink-3">(未登録)</span></span>}
+                  {customer ? (
+                    <span>
+                      <Link href={`/customers/${customer.id}`} className="hover:text-accent">{customer.name}</Link>
+                      {isPlaceholderCustomer(customer) && (
+                        <Link href={`/inquiries/${i.id}#link-customer`} className="ml-1 text-[10px] text-warn-ink hover:underline">(仮・紐づける)</Link>
+                      )}
+                    </span>
+                  ) : (
+                    <span>
+                      {i.contactName}{" "}
+                      <Link href={`/inquiries/${i.id}#link-customer`} className="text-[10px] text-accent hover:underline">(未登録・紐づける)</Link>
+                    </span>
+                  )}
                 </Td>
+                <Td className="text-xs whitespace-nowrap text-ink-2 tnum">{ct.phone ? <a href={`tel:${ct.phone.replace(/[^0-9+]/g, "")}`} className="hover:text-accent">{ct.phone}</a> : <span className="text-ink-3">-</span>}</Td>
+                <Td className="max-w-[14rem] text-xs text-ink-2">{ct.address ? <span className="line-clamp-2">{ct.address}</span> : <span className="text-ink-3">-</span>}</Td>
                 <Td><Link href={`/inquiries/${i.id}`} className="font-medium text-ink hover:text-accent">{i.summary}</Link></Td>
                 <Td className="text-xs text-ink-2">{CATEGORY_LABEL[i.category]}</Td>
                 <Td><StoreTag store={storeMap.get(i.storeId)} short /></Td>

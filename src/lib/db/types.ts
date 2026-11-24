@@ -1036,6 +1036,8 @@ export interface Delivery {
  */
 export type ScheduleKind =
   | "survey"
+  /** 現場見積 (現見): 現場で見積もりをして、そのまま工事に移る (お客様のご要望 2026-11-24「■2」。通常の見積り (現地調査) と分けて表示) */
+  | "onsite_quote"
   | "measure"
   | "pickup"
   | "delivery"

@@ -7,7 +7,7 @@ import { RecordViewRequest } from "@/components/features/RecordViewRequest";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canReadStoreRecords } from "@/lib/auth/permissions";
+import { canAccessStore, canEditCaseStore, canReadStoreRecords } from "@/lib/auth/permissions";
 import { customerTimeline, userName } from "@/lib/db/queries";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { CHANNEL_LABEL, INQUIRY_STATUS, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
@@ -26,6 +26,10 @@ import { customerMedia, mediaIndex } from "@/lib/media";
 import { MediaTag } from "@/components/ops-reports/MediaFields";
 import { BillingTermsCard } from "@/components/finance/BillingTermsCard";
 import { invoiceOfOrder } from "@/lib/billing";
+import { linkableInquiries } from "@/lib/link-search";
+import { linkInquiryFromForm } from "@/lib/actions/inquiries";
+import { InquiryLinkSearch } from "@/components/features/LinkSearch";
+import { Camera, Link2 } from "lucide-react";
 
 export default async function CustomerDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
   const { id } = await params;
@@ -63,6 +67,9 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
   const billed = t.invoices.filter((i) => i.status !== "void");
   // 媒体 (当社を知ったきっかけ。全社共通の分類): 最初の問い合わせ > 顧客の媒体 (販売管理ソフト) > 初回接点 (src/lib/media.ts)
   const media = customerMedia(mediaIndex(db), c, db.inquiries.filter((i) => i.customerId === c.id));
+  // 問い合わせ (案件) をこのお客様にひも付ける (お客様のご要望 2026-11-24「■6」): 電話・お名前・地区が合う未登録の問い合わせを最初から候補に出す
+  const canLink = !viewOnly && canEditCaseStore(user, c.storeId);
+  const linkCandidates = canLink ? linkableInquiries(db, user, c, "") : [];
 
   return (
     <div>
@@ -74,6 +81,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
         back={{ href: "/customers", label: "顧客一覧" }}
         actions={
           viewOnly ? undefined : <>
+            <LinkButton href={`/inquiries/reception?customer=${c.id}`} variant="secondary" size="sm"><Camera />メモを撮影して問い合わせ</LinkButton>
             <LinkButton href={`/inquiries/new?customerId=${c.id}`} variant="secondary" size="sm">+ 問い合わせ</LinkButton>
             <LinkButton href={`/quotes/new?customerId=${c.id}`} variant="secondary" size="sm">+ 見積</LinkButton>
             <LinkButton href={`/customers/${c.id}/edit`} size="sm">編集</LinkButton>
@@ -177,6 +185,21 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
 
         <div className="space-y-4 @3xl:col-span-2">
           <MapInfoCard db={db} user={user} target={{ type: "customer", id: c.id }} returnTo={returnTo} />
+          {canLink && (
+            <Card>
+              <CardHeader
+                title="問い合わせ・案件をこのお客様に紐づける"
+                icon={<Link2 />}
+                description="お名前・電話だけで受けた問い合わせや、予定表の取込で仮に登録した案件を、このお客様のものにします (予定・資料・やりとりの記録も移ります)。新しい問い合わせは右上の「メモを撮影して問い合わせ」で、手書きのメモを撮るだけで登録できます"
+              />
+              <details open={linkCandidates.length > 0}>
+                <summary className="cursor-pointer text-xs font-medium text-accent">{linkCandidates.length > 0 ? `候補 ${linkCandidates.length} 件 (電話番号・お名前・地区が合う問い合わせ)` : "問い合わせを探して紐づける"}</summary>
+                <div className="mt-2">
+                  <InquiryLinkSearch action={linkInquiryFromForm} customerId={c.id} returnTo={returnTo} initial={linkCandidates} />
+                </div>
+              </details>
+            </Card>
+          )}
           <Card>
             <CardHeader title="案件の流れ" description="問い合わせ → 見積 → 受注・施工 → 請求 → 入金 がすべて紐づきます" />
             {t.quotes.length === 0 && t.inquiries.length === 0 && <p className="text-sm text-ink-3">まだ案件はありません</p>}
@@ -263,7 +286,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
             today={toDateKey(new Date())}
             newParams={`customerId=${c.id}`}
             returnTo={`/customers/${c.id}`}
-            quickKinds={["visit", "survey", "measure"]}
+            quickKinds={["visit", "survey", "onsite_quote", "measure"]}
             canAdd={canAccessStore(user, c.storeId)}
           />
         </div>

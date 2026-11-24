@@ -119,7 +119,7 @@ export function caseIndex(db: Pick<Database, "customers" | "quotes" | "invoices"
   const paymentsByInvoice = new Map<string, Payment[]>();
   for (const p of db.payments) paymentsByInvoice.set(p.invoiceId, [...(paymentsByInvoice.get(p.invoiceId) ?? []), p]);
   const visitsByInquiry = new Map<string, string[]>();
-  for (const e of db.schedule) if (e.inquiryId && ["visit", "measure", "survey"].includes(e.kind)) visitsByInquiry.set(e.inquiryId, [...(visitsByInquiry.get(e.inquiryId) ?? []), e.date]);
+  for (const e of db.schedule) if (e.inquiryId && ["visit", "measure", "survey", "onsite_quote"].includes(e.kind)) visitsByInquiry.set(e.inquiryId, [...(visitsByInquiry.get(e.inquiryId) ?? []), e.date]);
   return { customers: new Map(db.customers.map((c) => [c.id, c])), quotesById: new Map(db.quotes.map((q) => [q.id, q])), invoicesByOrder, paymentsByInvoice, visitsByInquiry };
 }
 

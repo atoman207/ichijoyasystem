@@ -497,6 +497,8 @@ export interface ReceptionMeta {
   /** 電話のシステムから届いた項目 */
   call?: { id?: string; from?: string; to?: string; direction?: "inbound" | "outbound"; startedAt?: string; durationSec?: number; recordingUrl?: string; extension?: string; staff?: string };
   decision?: { action: ReceptionAction; at: string; by: string; targetType?: string; targetId?: string; label?: string; href?: string; note?: string };
+  /** 顧客の画面から取り込んだ受付のお客様 (お客様が決まっている。お客様のご要望 2026-11-24「■6」) */
+  customerId?: string;
 }
 
 export function receptionMetaOf(doc: Pick<CapturedDocument, "extracted">): ReceptionMeta {
@@ -508,6 +510,7 @@ export function receptionMetaOf(doc: Pick<CapturedDocument, "extracted">): Recep
     text: typeof x._text === "string" ? x._text : undefined,
     call: x._call && typeof x._call === "object" ? (x._call as ReceptionMeta["call"]) : undefined,
     decision: x._decision && typeof x._decision === "object" ? (x._decision as ReceptionMeta["decision"]) : undefined,
+    customerId: typeof x._customerId === "string" && x._customerId ? x._customerId : undefined,
   };
 }
 

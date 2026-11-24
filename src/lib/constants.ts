@@ -272,6 +272,7 @@ export const SCHEDULE_GROUP_LABEL: Record<ScheduleGroup, string> = {
  */
 export const SCHEDULE_KIND: Record<ScheduleKind, { label: string; short: string; tone: Tone; group: ScheduleGroup; minutes: number }> = {
   survey: { label: "見積り (現地調査)", short: "見積り", tone: "info", group: "case", minutes: 60 },
+  onsite_quote: { label: "現場見積 (現見)", short: "現見", tone: "info", group: "case", minutes: 120 },
   measure: { label: "採寸", short: "採寸", tone: "info", group: "case", minutes: 60 },
   pickup: { label: "引き取り", short: "引取", tone: "warn", group: "case", minutes: 60 },
   delivery: { label: "納品", short: "納品", tone: "good", group: "case", minutes: 90 },

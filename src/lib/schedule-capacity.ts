@@ -17,7 +17,7 @@ export const SCHEDULE_CAPACITY_ID = "schedule_capacity";
 /** 現場作業 (店舗の作業の手を使う予定) */
 export const JOB_KINDS: ScheduleKind[] = ["pickup", "delivery", "install", "measure"];
 /** 営業の訪問 */
-export const VISIT_KINDS: ScheduleKind[] = ["survey", "visit"];
+export const VISIT_KINDS: ScheduleKind[] = ["survey", "onsite_quote", "visit"];
 /** 候補日を提案できる種別 (案件の予定) */
 export const SUGGEST_KINDS: ScheduleKind[] = [...VISIT_KINDS, ...JOB_KINDS];
 

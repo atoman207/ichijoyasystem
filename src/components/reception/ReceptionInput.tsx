@@ -26,6 +26,7 @@ export function ReceptionInput({
   canChooseStore,
   aiEnabled,
   voice,
+  customer,
 }: {
   action: (formData: FormData) => Promise<void>;
   stores: { id: StoreId; name: string }[];
@@ -34,6 +35,8 @@ export function ReceptionInput({
   aiEnabled: boolean;
   /** サーバーの音声入力 (OpenAI) が使えるか */
   voice: boolean;
+  /** 顧客の画面から開いたときのお客様 (お客様が決まっている。お客様のご要望 2026-11-24「■6」) */
+  customer?: { id: string; name: string };
 }) {
   const [tab, setTab] = useState<Tab>("photo");
   const [channel, setChannel] = useState<Channel>("visit");
@@ -85,7 +88,7 @@ export function ReceptionInput({
           defaultStoreId={defaultStoreId}
           canChooseStore={canChooseStore}
           aiEnabled={aiEnabled}
-          hidden={{ source: "photo", channel }}
+          hidden={{ source: "photo", channel, ...(customer ? { customerId: customer.id } : {}) }}
           labels={{
             submit: "読み取って受付に入れる",
             pending: "AI がメモを読み取り中… (10〜20 秒)",
@@ -96,13 +99,13 @@ export function ReceptionInput({
           }}
         />
       )}
-      {tab === "text" && <TextInput action={action} channel={channel} storeId={storeId} voice={voice} />}
-      {tab === "audio" && <AudioInput channel={channel} storeId={storeId} voice={voice} />}
+      {tab === "text" && <TextInput action={action} channel={channel} storeId={storeId} voice={voice} customerId={customer?.id} />}
+      {tab === "audio" && <AudioInput channel={channel} storeId={storeId} voice={voice} customerId={customer?.id} />}
     </div>
   );
 }
 
-function TextInput({ action, channel, storeId, voice }: { action: (formData: FormData) => Promise<void>; channel: Channel; storeId: StoreId; voice: boolean }) {
+function TextInput({ action, channel, storeId, voice, customerId }: { action: (formData: FormData) => Promise<void>; channel: Channel; storeId: StoreId; voice: boolean; customerId?: string }) {
   const [text, setText] = useState("");
   const [spoken, setSpoken] = useState(false);
   const [pending, start] = useTransition();
@@ -135,6 +138,7 @@ function TextInput({ action, channel, storeId, voice }: { action: (formData: For
       <input type="hidden" name="source" value={spoken ? "voice" : "text"} />
       <input type="hidden" name="channel" value={channel} />
       <input type="hidden" name="storeId" value={storeId} />
+      {customerId && <input type="hidden" name="customerId" value={customerId} />}
       {mode !== "none" && (
         <div className="flex flex-wrap items-center gap-3">
           {recording ? (
@@ -160,7 +164,7 @@ function TextInput({ action, channel, storeId, voice }: { action: (formData: For
   );
 }
 
-function AudioInput({ channel, storeId, voice }: { channel: Channel; storeId: StoreId; voice: boolean }) {
+function AudioInput({ channel, storeId, voice, customerId }: { channel: Channel; storeId: StoreId; voice: boolean; customerId?: string }) {
   const ref = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -176,6 +180,7 @@ function AudioInput({ channel, storeId, voice }: { channel: Channel; storeId: St
       fd.set("file", f, f.name);
       fd.set("channel", channel);
       fd.set("storeId", storeId);
+      if (customerId) fd.set("customerId", customerId);
       const res = await fetch("/api/reception/audio", { method: "POST", body: fd });
       const body = (await res.json().catch(() => null)) as { href?: string; error?: string } | null;
       if (!res.ok || !body?.href) throw new Error(body?.error ?? "録音を読み取れませんでした。");

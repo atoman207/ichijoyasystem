@@ -8,7 +8,7 @@ import type { Attachment, CapturedDocument, CommLog, Database, Inquiry, InquiryI
 import { attachmentsOf, detectType, discardStored, relinkDocumentAttachments, storeFile } from "@/lib/attachments";
 import { readObject } from "@/lib/storage";
 import { CHANNEL_LABEL } from "@/lib/constants";
-import { canAccessStore, canSeeAllStores } from "@/lib/auth/permissions";
+import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { createHandoffTask } from "@/lib/ai-intake";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
@@ -34,7 +34,7 @@ import {
   type ReceptionSource,
 } from "@/lib/reception";
 import { newReceptionDoc, providerLabel, pushReceptionDoc, receptionExtracted } from "@/lib/reception-docs";
-import { assertStore, choice, fail, requireActionUser, resolveStoreId, str, withErr, withMsg } from "./guards";
+import { assertCaseStore, assertStore, choice, fail, requireActionUser, resolveStoreId, str, withErr, withMsg } from "./guards";
 
 /**
  * 受付 (すべての問い合わせの共通の入口。src/lib/reception.ts)
@@ -71,10 +71,14 @@ async function storePhoto(user: User, formData: FormData, doc: { id: string; sto
 export async function createReception(formData: FormData) {
   const user = await requireActionUser();
   const source: ReceptionSource = str(formData, "source") === "photo" ? "photo" : str(formData, "source") === "voice" ? "voice" : "text";
-  const storeId = resolveStoreId(user, str(formData, "storeId"));
+  const db = getDb();
+  // 顧客の画面から取り込むときはお客様が決まっている (お客様のご要望 2026-11-24「■6」)。受付の店舗はお客様の店舗 (扱えなければ自分の店舗)
+  const presetId = str(formData, "customerId");
+  const preset = presetId ? db.customers.find((c) => c.id === presetId) : undefined;
+  if (presetId && (!preset || !canEditCaseStore(user, preset.storeId))) fail(LIST, "お客様が見つからないか、このお客様の問い合わせを登録する権限がありません。");
+  const storeId = resolveStoreId(user, str(formData, "storeId"), preset && canAccessStore(user, preset.storeId) ? preset.storeId : undefined);
   assertStore(user, storeId, LIST);
   const channel = channelOf(formData, source === "photo" ? "visit" : "phone");
-  const db = getDb();
   let text: string | undefined;
   let photo: { fileName: string; mimeType: string; bytes: Buffer } | undefined;
   if (source === "photo") {
@@ -94,7 +98,7 @@ export async function createReception(formData: FormData) {
     readReception(db, photo ? { image: { base64: photo.bytes.toString("base64"), mimeType: photo.mimeType, fileName: photo.fileName } } : { text, today: toDateKey(new Date()) }),
   );
   const id = newId("doc");
-  const doc = newReceptionDoc({ id, uploadedBy: user.id, storeId, source, channel, fileName: photo?.fileName, text, read });
+  const doc = newReceptionDoc({ id, uploadedBy: user.id, storeId, source, channel, fileName: photo?.fileName, text, read, customerId: preset?.id });
   const original = photo ? await storePhoto(user, formData, doc, photo) : undefined;
   await mutate((d) => {
     if (original) d.attachments.push(original);
@@ -326,7 +330,8 @@ export async function registerReception(formData: FormData) {
       assertOpen(doc, back);
       const customer = customerId ? d.customers.find((c) => c.id === customerId) : undefined;
       if (customerId && !customer) fail(back, "選んだお客様が見つかりません。");
-      if (customer) assertStore(user, customer.storeId, back);
+      // 店長は全店舗のお客様の問い合わせを登録できる (問い合わせの店舗は自店舗。actions/inquiries.ts の createInquiry と同じ)
+      if (customer) assertCaseStore(user, customer.storeId, back);
       const storeId = resolveStoreId(user, str(formData, "storeId"), customer?.storeId ?? doc.storeId);
       assertStore(user, storeId, back);
       const contactName = customer?.name ?? f.customerName;

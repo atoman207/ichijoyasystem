@@ -38,7 +38,7 @@ export interface SuggestInput {
 }
 
 /** 案件の段階の順番 (先の段階の予定より後に入れる) */
-export const STAGE: Partial<Record<ScheduleKind, number>> = { survey: 0, visit: 0, measure: 1, pickup: 2, install: 3, delivery: 4 };
+export const STAGE: Partial<Record<ScheduleKind, number>> = { survey: 0, onsite_quote: 0, visit: 0, measure: 1, pickup: 2, install: 3, delivery: 4 };
 
 export interface BuiltRequest {
   req: JobRequest;

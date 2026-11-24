@@ -21,6 +21,8 @@ import { KindLegend } from "@/components/schedule/parts";
 import { activeHolds } from "@/lib/scheduling/context";
 import { holidayResolver } from "@/lib/holiday-calendar";
 import { expireHoldsNow } from "@/lib/actions/scheduling";
+import { eventLabeler } from "@/lib/schedule-label";
+import { EventQuickHost } from "@/components/schedule/EventQuick";
 
 type View = "month" | "week" | "staff" | "day" | "list";
 
@@ -129,6 +131,9 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   // 仕事内容と数量 (「タ12 フ6 シ4 ア2」。お客様のご要望 2026-11-23「■2」) と、日ごとの畳製造予定 (「■3」)
   const work = scheduleWork(db, inRange);
   const tokenCache = new Map<string, ReturnType<typeof workTokens>>();
+  // 件名「（町名）お客様」(現場の町名・ひも付けた顧客のお名前。お客様のご要望 2026-11-24「■1」「■3」)
+  const labeler = eventLabeler(db);
+  const labelCache = new Map<string, string>();
   const production = productionRows(db, { from, to, today }).filter((r) => !storeFilter || r.storeId === storeFilter);
   const productionDays = productionByDay(production.filter((r) => r.date && r.date >= from && r.date <= to));
   const productionHref = (d: string) => `/schedule/production?date=${d}&days=1${storeFilter ? `&store=${storeFilter}` : ""}`;
@@ -154,6 +159,10 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
     },
     workTextOf: (e) => workDescription(work.get(e.id)) || undefined,
     production: { byDay: productionDays, href: productionHref },
+    labelOf: (e) => {
+      if (!labelCache.has(e.id)) labelCache.set(e.id, labeler.label(e).text);
+      return labelCache.get(e.id)!;
+    },
   };
 
   const storeTabs = [
@@ -324,6 +333,8 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
         {(view === "staff" || view === "day") && storeFilter && <span className="text-ink-3">所属メンバーと応援者の予定をすべて表示しています</span>}
       </div>
 
+      {/* 予定を押すと、予定表の上で日時・内容・種類を変えられる (お客様のご要望 2026-11-24「■4」) */}
+      <EventQuickHost>
       {view === "month" && <MonthView days={days} month={anchor.slice(0, 7)} events={shown} ctx={ctx} />}
       {view === "week" && <WeekView days={days} events={shown} ctx={ctx} />}
       {view === "staff" && <StaffView days={days} rows={rowUsers} events={personEvents} unassigned={userParam ? [] : shown.filter((e) => e.assigneeIds.length === 0 && !e.companyWide)} ctx={ctx} />}
@@ -334,6 +345,7 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
       )}
       {view === "day" && <DayView day={anchor} rows={rowUsers} events={personEvents} unassigned={shown.filter((e) => e.assigneeIds.length === 0 && occursOn(e, anchor))} ctx={ctx} />}
       {view === "list" && <ListView days={days} events={shown} ctx={ctx} />}
+      </EventQuickHost>
 
       <div className="mt-6 grid grid-cols-1 gap-4 @4xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div id="conflicts" className="scroll-mt-24">
@@ -344,14 +356,18 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
               icon={<TriangleAlert />}
               action={relevantPairs.length > 0 && !onlyConflicts ? <Link href={link({ conflicts: "1", view: "list" })} className="text-xs font-medium text-accent hover:underline">重複のみ表示</Link> : undefined}
             />
-            <ConflictList pairs={relevantPairs} ctx={ctx} moreHref={link({ conflicts: "1", view: "list" })} />
+            <EventQuickHost>
+              <ConflictList pairs={relevantPairs} ctx={ctx} moreHref={link({ conflicts: "1", view: "list" })} />
+            </EventQuickHost>
           </Card>
         </div>
         <Card>
           <CardHeader title="凡例・使い方" />
           <KindLegend />
           <ul className="mt-4 space-y-1.5 text-xs leading-relaxed text-ink-2">
-            <li>・予定の左の色のアイコンが種類 (引き取り・納品・現地調査 (見積)・顧客訪問など)、その右が店舗名 (全社の表示のとき)。お客様の名前の右は仕事内容と数量です (タ = 畳・フ = 襖・シ = 障子・ア = 網戸。<span className="font-semibold text-critical-ink">(縁無)</span> はへり無し畳)。受注の見積の明細、移行した予定表の枚数、メモの「タ6フ1」から表示します。</li>
+            <li>・<span className="font-semibold text-ink">予定を押すと、予定表の上で日時・内容・種類 (アイコン) を変えられます</span> (お客様の電話・住所もここで確かめられます)。担当者・場所は「詳しく変更」、別の画面で開くときは Ctrl (Mac は ⌘) を押しながら。</li>
+            <li>・件名の頭の「（築地）」は現場の町名です (施工場所 → 問い合わせで聞いた住所 → お客様の住所。業者の案件はお客様の住所を使いません)。</li>
+            <li>・予定の左の色のアイコンが種類 (引き取り・納品・見積り (現地調査)・現見 (現場見積)・顧客訪問など)、その右が店舗名 (全社の表示のとき)。お客様の名前の右は仕事内容と数量です (タ = 畳・フ = 襖・シ = 障子・ア = 網戸。<span className="font-semibold text-critical-ink">(縁無)</span> はへり無し畳)。受注の見積の明細、移行した予定表の枚数、メモの「タ6フ1」から表示します。</li>
             <li>・日の見出しの「<span className="font-semibold">製 タ12</span>」はその日の畳製造予定 (押すとその日の製造予定。繰り越し・製造日未定・製造済みを記録できます)。</li>
             <li>・予定はすべての社員が全店舗分を閲覧できます。上のタブで店舗ごとのカレンダーに切り替えます (全社共通の予定はどの店舗にも表示)。</li>
             <li>・現地調査・採寸・引き取り・納品・施工・顧客訪問は、問い合わせ・見積・受注の画面の「この案件の予定」から登録すると案件に紐づきます。受注の施工予定は「施工」の予定と連動します。</li>

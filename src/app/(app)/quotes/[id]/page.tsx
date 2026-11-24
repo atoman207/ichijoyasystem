@@ -288,7 +288,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
             today={toDateKey(new Date())}
             newParams={chain.order ? `orderId=${chain.order.id}` : `quoteId=${q.id}`}
             returnTo={returnTo}
-            quickKinds={chain.order ? ["pickup", "delivery", "install", "site", "visit"] : ["visit", "measure", "survey"]}
+            quickKinds={chain.order ? ["pickup", "delivery", "install", "site", "visit"] : ["visit", "measure", "survey", "onsite_quote"]}
             canAdd={!["rejected", "expired"].includes(q.status) && canAccessStore(user, q.storeId)}
             description="見積の説明・再採寸などの訪問を担当者つきで登録すると、店舗の共通カレンダーに自動で反映されます。問い合わせ段階の現地調査も表示します"
           />

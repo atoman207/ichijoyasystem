@@ -53,14 +53,20 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
   if (pending) {
     const m = matchReception(db, user, f);
     matchWarnings = m.warnings;
-    const customers: ReviewCustomer[] = m.customers.slice(0, 8).map((c) => ({
-      id: c.customer.id,
-      label: `${c.customer.name} (${c.customer.code} · ${storeName(c.customer.storeId)})${c.customer.address ? ` ${c.customer.address.slice(0, 28)}` : c.customer.area ? ` 地区 ${c.customer.area}` : ""}`,
-      level: c.level,
-      reason: c.reason,
-    }));
+    const custLabel = (c: { name: string; code: string; storeId: string; address: string; area?: string }) => `${c.name} (${c.code} · ${storeName(c.storeId)})${c.address ? ` ${c.address.slice(0, 28)}` : c.area ? ` 地区 ${c.area}` : ""}`;
+    // 顧客の画面から取り込んだ受付: お客様が決まっている → 問い合わせとして登録・そのお客様を選んだ状態で開く (お客様のご要望 2026-11-24「■6」)
+    const preset = meta.customerId ? db.customers.find((c) => c.id === meta.customerId) : undefined;
+    if (preset) {
+      m.suggestion = { action: "inquiry", customerId: preset.id, reason: `${preset.name} 様の画面から取り込んだ受付です (お客様は決まっています)。読み取った内容を確かめて「問い合わせとして登録」してください` };
+      m.customers = m.customers.filter((c) => c.customer.id !== preset.id);
+    }
+    const customers: ReviewCustomer[] = [
+      ...(preset ? [{ id: preset.id, label: custLabel(preset), level: "preset" as const, reason: "顧客の画面から登録" }] : []),
+      ...m.customers.slice(0, 8).map((c) => ({ id: c.customer.id, label: custLabel(c.customer), level: c.level, reason: c.reason })),
+    ];
     // 案件: 住所・電話で一致したお客様の案件 + お名前で一致したお客様の案件 (選んだときに出す)
     const list: CaseCandidate[] = [...m.cases];
+    if (preset) for (const k of customerCases(db, preset.id)) if (!list.some((x) => caseKey(x) === caseKey(k)) && canAccessStore(user, k.storeId)) list.unshift(k);
     for (const c of m.customers.filter((x) => x.level === "name").slice(0, 3)) for (const k of customerCases(db, c.customer.id)) if (!list.some((x) => caseKey(x) === caseKey(k)) && canAccessStore(user, k.storeId)) list.push(k);
     const custName = (cid?: string) => (cid ? db.customers.find((c) => c.id === cid)?.name : undefined);
     const cases: ReviewCase[] = list.slice(0, 20).map((c) => ({ key: caseKey(c), number: c.number, kindLabel: KIND_LABEL[c.type], title: c.title, statusLabel: c.statusLabel, date: c.date, href: c.href, open: c.open, reason: c.reason, customerId: c.customerId, customerName: custName(c.customerId), ownerId: c.ownerId }));

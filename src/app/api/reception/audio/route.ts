@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/session";
 import { mutate, newId, syncDb } from "@/lib/db/store";
-import { canAccessStore, canSeeAllStores } from "@/lib/auth/permissions";
+import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { AiError, transcribeAudio, voiceEnabled } from "@/lib/ai/provider";
 import { readReception } from "@/lib/ai/reception";
 import { withAiContext } from "@/lib/ai/usage";
@@ -57,7 +57,9 @@ export async function POST(req: Request) {
   if (text.length < 4) return NextResponse.json({ error: "録音から言葉を聞き取れませんでした (無音・雑音だけの録音の可能性があります)。" }, { status: 422 });
   const read = await withAiContext({ kind: "reception", userId: user.id }, () => readReception(db, { text, today: toDateKey(new Date()) }));
   const id = newId("doc");
-  const doc = newReceptionDoc({ id, uploadedBy: user.id, storeId, source: "audio", channel, fileName: file.name, text, read });
+  const presetId = String(form?.get("customerId") ?? "");
+  const preset = presetId ? db.customers.find((c) => c.id === presetId && canEditCaseStore(user, c.storeId)) : undefined;
+  const doc = newReceptionDoc({ id, uploadedBy: user.id, storeId, source: "audio", channel, fileName: file.name, text, read, customerId: preset?.id });
   await mutate((d) => pushReceptionDoc(d, doc, user.id));
   return NextResponse.json({ href: receptionHref(id) }, { headers: { "Cache-Control": "private, no-store" } });
 }

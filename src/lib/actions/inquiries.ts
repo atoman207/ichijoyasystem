@@ -10,10 +10,11 @@ import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS } from "@/lib/constants";
 import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
 import { createHandoffTask, linkInquiryLogs } from "@/lib/ai-intake";
+import { moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
 import { storeInquiryNotices } from "@/lib/notify/store-line";
-import { assertCaseStore, assertStore, choice, fail, isKeyOf, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
+import { assertCaseStore, assertStore, choice, fail, isKeyOf, requireActionUser, resolveStoreId, safeReturn, str, withMsg } from "./guards";
 import { MEDIA_LABEL, isMediaKey, mapMediaText, readMediaRules } from "@/lib/media";
 import type { MediaKey } from "@/lib/db/types";
 
@@ -219,31 +220,52 @@ export async function registerCustomerFromInquiry(id: string, formData?: FormDat
   redirect(withMsg(`/customers/${customerId}/edit`, "顧客として登録しました。住所など不足している情報を補完してください。"));
 }
 
-/** 問い合わせを既存の顧客に紐づける (重複確認で同じお客様と分かったとき) */
-export async function linkInquiryToCustomer(id: string, customerId: string) {
+/**
+ * 問い合わせを既存の顧客に紐づける (付け替える)。問い合わせの画面 (重複の候補・検索) と顧客の画面 (この顧客にひも付ける) で共通。
+ * 予定・資料・やりとりの記録も移し、予定表の取込で仮に作った顧客に何も残らなければ消す (src/lib/customer-link.ts)
+ */
+export async function linkInquiryToCustomer(id: string, customerId: string, returnTo?: string) {
   const user = await requireActionUser();
-  const back = `/inquiries/${id}`;
+  const back = safeReturn(returnTo ?? "", `/inquiries/${id}`);
   if (!customerId) fail(back, "お客様を選んでください。");
+  let message = "";
   await mutate((db) => {
     const inq = db.inquiries.find((x) => x.id === id);
-    if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
+    if (!inq) fail(back, "問い合わせが見つかりません。");
     assertCaseStore(user, inq.storeId, back);
-    if (inq.customerId) fail(back, "すでに顧客に紐づいています。");
     const c = db.customers.find((x) => x.id === customerId);
     if (!c) fail(back, "顧客が見つかりません。");
+    if (inq.customerId === c.id) fail(back, `すでに ${c.name} 様に紐づいています。`);
     if (!canEditCaseStore(user, c.storeId)) fail(back, "他店舗の顧客には紐づけられません。店舗または本部に依頼してください。");
-    inq.customerId = c.id;
-    inq.updatedAt = nowIso();
-    for (const e of db.schedule) if (e.inquiryId === id && !e.customerId) e.customerId = c.id;
-    // 問い合わせ・見積に登録済みの資料・写真も顧客にまとめる
-    for (const a of db.attachments) if (a.parentType === "inquiry" && a.parentId === id && !a.customerId) a.customerId = c.id;
-    // AI 受付の会話の記録など、顧客の登録前のやりとり履歴もお客様の履歴に移す
-    linkInquiryLogs(db, inq, c.id);
+    if (inq.customerId) {
+      const blocker = relinkBlocker(db, inq);
+      if (blocker) fail(back, blocker);
+    }
+    const before = inq.customerId ?? null;
+    const r = moveInquiryToCustomer(db, inq, c, user.id);
     c.updatedAt = nowIso();
-    addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: id, entityLabel: inq.number, summary: `既存の顧客 ${c.code} ${c.name} に紐づけ`, storeId: inq.storeId, changes: [{ field: "customerId", before: null, after: c.id }] });
+    addAudit(db, {
+      userId: user.id,
+      action: "update",
+      entity: "inquiry",
+      entityId: id,
+      entityLabel: inq.number,
+      summary: `${r.from ? `顧客を付け替え (${r.from.code} ${r.from.name} → ${c.code} ${c.name})` : `既存の顧客 ${c.code} ${c.name} に紐づけ`}${r.events ? ` · 予定 ${r.events} 件も移す` : ""}${r.removed ? ` · 仮の顧客 ${r.removed.code} を削除` : ""}`,
+      storeId: inq.storeId,
+      changes: [{ field: "customerId", before, after: c.id }],
+    });
+    message = `問い合わせ ${inq.number} を ${c.name} 様に紐づけました。${r.events ? `予定 ${r.events} 件もこのお客様の予定にしました。` : ""}${r.removed ? `予定表の取込で仮に作った顧客 (${r.removed.code}) は記録がなくなったため削除しました。` : ""}これまでの履歴とあわせて表示されます。`;
   });
-  revalidatePath(back);
-  redirect(withMsg(back, "既存の顧客に紐づけました。これまでの履歴とあわせて表示されます。"));
+  revalidatePath(`/inquiries/${id}`);
+  revalidatePath(`/customers/${customerId}`);
+  revalidatePath("/schedule");
+  revalidatePath("/inquiries");
+  redirect(withMsg(back, message));
+}
+
+/** 問い合わせ画面・顧客画面の検索から紐づける (inquiryId・customerId・returnTo。ボタンの value で選んだ方を送る) */
+export async function linkInquiryFromForm(formData: FormData) {
+  await linkInquiryToCustomer(str(formData, "inquiryId"), str(formData, "customerId"), str(formData, "returnTo") || undefined);
 }
 
 /** 問い合わせ画面の検索プルダウンから既存顧客へ紐づける */

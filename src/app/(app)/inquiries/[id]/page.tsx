@@ -7,11 +7,13 @@ import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canAccessStore, canEditCaseStore, canSeeAllStores, canViewAuditEntry } from "@/lib/auth/permissions";
-import { customerOptions, userName } from "@/lib/db/queries";
-import { handoffInquiry, linkInquiryToCustomer, linkInquiryToSelectedCustomer, registerCustomerFromInquiry, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
-import { customerOptionLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
+import { userName } from "@/lib/db/queries";
+import { handoffInquiry, linkInquiryFromForm, registerCustomerFromInquiry, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
+import { findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
 import { addCommLog } from "@/lib/actions/customers";
-import { CustomerSearch } from "@/components/features/CustomerSearch";
+import { CustomerLinkSearch } from "@/components/features/LinkSearch";
+import { isPlaceholderCustomer, relinkBlocker } from "@/lib/customer-link";
+import { inquiryContact } from "@/lib/link-search";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS, ORDER_STATUS, QUOTE_STATUS, TASK_STATUS } from "@/lib/constants";
 import { Badge, Button, Card, CardHeader, ChannelTag, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
@@ -60,9 +62,13 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const ik = inq.intake;
   const dup = customer ? null : findDuplicateCustomers(db, { name: inq.contactName, phone: inq.contactPhone, otherPhones: [ik?.phone, ik?.callbackPhone].filter((x): x is string => Boolean(x)), email: ik?.email, postalCode: ik?.postalCode, address: ik?.address });
   const candidates = dup ? [...dup.high.map((m) => ({ ...m, level: "high" as const })), ...dup.check.map((m) => ({ ...m, level: "check" as const })), ...dup.sameName.slice(0, 5).map((m) => ({ ...m, level: "name" as const }))] : [];
-  // 紐づけられるお客様: 自店舗 (全店舗ロールは全店舗)、店長は全店舗 (permissions.ts の canEditCaseStore)
-  const linkChoices = !customer && !viewOnly ? customerOptions(db.customers.filter((c) => canEditCaseStore(user, c.storeId)), cq) : null;
-  const linkCustomers = linkChoices?.options ?? [];
+  // 紐づけ・付け替え (お客様のご要望 2026-11-24「■5」): 入力するたびに既存の顧客の候補を出し、「紐づける」を押すだけ
+  // 付け替えは見積の前の案件だけ (src/lib/customer-link.ts)。予定表の取込で仮に作った顧客 (電話・住所なし) は付け替えを勧める
+  const placeholder = isPlaceholderCustomer(customer);
+  const relinkBlocked = customer ? relinkBlocker(db, inq) : undefined;
+  const canLink = !viewOnly && canEditCaseStore(user, inq.storeId);
+  const contact = inquiryContact(inq, customer);
+  const here = `/inquiries/${inq.id}`;
   const storeName = (sid: string) => db.stores.find((s) => s.id === sid)?.name ?? sid;
   // AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) からの受付: 会話の記録
   const fromAi = isAiChannel(inq.channel);
@@ -124,7 +130,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             <CardHeader title="問い合わせ内容" />
             <p className="whitespace-pre-wrap text-sm text-ink">{inq.detail || "(詳細なし)"}</p>
             <div className="mt-4">
-              <Dl columns={3} items={[["お客様", inq.contactName], ["電話", inq.contactPhone ?? "-"], ["担当", userName(inq.assignedUserId)], ["登録者", userName(inq.createdBy)], ["次のアクション", inq.nextAction ?? "-"], ["期限", inq.nextActionDue ? fmtDate(inq.nextActionDue) : "-"], ["媒体 (きっかけ)", <MediaTag key="m" {...media} />], ["きっかけの販促", promotion ? `${promotion.title} (${promotion.number})` : "-"]]} />
+              <Dl columns={3} items={[["お客様", customer && customer.name !== inq.contactName ? `${customer.name} 様 (受付時のお名前: ${inq.contactName})` : inq.contactName], ["電話", contact.phone || "-"], ["住所", contact.address || "-"], ["担当", userName(inq.assignedUserId)], ["登録者", userName(inq.createdBy)], ["次のアクション", inq.nextAction ?? "-"], ["期限", inq.nextActionDue ? fmtDate(inq.nextActionDue) : "-"], ["媒体 (きっかけ)", <MediaTag key="m" {...media} />], ["きっかけの販促", promotion ? `${promotion.title} (${promotion.number})` : "-"]]} />
             </div>
           </Card>
 
@@ -188,7 +194,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             today={toDateKey(new Date())}
             newParams={caseParam}
             returnTo={`/inquiries/${inq.id}`}
-            quickKinds={order ? ["pickup", "delivery", "install", "site", "visit"] : ["survey", "measure", "visit"]}
+            quickKinds={order ? ["pickup", "delivery", "install", "site", "visit"] : ["survey", "onsite_quote", "measure", "visit"]}
             canAdd={(open || Boolean(order)) && canAccessStore(user, inq.storeId)}
             emptyText={open ? "まだ予定はありません。現地調査・採寸の日程が決まったら登録してください (未対応の問い合わせは「対応中」になります)" : "予定はありません"}
             description="現地調査・採寸・顧客訪問を担当者つきで登録すると、店舗の共通カレンダーに自動で反映されます。見積・受注に進んでも同じ案件の予定として引き継がれます"
@@ -278,53 +284,53 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
           <Card>
             <CardHeader title="お客様" />
             {customer ? (
-              <div className="text-sm">
+              <div className="text-sm" id="link-customer">
                 <Link href={`/customers/${customer.id}`} className="font-medium text-accent hover:underline">{customer.name}</Link>
-                <div className="mt-1 text-xs text-ink-2">{customer.code} · {customer.phone}</div>
+                <div className="mt-1 text-xs text-ink-2">{customer.code} · {customer.phone || "電話未登録"}</div>
                 <div className="text-xs text-ink-2">{customer.address || "住所未登録"}</div>
                 <div className="mt-2 flex flex-wrap gap-1">{customer.tags.map((t) => <Badge key={t} dot={false}>{t}</Badge>)}</div>
+                {canLink && !relinkBlocked && (
+                  <details className="mt-3 rounded-xl border border-line bg-subtle/50 p-3" open={placeholder}>
+                    <summary className="cursor-pointer text-xs font-semibold text-ink">{placeholder ? "予定表の取込で仮に作った顧客です。既存のお客様を探して付け替える" : "別の既存のお客様に付け替える"}</summary>
+                    <p className="mt-1 mb-2 text-xs text-ink-3">付け替えると、この問い合わせの予定・資料・やりとりの記録も新しいお客様に移ります{placeholder ? " (仮の顧客にほかの記録がなければ、仮の顧客は削除します)" : ""}。</p>
+                    <CustomerLinkSearch action={linkInquiryFromForm} inquiryId={inq.id} returnTo={here} relink initialQuery={placeholder ? customer.name.split(/[\s　]+/)[0] : ""} />
+                  </details>
+                )}
               </div>
             ) : (
-              <div>
-                <p className="text-sm text-ink-2">{inq.contactName} 様はまだ顧客登録されていません。既存のお客様なら住所で探して紐づけてください (受注番号は不要です)。</p>
+              <div id="link-customer">
+                <p className="text-sm text-ink-2">{inq.contactName} 様はまだ顧客登録されていません。既存のお客様なら下の欄で探して「紐づける」を押してください (受注番号は不要です)。</p>
                 {candidates.length > 0 && (
                   <div className="mt-3 rounded-xl border border-warn/40 bg-warn-soft/40 p-3 text-xs" data-testid="inquiry-duplicates">
                     <div className="mb-2 font-semibold text-ink">既存の顧客 (全店舗) に候補があります (住所をいちばん確かめてください)</div>
-                    <ul className="space-y-2">
-                      {candidates.map((m) => (
-                        <li key={m.id} className="rounded-lg bg-panel p-2">
-                          <div className="flex flex-wrap items-baseline gap-x-2">
-                            {canEditCaseStore(user, m.storeId) ? <Link href={`/customers/${m.id}`} className="font-medium text-accent hover:underline">{m.code} {m.name}</Link> : <span className="font-medium text-ink">{m.code} {m.name}</span>}
-                            <span className="text-ink-3">{storeName(m.storeId)}</span>
-                          </div>
-                          <div className="mt-0.5 text-ink-2">{m.address || (m.area ? `地区 ${m.area}` : "住所未登録")}</div>
-                          <div className="text-ink-3">{m.level === "high" ? "重複の可能性が高い" : m.level === "check" ? "要確認" : "参考"}: {m.reasons.join("・")}</div>
-                          {canEditCaseStore(user, m.storeId) ? (
-                            <form action={linkInquiryToCustomer.bind(null, inq.id, m.id)} className="mt-1.5">
-                              <Button type="submit" size="sm" variant="secondary">この顧客に紐づける</Button>
-                            </form>
-                          ) : (
-                            <p className="mt-1 text-ink-3">他店舗の顧客です。同じお客様なら店舗または本部に確認してください。</p>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                    {dup && dup.sameNameTotal > 5 && <p className="mt-2 text-ink-3">同じ氏名の顧客がほかに {dup.sameNameTotal - 5} 件あります (下の検索か顧客一覧で住所を確かめてください)。</p>}
+                    <form action={linkInquiryFromForm}>
+                      <input type="hidden" name="inquiryId" value={inq.id} />
+                      <input type="hidden" name="returnTo" value={here} />
+                      <ul className="space-y-2">
+                        {candidates.map((m) => (
+                          <li key={m.id} className="rounded-lg bg-panel p-2">
+                            <div className="flex flex-wrap items-baseline gap-x-2">
+                              {canEditCaseStore(user, m.storeId) ? <Link href={`/customers/${m.id}`} className="font-medium text-accent hover:underline">{m.code} {m.name}</Link> : <span className="font-medium text-ink">{m.code} {m.name}</span>}
+                              <span className="text-ink-3">{storeName(m.storeId)}</span>
+                            </div>
+                            <div className="mt-0.5 text-ink-2">{m.address || (m.area ? `地区 ${m.area}` : "住所未登録")}</div>
+                            <div className="text-ink-3">{m.level === "high" ? "重複の可能性が高い" : m.level === "check" ? "要確認" : "参考"}: {m.reasons.join("・")}</div>
+                            {canLink && canEditCaseStore(user, m.storeId) ? (
+                              <Button type="submit" name="customerId" value={m.id} size="sm" variant="secondary" className="mt-1.5">この顧客に紐づける</Button>
+                            ) : (
+                              <p className="mt-1 text-ink-3">他店舗の顧客です。同じお客様なら店舗または本部に確認してください。</p>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </form>
+                    {dup && dup.sameNameTotal > 5 && <p className="mt-2 text-ink-3">同じ氏名の顧客がほかに {dup.sameNameTotal - 5} 件あります (下の検索で住所を確かめてください)。</p>}
                   </div>
                 )}
-                {linkChoices && (
+                {canLink && (
                   <div className="mt-3 rounded-xl border border-line bg-subtle/50 p-3" data-testid="inquiry-link-search">
-                    <div className="mb-2 text-xs font-semibold text-ink">住所・お名前で既存の顧客を探して紐づける</div>
-                    {linkChoices.searchable && <CustomerSearch total={linkChoices.total} q={cq} shown={linkCustomers.length} keep={{}} />}
-                    <form action={linkInquiryToSelectedCustomer.bind(null, inq.id)} className="mt-2 space-y-2">
-                      <Field label="既存顧客" hint="候補の住所を確かめて選んでください">
-                        <Select name="customerId" defaultValue="" required>
-                          <option value="">{linkChoices.searchable && !cq ? "(上で住所・お名前を検索)" : "(選んでください)"}</option>
-                          {linkCustomers.map((c) => <option key={c.id} value={c.id}>{customerOptionLabel(c)}</option>)}
-                        </Select>
-                      </Field>
-                      {linkCustomers.length > 0 ? <Button type="submit" size="sm" variant="secondary">この顧客に紐づける</Button> : <p className="text-xs text-ink-3">上で住所・お名前を検索すると候補が出ます。</p>}
-                    </form>
+                    <div className="mb-2 text-xs font-semibold text-ink">既存の顧客を探して紐づける</div>
+                    <CustomerLinkSearch action={linkInquiryFromForm} inquiryId={inq.id} returnTo={here} initialQuery={candidates.length ? "" : (cq ?? inq.contactName.split(/[\s　]+/)[0] ?? "")} />
                   </div>
                 )}
                 <form action={registerCustomerFromInquiry.bind(null, inq.id)} className="mt-3 space-y-2">
@@ -334,7 +340,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                       上の候補とは別のお客様であることを確認した
                     </label>
                   )}
-                  <Button type="submit" size="sm" variant={candidates.length || linkCustomers.length ? "secondary" : "primary"}>{candidates.length || linkCustomers.length ? "新しい顧客として登録する" : "顧客として登録する"}</Button>
+                  <Button type="submit" size="sm" variant={candidates.length ? "secondary" : "primary"}>{candidates.length ? "新しい顧客として登録する" : "顧客として登録する"}</Button>
                 </form>
               </div>
             )}

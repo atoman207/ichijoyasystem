@@ -198,8 +198,8 @@ export function workDescription(c: WorkCounts | undefined): string {
 /* ---------------- 件名 ---------------- */
 
 /** 案件の予定 (引き取り・納品・現地調査・見積・採寸・顧客訪問・現場管理) の件名の最後の種類の言葉 (と受注の予定の品目の括弧) */
-const KIND_WORDS = /\s*(?:引き取り|引取り?|納品|顧客訪問|現地調査・見積|現地調査|見積り?|採寸|現場管理)(?:\s*[(（][^)）]*[)）])?\s*$/;
-const STRIP_KINDS = new Set(["pickup", "delivery", "survey", "measure", "visit", "site"]);
+const KIND_WORDS = /\s*(?:引き取り|引取り?|納品|顧客訪問|現地調査・見積|現地調査|現場見積\s*[(（]現見[)）]|現場見積|現見|見積り?|採寸|現場管理)(?:\s*[(（][^)）]*[)）])?\s*$/;
+const STRIP_KINDS = new Set(["pickup", "delivery", "survey", "onsite_quote", "measure", "visit", "site"]);
 
 /** 予定表に出す件名: 「(清水万石) 谷本 引き取り」→「(清水万石) 谷本」(種類はアイコンと色で表す) */
 export function stripKindWords(title: string, kind: string): string {

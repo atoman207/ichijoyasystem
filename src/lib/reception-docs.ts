@@ -18,13 +18,14 @@ export function providerLabel(p: unknown): string {
 }
 
 /** 受付の読み取りの結果を書類の extracted にする (_ で始まる項目は受付の記録) */
-export function receptionExtracted(read: ReceptionRead, meta: Pick<ReceptionMeta, "source" | "channel" | "text" | "call">): Record<string, unknown> {
+export function receptionExtracted(read: ReceptionRead, meta: Pick<ReceptionMeta, "source" | "channel" | "text" | "call" | "customerId">): Record<string, unknown> {
   return {
     ...read.fields,
     _source: meta.source,
     _channel: meta.channel,
     ...(meta.text ? { _text: meta.text.slice(0, 30_000) } : {}),
     ...(meta.call ? { _call: meta.call } : {}),
+    ...(meta.customerId ? { _customerId: meta.customerId } : {}),
     _provider: read.provider,
     _model: read.model,
     _warnings: read.warnings,
@@ -37,7 +38,7 @@ export function receptionExtracted(read: ReceptionRead, meta: Pick<ReceptionMeta
   };
 }
 
-export function newReceptionDoc(p: { id: string; uploadedBy: string; storeId: StoreId; source: ReceptionSource; channel: Channel; fileName?: string; text?: string; call?: ReceptionMeta["call"]; read: ReceptionRead }): CapturedDocument {
+export function newReceptionDoc(p: { id: string; uploadedBy: string; storeId: StoreId; source: ReceptionSource; channel: Channel; fileName?: string; text?: string; call?: ReceptionMeta["call"]; read: ReceptionRead; customerId?: string }): CapturedDocument {
   const at = nowIso();
   const stamp = new Date(at).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   return {
@@ -48,7 +49,7 @@ export function newReceptionDoc(p: { id: string; uploadedBy: string; storeId: St
     storeId: p.storeId,
     uploadedAt: at,
     status: p.read.provider === "error" && !p.text ? "failed" : "extracted",
-    extracted: receptionExtracted(p.read, { source: p.source, channel: p.channel, text: p.text, call: p.call }),
+    extracted: receptionExtracted(p.read, { source: p.source, channel: p.channel, text: p.text, call: p.call, customerId: p.customerId }),
     confidence: p.read.confidence,
   };
 }

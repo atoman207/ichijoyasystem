@@ -17,7 +17,7 @@ import { countsFromLines, countsFromText, emptyCounts, hasWork, mergeCounts, typ
  * 施工 (リフォーム) と社内の予定は対象外 (これまでどおりの表示)
  */
 
-const CASE_KINDS = new Set(["pickup", "delivery", "survey", "measure", "visit", "site"]);
+const CASE_KINDS = new Set(["pickup", "delivery", "survey", "onsite_quote", "measure", "visit", "site"]);
 const CATEGORY_KEY: Partial<Record<string, WorkKey>> = { tatami: "tatami", fusuma: "fusuma", shoji: "shoji", amido: "amido", curtain: "curtain" };
 
 interface Lookup {
