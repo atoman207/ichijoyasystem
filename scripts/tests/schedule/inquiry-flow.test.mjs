@@ -119,6 +119,7 @@ eq(st(mk({ schedule: [ev({ kind: "meeting" })] })).state, "request_waiting", "�
 eq(st(mk({ quotes: [{ id: "q1", status: "sent" }] }), base({ quoteId: "q1" })).state, "quoted", "見積を作った → 見積提出済");
 eq(st(mk({ quotes: [{ id: "q1", status: "accepted" }], orders: [{ id: "o1", quoteId: "q1", status: "scheduled" }] }), base({ quoteId: "q1" })).state, "ordered", "受注した → 受注");
 eq(st(mk(), base({ status: "lost" })).state, "closed", "失注 → 完了・失注");
+eq(st(mk(), base({ status: "quoted", source: "import" })).state, "quoted", "見積の記録がない「見積提出済」(移行した TEL待ちリスト) は依頼待ちにしない → 見積提出済");
 
 /* ================================================================== */
 section("3. 再通知の対象");

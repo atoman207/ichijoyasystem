@@ -189,6 +189,8 @@ export function inquiryFlow(inq: Inquiry, ix: FlowIndex, now: Date): InquiryFlow
     const next = qs === "draft" ? "見積を仕上げて提出する" : qs === "pending_approval" ? "見積の承認を待つ (店長・管理者)" : qs === "approved" ? "お客様へ見積を送る" : qs === "rejected" || qs === "expired" ? "失注か、見積を出し直すかを決める" : "お客様のお返事 → 受注登録";
     return make("quoted", next, nextEvent ? [] : [assignee]);
   }
+  // 見積提出済 (見積の記録がない: 移行した TEL待ちリストの「見積済・TEL待ち」など)
+  if (inq.status === "quoted") return make("quoted", "お客様のお返事 (TEL待ち) → 受注・失注", [assignee]);
   // 日程が決まった (これからの予定がある)
   if (nextEvent) return make("scheduled", `${md(nextEvent.date)} ${kindName(nextEvent)}${nextEvent.kind === "onsite_quote" ? " (現場で見積 → 工事)" : ""}`, nextEvent.assigneeIds.map(name));
   // お客様都合で日程未定

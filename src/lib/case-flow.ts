@@ -86,8 +86,8 @@ export function caseFlow(db: FlowDb, from: { inquiryId?: string; quoteId?: strin
   steps.push({
     key: "quote",
     label: onsite ? "見積 (現見)" : "見積",
-    state: quote ? (["sent", "accepted"].includes(quote.status) || order ? "done" : "current") : order ? "skip" : visitEvents.some((e) => e.date <= today) ? "current" : "todo",
-    detail: quote ? `${quote.number}${quote.status === "draft" ? " 作成中" : quote.status === "pending_approval" ? " 承認待ち" : quote.status === "approved" ? " 承認済・未送付" : ""}` : undefined,
+    state: quote ? (["sent", "accepted"].includes(quote.status) || order ? "done" : "current") : order ? "skip" : inquiry?.status === "quoted" ? "done" : visitEvents.some((e) => e.date <= today) ? "current" : "todo",
+    detail: quote ? `${quote.number}${quote.status === "draft" ? " 作成中" : quote.status === "pending_approval" ? " 承認待ち" : quote.status === "approved" ? " 承認済・未送付" : ""}` : inquiry?.status === "quoted" ? "見積済 (TEL待ち)" : undefined,
     href: quote ? `/quotes/${quote.id}` : undefined,
   });
 
@@ -147,7 +147,7 @@ export function caseFlow(db: FlowDb, from: { inquiryId?: string; quoteId?: strin
           : { text: "見積の前に、お客様を顧客として登録するか既存の顧客に紐づける", href: `${inqHref}#link-customer`, button: "お客様を登録・紐づけ", tone: "accent" };
         break;
       default:
-        next = flow.next ? { text: flow.next } : undefined;
+        next = flow.next ? { text: flow.next, who: flow.who.join("・") || undefined } : undefined;
     }
   }
   return { steps, next, inquiryFlow: flow, badge };
