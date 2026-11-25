@@ -1,7 +1,7 @@
 import { getDb } from "@/lib/db/store";
 import { chatState } from "@/lib/chat/inbox";
 import { canView, findChannel } from "@/lib/chat/channels";
-import { changedSince, getMessage, taskInfo, toViews } from "@/lib/chat/repo";
+import { changedSince, getMessage, onlineUsers, taskInfo, toViews, touchPresence, typingIn } from "@/lib/chat/repo";
 import { chatDb, currentRev } from "@/lib/chat/db";
 import { chatUser, json } from "@/lib/chat/api";
 import type { ChatSyncResponse, ChatTaskInfo } from "@/lib/chat/types";
@@ -24,7 +24,8 @@ export async function GET(req: Request) {
   const t = url.searchParams.get("t") ?? "";
   const state = chatState(db, user);
   const ch = c ? findChannel(db, c) : undefined;
-  const out: ChatSyncResponse = { rev, channels: state.channels, counts: state.counts, inbox: state.inbox, waiting: state.waiting, messages: [], replies: [], tasks: {} };
+  touchPresence(user.id);
+  const out: ChatSyncResponse = { rev, channels: state.channels, counts: state.counts, inbox: state.inbox, waiting: state.waiting, messages: [], replies: [], tasks: {}, typing: [], threadTyping: [], online: onlineUsers() };
   if (ch && canView(user, ch)) {
     const root = t ? getMessage(t) : undefined;
     const thread = root && root.channelId === ch.id ? root.id : undefined;
@@ -40,6 +41,8 @@ export async function GET(req: Request) {
       if (info) tasks[info.threadId] = info;
     }
     out.tasks = tasks;
+    out.typing = typingIn(ch.id, user.id);
+    if (thread) out.threadTyping = typingIn(`t:${thread}`, user.id);
   }
   return json(out);
 }

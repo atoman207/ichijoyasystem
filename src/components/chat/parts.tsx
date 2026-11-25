@@ -3,11 +3,12 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import clsx from "clsx";
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, CircleCheck, Copy, Download, FileSpreadsheet, FileText, FileVideo, ListTodo, Lock, MessageSquareReply, MoreHorizontal, Pencil, SmilePlus, Trash2, X } from "lucide-react";
+import { AlertTriangle, Bookmark, BookmarkCheck, Check, ChevronLeft, ChevronRight, CircleCheck, Copy, Download, EyeOff, FileSpreadsheet, FileText, FileVideo, Forward, ListTodo, Lock, MessageSquare, MessageSquareReply, MoreVertical, Pencil, Pin, SmilePlus, Trash2, X } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { Avatar, Badge, StatusBadge } from "@/components/ui";
 import { TASK_STATUS } from "@/lib/constants";
-import { segments } from "@/lib/chat/text";
+import { blocks, inlines, segments } from "@/lib/chat/text";
+import { EMOJI_GROUPS } from "@/lib/chat/emoji";
 import { CHAT_REACTIONS, type ChatFile, type ChatMessageView, type ChatStoreRef, type ChatUser } from "@/lib/chat/types";
 import { dueLabel, fileUrl, fullWhen, sizeLabel, timeLabel } from "./client";
 
@@ -19,13 +20,25 @@ export interface Dir {
   me: ChatUser;
   users: Map<string, ChatUser>;
   stores: ChatStoreRef[];
+  /** オンライン (いま画面を開いている) の社員 */
+  online: Set<string>;
 }
 
 export const nameOf = (dir: Dir, id?: string) => (id ? (dir.users.get(id)?.name ?? "退職した社員") : "");
 
-export function UserAvatar({ dir, id, size = 36 }: { dir: Dir; id: string; size?: number }) {
+/** 顔写真 (presence = 右下にオンラインの印: 緑 = オンライン / 灰の輪 = オフライン) */
+export function UserAvatar({ dir, id, size = 36, presence = false }: { dir: Dir; id: string; size?: number; presence?: boolean }) {
   const u = dir.users.get(id);
-  return <Avatar name={u?.name ?? "?"} id={id} size={size} src={u?.avatar} />;
+  const avatar = <Avatar name={u?.name ?? "?"} id={id} size={size} src={u?.avatar} />;
+  if (!presence) return avatar;
+  const online = dir.online.has(id);
+  const dot = Math.max(8, Math.round(size * 0.28));
+  return (
+    <span className="relative inline-flex shrink-0">
+      {avatar}
+      <span className={clsx("absolute -right-0.5 -bottom-0.5 rounded-full ring-2 ring-panel", online ? "bg-good" : "bg-panel")} style={{ width: dot, height: dot, boxShadow: online ? undefined : "inset 0 0 0 1.5px var(--color-ink-3)" }} aria-label={online ? "オンライン" : "オフライン"} />
+    </span>
+  );
 }
 
 /** 画面の中央のダイアログ (背面を暗くして、押すと閉じる・Esc で閉じる) */
@@ -69,14 +82,31 @@ export function Modal({ title, onClose, children, wide = false, footer }: { titl
 /* 本文                                                                 */
 /* ================================================================== */
 
-export function MessageBody({ m, dir, className }: { m: Pick<ChatMessageView, "body" | "links">; dir: Dir; className?: string }) {
-  const segs = segments(m.body, m.links);
+/** 1 行の中の文字 (メンション・URL・案件の番号 → 書式: 太字・斜体・取り消し線・コード) */
+function Line({ text, links, dir }: { text: string; links: ChatMessageView["links"]; dir: Dir }) {
+  const segs = segments(text, links);
   return (
-    <div className={clsx("text-[14px] leading-relaxed break-words whitespace-pre-wrap text-ink", className)}>
+    <>
       {segs.map((s, i) => {
         switch (s.kind) {
           case "text":
-            return <span key={i}>{s.text}</span>;
+            return inlines(s.text).map((x, j) =>
+              x.code ? (
+                <code key={`${i}-${j}`} className="rounded border border-line bg-subtle px-1 py-px font-mono text-[12.5px] text-critical-ink">
+                  {x.text}
+                </code>
+              ) : x.bold ? (
+                <strong key={`${i}-${j}`} className="font-semibold">
+                  {x.text}
+                </strong>
+              ) : x.italic ? (
+                <em key={`${i}-${j}`}>{x.text}</em>
+              ) : x.strike ? (
+                <s key={`${i}-${j}`}>{x.text}</s>
+              ) : (
+                <span key={`${i}-${j}`}>{x.text}</span>
+              ),
+            );
           case "user": {
             const mine = s.id === dir.me.id;
             return (
@@ -114,6 +144,191 @@ export function MessageBody({ m, dir, className }: { m: Pick<ChatMessageView, "b
             );
         }
       })}
+    </>
+  );
+}
+
+/** 本文 (Slack と同じ書き方: *太字* _斜体_ ~取り消し線~ `コード` ```コードのかたまり``` > 引用 ・箇条書き 1. 番号) */
+export function MessageBody({ m, dir, className }: { m: Pick<ChatMessageView, "body" | "links">; dir: Dir; className?: string }) {
+  return (
+    <div className={clsx("text-[14px] leading-relaxed break-words text-ink", className)}>
+      {blocks(m.body).map((b, i) => {
+        if (b.kind === "code")
+          return (
+            <pre key={i} className="my-1 overflow-x-auto rounded-lg border border-line bg-subtle px-3 py-2 font-mono text-[12.5px] leading-snug whitespace-pre text-ink">
+              {b.text}
+            </pre>
+          );
+        if (b.kind === "quote")
+          return (
+            <blockquote key={i} className="my-0.5 border-l-4 border-line-strong pl-3 whitespace-pre-wrap text-ink-2">
+              {b.lines.map((l, j) => (
+                <div key={j}>{l ? <Line text={l} links={m.links} dir={dir} /> : " "}</div>
+              ))}
+            </blockquote>
+          );
+        if (b.kind === "list") {
+          const Tag = b.ordered ? "ol" : "ul";
+          return (
+            <Tag key={i} className={clsx("my-0.5 pl-5", b.ordered ? "list-decimal" : "list-disc")}>
+              {b.items.map((it, j) => (
+                <li key={j} className="whitespace-pre-wrap">
+                  <Line text={it} links={m.links} dir={dir} />
+                </li>
+              ))}
+            </Tag>
+          );
+        }
+        return (
+          <div key={i} className="whitespace-pre-wrap">
+            {b.lines.map((l, j) => (
+              <span key={j}>
+                {j > 0 && "\n"}
+                <Line text={l} links={m.links} dir={dir} />
+              </span>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ================================================================== */
+/* ポップアップ (絵文字・プロフィール)。画面 (body) に出し、はみ出さない位置に置く   */
+/* ================================================================== */
+
+export function Popover({ anchor, onClose, children, width = 320, label }: { anchor: DOMRect; onClose: () => void; children: ReactNode; width?: number; label: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    const vw = window.innerWidth;
+    const vh = window.visualViewport?.height ?? window.innerHeight;
+    const h = el?.offsetHeight ?? 300;
+    const w = Math.min(width, vw - 16);
+    const left = Math.max(8, Math.min(anchor.right - w, vw - w - 8));
+    const below = anchor.bottom + 6;
+    const top = below + h > vh - 8 ? Math.max(8, anchor.top - h - 6) : below;
+    const t = window.setTimeout(() => setPos({ left, top }), 0);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    return () => {
+      window.clearTimeout(t);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [anchor, width, onClose]);
+  return createPortal(
+    <div className="fixed inset-0 z-[75]" onClick={onClose} role="presentation">
+      <div
+        ref={ref}
+        role="dialog"
+        aria-label={label}
+        onClick={(e) => e.stopPropagation()}
+        className="absolute overflow-hidden rounded-2xl border border-line bg-panel shadow-pop animate-pop max-sm:!inset-x-2 max-sm:!top-auto max-sm:!bottom-2"
+        style={{ width: Math.min(width, typeof window === "undefined" ? width : window.innerWidth - 16), left: pos?.left ?? -9999, top: pos?.top ?? -9999 }}
+      >
+        {children}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+export function EmojiPicker({ anchor, onPick, onClose }: { anchor: DOMRect; onPick: (emoji: string) => void; onClose: () => void }) {
+  const [tab, setTab] = useState(0);
+  return (
+    <Popover anchor={anchor} onClose={onClose} width={316} label="絵文字">
+      <div className="flex gap-0.5 overflow-x-auto border-b border-line px-2 pt-2 pb-1.5">
+        {EMOJI_GROUPS.map((g, i) => (
+          <button key={g.label} type="button" onClick={() => setTab(i)} className={clsx("shrink-0 rounded-lg px-2 py-1 text-xs", tab === i ? "bg-accent-soft font-semibold text-accent-ink" : "text-ink-2 hover:bg-subtle")}>
+            {g.label}
+          </button>
+        ))}
+      </div>
+      <div className="grid max-h-56 grid-cols-8 gap-0.5 overflow-y-auto p-2">
+        {EMOJI_GROUPS[tab].list.map((e) => (
+          <button key={e} type="button" onClick={() => (onPick(e), onClose())} className="flex h-9 w-9 items-center justify-center rounded-lg text-xl leading-none hover:bg-subtle" aria-label={`絵文字 ${e}`}>
+            {e}
+          </button>
+        ))}
+      </div>
+    </Popover>
+  );
+}
+
+/** 名前・顔写真を押したときのプロフィール (所属・役職・オンライン・DM を送る) */
+export function ProfileCard({ dir, userId, anchor, onClose, onDm }: { dir: Dir; userId: string; anchor: DOMRect; onClose: () => void; onDm: (userId: string) => void }) {
+  const u = dir.users.get(userId);
+  const store = dir.stores.find((s) => s.id === u?.storeId);
+  const online = dir.online.has(userId);
+  return (
+    <Popover anchor={anchor} onClose={onClose} width={300} label="プロフィール">
+      <div className="bg-linear-to-br from-accent-soft to-panel px-4 pt-4 pb-3">
+        <div className="flex items-center gap-3">
+          <UserAvatar dir={dir} id={userId} size={56} presence />
+          <div className="min-w-0">
+            <div className="truncate text-base font-semibold text-ink">{u?.name ?? "退職した社員"}</div>
+            {u?.title && <div className="truncate text-xs text-ink-2">{u.title}</div>}
+            <div className={clsx("mt-0.5 inline-flex items-center gap-1 text-[11px]", online ? "text-good-ink" : "text-ink-3")}>
+              <span className={clsx("h-2 w-2 rounded-full", online ? "bg-good" : "border border-ink-3")} />
+              {online ? "オンライン" : "オフライン"}
+            </div>
+          </div>
+        </div>
+      </div>
+      <dl className="space-y-1 px-4 py-3 text-xs">
+        {store && (
+          <div className="flex gap-2">
+            <dt className="w-12 shrink-0 text-ink-3">所属</dt>
+            <dd className="inline-flex items-center gap-1.5 text-ink">
+              <span className="h-2 w-2 rounded-full" style={{ background: store.color }} />
+              {store.name}
+            </dd>
+          </div>
+        )}
+        {u?.kana && (
+          <div className="flex gap-2">
+            <dt className="w-12 shrink-0 text-ink-3">読み</dt>
+            <dd className="text-ink">{u.kana}</dd>
+          </div>
+        )}
+        <div className="flex gap-2">
+          <dt className="w-12 shrink-0 text-ink-3">役割</dt>
+          <dd className="text-ink">{ROLE_NAME[u?.role ?? "store_staff"]}</dd>
+        </div>
+      </dl>
+      {userId !== dir.me.id && u && (
+        <div className="border-t border-line p-3">
+          <button type="button" onClick={() => (onDm(userId), onClose())} className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-xl bg-accent text-sm font-medium text-white hover:bg-accent-hover">
+            <MessageSquare className="h-4 w-4" />
+            メッセージを送る (DM)
+          </button>
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+const ROLE_NAME: Record<string, string> = { admin: "管理者", hq_staff: "本部", store_manager: "店長", store_staff: "店舗スタッフ" };
+
+/** 共有 (転送) されたメッセージ */
+function SharedBlock({ s, dir, onOpen }: { s: NonNullable<ChatMessageView["shared"]>; dir: Dir; onOpen?: () => void }) {
+  return (
+    <div className="mt-1.5 max-w-[520px] border-l-4 border-line-strong py-0.5 pl-3">
+      <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-ink-3">
+        <UserAvatar dir={dir} id={s.userId} size={18} />
+        <span className="font-semibold text-ink">{nameOf(dir, s.userId)}</span>
+        <span>{s.channelName === "DM" ? "DM" : `# ${s.channelName}`}</span>
+        <span>{fullWhen(s.at)}</span>
+      </div>
+      {s.body && <MessageBody m={{ body: s.body, links: s.links }} dir={dir} className="mt-0.5 text-[13px]" />}
+      {s.fileNames.length > 0 && <p className="mt-0.5 text-[11px] text-ink-3">資料・写真: {s.fileNames.join("、")} (元のメッセージで開けます)</p>}
+      {onOpen && (
+        <button type="button" onClick={onOpen} className="mt-0.5 text-[11px] font-medium text-accent hover:underline">
+          元のメッセージを開く
+        </button>
+      )}
     </div>
   );
 }
@@ -265,6 +480,13 @@ export interface MessageHandlers {
   onAcks: (m: ChatMessageView) => void;
   onCopy: (m: ChatMessageView) => void;
   onOpenImage: (m: ChatMessageView, files: ChatFile[], index: number) => void;
+  onPin: (m: ChatMessageView) => void;
+  onSave: (m: ChatMessageView) => void;
+  onUnread: (m: ChatMessageView) => void;
+  onShare: (m: ChatMessageView) => void;
+  onProfile: (userId: string, anchor: DOMRect) => void;
+  onOpenThread: (rootId: string) => void;
+  onOpenShared: (s: NonNullable<ChatMessageView["shared"]>) => void;
 }
 
 export function TaskCard({ task, dir }: { task: NonNullable<ChatMessageView["task"]>; dir: Dir }) {
@@ -314,19 +536,22 @@ function AckBar({ m, h, dir }: { m: ChatMessageView; h: MessageHandlers; dir: Di
   );
 }
 
-function Reactions({ m, h, dir }: { m: ChatMessageView; h: MessageHandlers; dir: Dir }) {
+function Reactions({ m, h, dir, onAdd }: { m: ChatMessageView; h: MessageHandlers; dir: Dir; onAdd: (anchor: DOMRect) => void }) {
   if (!m.reactions.length) return null;
   return (
     <div className="mt-1.5 flex flex-wrap gap-1">
       {m.reactions.map((r) => {
         const mine = r.userIds.includes(dir.me.id);
         return (
-          <button key={r.emoji} type="button" onClick={() => h.onReact(m, r.emoji)} title={r.userIds.map((id) => nameOf(dir, id)).join("、")} className={clsx("inline-flex h-6 items-center gap-1 rounded-full border px-2 text-xs transition", mine ? "border-accent/40 bg-accent-soft text-accent-ink" : "border-line bg-panel text-ink-2 hover:border-line-strong")}>
+          <button key={r.emoji} type="button" onClick={() => h.onReact(m, r.emoji)} title={`${r.userIds.map((id) => nameOf(dir, id)).join("、")} がリアクション`} className={clsx("inline-flex h-6 items-center gap-1 rounded-full border px-2 text-xs transition", mine ? "border-accent/50 bg-accent-soft text-accent-ink" : "border-line bg-subtle/60 text-ink-2 hover:border-line-strong")}>
             <span>{r.emoji}</span>
-            <span className="tnum">{r.userIds.length}</span>
+            <span className="font-semibold tnum">{r.userIds.length}</span>
           </button>
         );
       })}
+      <button type="button" onClick={(e) => onAdd(e.currentTarget.getBoundingClientRect())} className="inline-flex h-6 items-center rounded-full border border-line bg-subtle/60 px-2 text-ink-3 hover:border-line-strong hover:text-ink" aria-label="リアクションを付ける">
+        <SmilePlus className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }
@@ -338,7 +563,7 @@ function ActionMenu({ m, h, dir, inThread, canDelete, onClose }: { m: ChatMessag
     fn();
   };
   return (
-    <div className="w-60 rounded-xl border border-line bg-panel p-1.5 shadow-pop animate-pop" role="menu">
+    <div className="w-64 rounded-xl border border-line bg-panel p-1.5 shadow-pop animate-pop" role="menu">
       <div className="mb-1 flex flex-wrap gap-0.5 border-b border-line px-1 pb-1.5">
         {CHAT_REACTIONS.map((e) => (
           <button key={e} type="button" onClick={run(() => h.onReact(m, e))} className="rounded-lg p-1.5 text-lg leading-none hover:bg-subtle" aria-label={`リアクション ${e}`}>
@@ -352,16 +577,32 @@ function ActionMenu({ m, h, dir, inThread, canDelete, onClose }: { m: ChatMessag
           スレッドで返信
         </button>
       )}
+      <button type="button" className={item} onClick={run(() => h.onShare(m))}>
+        <Forward className="h-4 w-4 text-ink-3" />
+        メッセージを共有 (転送)
+      </button>
+      <button type="button" className={item} onClick={run(() => h.onSave(m))}>
+        {m.saved ? <BookmarkCheck className="h-4 w-4 text-accent" /> : <Bookmark className="h-4 w-4 text-ink-3" />}
+        {m.saved ? "「後で見る」から外す" : "後で見る (保存)"}
+      </button>
+      <button type="button" className={item} onClick={run(() => h.onPin(m))}>
+        <Pin className="h-4 w-4 text-ink-3" />
+        {m.pinnedBy ? "ピン留めを外す" : "チャンネルにピン留め"}
+      </button>
+      <button type="button" className={item} onClick={run(() => h.onUnread(m))}>
+        <EyeOff className="h-4 w-4 text-ink-3" />
+        ここから未読にする
+      </button>
+      <button type="button" className={item} onClick={run(() => h.onCopy(m))}>
+        <Copy className="h-4 w-4 text-ink-3" />
+        リンクをコピー
+      </button>
       {!m.task && (
         <button type="button" className={item} onClick={run(() => h.onTask(m))}>
           <ListTodo className="h-4 w-4 text-ink-3" />
           業務依頼にする
         </button>
       )}
-      <button type="button" className={item} onClick={run(() => h.onCopy(m))}>
-        <Copy className="h-4 w-4 text-ink-3" />
-        リンクをコピー
-      </button>
       {m.userId === dir.me.id && (
         <button type="button" className={item} onClick={run(() => h.onEdit(m))}>
           <Pencil className="h-4 w-4 text-ink-3" />
@@ -401,13 +642,29 @@ export function MessageItem({
 }) {
   const [menu, setMenu] = useState(false);
   const [menuUp, setMenuUp] = useState(false);
+  const [picker, setPicker] = useState<DOMRect | null>(null);
+  /** スマートフォン: メッセージを押すと操作のボタンを出す (いつも出すと文字に重なるため) */
+  const [tapped, setTapped] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
   const openMenu = () => {
     // 画面の下の方では上に開く (メッセージの一覧の下端で切れないように)
     const r = menuRef.current?.getBoundingClientRect();
-    setMenuUp(Boolean(r && r.bottom + 330 > (window.visualViewport?.height ?? window.innerHeight)));
+    setMenuUp(Boolean(r && r.bottom + 420 > (window.visualViewport?.height ?? window.innerHeight)));
     setMenu((x) => !x);
   };
+  useEffect(() => {
+    if (!tapped || menu) return;
+    const onDown = (e: TouchEvent | MouseEvent) => {
+      if (rowRef.current && !rowRef.current.contains(e.target as Node)) setTapped(false);
+    };
+    document.addEventListener("touchstart", onDown, { passive: true });
+    document.addEventListener("mousedown", onDown);
+    return () => {
+      document.removeEventListener("touchstart", onDown);
+      document.removeEventListener("mousedown", onDown);
+    };
+  }, [tapped, menu]);
   useEffect(() => {
     if (!menu) return;
     const onDown = (e: MouseEvent | TouchEvent) => {
@@ -424,22 +681,33 @@ export function MessageItem({
     if (!m.replyCount || inThread) return null;
   }
   const mentioned = !m.deleted && (m.mentions.includes(dir.me.id) || m.mentionAll);
+  const profile = (e: React.MouseEvent<HTMLElement>) => h.onProfile(m.userId, e.currentTarget.getBoundingClientRect());
+  const tool = "flex h-8 w-8 items-center justify-center rounded-lg text-ink-2 hover:bg-subtle hover:text-ink";
   return (
     <div
+      ref={rowRef}
       id={`m-${m.id}`}
       data-mid={m.id}
       data-at={m.at}
+      onClick={(e) => {
+        if (!window.matchMedia("(pointer: coarse)").matches) return;
+        if ((e.target as HTMLElement).closest("a,button,input,textarea,select,video,img,label")) return;
+        setTapped((x) => !x);
+      }}
       className={clsx(
         "group relative flex gap-3 px-3 transition-colors @xl:px-4",
-        compact ? "py-0.5" : "pt-2.5 pb-1",
-        m.important ? "border-l-[3px] border-warn bg-warn-soft/35" : mentioned ? "border-l-[3px] border-accent/50 bg-accent-soft/25" : "border-l-[3px] border-transparent",
+        compact && !m.pinnedBy ? "py-0.5" : "pt-2 pb-1",
+        m.important ? "border-l-[3px] border-warn bg-warn-soft/35" : m.pinnedBy ? "border-l-[3px] border-warn/60 bg-warn-soft/20" : mentioned ? "border-l-[3px] border-accent/50 bg-accent-soft/25" : "border-l-[3px] border-transparent",
         highlight && "!bg-warn-soft/80",
+        tapped && "bg-subtle/80",
         !editing && "hover:bg-subtle/70",
       )}
     >
       <div className="w-9 shrink-0">
-        {!compact ? (
-          <UserAvatar dir={dir} id={m.userId} />
+        {!compact || m.pinnedBy ? (
+          <button type="button" onClick={profile} className="mt-0.5 block rounded-lg" aria-label={`${nameOf(dir, m.userId)} のプロフィール`}>
+            <UserAvatar dir={dir} id={m.userId} presence />
+          </button>
         ) : (
           <span className="block pt-0.5 text-right text-[10px] text-ink-3 opacity-0 group-hover:opacity-100 tnum" title={fullWhen(m.at)}>
             {timeLabel(m.at)}
@@ -447,9 +715,32 @@ export function MessageItem({
         )}
       </div>
       <div className="min-w-0 flex-1">
-        {!compact && (
+        {(m.pinnedBy || m.saved) && (
+          <div className="mb-0.5 flex flex-wrap gap-x-3 text-[11px] font-medium">
+            {m.pinnedBy && (
+              <span className="inline-flex items-center gap-1 text-warn-ink">
+                <Pin className="h-3 w-3" />
+                {nameOf(dir, m.pinnedBy)} がピン留め
+              </span>
+            )}
+            {m.saved && (
+              <span className="inline-flex items-center gap-1 text-accent-ink">
+                <BookmarkCheck className="h-3 w-3" />
+                後で見る
+              </span>
+            )}
+          </div>
+        )}
+        {m.alsoChannel && m.root && !inThread && (
+          <button type="button" onClick={() => h.onOpenThread(m.root!.id)} className="mb-0.5 block max-w-full truncate text-left text-[11px] text-ink-3 hover:text-accent">
+            スレッドに返信しました: {nameOf(dir, m.root.userId)}「{m.root.body.replace(/<[@!][^>]+>/g, "@…").replace(/\s+/g, " ").slice(0, 60) || "…"}」
+          </button>
+        )}
+        {(!compact || m.pinnedBy) && (
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <span className="text-[14px] font-semibold text-ink">{nameOf(dir, m.userId)}</span>
+            <button type="button" onClick={profile} className="text-[14px] font-bold text-ink hover:underline">
+              {nameOf(dir, m.userId)}
+            </button>
             <time className="text-[11px] text-ink-3 tnum" dateTime={m.at} title={fullWhen(m.at)}>
               {timeLabel(m.at)}
             </time>
@@ -469,17 +760,18 @@ export function MessageItem({
           <>
             {m.body && <MessageBody m={m} dir={dir} />}
             {m.editedAt && <span className="text-[10px] text-ink-3">(編集済み)</span>}
+            {m.shared && <SharedBlock s={m.shared} dir={dir} onOpen={() => h.onOpenShared(m.shared!)} />}
             <FileList m={m} onOpenImage={(files, i) => h.onOpenImage(m, files, i)} />
             {m.task && <TaskCard task={m.task} dir={dir} />}
             <AckBar m={m} h={h} dir={dir} />
-            <Reactions m={m} h={h} dir={dir} />
+            <Reactions m={m} h={h} dir={dir} onAdd={(r) => setPicker(r)} />
           </>
         )}
         {!inThread && m.replyCount > 0 && h.onReply && (
-          <button type="button" onClick={() => h.onReply!(m)} className="mt-1 inline-flex items-center gap-2 rounded-lg px-1.5 py-1 text-xs font-medium text-accent hover:bg-accent-soft">
+          <button type="button" onClick={() => h.onReply!(m)} className="mt-1 inline-flex items-center gap-2 rounded-lg border border-transparent px-1.5 py-1 text-xs font-semibold text-accent hover:border-line hover:bg-panel">
             <span className="flex -space-x-1.5">
               {m.replyUserIds.slice(-3).map((id) => (
-                <UserAvatar key={id} dir={dir} id={id} size={18} />
+                <UserAvatar key={id} dir={dir} id={id} size={20} />
               ))}
             </span>
             {m.replyCount} 件の返信
@@ -488,26 +780,30 @@ export function MessageItem({
         )}
       </div>
       {!m.deleted && !editing && (
-        <div ref={menuRef} className={clsx("absolute top-0.5 right-2 z-10", menu ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-70")}>
-          <div className="flex items-center gap-0.5 rounded-xl border border-line bg-panel p-0.5 shadow-card">
-            <button type="button" onClick={() => h.onReact(m, "👍")} className="rounded-lg p-1.5 text-sm leading-none hover:bg-subtle max-[480px]:hidden pointer-coarse:hidden" aria-label="リアクション 👍">
-              👍
-            </button>
-            <button type="button" onClick={() => h.onReact(m, "✅")} className="rounded-lg p-1.5 text-sm leading-none hover:bg-subtle max-[480px]:hidden pointer-coarse:hidden" aria-label="リアクション ✅">
+        <div ref={menuRef} className={clsx("absolute -top-3.5 right-3 z-10", menu || picker || tapped ? "opacity-100" : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100")}>
+          <div className="flex items-center gap-0.5 rounded-lg border border-line bg-panel p-0.5 shadow-card">
+            <button type="button" onClick={() => h.onReact(m, "✅")} className={clsx(tool, "text-base pointer-coarse:hidden")} aria-label="リアクション ✅" title="✅">
               ✅
             </button>
+            <button type="button" onClick={() => h.onReact(m, "👍")} className={clsx(tool, "text-base pointer-coarse:hidden")} aria-label="リアクション 👍" title="👍">
+              👍
+            </button>
+            <button type="button" onClick={(e) => setPicker(e.currentTarget.getBoundingClientRect())} className={tool} aria-label="リアクションを付ける" title="リアクションを付ける">
+              <SmilePlus className="h-4 w-4" />
+            </button>
             {!inThread && h.onReply && (
-              <button type="button" onClick={() => h.onReply!(m)} className="rounded-lg p-1.5 text-ink-2 hover:bg-subtle hover:text-ink pointer-coarse:hidden" aria-label="スレッドで返信" title="スレッドで返信">
+              <button type="button" onClick={() => h.onReply!(m)} className={clsx(tool, "pointer-coarse:hidden")} aria-label="スレッドで返信" title="スレッドで返信">
                 <MessageSquareReply className="h-4 w-4" />
               </button>
             )}
-            <button type="button" onClick={openMenu} className="rounded-lg p-1.5 text-ink-2 hover:bg-subtle hover:text-ink" aria-label="ほかの操作" aria-haspopup="menu" aria-expanded={menu} data-testid="chat-msg-menu">
-              <span className="pointer-coarse:hidden">
-                <MoreHorizontal className="h-4 w-4" />
-              </span>
-              <span className="hidden pointer-coarse:inline">
-                <SmilePlus className="h-4 w-4" />
-              </span>
+            <button type="button" onClick={() => h.onShare(m)} className={clsx(tool, "max-[480px]:hidden pointer-coarse:hidden")} aria-label="メッセージを共有" title="メッセージを共有 (転送)">
+              <Forward className="h-4 w-4" />
+            </button>
+            <button type="button" onClick={() => h.onSave(m)} className={clsx(tool, "max-[480px]:hidden pointer-coarse:hidden", m.saved && "text-accent")} aria-label={m.saved ? "「後で見る」から外す" : "後で見る"} title={m.saved ? "「後で見る」から外す" : "後で見る (保存)"}>
+              {m.saved ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
+            </button>
+            <button type="button" onClick={openMenu} className={tool} aria-label="その他の操作" aria-haspopup="menu" aria-expanded={menu} data-testid="chat-msg-menu">
+              <MoreVertical className="h-4 w-4" />
             </button>
           </div>
           {menu && (
@@ -517,6 +813,7 @@ export function MessageItem({
           )}
         </div>
       )}
+      {picker && <EmojiPicker anchor={picker} onPick={(e) => h.onReact(m, e)} onClose={() => setPicker(null)} />}
     </div>
   );
 }

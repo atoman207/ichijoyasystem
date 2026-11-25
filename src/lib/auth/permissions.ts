@@ -387,17 +387,18 @@ export function canSendImportantChat(user: Pick<User, "role">): boolean {
   return isChatLead(user);
 }
 
-/** チャンネルを追加できる (メンバーを選ぶチャンネル): 管理者・本部・店長 */
-export function canCreateChatChannel(user: Pick<User, "role">): boolean {
-  return isChatLead(user);
+/** チャンネルを追加できる: 有効な社員なら誰でも (Slack と同じ。2026-11-26 のご要望) */
+export function canCreateChatChannel(user: Pick<User, "role"> & { active?: boolean }): boolean {
+  return user.active !== false;
 }
 
 /**
- * チャンネル・DM を見る・投稿できるか
+ * チャンネル・DM を見られるか
  * - 全社: 有効な社員全員 / 店舗: その店舗の社員と本部・管理者 / 店長: 店長以上
- * - 追加したチャンネル・DM: メンバー (参加している本人) だけ。DM は管理者も見られない (お客様の決定 2026-11-25「■5」)
+ * - 追加したチャンネル: 公開 (public) は社員なら誰でも見て参加できる、非公開はメンバーだけ
+ * - DM: 参加している本人だけ。管理者も見られない (お客様の決定 2026-11-25「■5」)
  */
-export function canViewChatChannel(user: Pick<User, "id" | "role" | "storeId" | "active">, ch: { kind: string; storeId?: string; memberIds: string[] }): boolean {
+export function canViewChatChannel(user: Pick<User, "id" | "role" | "storeId" | "active">, ch: { kind: string; storeId?: string; memberIds: string[]; visibility?: string }): boolean {
   if (!user.active) return false;
   switch (ch.kind) {
     case "all":
@@ -406,12 +407,25 @@ export function canViewChatChannel(user: Pick<User, "id" | "role" | "storeId" | 
       return user.storeId === ch.storeId || user.role === "admin" || user.role === "hq_staff";
     case "managers":
       return isChatLead(user);
+    case "custom":
+      return ch.visibility === "public" || ch.memberIds.includes(user.id);
     default:
       return ch.memberIds.includes(user.id);
   }
 }
 
-/** 追加したチャンネルの名前・説明・メンバーの変更とアーカイブ: 作成した人・管理者 */
+/** チャンネル・DM に送れるか (追加したチャンネルはメンバーだけ。公開のチャンネルは参加してから) */
+export function canPostChatChannel(user: Pick<User, "id" | "role" | "storeId" | "active">, ch: { kind: string; storeId?: string; memberIds: string[]; visibility?: string }): boolean {
+  if (!canViewChatChannel(user, ch)) return false;
+  return ch.kind === "custom" || ch.kind === "dm" ? ch.memberIds.includes(user.id) : true;
+}
+
+/** 追加したチャンネルにメンバーを足せる: そのチャンネルのメンバー (Slack と同じ。外すのは作成した人・管理者) */
+export function canAddChatMembers(user: Pick<User, "id">, ch: { kind: string; memberIds: string[] }): boolean {
+  return ch.kind === "custom" && ch.memberIds.includes(user.id);
+}
+
+/** 追加したチャンネルの名前・説明・公開範囲の変更、メンバーを外す、アーカイブ: 作成した人・管理者 */
 export function canManageChatChannel(user: Pick<User, "id" | "role">, ch: { kind: string; createdBy?: string }): boolean {
   return ch.kind === "custom" && (ch.createdBy === user.id || user.role === "admin");
 }

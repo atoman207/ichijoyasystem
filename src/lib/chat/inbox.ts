@@ -1,8 +1,8 @@
 import "server-only";
 import type { Database, User } from "@/lib/db/types";
 import { canViewThread } from "@/lib/auth/permissions";
-import { dmName, isViewer, visibleChannels, type ChannelDef, canManage } from "./channels";
-import { channelNotify, channelStats, mentionRows, notifyFor, pendingImportant, readsOf, type RawMessage } from "./repo";
+import { canAddMembers, canManage, canPost, dmName, isJoined, isViewer, visibleChannels, type ChannelDef } from "./channels";
+import { channelNotify, channelStats, mentionRows, notifyFor, pendingImportant, pinCounts, readsOf, starsOf, type ChannelStat, type RawMessage } from "./repo";
 import { preview } from "./text";
 import type { ChatChannelView, ChatCounts, InboxItem, WaitingItem } from "./types";
 
@@ -119,31 +119,15 @@ export function chatState(db: Database, user: User, opts: { withLists?: boolean 
   const rank: Record<InboxItem["kind"], number> = { task: 0, report: 1, important: 2, mention: 3, thread_mention: 3 };
   items.sort((a, b) => Number(b.overdue ?? false) - Number(a.overdue ?? false) || rank[a.kind] - rank[b.kind] || b.at.localeCompare(a.at));
 
-  // チャンネルの一覧
-  const channels: ChatChannelView[] = defs.map((d) => {
-    const s = stats.get(d.id) ?? { unread: 0, mentions: 0 };
-    const pending = important.filter((m) => m.channelId === d.id && !m.parentId).length;
-    const last = s.lastAt ? (s.lastBody ? preview(s.lastBody, ctx, 60) : s.lastFiles ? "(資料・写真)" : "") : undefined;
-    return {
-      id: d.id,
-      kind: d.kind,
-      name: d.kind === "dm" ? dmName(db, d, user.id) : d.name,
-      topic: d.topic,
-      storeId: d.storeId,
-      color: d.color,
-      memberIds: d.memberIds,
-      viewer: isViewer(user, d) || undefined,
-      unread: s.unread,
-      mentions: Math.max(s.mentions, 0) + pending,
-      lastAt: s.lastAt,
-      lastUserId: s.lastUserId,
-      lastPreview: last,
-      notify: notifyFor(user.id, d, notify),
-      canManage: canManage(user, d),
-      archived: Boolean(d.archivedAt) || undefined,
-      createdBy: d.createdBy,
-    };
-  });
+  // チャンネルの一覧 (サイドバー: 参加しているチャンネル・DM。公開のチャンネルで参加していないものは「チャンネルを探す」から)
+  const stars = starsOf(user.id);
+  const pins = pinCounts(defs.map((d) => d.id));
+  const channels: ChatChannelView[] = defs
+    .filter((d) => isJoined(user.id, d))
+    .map((d) => {
+      const pending = important.filter((m) => m.channelId === d.id && !m.parentId).length;
+      return channelView(db, user, d, { stat: stats.get(d.id), pending, notify: notifyFor(user.id, d, notify), starred: stars.has(d.id), pinCount: pins.get(d.id) ?? 0 });
+    });
 
   const unreadChannels = channels.filter((c) => c.notify === "all" && c.unread > 0);
   const unread = unreadChannels.reduce((a, c) => a + c.unread, 0);
@@ -155,5 +139,44 @@ export function chatState(db: Database, user: User, opts: { withLists?: boolean 
     counts: { action: items.length, unread, actionKey, unreadKey: `${unread}:${latestUnread}` },
     inbox: opts.withLists === false ? [] : items,
     waiting: opts.withLists === false ? [] : waiting,
+  };
+}
+
+/** チャンネル 1 つの画面の形 (サイドバー・参加していない公開のチャンネルを開いたとき) */
+export function channelView(
+  db: Database,
+  user: User,
+  d: ChannelDef,
+  extra: { stat?: ChannelStat; pending?: number; notify?: ChatChannelView["notify"]; starred?: boolean; pinCount?: number } = {},
+): ChatChannelView {
+  const ctx = ctxOf(db);
+  const s = extra.stat ?? { unread: 0, mentions: 0 };
+  const joined = isJoined(user.id, d);
+  const last = s.lastAt ? (s.lastBody ? preview(s.lastBody, ctx, 60) : s.lastFiles ? "(資料・写真)" : "") : undefined;
+  return {
+    id: d.id,
+    kind: d.kind,
+    name: d.kind === "dm" ? dmName(db, d, user.id) : d.name,
+    topic: d.topic,
+    storeId: d.storeId,
+    color: d.color,
+    memberIds: d.memberIds,
+    viewer: isViewer(user, d) || undefined,
+    unread: joined ? s.unread : 0,
+    mentions: joined ? Math.max(s.mentions, 0) + (extra.pending ?? 0) : 0,
+    lastAt: s.lastAt,
+    lastUserId: s.lastUserId,
+    lastPreview: last,
+    notify: extra.notify ?? (d.kind === "dm" ? "all" : "priority"),
+    canManage: canManage(user, d),
+    archived: Boolean(d.archivedAt) || undefined,
+    createdBy: d.createdBy,
+    createdAt: d.createdAt,
+    visibility: d.visibility,
+    joined,
+    canPost: canPost(user, d),
+    canAddMembers: canAddMembers(user, d),
+    starred: Boolean(extra.starred),
+    pinCount: extra.pinCount ?? 0,
   };
 }

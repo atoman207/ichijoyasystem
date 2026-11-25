@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
-import { Bell, BellOff, Check, CircleAlert, Hash, Search, Smartphone, Volume2, VolumeX, X } from "lucide-react";
+import { Bell, BellOff, Check, CircleAlert, Hash, Lock, MessageSquare, Plus, Search, Smartphone, Volume2, VolumeX, X } from "lucide-react";
 import { Button, Badge } from "@/components/ui";
-import { archiveChatChannel, createChatChannel, leaveChatChannel, makeChatTask, openDirect, remindChatMessage, setChatChannelNotify, setChatPrefs, testChatPush, updateChatChannel } from "@/lib/actions/chat";
+import { archiveChatChannel, createChatChannel, makeChatTask, openDirect, remindChatMessage, setChatChannelNotify, setChatPrefs, shareChatMessage, testChatPush, updateChatChannel } from "@/lib/actions/chat";
 import { matchName } from "@/lib/chat/text";
-import { DM_MAX_MEMBERS, type ChatChannelView, type ChatDueChoice, type ChatMessageView, type ChatPrefs, type ChatTaskInput, type ChatUser } from "@/lib/chat/types";
+import { DM_MAX_MEMBERS, type ChatChannelView, type ChatDueChoice, type ChatMessageView, type ChatPrefs, type ChatTaskInput } from "@/lib/chat/types";
 import { disablePush, enablePush, isIos, isStandalone, playChime, pushState, type PushState } from "./client";
 import { Modal, nameOf, UserAvatar, type Dir } from "./parts";
 
@@ -215,6 +215,7 @@ export function NewDmDialog({ dir, onClose, onOpen }: { dir: Dir; onClose: () =>
 export function ChannelDialog({ dir, channel, onClose, onSaved }: { dir: Dir; channel?: ChatChannelView; onClose: () => void; onSaved: (channelId: string, archived?: boolean) => void }) {
   const [name, setName] = useState(channel?.name ?? "");
   const [topic, setTopic] = useState(channel?.topic ?? "");
+  const [visibility, setVisibility] = useState<"public" | "private">(channel?.visibility ?? "public");
   const [ids, setIds] = useState<string[]>(channel ? channel.memberIds.filter((x) => x !== dir.me.id) : []);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -232,20 +233,20 @@ export function ChannelDialog({ dir, channel, onClose, onSaved }: { dir: Dir; ch
       setBusy(false);
     }
   };
-  const save = () => run(() => (channel ? updateChatChannel(channel.id, { name, topic, memberIds: ids }).then((r) => ({ ...r, data: { channelId: channel.id } })) : createChatChannel({ name, topic, memberIds: ids })), (r) => onSaved(r.data!.channelId));
+  const save = () =>
+    run(
+      () => (channel ? updateChatChannel(channel.id, { name, topic, memberIds: ids, visibility }).then((r) => ({ ...r, data: { channelId: channel.id } })) : createChatChannel({ name, topic, memberIds: ids, visibility })),
+      (r) => onSaved(r.data!.channelId),
+    );
   const addStore = (storeId: string) => setIds((x) => [...new Set([...x, ...[...dir.users.values()].filter((u) => u.storeId === storeId && u.id !== dir.me.id).map((u) => u.id)])]);
+  const needMembers = visibility === "private" && !ids.length;
   return (
     <Modal
-      title={editing ? `#${channel!.name} の設定` : "チャンネルを追加"}
+      title={editing ? `#${channel!.name} の設定` : "チャンネルを作成"}
       wide
       onClose={onClose}
       footer={
         <>
-          {editing && channel!.createdBy !== dir.me.id && (
-            <Button type="button" variant="ghost" onClick={() => run(() => leaveChatChannel(channel!.id), () => onSaved(channel!.id, true))} disabled={busy}>
-              チャンネルから抜ける
-            </Button>
-          )}
           {editing && (
             <Button type="button" variant="danger" onClick={() => confirm(`#${channel!.name} をアーカイブしますか？\nメッセージは残りますが、一覧に出なくなり、送れなくなります。`) && run(() => archiveChatChannel(channel!.id, true), () => onSaved(channel!.id, true))} disabled={busy}>
               アーカイブ
@@ -255,8 +256,8 @@ export function ChannelDialog({ dir, channel, onClose, onSaved }: { dir: Dir; ch
           <Button type="button" variant="secondary" onClick={onClose}>
             やめる
           </Button>
-          <Button type="button" onClick={save} disabled={busy || !name.trim() || !ids.length} data-testid="chat-channel-save">
-            {editing ? "保存する" : "追加する"}
+          <Button type="button" onClick={save} disabled={busy || !name.trim() || needMembers} data-testid="chat-channel-save">
+            {editing ? "保存する" : "作成する"}
           </Button>
         </>
       }
@@ -276,9 +277,31 @@ export function ChannelDialog({ dir, channel, onClose, onSaved }: { dir: Dir; ch
           <span className="mb-1 block text-xs font-medium text-ink-2">説明 (任意)</span>
           <input value={topic} onChange={(e) => setTopic(e.target.value)} maxLength={200} placeholder="何のためのチャンネルか" className="h-9 w-full rounded-xl border border-line bg-panel px-3 text-sm outline-none focus:border-accent focus:ring-4 focus:ring-accent/15" />
         </label>
+        <fieldset>
+          <legend className="mb-1 text-xs font-medium text-ink-2">公開範囲</legend>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {(
+              [
+                ["public", "公開", "社員なら誰でも「チャンネルを探す」から見つけて参加できます", Hash],
+                ["private", "非公開", "メンバーだけが見られます (招待した人だけ)", Lock],
+              ] as const
+            ).map(([v, label, desc, Icon]) => (
+              <label key={v} className={clsx("flex cursor-pointer items-start gap-2.5 rounded-xl border p-3", visibility === v ? "border-accent bg-accent-soft/50" : "border-line hover:bg-subtle")}>
+                <input type="radio" name="visibility" value={v} checked={visibility === v} onChange={() => setVisibility(v)} className="mt-1 accent-accent" />
+                <span>
+                  <span className="flex items-center gap-1 text-sm font-semibold text-ink">
+                    <Icon className="h-3.5 w-3.5" />
+                    {label}
+                  </span>
+                  <span className="block text-[11px] text-ink-3">{desc}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
         <div>
           <div className="mb-1 flex flex-wrap items-center gap-1.5 text-xs font-medium text-ink-2">
-            メンバー <span className="text-critical">*</span>
+            メンバー {visibility === "private" ? <span className="text-critical">*</span> : <span className="font-normal text-ink-3">(任意。公開のチャンネルはあとから参加できます)</span>}
             <span className="font-normal text-ink-3">店舗の全員を追加:</span>
             {dir.stores.map((s) => (
               <button key={s.id} type="button" onClick={() => addStore(s.id)} className="rounded-full border border-line px-2 py-0.5 text-[11px] font-normal hover:bg-subtle">
@@ -287,35 +310,212 @@ export function ChannelDialog({ dir, channel, onClose, onSaved }: { dir: Dir; ch
             ))}
           </div>
           <PeoplePicker dir={dir} value={ids} onChange={setIds} exclude={[dir.me.id]} />
-          <p className="mt-1.5 text-[11px] text-ink-3">追加したチャンネルはメンバーだけが見られます (あなたも自動でメンバーになります)。</p>
+          <p className="mt-1.5 text-[11px] text-ink-3">あなたも自動でメンバーになります。メンバーはあとから「メンバー」の画面で追加できます。</p>
         </div>
       </div>
     </Modal>
   );
 }
 
-export function MembersDialog({ dir, channel, onClose }: { dir: Dir; channel: ChatChannelView; onClose: () => void }) {
-  const members = channel.memberIds.map((id) => dir.users.get(id)).filter((u): u is ChatUser => Boolean(u));
-  const kindNote: Record<string, string> = {
-    all: "全社員が自動で参加しています。",
-    store: "この店舗に所属する社員が自動で参加しています (異動・退職で自動で入れ替わります)。本部・管理者も見られます。",
-    managers: "店長・本部・管理者が自動で参加しています。",
-    custom: "メンバーだけが見られます。",
-    dm: "参加している本人同士だけが見られます (管理者も見られません)。",
-  };
+/* ================================================================== */
+/* チャンネルを探す・共有・すばやく移動                                   */
+/* ================================================================== */
+
+export interface BrowseRow {
+  id: string;
+  kind: string;
+  name: string;
+  topic: string;
+  color?: string;
+  visibility?: "public" | "private";
+  memberCount: number;
+  joined: boolean;
+  lastAt?: string;
+  messages: number;
+}
+
+/** チャンネルを探す (全社・店舗・店長・公開のチャンネル。参加する・開く) */
+export function BrowseDialog({ onClose, onOpen, onCreate }: { onClose: () => void; onOpen: (id: string, join: boolean) => void; onCreate: () => void }) {
+  const [list, setList] = useState<BrowseRow[] | null>(null);
+  const [q, setQ] = useState("");
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    fetch("/api/chat/browse", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j: { channels?: BrowseRow[]; error?: string }) => (j.channels ? setList(j.channels) : setErr(j.error ?? "読み込めませんでした。")))
+      .catch(() => setErr("読み込めませんでした。"));
+  }, []);
+  const shown = (list ?? []).filter((c) => !q.trim() || matchName(q, c.name) > 0 || c.topic.includes(q.trim()));
   return (
-    <Modal title={`メンバー (${members.length} 人)`} onClose={onClose}>
-      <p className="mb-2 text-xs text-ink-3">{kindNote[channel.kind]}</p>
-      <ul className="divide-y divide-line">
-        {members.map((u) => (
-          <li key={u.id} className="flex items-center gap-2.5 py-2">
-            <UserAvatar dir={dir} id={u.id} size={30} />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium text-ink">{u.name}</span>
-              <span className="block truncate text-[11px] text-ink-3">{[dir.stores.find((s) => s.id === u.storeId)?.name, u.title].filter(Boolean).join(" · ")}</span>
+    <Modal
+      title="チャンネルを探す"
+      wide
+      onClose={onClose}
+      footer={
+        <Button type="button" onClick={onCreate}>
+          <Plus className="h-4 w-4" />
+          チャンネルを作成
+        </Button>
+      }
+    >
+      <label className="relative mb-3 block">
+        <Search className="pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-ink-3" />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="チャンネルの名前・説明で探す" className="h-9 w-full rounded-xl border border-line bg-panel pr-3 pl-8 text-sm outline-none focus:border-accent focus:ring-4 focus:ring-accent/15" autoFocus />
+      </label>
+      {err && <ErrorLine text={err} />}
+      {!list && !err && <p className="py-6 text-center text-sm text-ink-3">読み込んでいます…</p>}
+      <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
+        {list && shown.length === 0 && <li className="px-3 py-6 text-center text-xs text-ink-3">見つかりません</li>}
+        {shown.map((c) => (
+          <li key={c.id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-subtle/60">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-white" style={{ background: c.color ?? (c.kind === "custom" ? "#64748b" : "#4a5ae8") }}>
+              <Hash className="h-4 w-4" />
             </span>
+            <button type="button" onClick={() => onOpen(c.id, false)} className="min-w-0 flex-1 text-left">
+              <span className="flex items-center gap-1.5 text-sm font-semibold text-ink">
+                {c.name}
+                {c.joined && <span className="rounded-full bg-good-soft px-1.5 py-px text-[10px] font-medium text-good-ink">参加中</span>}
+              </span>
+              <span className="block truncate text-[11px] text-ink-3">
+                メンバー {c.memberCount} 人 · メッセージ {c.messages} 件{c.topic ? ` · ${c.topic}` : ""}
+              </span>
+            </button>
+            {c.joined ? (
+              <Button type="button" size="sm" variant="secondary" onClick={() => onOpen(c.id, false)}>
+                開く
+              </Button>
+            ) : (
+              <Button type="button" size="sm" onClick={() => onOpen(c.id, true)} data-testid="chat-browse-join">
+                参加する
+              </Button>
+            )}
           </li>
         ))}
+      </ul>
+    </Modal>
+  );
+}
+
+/** メッセージを別のチャンネル・DM に共有する (転送) */
+export function ShareDialog({ dir, m, channels, onClose, onDone }: { dir: Dir; m: ChatMessageView; channels: ChatChannelView[]; onClose: () => void; onDone: (channelId: string) => void }) {
+  const targets = channels.filter((c) => c.canPost && !c.archived);
+  const [target, setTarget] = useState(targets[0]?.id ?? "");
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const submit = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await shareChatMessage(m.id, target, comment);
+      if (!r.ok) setErr(r.error ?? "共有できませんでした。");
+      else onDone(target);
+    } catch {
+      setErr("通信に失敗しました。もう一度お試しください。");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title="メッセージを共有"
+      onClose={onClose}
+      footer={
+        <>
+          <Button type="button" variant="secondary" onClick={onClose}>
+            やめる
+          </Button>
+          <Button type="button" onClick={submit} disabled={busy || !target} data-testid="chat-share-send">
+            共有する
+          </Button>
+        </>
+      }
+    >
+      {err && <ErrorLine text={err} />}
+      <label className="block">
+        <span className="mb-1 block text-xs font-medium text-ink-2">共有先 (チャンネル・DM)</span>
+        <select value={target} onChange={(e) => setTarget(e.target.value)} className="h-9 w-full rounded-xl border border-line bg-panel px-2.5 text-sm outline-none focus:border-accent">
+          {targets.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.kind === "dm" ? `DM: ${c.name}` : `# ${c.name}`}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="mt-3 block">
+        <span className="mb-1 block text-xs font-medium text-ink-2">ひとこと (任意)</span>
+        <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} maxLength={2000} className="w-full rounded-xl border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-accent" placeholder="例: これを見ておいてください" />
+      </label>
+      <div className="mt-3 rounded-xl border border-line bg-subtle/50 p-3">
+        <div className="mb-1 flex items-center gap-1.5 text-[12px] text-ink-3">
+          <UserAvatar dir={dir} id={m.userId} size={18} />
+          <span className="font-semibold text-ink">{nameOf(dir, m.userId)}</span>
+        </div>
+        <p className="line-clamp-4 text-[13px] whitespace-pre-wrap text-ink-2">{m.body.replace(/<@([^>]+)>/g, (_, id: string) => `@${nameOf(dir, id)}`).replace(/<![^>]+>/g, "@…") || "(資料・写真)"}</p>
+      </div>
+      <p className="mt-2 text-[11px] text-ink-3">共有先のメンバーに、このメッセージの写しが届きます。資料・写真は元のチャンネル・DM を見られる人だけが開けます。</p>
+    </Modal>
+  );
+}
+
+export interface SwitchItem {
+  key: string;
+  kind: "channel" | "dm" | "person";
+  label: string;
+  sub?: string;
+  id: string;
+}
+
+/** すばやく移動 (Ctrl / ⌘ + K): チャンネル・DM・社員の名前で探して開く */
+export function QuickSwitcher({ dir, channels, onClose, onPick }: { dir: Dir; channels: ChatChannelView[]; onClose: () => void; onPick: (item: SwitchItem) => void }) {
+  const [q, setQ] = useState("");
+  const [i, setI] = useState(0);
+  const items: SwitchItem[] = [
+    ...channels.map<SwitchItem>((c) => ({ key: `c:${c.id}`, kind: c.kind === "dm" ? "dm" : "channel", label: c.name, sub: c.kind === "dm" ? "DM" : c.topic, id: c.id })),
+    ...[...dir.users.values()].filter((u) => u.id !== dir.me.id).map<SwitchItem>((u) => ({ key: `p:${u.id}`, kind: "person", label: u.name, sub: [dir.stores.find((s) => s.id === u.storeId)?.name, u.title].filter(Boolean).join(" · "), id: u.id })),
+  ];
+  const shown = items
+    .map((x) => ({ x, s: matchName(q, x.label, x.kind === "person" ? dir.users.get(x.id)?.kana : "") }))
+    .filter((r) => r.s > 0)
+    .sort((a, b) => b.s - a.s || (a.x.kind === "person" ? 1 : 0) - (b.x.kind === "person" ? 1 : 0))
+    .slice(0, 12)
+    .map((r) => r.x);
+  return (
+    <Modal title="移動先を探す (Ctrl / ⌘ + K)" onClose={onClose}>
+      <input
+        value={q}
+        onChange={(e) => (setQ(e.target.value), setI(0))}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setI((x) => Math.min(shown.length - 1, x + 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setI((x) => Math.max(0, x - 1));
+          } else if (e.key === "Enter" && !e.nativeEvent.isComposing && shown[i]) {
+            e.preventDefault();
+            onPick(shown[i]);
+          }
+        }}
+        placeholder="チャンネル・DM・社員の名前"
+        className="h-10 w-full rounded-xl border border-line bg-panel px-3 text-sm outline-none focus:border-accent focus:ring-4 focus:ring-accent/15"
+        autoFocus
+        data-testid="chat-switcher-input"
+      />
+      <ul className="mt-2" role="listbox">
+        {shown.map((x, k) => (
+          <li key={x.key} role="option" aria-selected={k === i}>
+            <button type="button" onClick={() => onPick(x)} onMouseEnter={() => setI(k)} className={clsx("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left", k === i ? "bg-accent-soft" : "hover:bg-subtle")}>
+              {x.kind === "person" ? <UserAvatar dir={dir} id={x.id} size={24} presence /> : <span className="flex h-6 w-6 items-center justify-center rounded-md bg-neutral-soft text-ink-2">{x.kind === "dm" ? <MessageSquare className="h-3.5 w-3.5" /> : <Hash className="h-3.5 w-3.5" />}</span>}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-ink">{x.label}</span>
+                {x.sub && <span className="block truncate text-[11px] text-ink-3">{x.sub}</span>}
+              </span>
+              <span className="text-[10px] text-ink-3">{x.kind === "person" ? "DM を開く" : "開く"}</span>
+            </button>
+          </li>
+        ))}
+        {!shown.length && <li className="px-3 py-6 text-center text-xs text-ink-3">見つかりません</li>}
       </ul>
     </Modal>
   );

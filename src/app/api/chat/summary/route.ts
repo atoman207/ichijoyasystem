@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db/store";
 import { chatState } from "@/lib/chat/inbox";
-import { prefsOf } from "@/lib/chat/repo";
+import { prefsOf, touchPresence } from "@/lib/chat/repo";
 import { chatUser, json } from "@/lib/chat/api";
 import type { ChatSummary } from "@/lib/chat/types";
 
@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const user = await chatUser();
   if (user instanceof Response) return user;
+  touchPresence(user.id);
   const s = chatState(getDb(), user, { withLists: false });
   return json<ChatSummary>({ ...s.counts, prefs: prefsOf(user.id) });
 }

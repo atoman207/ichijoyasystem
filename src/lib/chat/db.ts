@@ -22,6 +22,8 @@ import path from "node:path";
  *   channel_prefs (チャンネルごとの通知)、prefs (通知音・プッシュ通知を使うか)
  *   (プッシュ通知の端末の登録は src/lib/notify/push.ts の push.sqlite。試験期間と本番で同じものを使う)
  *   uploads (送る前に預かった資料・写真)、task_links (業務依頼 → メッセージ)
+ *   pins (チャンネルのピン留め)、saves (自分の「後で見る」)、stars (スター付きのチャンネル)、presence (最後に画面を開いていた時刻 = オンライン)、
+ *   typing (入力中。数秒で消える)
  */
 
 export interface Statement {
@@ -156,7 +158,53 @@ const SCHEMA = `
     message_id text not null,
     channel_id text not null
   );
+  create table if not exists pins (
+    channel_id text not null,
+    message_id text not null,
+    user_id text not null,
+    at text not null,
+    primary key (channel_id, message_id)
+  );
+  create table if not exists saves (
+    user_id text not null,
+    message_id text not null,
+    at text not null,
+    primary key (user_id, message_id)
+  );
+  create table if not exists stars (
+    user_id text not null,
+    channel_id text not null,
+    at text not null,
+    primary key (user_id, channel_id)
+  );
+  create table if not exists presence (
+    user_id text primary key,
+    at text not null
+  );
+  create table if not exists typing (
+    user_id text not null,
+    key text not null,
+    at text not null,
+    primary key (user_id, key)
+  );
 `;
+
+/** あとから足した列 (古い chat.sqlite にも足す) */
+const COLUMNS: [table: string, column: string, ddl: string][] = [
+  // 追加したチャンネルの公開範囲: public = 社員なら誰でも探して参加できる / private = メンバーだけ
+  ["channels", "visibility", "text not null default 'private'"],
+  // スレッドの返信を「チャンネルにも送信」した
+  ["messages", "also_channel", "integer not null default 0"],
+  // 共有 (転送) したメッセージの写し { channelId, messageId, userId, body, at, files }
+  ["messages", "shared", "text"],
+];
+
+function ensureColumns(db: SqliteDb) {
+  for (const [table, column, ddl] of COLUMNS) {
+    const has = db.prepare(`pragma table_info(${table})`).all().some((r) => r.name === column);
+    if (!has) db.exec(`alter table ${table} add column ${column} ${ddl}`);
+  }
+}
 
 export function chatDb(): SqliteDb {
   const file = chatDbPath();
@@ -167,6 +215,7 @@ export function chatDb(): SqliteDb {
   const { DatabaseSync } = (process as unknown as { getBuiltinModule(id: string): SqliteModule }).getBuiltinModule("node:sqlite");
   const db = new DatabaseSync(file);
   db.exec(SCHEMA);
+  ensureColumns(db);
   g.__ichijoyaChatDb = { file, db };
   return db;
 }

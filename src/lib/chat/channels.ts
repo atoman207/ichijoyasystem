@@ -1,7 +1,7 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
 import type { Database, User } from "@/lib/db/types";
-import { canManageChatChannel, canViewChatChannel, isChatLead } from "@/lib/auth/permissions";
+import { canAddChatMembers, canManageChatChannel, canPostChatChannel, canViewChatChannel, isChatLead } from "@/lib/auth/permissions";
 import { chatDb, jsonArr, str } from "./db";
 import type { ChatChannelKind } from "./types";
 
@@ -26,6 +26,8 @@ export interface ChannelDef {
   createdBy?: string;
   createdAt?: string;
   archivedAt?: string;
+  /** 追加したチャンネルの公開範囲 (public = 社員なら誰でも探して参加できる) */
+  visibility?: "public" | "private";
 }
 
 export const ALL_CHANNEL = "all";
@@ -73,13 +75,27 @@ function rowToDef(r: Record<string, unknown>, db: Pick<Database, "users">): Chan
     createdBy: str(r.created_by),
     createdAt: str(r.created_at),
     archivedAt: str(r.archived_at),
+    visibility: r.kind === "custom" ? (r.visibility === "public" ? "public" : "private") : undefined,
   };
 }
 
-/** 追加したチャンネル・DM (自分がメンバーのものだけ) */
+/** 追加したチャンネル・DM (自分がメンバーのもの + 公開のチャンネル) */
 export function memberChannels(db: Pick<Database, "users">, userId: string): ChannelDef[] {
-  const rows = chatDb().prepare("select * from channels where members like ? order by created_at").all(`%"${userId}"%`);
-  return rows.map((r) => rowToDef(r, db)).filter((c) => c.memberIds.includes(userId));
+  const rows = chatDb().prepare("select * from channels where members like ? or (kind = 'custom' and visibility = 'public') order by created_at").all(`%"${userId}"%`);
+  return rows.map((r) => rowToDef(r, db)).filter((c) => c.memberIds.includes(userId) || c.visibility === "public");
+}
+
+/** 公開のチャンネル (チャンネルを探す。アーカイブしたものを除く) */
+export function publicChannels(db: Pick<Database, "users">): ChannelDef[] {
+  return chatDb()
+    .prepare("select * from channels where kind = 'custom' and visibility = 'public' and archived_at is null order by name")
+    .all()
+    .map((r) => rowToDef(r, db));
+}
+
+/** 自分が参加している (サイドバーに出す)。全社・店舗・店長は見られれば参加、追加したチャンネル・DM はメンバー */
+export function isJoined(userId: string, ch: ChannelDef): boolean {
+  return ch.kind === "custom" || ch.kind === "dm" ? ch.memberIds.includes(userId) : true;
 }
 
 /** チャンネル 1 つ (ない・見られないときは undefined) */
@@ -101,6 +117,14 @@ export function canView(user: User, ch: ChannelDef | undefined): ch is ChannelDe
 
 export function canManage(user: User, ch: ChannelDef): boolean {
   return canManageChatChannel(user, ch);
+}
+
+export function canPost(user: User, ch: ChannelDef | undefined): ch is ChannelDef {
+  return Boolean(ch && canPostChatChannel(user, ch));
+}
+
+export function canAddMembers(user: User, ch: ChannelDef): boolean {
+  return canAddChatMembers(user, ch);
 }
 
 /** 自分がメンバーではなく、本部・管理者として見ている店舗のチャンネル */

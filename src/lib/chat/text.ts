@@ -186,3 +186,74 @@ export function chatNavKey(p: { get(k: string): string | null } | Record<string,
   const get = (k: string) => (typeof (p as { get?: unknown }).get === "function" ? (p as { get(k: string): string | null }).get(k) : (p as Record<string, string | undefined>)[k]) ?? "";
   return ["view", "c", "t", "m", "q"].map((k) => `${k}=${get(k)}`).join("&");
 }
+
+/* ---------------- 書式 (Slack と同じ書き方: *太字* _斜体_ ~取り消し線~ `コード` ```コードのかたまり``` > 引用 ・箇条書き) ---------------- */
+
+export type Block =
+  | { kind: "para"; lines: string[] }
+  | { kind: "quote"; lines: string[] }
+  | { kind: "list"; ordered: boolean; items: string[] }
+  | { kind: "code"; text: string };
+
+const BULLET = /^\s*(?:[-*•]\s+|・\s*)(\S.*)$/;
+const ORDERED = /^\s*\d{1,3}[.)．]\s+(.*)$/;
+const QUOTE = /^\s*(?:>|＞)\s?(.*)$/;
+
+/** 本文をかたまりに分ける (コード → 引用 → 箇条書き → 段落) */
+export function blocks(body: string): Block[] {
+  const out: Block[] = [];
+  const parts = body.split("```");
+  parts.forEach((part, i) => {
+    // 奇数番目は ``` で囲まれたコード (閉じていない最後のものは文字のまま)
+    if (i % 2 === 1 && i < parts.length - 1) {
+      out.push({ kind: "code", text: part.replace(/^\n/, "").replace(/\n$/, "") });
+      return;
+    }
+    let text = i % 2 === 1 ? "```" + part : part;
+    // コードのかたまりの前後の改行 1 つは段落にしない
+    if (i > 0 && i % 2 === 0) text = text.replace(/^\n/, "");
+    if (i % 2 === 0 && i < parts.length - 2) text = text.replace(/\n$/, "");
+    if (!text && i > 0) return;
+    for (const line of text.split("\n")) {
+      const last = out[out.length - 1];
+      const q = line.match(QUOTE);
+      const b = line.match(BULLET);
+      const o = line.match(ORDERED);
+      if (q) {
+        if (last?.kind === "quote") last.lines.push(q[1]);
+        else out.push({ kind: "quote", lines: [q[1]] });
+      } else if (b || o) {
+        const ordered = Boolean(o && !b);
+        const item = (b ?? o)![1];
+        if (last?.kind === "list" && last.ordered === ordered) last.items.push(item);
+        else out.push({ kind: "list", ordered, items: [item] });
+      } else if (last?.kind === "para") last.lines.push(line);
+      else out.push({ kind: "para", lines: [line] });
+    }
+  });
+  // 前後の空の段落を除く
+  return out.filter((b, i) => !(b.kind === "para" && b.lines.every((l) => !l.trim()) && (i === 0 || i === out.length - 1)));
+}
+
+export type Inline = { text: string; bold?: boolean; italic?: boolean; strike?: boolean; code?: boolean };
+
+// 後読み (?<=) は古い iPhone の Safari で読めないため使わない。斜体の前の文字は (前の文字) で受けて、文字として戻す
+const INLINE_RE = /`([^`\n]+)`|\*([^*\n]+)\*|(^|[\s(（「『、。])_([^_\n]+)_(?=$|[\s)）」』、。!?！？])|~([^~\n]+)~/g;
+
+/** 1 行の中の書式 (コード・太字・斜体・取り消し線)。入れ子は 1 段だけ */
+export function inlines(text: string): Inline[] {
+  const out: Inline[] = [];
+  let last = 0;
+  for (const m of text.matchAll(INLINE_RE)) {
+    const at = m.index ?? 0;
+    const lead = m[3] ?? "";
+    if (at + lead.length > last) out.push({ text: text.slice(last, at) + lead });
+    if (m[1] !== undefined) out.push({ text: m[1], code: true });
+    else if (m[2] !== undefined) out.push({ text: m[2], bold: true });
+    else if (m[4] !== undefined) out.push({ text: m[4], italic: true });
+    else if (m[5] !== undefined) out.push({ text: m[5], strike: true });
+    last = at + m[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last) });
+  return out.filter((x) => x.text);
+}

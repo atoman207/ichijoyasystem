@@ -4,11 +4,12 @@ import { addAudit, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Database, User } from "@/lib/db/types";
 import { canCreateChatChannel, canDeleteChatMessage, canSendImportantChat, canViewThread, isChatLead } from "@/lib/auth/permissions";
 import { removeObjects } from "@/lib/storage";
-import { canManage, canView, directId, dmName, findChannel, newChannelId, storeChannelName, viewersOf, type ChannelDef } from "@/lib/chat/channels";
-import { ack, archiveChannel, ensureChannel, findGroupDm, findUploads, getMessage, insertMessage, markRead, notifyFor, prefsOf, setChannelNotify, setPrefs, setReminded, softDelete, toViews, toggleReaction, updateBody, upsertChannel, type RawMessage, channelNotify } from "@/lib/chat/repo";
+import { canAddMembers, canManage, canPost, canView, directId, dmName, findChannel, newChannelId, storeChannelName, viewersOf, type ChannelDef } from "@/lib/chat/channels";
+import { ack, archiveChannel, ensureChannel, findGroupDm, findUploads, getMessage, insertMessage, markRead, markUnreadFrom, notifyFor, prefsOf, setChannelNotify, setMembers, setPin, setPrefs, setReminded, setSaved, setStar, setTyping, softDelete, toViews, toggleReaction, updateBody, upsertChannel, type RawMessage, channelNotify } from "@/lib/chat/repo";
+import { ALL_EMOJI } from "@/lib/chat/emoji";
 import { caseNumbers, encodeMentions, parseMentions, preview, type MentionCtx } from "@/lib/chat/text";
 import { createChatTask, ChatTaskError } from "@/lib/chat/tasks";
-import { CHAT_MAX_BODY, CHAT_MAX_FILES, CHAT_REACTIONS, DM_MAX_MEMBERS, type ActionResult, type ChatLink, type ChatMessageView, type ChatPrefs, type ChatTaskInput, type NotifyLevel } from "@/lib/chat/types";
+import { CHAT_MAX_BODY, CHAT_MAX_FILES, DM_MAX_MEMBERS, type ActionResult, type ChatLink, type ChatMessageView, type ChatPrefs, type ChatTaskInput, type NotifyLevel, type SharedMessage } from "@/lib/chat/types";
 import { pushLater, pushToUsers, type PushPayload } from "@/lib/notify/push";
 import { requireActionUser } from "./guards";
 
@@ -75,7 +76,7 @@ function messagePushes(db: Database, ch: ChannelDef, m: RawMessage, sender: User
   for (const v of viewersOf(db, ch)) {
     if (v.id === sender.id || skip.has(v.id)) continue;
     if (mention.has(v.id) || recipients.has(v.id)) priority.push(v.id);
-    else if (m.parentId) {
+    else if (m.parentId && !m.alsoChannel) {
       if (participants.has(v.id) && (root?.userId === v.id || notifyFor(v.id, ch, channelNotify(v.id)) === "all")) normal.push(v.id);
     } else if (notifyFor(v.id, ch, channelNotify(v.id)) === "all") normal.push(v.id);
   }
@@ -97,6 +98,8 @@ function messagePushes(db: Database, ch: ChannelDef, m: RawMessage, sender: User
 export interface SendInput {
   channelId: string;
   parentId?: string;
+  /** スレッドの返信を「チャンネルにも送信」する */
+  alsoChannel?: boolean;
   body: string;
   important?: boolean;
   uploadIds?: string[];
@@ -110,6 +113,7 @@ export async function sendChatMessage(input: SendInput): Promise<ActionResult<{ 
   const db = getDb();
   const ch = findChannel(db, String(input.channelId ?? ""));
   if (!canView(user, ch)) return fail("このチャンネルに送る権限がありません。");
+  if (!canPost(user, ch)) return fail("このチャンネルに参加してから送ってください (「チャンネルに参加」)。");
   if (ch.archivedAt) return fail("アーカイブしたチャンネルには送れません。");
   const ctx = mentionCtx(db, user);
   const raw = String(input.body ?? "").replace(/\r\n/g, "\n").trim();
@@ -157,6 +161,7 @@ export async function sendChatMessage(input: SendInput): Promise<ActionResult<{ 
     files: uploads.map((u) => ({ ...u.file, access: managersOnly.some((x) => x.id === u.id) ? "managers" : "members" })),
     links: caseLinks(db, body),
     uploadIds: uploads.map((u) => u.id),
+    alsoChannel: Boolean(parentId && input.alsoChannel),
   });
   let taskError: string | undefined;
   let taskAssignees = new Set<string>();
@@ -216,7 +221,7 @@ export async function deleteChatMessage(id: string): Promise<ActionResult> {
 
 export async function reactChatMessage(id: string, emoji: string): Promise<ActionResult<{ on: boolean }>> {
   const user = await requireActionUser();
-  if (!(CHAT_REACTIONS as readonly string[]).includes(emoji)) return fail("使えない絵文字です。");
+  if (!ALL_EMOJI.includes(emoji)) return fail("使えない絵文字です。");
   const m = getMessage(String(id));
   if (!m || m.deletedAt) return fail("メッセージが見つかりません。");
   if (!canView(user, findChannel(getDb(), m.channelId))) return fail("このメッセージを見る権限がありません。");
@@ -355,23 +360,25 @@ export async function openDirect(memberIds: string[]): Promise<ActionResult<{ ch
 
 const NAME_MAX = 40;
 
-export async function createChatChannel(input: { name: string; topic?: string; memberIds: string[] }): Promise<ActionResult<{ channelId: string }>> {
+export async function createChatChannel(input: { name: string; topic?: string; memberIds: string[]; visibility?: "public" | "private" }): Promise<ActionResult<{ channelId: string }>> {
   const user = await requireActionUser();
-  if (!canCreateChatChannel(user)) return fail("チャンネルを追加できるのは管理者・本部・店長です。");
+  if (!canCreateChatChannel(user)) return fail("チャンネルを追加する権限がありません。");
   const db = getDb();
   const name = String(input?.name ?? "").replace(/^#/, "").trim();
   if (!name) return fail("チャンネルの名前を入力してください。");
   if (name.length > NAME_MAX) return fail(`名前は ${NAME_MAX} 文字までです。`);
+  const visibility = input.visibility === "public" ? "public" : "private";
   const members = [...new Set([user.id, ...cleanMembers(db, input.memberIds ?? [])])];
-  if (members.length < 2) return fail("メンバーを 1 人以上選んでください。");
+  // 公開のチャンネルは自分だけで作ってもよい (ほかの社員はあとから参加する)。非公開はメンバーを選ぶ
+  if (visibility === "private" && members.length < 2) return fail("非公開のチャンネルはメンバーを 1 人以上選んでください。");
   const id = newChannelId("c");
   const topic = String(input.topic ?? "").trim().slice(0, 200);
-  upsertChannel({ id, kind: "custom", name, topic, members, createdBy: user.id, at: nowIso() });
-  await mutate((d) => addAudit(d, { userId: user.id, action: "create", entity: "chat_channel", entityId: id, entityLabel: `#${name}`, summary: `チャットのチャンネルを追加 (#${name} / メンバー ${members.length} 人)` })).catch((err) => console.warn("[chat] audit failed:", (err as Error).message));
+  upsertChannel({ id, kind: "custom", name, topic, members, createdBy: user.id, at: nowIso(), visibility });
+  await mutate((d) => addAudit(d, { userId: user.id, action: "create", entity: "chat_channel", entityId: id, entityLabel: `#${name}`, summary: `チャットのチャンネルを追加 (#${name} / ${visibility === "public" ? "公開" : "非公開"} / メンバー ${members.length} 人)` })).catch((err) => console.warn("[chat] audit failed:", (err as Error).message));
   return { ok: true, data: { channelId: id } };
 }
 
-export async function updateChatChannel(id: string, input: { name: string; topic?: string; memberIds: string[] }): Promise<ActionResult> {
+export async function updateChatChannel(id: string, input: { name: string; topic?: string; memberIds: string[]; visibility?: "public" | "private" }): Promise<ActionResult> {
   const user = await requireActionUser();
   const db = getDb();
   const ch = findChannel(db, String(id));
@@ -381,9 +388,10 @@ export async function updateChatChannel(id: string, input: { name: string; topic
   if (name.length > NAME_MAX) return fail(`名前は ${NAME_MAX} 文字までです。`);
   // 変更した人と作成した人はメンバーに残す (抜けるときは「チャンネルから抜ける」)
   const members = [...new Set([user.id, ...cleanMembers(db, [...(ch.createdBy ? [ch.createdBy] : []), ...(input.memberIds ?? [])])])];
-  if (members.length < 2) return fail("メンバーを 1 人以上選んでください。");
+  const visibility = input.visibility === "public" || (input.visibility === undefined && ch.visibility === "public") ? "public" : "private";
+  if (visibility === "private" && members.length < 2) return fail("非公開のチャンネルはメンバーを 1 人以上選んでください。");
   const topic = String(input.topic ?? "").trim().slice(0, 200);
-  upsertChannel({ id: ch.id, kind: "custom", name, topic, members, createdBy: ch.createdBy ?? user.id, at: nowIso() });
+  upsertChannel({ id: ch.id, kind: "custom", name, topic, members, createdBy: ch.createdBy ?? user.id, at: nowIso(), visibility });
   const nameOf = (x: string) => db.users.find((u) => u.id === x)?.name ?? x;
   const added = members.filter((x) => !ch.memberIds.includes(x)).map(nameOf);
   const removed = ch.memberIds.filter((x) => !members.includes(x)).map(nameOf);
@@ -398,6 +406,7 @@ export async function updateChatChannel(id: string, input: { name: string; topic
       changes: [
         ...(ch.name !== name ? [{ field: "name", before: ch.name, after: name }] : []),
         ...((ch.topic ?? "") !== topic ? [{ field: "topic", before: ch.topic ?? "", after: topic }] : []),
+        ...((ch.visibility ?? "private") !== visibility ? [{ field: "visibility", before: ch.visibility === "public" ? "公開" : "非公開", after: visibility === "public" ? "公開" : "非公開" }] : []),
         ...(added.length || removed.length ? [{ field: "members", before: removed.length ? `外した: ${removed.join("・")}` : "", after: added.length ? `追加: ${added.join("・")}` : "" }] : []),
       ],
     }),
@@ -409,7 +418,7 @@ export async function archiveChatChannel(id: string, archived: boolean): Promise
   const user = await requireActionUser();
   const db = getDb();
   const ch = findChannel(db, String(id));
-  if (!ch || ch.kind !== "custom" || !ch.memberIds.includes(user.id) || !canManage(user, ch)) return fail("このチャンネルをアーカイブする権限がありません。");
+  if (!ch || ch.kind !== "custom" || !canManage(user, ch)) return fail("このチャンネルをアーカイブする権限がありません (作成した人・管理者)。");
   archiveChannel(ch.id, nowIso(), Boolean(archived));
   await mutate((d) => addAudit(d, { userId: user.id, action: "status", entity: "chat_channel", entityId: ch.id, entityLabel: `#${ch.name}`, summary: `チャットのチャンネルを${archived ? "アーカイブ" : "元に戻す"} (#${ch.name})`, changes: [{ field: "archived", before: archived ? "使用中" : "アーカイブ", after: archived ? "アーカイブ" : "使用中" }] })).catch((err) => console.warn("[chat] audit failed:", (err as Error).message));
   return { ok: true };
@@ -423,7 +432,128 @@ export async function leaveChatChannel(id: string): Promise<ActionResult> {
   if (!ch || ch.kind !== "custom" || !ch.memberIds.includes(user.id)) return fail("このチャンネルから抜けられません。");
   if (ch.createdBy === user.id) return fail("作成した人はチャンネルから抜けられません。使わなくなったときはアーカイブしてください。");
   const members = ch.memberIds.filter((x) => x !== user.id);
-  upsertChannel({ id: ch.id, kind: "custom", name: ch.name, topic: ch.topic, members, createdBy: ch.createdBy ?? user.id, at: nowIso() });
+  setMembers(ch.id, members, nowIso());
   await mutate((d) => addAudit(d, { userId: user.id, action: "update", entity: "chat_channel", entityId: ch.id, entityLabel: `#${ch.name}`, summary: `チャットのチャンネルから抜けた (#${ch.name})`, changes: [{ field: "members", before: `外した: ${user.name}`, after: "" }] })).catch((err) => console.warn("[chat] audit failed:", (err as Error).message));
   return { ok: true };
+}
+
+/** 公開のチャンネルに参加する */
+export async function joinChatChannel(id: string): Promise<ActionResult> {
+  const user = await requireActionUser();
+  const db = getDb();
+  const ch = findChannel(db, String(id));
+  if (!ch || ch.kind !== "custom" || ch.visibility !== "public" || ch.archivedAt) return fail("参加できるチャンネルが見つかりません。");
+  if (!ch.memberIds.includes(user.id)) setMembers(ch.id, [...ch.memberIds, user.id], nowIso());
+  return { ok: true };
+}
+
+/** メンバーを追加する (そのチャンネルのメンバーなら誰でも) */
+export async function addChatMembers(id: string, memberIds: string[]): Promise<ActionResult<{ added: number }>> {
+  const user = await requireActionUser();
+  const db = getDb();
+  const ch = findChannel(db, String(id));
+  if (!ch || !canAddMembers(user, ch)) return fail("このチャンネルにメンバーを追加する権限がありません (メンバーになってから追加できます)。");
+  if (ch.archivedAt) return fail("アーカイブしたチャンネルです。");
+  const add = cleanMembers(db, memberIds ?? []).filter((x) => !ch.memberIds.includes(x));
+  if (!add.length) return fail("追加する社員を選んでください。");
+  setMembers(ch.id, [...ch.memberIds, ...add], nowIso());
+  const names = add.map((x) => db.users.find((u) => u.id === x)?.name ?? x);
+  await mutate((d) => addAudit(d, { userId: user.id, action: "update", entity: "chat_channel", entityId: ch.id, entityLabel: `#${ch.name}`, summary: `チャットのチャンネルにメンバーを追加 (#${ch.name})`, changes: [{ field: "members", before: "", after: `追加: ${names.join("・")}` }] })).catch((err) => console.warn("[chat] audit failed:", (err as Error).message));
+  return { ok: true, data: { added: add.length } };
+}
+
+/** メンバーを外す (作成した人・管理者。作成した人は外せない) */
+export async function removeChatMember(id: string, memberId: string): Promise<ActionResult> {
+  const user = await requireActionUser();
+  const db = getDb();
+  const ch = findChannel(db, String(id));
+  if (!ch || ch.kind !== "custom" || !canManage(user, ch)) return fail("メンバーを外せるのは、チャンネルを作成した人と管理者です。");
+  if (memberId === ch.createdBy) return fail("チャンネルを作成した人は外せません。");
+  if (!ch.memberIds.includes(memberId)) return fail("メンバーではありません。");
+  setMembers(ch.id, ch.memberIds.filter((x) => x !== memberId), nowIso());
+  const name = db.users.find((u) => u.id === memberId)?.name ?? memberId;
+  await mutate((d) => addAudit(d, { userId: user.id, action: "update", entity: "chat_channel", entityId: ch.id, entityLabel: `#${ch.name}`, summary: `チャットのチャンネルのメンバーを外した (#${ch.name})`, changes: [{ field: "members", before: `外した: ${name}`, after: "" }] })).catch((err) => console.warn("[chat] audit failed:", (err as Error).message));
+  return { ok: true };
+}
+
+/** ピン留め (チャンネルのメンバーなら誰でも。Slack と同じ) */
+export async function pinChatMessage(id: string, on: boolean): Promise<ActionResult> {
+  const user = await requireActionUser();
+  const m = getMessage(String(id));
+  if (!m || m.deletedAt) return fail("メッセージが見つかりません。");
+  const ch = findChannel(getDb(), m.channelId);
+  if (!canPost(user, ch)) return fail("このチャンネルのメンバーがピン留めできます。");
+  setPin(ch.id, m.id, user.id, Boolean(on), nowIso());
+  return { ok: true };
+}
+
+/** 後で見る (自分だけ) */
+export async function saveChatMessage(id: string, on: boolean): Promise<ActionResult> {
+  const user = await requireActionUser();
+  const m = getMessage(String(id));
+  if (!m || m.deletedAt) return fail("メッセージが見つかりません。");
+  if (!canView(user, findChannel(getDb(), m.channelId))) return fail("このメッセージを見る権限がありません。");
+  setSaved(user.id, m.id, Boolean(on), nowIso());
+  return { ok: true };
+}
+
+/** ここから未読にする */
+export async function markChatUnread(id: string): Promise<ActionResult> {
+  const user = await requireActionUser();
+  const m = getMessage(String(id));
+  if (!m || m.deletedAt) return fail("メッセージが見つかりません。");
+  if (!canView(user, findChannel(getDb(), m.channelId))) return fail("このメッセージを見る権限がありません。");
+  markUnreadFrom(user.id, m.parentId && !m.alsoChannel ? `t:${m.parentId}` : m.channelId, m.at);
+  return { ok: true };
+}
+
+/** スター (自分の一覧の上に出す) */
+export async function starChatChannel(id: string, on: boolean): Promise<ActionResult> {
+  const user = await requireActionUser();
+  if (!canView(user, findChannel(getDb(), String(id)))) return fail("チャンネルが見つかりません。");
+  setStar(user.id, String(id), Boolean(on), nowIso());
+  return { ok: true };
+}
+
+/** 入力中 (画面が数秒ごとに知らせる) */
+export async function chatTyping(channelId: string, parentId?: string): Promise<ActionResult> {
+  const user = await requireActionUser();
+  const ch = findChannel(getDb(), String(channelId));
+  if (!canPost(user, ch)) return { ok: false };
+  setTyping(user.id, parentId ? `t:${parentId}` : ch.id);
+  return { ok: true };
+}
+
+/** メッセージを別のチャンネル・DM に共有する (転送。元のメッセージを見られる人が、送れるところに) */
+export async function shareChatMessage(id: string, targetId: string, comment: string): Promise<ActionResult<{ message: ChatMessageView }>> {
+  const user = await requireActionUser();
+  const db = getDb();
+  const m = getMessage(String(id));
+  if (!m || m.deletedAt) return fail("メッセージが見つかりません。");
+  const src = findChannel(db, m.channelId);
+  if (!canView(user, src)) return fail("このメッセージを見る権限がありません。");
+  const target = findChannel(db, String(targetId));
+  if (!canPost(user, target)) return fail("共有先に送る権限がありません (参加しているチャンネル・DM を選んでください)。");
+  if (target.archivedAt) return fail("アーカイブしたチャンネルには送れません。");
+  const raw = String(comment ?? "").replace(/\r\n/g, "\n").trim();
+  if (raw.length > CHAT_MAX_BODY) return fail(`本文は ${CHAT_MAX_BODY.toLocaleString()} 文字までです。`);
+  const ctx = mentionCtx(db, user);
+  if (!ctx.allowAll && ALL_TEXT.test(raw)) return fail("@全員 を使えるのは管理者・本部・店長です。");
+  const body = encodeMentions(raw, ctx);
+  const p = parseMentions(body);
+  const shared: SharedMessage = {
+    channelId: src.id,
+    channelName: src.kind === "dm" ? "DM" : src.name,
+    messageId: m.id,
+    parentId: m.parentId,
+    userId: m.userId,
+    body: m.body,
+    at: m.at,
+    links: m.links,
+    fileNames: m.files.map((f) => f.name),
+  };
+  const mentionIds = mentionTargets(db, target, body, user.id);
+  const msg = insertMessage({ id: newId("cm"), channel: target, userId: user.id, body, at: nowIso(), important: false, recipients: [], mentionAll: p.all, mentionIds, files: [], links: caseLinks(db, body), uploadIds: [], shared });
+  pushLater(messagePushes(db, target, { ...msg, body: body || `共有: ${preview(m.body, { users: ctx.users, stores: ctx.stores }, 120)}` }, user, mentionIds, new Set()));
+  return { ok: true, data: { message: toViews(user, [msg], db)[0] } };
 }

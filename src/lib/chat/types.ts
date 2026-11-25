@@ -59,6 +59,33 @@ export interface ChatChannelView {
   canManage: boolean;
   archived?: boolean;
   createdBy?: string;
+  createdAt?: string;
+  /** 追加したチャンネルの公開範囲: public = 社員なら誰でも探して参加できる / private = メンバーだけ */
+  visibility?: "public" | "private";
+  /** 自分がメンバー (追加したチャンネルで参加していないときは見るだけ) */
+  joined: boolean;
+  /** 送れる (追加したチャンネルはメンバーだけ) */
+  canPost: boolean;
+  /** メンバーを追加できる (追加したチャンネルのメンバー) */
+  canAddMembers: boolean;
+  /** スター付き (自分の一覧の上に出す) */
+  starred: boolean;
+  /** ピン留めしたメッセージの数 */
+  pinCount: number;
+}
+
+/** 共有 (転送) したメッセージの写し */
+export interface SharedMessage {
+  channelId: string;
+  channelName: string;
+  messageId: string;
+  parentId?: string;
+  userId: string;
+  body: string;
+  at: string;
+  links: ChatLink[];
+  /** 元のメッセージの資料・写真の名前 (開くのは元のチャンネルを見られる人だけ) */
+  fileNames: string[];
 }
 
 export interface ChatFile {
@@ -132,6 +159,16 @@ export interface ChatMessageView {
   task?: ChatTaskInfo;
   links: ChatLink[];
   rev: number;
+  /** ピン留めした人 */
+  pinnedBy?: string;
+  /** 自分が「後で見る」に保存した */
+  saved?: boolean;
+  /** スレッドの返信を「チャンネルにも送信」した */
+  alsoChannel?: boolean;
+  /** チャンネルにも送信した返信の、スレッドの最初のメッセージ (要約) */
+  root?: { id: string; userId: string; body: string };
+  /** 共有 (転送) したメッセージ */
+  shared?: SharedMessage;
 }
 
 export type InboxKind = "task" | "report" | "important" | "mention" | "thread_mention";
@@ -196,6 +233,11 @@ export interface ChatSyncResponse {
   replies: ChatMessageView[];
   /** 開いているチャンネルの業務依頼の状態 (メッセージの task を新しくする) */
   tasks: Record<string, ChatTaskInfo>;
+  /** 開いているチャンネル・スレッドで入力中の人 */
+  typing: string[];
+  threadTyping: string[];
+  /** オンライン (いま画面を開いている) の社員 */
+  online: string[];
 }
 
 export interface ChatBootstrap {
@@ -234,5 +276,5 @@ export const CHAT_MAX_FILES = 10;
 export const CHAT_MAX_FILE_BYTES = 9 * 1024 * 1024;
 /** 本文の長さ */
 export const CHAT_MAX_BODY = 8000;
-/** リアクションに使える絵文字 */
+/** メッセージの上にすぐ出すリアクション (ほかは絵文字の一覧から。src/lib/chat/emoji.ts) */
 export const CHAT_REACTIONS = ["👍", "✅", "🙏", "😊", "🎉", "👀", "😢", "❗"] as const;

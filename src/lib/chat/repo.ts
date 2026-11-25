@@ -3,7 +3,7 @@ import type { Database, User } from "@/lib/db/types";
 import { canViewChatFile, isChatLead } from "@/lib/auth/permissions";
 import { chatDb, jsonArr, nextRev, str, tx, type SqliteDb } from "./db";
 import { parseMentions } from "./text";
-import type { ChatAckInfo, ChatFile, ChatLink, ChatMessageView, ChatPrefs, ChatReaction, ChatTaskInfo, NotifyLevel } from "./types";
+import type { ChatAckInfo, ChatFile, ChatLink, ChatMessageView, ChatPrefs, ChatReaction, ChatTaskInfo, NotifyLevel, SharedMessage } from "./types";
 import type { ChannelDef } from "./channels";
 
 /**
@@ -38,6 +38,19 @@ export interface RawMessage {
   replyUsers: string[];
   remindedAt?: string;
   rev: number;
+  /** スレッドの返信を「チャンネルにも送信」した */
+  alsoChannel: boolean;
+  /** 共有 (転送) したメッセージの写し */
+  shared?: SharedMessage;
+}
+
+function parseShared(v: unknown): SharedMessage | undefined {
+  if (typeof v !== "string" || !v) return undefined;
+  try {
+    return JSON.parse(v) as SharedMessage;
+  } catch {
+    return undefined;
+  }
 }
 
 export function rowToMessage(r: Record<string, unknown>): RawMessage {
@@ -62,8 +75,13 @@ export function rowToMessage(r: Record<string, unknown>): RawMessage {
     replyUsers: jsonArr<string>(r.reply_users),
     remindedAt: str(r.reminded_at),
     rev: Number(r.rev ?? 0),
+    alsoChannel: Number(r.also_channel ?? 0) === 1,
+    shared: parseShared(r.shared),
   };
 }
+
+/** チャンネルの流れに出すメッセージ (スレッドの返信は「チャンネルにも送信」したものだけ) */
+const IN_CHANNEL = "(parent_id is null or also_channel = 1)";
 
 export function getMessage(id: string): RawMessage | undefined {
   const r = chatDb().prepare("select * from messages where id = ?").get(id);
@@ -78,16 +96,16 @@ const PAGE = 50;
 export function channelMessages(channelId: string, opts: { before?: string; limit?: number } = {}): { rows: RawMessage[]; hasMore: boolean } {
   const limit = Math.min(Math.max(opts.limit ?? PAGE, 1), 200);
   const rows = opts.before
-    ? chatDb().prepare("select * from messages where channel_id = ? and parent_id is null and at < ? order by at desc, id desc limit ?").all(channelId, opts.before, limit + 1)
-    : chatDb().prepare("select * from messages where channel_id = ? and parent_id is null order by at desc, id desc limit ?").all(channelId, limit + 1);
+    ? chatDb().prepare(`select * from messages where channel_id = ? and ${IN_CHANNEL} and at < ? order by at desc, id desc limit ?`).all(channelId, opts.before, limit + 1)
+    : chatDb().prepare(`select * from messages where channel_id = ? and ${IN_CHANNEL} order by at desc, id desc limit ?`).all(channelId, limit + 1);
   const hasMore = rows.length > limit;
   return { rows: rows.slice(0, limit).map(rowToMessage).reverse(), hasMore };
 }
 
 /** あるメッセージの前後 (検索・要対応から開いたとき) */
 export function messagesAround(channelId: string, at: string, span = 25): { rows: RawMessage[]; hasMore: boolean } {
-  const before = chatDb().prepare("select * from messages where channel_id = ? and parent_id is null and at < ? order by at desc, id desc limit ?").all(channelId, at, span + 1);
-  const after = chatDb().prepare("select * from messages where channel_id = ? and parent_id is null and at >= ? order by at, id limit ?").all(channelId, at, span * 4);
+  const before = chatDb().prepare(`select * from messages where channel_id = ? and ${IN_CHANNEL} and at < ? order by at desc, id desc limit ?`).all(channelId, at, span + 1);
+  const after = chatDb().prepare(`select * from messages where channel_id = ? and ${IN_CHANNEL} and at >= ? order by at, id limit ?`).all(channelId, at, span * 4);
   return { rows: [...before.slice(0, span).reverse(), ...after].map(rowToMessage), hasMore: before.length > span };
 }
 
@@ -99,7 +117,7 @@ export function replies(parentId: string): RawMessage[] {
 /** rev より後に変わったメッセージ (開いているチャンネルのスレッドの返信を除く行・開いているスレッドの返信) */
 export function changedSince(channelId: string, rev: number, threadId?: string): { messages: RawMessage[]; replies: RawMessage[] } {
   const db = chatDb();
-  const messages = db.prepare("select * from messages where channel_id = ? and rev > ? and parent_id is null order by at, id limit 300").all(channelId, rev).map(rowToMessage);
+  const messages = db.prepare(`select * from messages where channel_id = ? and rev > ? and ${IN_CHANNEL} order by at, id limit 300`).all(channelId, rev).map(rowToMessage);
   const reps = threadId ? db.prepare("select * from messages where parent_id = ? and rev > ? order by at, id limit 300").all(threadId, rev).map(rowToMessage) : [];
   return { messages, replies: reps };
 }
@@ -111,16 +129,16 @@ export function channelFiles(channelId: string, limit = 200): { message: RawMess
 }
 
 /** 本文の検索 (見られるチャンネルの中だけ。新しい順) */
-export function searchMessages(channelIds: string[], q: string, limit = 60): RawMessage[] {
+export function searchMessages(channelIds: string[], q: string, limit = 60, fromId?: string): RawMessage[] {
   const words = q.trim().split(/[\s　]+/).filter(Boolean).slice(0, 5);
-  if (!words.length || !channelIds.length) return [];
+  if ((!words.length && !fromId) || !channelIds.length) return [];
   const where = words.map(() => "(body like ? escape '\\' or files like ? escape '\\')").join(" and ");
   const esc = (w: string) => `%${w.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
   const params = words.flatMap((w) => [esc(w), esc(w)]);
   const ph = channelIds.map(() => "?").join(",");
   return chatDb()
-    .prepare(`select * from messages where deleted_at is null and channel_id in (${ph}) and ${where} order by at desc limit ?`)
-    .all(...channelIds, ...params, limit)
+    .prepare(`select * from messages where deleted_at is null and channel_id in (${ph})${where ? ` and ${where}` : ""}${fromId ? " and user_id = ?" : ""} order by at desc limit ?`)
+    .all(...channelIds, ...params, ...(fromId ? [fromId] : []), limit)
     .map(rowToMessage);
 }
 
@@ -177,6 +195,11 @@ export function toViews(user: User, rows: RawMessage[], db: Pick<Database, "thre
   const ids = rows.map((r) => r.id);
   const reactions = reactionsOf(sql, ids);
   const acks = acksOf(sql, rows.filter((r) => r.important).map((r) => r.id));
+  const ph = ids.map(() => "?").join(",");
+  const pins = new Map(sql.prepare(`select message_id, user_id from pins where message_id in (${ph})`).all(...ids).map((r) => [String(r.message_id), String(r.user_id)]));
+  const saved = new Set(sql.prepare(`select message_id from saves where user_id = ? and message_id in (${ph})`).all(user.id, ...ids).map((r) => String(r.message_id)));
+  const rootIds = [...new Set(rows.filter((r) => r.alsoChannel && r.parentId).map((r) => r.parentId!))];
+  const roots = new Map(rootIds.length ? sql.prepare(`select id, user_id, body, deleted_at from messages where id in (${rootIds.map(() => "?").join(",")})`).all(...rootIds).map((r) => [String(r.id), { id: String(r.id), userId: String(r.user_id), body: r.deleted_at ? "" : String(r.body ?? "") }]) : []);
   const today = new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
   return rows.map((m) => {
     const deleted = Boolean(m.deletedAt);
@@ -218,6 +241,11 @@ export function toViews(user: User, rows: RawMessage[], db: Pick<Database, "thre
       task: deleted ? undefined : taskInfo(db, m.taskThreadId, today),
       links: deleted ? [] : m.links,
       rev: m.rev,
+      pinnedBy: deleted ? undefined : pins.get(m.id),
+      saved: saved.has(m.id) || undefined,
+      alsoChannel: m.alsoChannel || undefined,
+      root: m.alsoChannel && m.parentId ? roots.get(m.parentId) : undefined,
+      shared: deleted ? undefined : m.shared,
     };
   });
 }
@@ -239,6 +267,8 @@ export interface NewMessage {
   files: StoredFile[];
   links: ChatLink[];
   uploadIds: string[];
+  alsoChannel?: boolean;
+  shared?: SharedMessage;
 }
 
 export function insertMessage(m: NewMessage): RawMessage {
@@ -250,9 +280,9 @@ export function insertMessage(m: NewMessage): RawMessage {
       db.prepare("update messages set reply_count = reply_count + 1, last_reply_at = ?, reply_users = ?, rev = ? where id = ?").run(m.at, JSON.stringify(users), rev, m.parentId);
     }
     db.prepare(
-      `insert into messages (id, channel_id, parent_id, user_id, body, at, important, recipients, mention_all, files, links, rev)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(m.id, m.channel.id, m.parentId ?? null, m.userId, m.body, m.at, m.important ? 1 : 0, JSON.stringify(m.recipients), m.mentionAll ? 1 : 0, JSON.stringify(m.files), JSON.stringify(m.links), rev);
+      `insert into messages (id, channel_id, parent_id, user_id, body, at, important, recipients, mention_all, files, links, rev, also_channel, shared)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(m.id, m.channel.id, m.parentId ?? null, m.userId, m.body, m.at, m.important ? 1 : 0, JSON.stringify(m.recipients), m.mentionAll ? 1 : 0, JSON.stringify(m.files), JSON.stringify(m.links), rev, m.alsoChannel && m.parentId ? 1 : 0, m.shared ? JSON.stringify(m.shared) : null);
     const ins = db.prepare("insert or ignore into mentions (message_id, user_id, channel_id, at) values (?, ?, ?, ?)");
     for (const uid of m.mentionIds) ins.run(m.id, uid, m.channel.id, m.at);
     if (m.uploadIds.length) {
@@ -261,6 +291,7 @@ export function insertMessage(m: NewMessage): RawMessage {
     }
     // 送った人は自分のメッセージまで既読
     markReadIn(db, m.userId, m.parentId ? `t:${m.parentId}` : m.channel.id, m.at);
+    if (m.parentId && m.alsoChannel) markReadIn(db, m.userId, m.channel.id, m.at);
     if (m.channel.kind === "dm" || m.channel.kind === "custom") db.prepare("update channels set updated_at = ?, rev = ? where id = ?").run(m.at, rev, m.channel.id);
     return rowToMessage(db.prepare("select * from messages where id = ?").get(m.id)!);
   });
@@ -283,7 +314,8 @@ export function softDelete(id: string, by: string, at: string): RawMessage {
   return tx((db) => {
     const rev = nextRev(db);
     const m = rowToMessage(db.prepare("select * from messages where id = ?").get(id)!);
-    db.prepare("update messages set deleted_at = ?, deleted_by = ?, body = '', files = '[]', links = '[]', important = 0, rev = ? where id = ?").run(at, by, rev, id);
+    db.prepare("update messages set deleted_at = ?, deleted_by = ?, body = '', files = '[]', links = '[]', important = 0, shared = null, rev = ? where id = ?").run(at, by, rev, id);
+    db.prepare("delete from pins where message_id = ?").run(id);
     db.prepare("delete from mentions where message_id = ?").run(id);
     db.prepare("delete from reactions where message_id = ?").run(id);
     if (m.parentId) {
@@ -416,13 +448,21 @@ export function dropUploads(ids: string[]): void {
 
 /* ---------------- チャンネル (追加したチャンネル・DM) ---------------- */
 
-export function upsertChannel(c: { id: string; kind: "custom" | "dm"; name: string; topic?: string; members: string[]; createdBy: string; at: string }): void {
+export function upsertChannel(c: { id: string; kind: "custom" | "dm"; name: string; topic?: string; members: string[]; createdBy: string; at: string; visibility?: "public" | "private" }): void {
   tx((db) => {
     const rev = nextRev(db);
     db.prepare(
-      `insert into channels (id, kind, name, topic, members, created_by, created_at, updated_at, rev) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       on conflict (id) do update set name = excluded.name, topic = excluded.topic, members = excluded.members, updated_at = excluded.updated_at, rev = excluded.rev`,
-    ).run(c.id, c.kind, c.name, c.topic ?? "", JSON.stringify(c.members), c.createdBy, c.at, c.at, rev);
+      `insert into channels (id, kind, name, topic, members, created_by, created_at, updated_at, rev, visibility) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       on conflict (id) do update set name = excluded.name, topic = excluded.topic, members = excluded.members, updated_at = excluded.updated_at, rev = excluded.rev, visibility = excluded.visibility`,
+    ).run(c.id, c.kind, c.name, c.topic ?? "", JSON.stringify(c.members), c.createdBy, c.at, c.at, rev, c.visibility === "public" ? "public" : "private");
+  });
+}
+
+/** メンバーを足す・外す (ほかの項目は変えない) */
+export function setMembers(id: string, members: string[], at: string): void {
+  tx((db) => {
+    const rev = nextRev(db);
+    db.prepare("update channels set members = ?, updated_at = ?, rev = ? where id = ?").run(JSON.stringify([...new Set(members)]), at, rev, id);
   });
 }
 
@@ -460,8 +500,8 @@ export interface ChannelStat {
 export function channelStats(userId: string, channelIds: string[], reads: Map<string, string>, since: string): Map<string, ChannelStat> {
   const db = chatDb();
   const out = new Map<string, ChannelStat>();
-  const count = db.prepare("select count(*) n from messages where channel_id = ? and parent_id is null and deleted_at is null and user_id != ? and at > ?");
-  const last = db.prepare("select user_id, body, at, files from messages where channel_id = ? and parent_id is null and deleted_at is null order by at desc limit 1");
+  const count = db.prepare(`select count(*) n from messages where channel_id = ? and ${IN_CHANNEL} and deleted_at is null and user_id != ? and at > ?`);
+  const last = db.prepare(`select user_id, body, at, files from messages where channel_id = ? and ${IN_CHANNEL} and deleted_at is null order by at desc limit 1`);
   const ment = db.prepare(
     `select count(*) n from mentions mn join messages m on m.id = mn.message_id
      where mn.user_id = ? and mn.channel_id = ? and m.deleted_at is null and m.parent_id is null and m.at > ? and m.at > ?`,
@@ -499,4 +539,95 @@ export function pendingImportant(userId: string, since: string): RawMessage[] {
     )
     .all(since, `%"${userId}"%`, userId)
     .map(rowToMessage);
+}
+
+/* ---------------- ピン留め・後で見る・スター・オンライン・入力中・未読にする ---------------- */
+
+export function setPin(channelId: string, messageId: string, userId: string, on: boolean, at: string): void {
+  tx((db) => {
+    const rev = nextRev(db);
+    if (on) db.prepare("insert or replace into pins (channel_id, message_id, user_id, at) values (?, ?, ?, ?)").run(channelId, messageId, userId, at);
+    else db.prepare("delete from pins where channel_id = ? and message_id = ?").run(channelId, messageId);
+    db.prepare("update messages set rev = ? where id = ?").run(rev, messageId);
+  });
+}
+
+export function pinCounts(channelIds: string[]): Map<string, number> {
+  if (!channelIds.length) return new Map();
+  return new Map(
+    chatDb()
+      .prepare(`select p.channel_id, count(*) n from pins p join messages m on m.id = p.message_id where m.deleted_at is null and p.channel_id in (${channelIds.map(() => "?").join(",")}) group by p.channel_id`)
+      .all(...channelIds)
+      .map((r) => [String(r.channel_id), Number(r.n)]),
+  );
+}
+
+/** チャンネルのピン留め (新しい順) */
+export function pinnedMessages(channelId: string): RawMessage[] {
+  return chatDb()
+    .prepare("select m.* from pins p join messages m on m.id = p.message_id where p.channel_id = ? and m.deleted_at is null order by p.at desc limit 100")
+    .all(channelId)
+    .map(rowToMessage);
+}
+
+export function setSaved(userId: string, messageId: string, on: boolean, at: string): void {
+  if (on) chatDb().prepare("insert or replace into saves (user_id, message_id, at) values (?, ?, ?)").run(userId, messageId, at);
+  else chatDb().prepare("delete from saves where user_id = ? and message_id = ?").run(userId, messageId);
+}
+
+/** 自分の「後で見る」(保存した順に新しいものから) */
+export function savedMessages(userId: string): RawMessage[] {
+  return chatDb()
+    .prepare("select m.* from saves s join messages m on m.id = s.message_id where s.user_id = ? and m.deleted_at is null order by s.at desc limit 200")
+    .all(userId)
+    .map(rowToMessage);
+}
+
+export function setStar(userId: string, channelId: string, on: boolean, at: string): void {
+  if (on) chatDb().prepare("insert or replace into stars (user_id, channel_id, at) values (?, ?, ?)").run(userId, channelId, at);
+  else chatDb().prepare("delete from stars where user_id = ? and channel_id = ?").run(userId, channelId);
+}
+
+export function starsOf(userId: string): Set<string> {
+  return new Set(chatDb().prepare("select channel_id from stars where user_id = ?").all(userId).map((r) => String(r.channel_id)));
+}
+
+const ONLINE_MS = 150_000;
+const gp = globalThis as typeof globalThis & { __ichijoyaChatSeen?: Map<string, number> };
+
+/** 画面を開いている印 (30 秒に 1 回まで書く) */
+export function touchPresence(userId: string): void {
+  const seen = (gp.__ichijoyaChatSeen ??= new Map());
+  const now = Date.now();
+  if (now - (seen.get(userId) ?? 0) < 30_000) return;
+  seen.set(userId, now);
+  chatDb().prepare("insert into presence (user_id, at) values (?, ?) on conflict (user_id) do update set at = excluded.at").run(userId, new Date(now).toISOString());
+}
+
+/** オンライン (2 分半以内に画面を開いていた) の社員 */
+export function onlineUsers(): string[] {
+  const since = new Date(Date.now() - ONLINE_MS).toISOString();
+  return chatDb().prepare("select user_id from presence where at > ?").all(since).map((r) => String(r.user_id));
+}
+
+/** 最後に画面を開いていた時刻 */
+export function lastSeen(userIds: string[]): Map<string, string> {
+  if (!userIds.length) return new Map();
+  return new Map(chatDb().prepare(`select user_id, at from presence where user_id in (${userIds.map(() => "?").join(",")})`).all(...userIds).map((r) => [String(r.user_id), String(r.at)]));
+}
+
+/** 入力中 (key = チャンネルの ID / t:<スレッド>)。6 秒で消える */
+export function setTyping(userId: string, key: string): void {
+  chatDb().prepare("insert into typing (user_id, key, at) values (?, ?, ?) on conflict (user_id, key) do update set at = excluded.at").run(userId, key, new Date().toISOString());
+}
+
+export function typingIn(key: string, exceptId: string): string[] {
+  const since = new Date(Date.now() - 6_000).toISOString();
+  return chatDb().prepare("select user_id from typing where key = ? and at > ? and user_id != ?").all(key, since, exceptId).map((r) => String(r.user_id));
+}
+
+/** 「ここから未読にする」: そのメッセージの直前まで既読にする (既読を戻す) */
+export function markUnreadFrom(userId: string, key: string, messageAt: string): void {
+  const before = new Date(Date.parse(messageAt) - 1).toISOString();
+  chatDb().prepare("insert into reads (user_id, key, at) values (?, ?, ?) on conflict (user_id, key) do update set at = excluded.at").run(userId, key, before);
 }

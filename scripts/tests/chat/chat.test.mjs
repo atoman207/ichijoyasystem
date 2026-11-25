@@ -345,10 +345,12 @@ let dmId = "";
 /* ================================================================== */
 section("7. チャンネルの追加・資料の公開範囲");
 {
-  const c0 = await as(a, () => A.createChatChannel({ name: "勉強会", memberIds: [b.id] }));
-  ok(!c0.ok, "店舗スタッフはチャンネルを追加できない");
-  const c1 = await as(mgr, () => A.createChatChannel({ name: "#勉強会", topic: "新商品", memberIds: [a.id] }));
-  ok(c1.ok, "店長はチャンネルを追加できる");
+  const c0 = await as(a, () => A.createChatChannel({ name: "雑談", memberIds: [], visibility: "public" }));
+  ok(c0.ok, "店舗スタッフもチャンネルを作れる (誰でも。公開のチャンネルはメンバーなしでよい)");
+  const c0b = await as(a, () => A.createChatChannel({ name: "内緒", memberIds: [], visibility: "private" }));
+  ok(!c0b.ok, "非公開のチャンネルはメンバーを 1 人以上選ぶ");
+  const c1 = await as(mgr, () => A.createChatChannel({ name: "#勉強会", topic: "新商品", memberIds: [a.id], visibility: "private" }));
+  ok(c1.ok, "店長は非公開のチャンネルを作れる");
   const id = c1.data.channelId;
   const ch = C.findChannel(db(), id);
   eq([ch.name, ch.memberIds.sort()], ["勉強会", [a.id, mgr.id].sort()], "名前の # を外し、作った人もメンバーになる");
@@ -391,6 +393,89 @@ section("7. チャンネルの追加・資料の公開範囲");
 }
 
 /* ================================================================== */
+section("7b. 公開のチャンネル・メンバー・ピン留め・後で見る・未読にする・スター・共有");
+{
+  const pub = (await as(a, () => A.createChatChannel({ name: "現場の写真", memberIds: [b.id], visibility: "public" }))).data.channelId;
+  const ch = () => C.findChannel(db(), pub);
+  ok(P.canViewChatChannel(x2, ch()) && !P.canPostChatChannel(x2, ch()), "公開のチャンネル: ほかの店舗の社員も見られる (参加するまで送れない)");
+  ok(!I.chatState(db(), x2).channels.some((c) => c.id === pub), "参加していない公開のチャンネルはサイドバーに出さない (チャンネルを探すから)");
+  const s0 = await send(x2, { channelId: pub, body: "参加前" });
+  ok(!s0.ok && /参加/.test(s0.error), "参加する前は送れない");
+  const j = await as(x2, () => A.joinChatChannel(pub));
+  ok(j.ok && ch().memberIds.includes(x2.id) && I.chatState(db(), x2).channels.some((c) => c.id === pub && c.joined && c.canPost), "「チャンネルに参加」でメンバーになり送れる");
+  const add = await as(b, () => A.addChatMembers(pub, [hq.id]));
+  ok(add.ok && ch().memberIds.includes(hq.id), "メンバーなら誰でもメンバーを追加できる");
+  const addX = await as(admin, () => A.addChatMembers(pub, [mgr.id]));
+  ok(!addX.ok, "メンバーでない人は追加できない");
+  const rmB = await as(b, () => A.removeChatMember(pub, hq.id));
+  ok(!rmB.ok, "メンバーを外せるのは作成した人・管理者だけ");
+  const rmCreator = await as(admin, () => A.removeChatMember(pub, a.id));
+  ok(!rmCreator.ok, "作成した人は外せない");
+  const rm = await as(a, () => A.removeChatMember(pub, hq.id));
+  ok(rm.ok && !ch().memberIds.includes(hq.id), "作成した人はメンバーを外せる");
+  const priv = (await as(mgr, () => A.createChatChannel({ name: "非公開の相談", memberIds: [a.id], visibility: "private" }))).data.channelId;
+  ok(!P.canViewChatChannel(x2, C.findChannel(db(), priv)) && !(await as(x2, () => A.joinChatChannel(priv))).ok, "非公開のチャンネルは見られない・参加できない");
+
+  // ピン留め・後で見る
+  const m1 = (await send(a, { channelId: pub, body: "*大事* な手順は _ここ_ にまとめます\n・手順 1\n・手順 2" })).data.message;
+  const pinX = await as(admin, () => A.pinChatMessage(m1.id, true));
+  ok(!pinX.ok, "メンバーでない人はピン留めできない");
+  ok((await as(b, () => A.pinChatMessage(m1.id, true))).ok, "メンバーはピン留めできる");
+  eq(R.pinnedMessages(pub).map((m) => m.id), [m1.id], "ピン留めの一覧に出る");
+  ok(I.chatState(db(), b).channels.find((c) => c.id === pub).pinCount === 1, "チャンネルのピン留めの数");
+  ok(R.toViews(a, [R.getMessage(m1.id)], db())[0].pinnedBy === b.id, "誰がピン留めしたか分かる");
+  await as(b, () => A.pinChatMessage(m1.id, false));
+  eq(R.pinnedMessages(pub).length, 0, "ピン留めを外せる");
+  await as(x2, () => A.saveChatMessage(m1.id, true));
+  ok(R.savedMessages(x2.id).some((m) => m.id === m1.id) && R.toViews(x2, [R.getMessage(m1.id)], db())[0].saved && !R.toViews(a, [R.getMessage(m1.id)], db())[0].saved, "「後で見る」は自分だけの保存");
+  await as(x2, () => A.saveChatMessage(m1.id, false));
+  eq(R.savedMessages(x2.id).length, 0, "「後で見る」から外せる");
+
+  // 未読にする
+  const m2 = (await send(a, { channelId: pub, body: "@試験次郎 明日の件" })).data.message;
+  await as(b, () => A.markChatRead(pub, new Date().toISOString()));
+  ok(!I.chatState(db(), b).inbox.some((i) => i.messageId === m2.id), "読むとメンションは消える");
+  await as(b, () => A.markChatUnread(m2.id));
+  ok(I.chatState(db(), b).inbox.some((i) => i.messageId === m2.id) && I.chatState(db(), b).channels.find((c) => c.id === pub).unread >= 1, "「ここから未読にする」でメンション・未読に戻る");
+
+  // スター
+  await as(b, () => A.starChatChannel(pub, true));
+  ok(I.chatState(db(), b).channels.find((c) => c.id === pub).starred && !I.chatState(db(), a).channels.find((c) => c.id === pub).starred, "スターは自分だけ");
+
+  // リアクション (絵文字の一覧から)
+  ok((await as(b, () => A.reactChatMessage(m1.id, "🔥"))).ok, "絵文字の一覧のリアクションを付けられる");
+
+  // 共有 (転送): DM のメッセージを公開のチャンネルへ
+  const dmAB = C.directId(a.id, b.id);
+  const dmMsg = (await send(a, { channelId: dmAB, body: "DM の内容です" })).data.message;
+  const sh0 = await as(b, () => A.shareChatMessage(dmMsg.id, priv, "見てください"));
+  ok(!sh0.ok, "参加していないチャンネルには共有できない");
+  const sh = await as(b, () => A.shareChatMessage(dmMsg.id, pub, "見てください"));
+  ok(sh.ok && sh.data.message.shared?.body === "DM の内容です" && sh.data.message.shared?.channelName === "DM", "共有すると写しが届く (どこからの共有か)");
+  const shX = await as(x2, () => A.shareChatMessage(dmMsg.id, pub, ""));
+  ok(!shX.ok, "見られないメッセージ (他人の DM) は共有できない");
+
+  // スレッドの「チャンネルにも送信」
+  const r1 = await send(b, { channelId: pub, parentId: m1.id, body: "チャンネルにも出す返信", alsoChannel: true });
+  const r2 = await send(b, { channelId: pub, parentId: m1.id, body: "スレッドだけの返信" });
+  const list = R.channelMessages(pub).rows.map((m) => m.id);
+  ok(list.includes(r1.data.message.id) && !list.includes(r2.data.message.id), "「チャンネルにも送信」した返信だけチャンネルの流れに出る");
+  const v1 = R.toViews(a, [R.getMessage(r1.data.message.id)], db())[0];
+  ok(v1.alsoChannel && v1.root?.id === m1.id, "どのスレッドへの返信かが分かる");
+
+  // 入力中・オンライン
+  await as(b, () => A.chatTyping(pub));
+  eq(R.typingIn(pub, a.id), [b.id], "入力中の人が分かる (自分は除く)");
+  eq(R.typingIn(pub, b.id), [], "自分の入力中は出さない");
+  ok(!(await as(admin, () => A.chatTyping(pub))).ok, "送れないチャンネルでは入力中を知らせない");
+  R.touchPresence(a.id);
+  ok(R.onlineUsers().includes(a.id), "画面を開いている人はオンライン");
+
+  // 検索の絞り込み (送った人)
+  const found = R.searchMessages([pub], "", 50, b.id);
+  ok(found.length > 0 && found.every((m) => m.userId === b.id), "検索を送った人で絞れる");
+}
+
 section("8. 業務依頼 (チャットから)・スレッド・編集・削除");
 {
   const r = await send(mgr, { channelId: chS, body: "合志の在庫を数えてください", task: { title: "在庫の確認", assigneeIds: [a.id], due: "tomorrow" } });
@@ -474,6 +559,12 @@ section("9. 従来の社内連絡のメンションも要対応にまとめる")
 }
 
 /* ================================================================== */
+section("9b. 書式 (Slack と同じ書き方)");
+{
+  eq(T.inlines("*太字* と _斜体_ と ~取り消し~ と `code` file_name_x"), [{ text: "太字", bold: true }, { text: " と " }, { text: "斜体", italic: true }, { text: " と " }, { text: "取り消し", strike: true }, { text: " と " }, { text: "code", code: true }, { text: " file_name_x" }], "太字・斜体・取り消し線・コード (単語の中の _ は斜体にしない)");
+  eq(T.blocks("前\n> 引用\n・箇条\n1. 番号\n```\nx = 1\n```\n後").map((b) => b.kind), ["para", "quote", "list", "list", "code", "para"], "引用・箇条書き・番号・コードのかたまり");
+}
+
 section("10. データの置き場所");
 {
   ok(fs.existsSync(path.join(work, "chat.sqlite")), "チャットは指定の SQLite (CHAT_DB_PATH) に保存する");

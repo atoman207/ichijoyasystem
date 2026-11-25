@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import clsx from "clsx";
-import { AlertTriangle, AtSign, Camera, FileText, ListTodo, Loader2, Lock, Paperclip, SendHorizontal, X } from "lucide-react";
-import { sendChatMessage } from "@/lib/actions/chat";
+import { AlertTriangle, AtSign, Bold, Camera, Code, FileText, Italic, Link2, List, ListOrdered, ListTodo, Loader2, Lock, Paperclip, Quote, SendHorizontal, Smile, SquareCode, Strikethrough, Type, X } from "lucide-react";
+import { chatTyping, sendChatMessage } from "@/lib/actions/chat";
 import { matchName, mentionQuery, mentionText } from "@/lib/chat/text";
 import { CHAT_MAX_FILES, type ChatChannelView, type ChatFileAccess, type ChatMessageView, type ChatTaskInput } from "@/lib/chat/types";
 import { prepareFile } from "@/components/attachments/image-prep";
 import { sizeLabel } from "./client";
 import { emptyTask, ErrorLine, TaskFields } from "./dialogs";
-import { UserAvatar, type Dir } from "./parts";
+import { EmojiPicker, UserAvatar, nameOf, type Dir } from "./parts";
 
 export interface ComposerHandle {
   addFiles: (files: File[]) => void;
@@ -91,6 +91,8 @@ export function Composer({
   placeholder,
   handleRef,
   compact = false,
+  typing = [],
+  onEditLast,
 }: {
   channel: ChatChannelView;
   parentId?: string;
@@ -101,6 +103,10 @@ export function Composer({
   placeholder: string;
   handleRef?: Ref<ComposerHandle>;
   compact?: boolean;
+  /** このチャンネル・スレッドで入力中の人 */
+  typing?: string[];
+  /** 入力欄が空のときの ↑ (最後に送った自分のメッセージを編集) */
+  onEditLast?: () => void;
 }) {
   const key = draftKey(channel.id, parentId);
   const [text, setText] = useState("");
@@ -112,12 +118,16 @@ export function Composer({
   const [err, setErr] = useState("");
   const [sug, setSug] = useState<{ start: number; query: string; index: number } | null>(null);
   const [fine, setFine] = useState(true);
+  const [alsoChannel, setAlsoChannel] = useState(false);
+  const [showFormat, setShowFormat] = useState(true);
+  const [emoji, setEmoji] = useState<DOMRect | null>(null);
+  const typedAt = useRef(0);
   const ta = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const camInput = useRef<HTMLInputElement>(null);
   const filesRef = useRef<Pending[]>([]);
   /** 文字を差し込んだあとのカーソルの位置 (画面に反映した直後に合わせる。続けて打った文字が前に入らないように) */
-  const caretRef = useRef<number | null>(null);
+  const caretRef = useRef<number | [number, number] | null>(null);
   useEffect(() => {
     filesRef.current = files;
   }, [files]);
@@ -127,7 +137,8 @@ export function Composer({
     if (!el || pos === null) return;
     caretRef.current = null;
     el.focus();
-    el.setSelectionRange(pos, pos);
+    if (Array.isArray(pos)) el.setSelectionRange(pos[0], pos[1]);
+    else el.setSelectionRange(pos, pos);
   }, [text]);
 
   // チャンネル・スレッドを変えたら下書きを読み直す
@@ -140,7 +151,13 @@ export function Composer({
     setErr("");
   }, [key]);
   useEffect(() => {
-    setFine(window.matchMedia?.("(pointer: fine)").matches ?? true);
+    const f = window.matchMedia?.("(pointer: fine)").matches ?? true;
+    const t = window.setTimeout(() => {
+      setFine(f);
+      // スマートフォンは書式のボタンをしまっておく (「Aa」で出す)
+      if (!f) setShowFormat(false);
+    }, 0);
+    return () => window.clearTimeout(t);
   }, []);
   useEffect(() => {
     const t = window.setTimeout(() => writeDraft(key, text), 400);
@@ -237,6 +254,60 @@ export function Composer({
     refreshSug(next, pos);
   };
 
+  /** 選んだ文字を書式の印で囲む (選んでいなければ印だけ入れて、間にカーソル) */
+  const wrap = (left: string, right = left) => {
+    const el = ta.current;
+    if (!el) return;
+    const a = el.selectionStart ?? text.length;
+    const b = el.selectionEnd ?? a;
+    const sel = text.slice(a, b);
+    caretRef.current = sel ? [a + left.length, a + left.length + sel.length] : a + left.length;
+    setText(text.slice(0, a) + left + sel + right + text.slice(b));
+  };
+  /** 選んだ行の頭に印を付ける (引用・箇条書き・番号) */
+  const prefixLines = (make: (i: number) => string) => {
+    const el = ta.current;
+    if (!el) return;
+    const a = el.selectionStart ?? text.length;
+    const b = el.selectionEnd ?? a;
+    const start = text.lastIndexOf("\n", a - 1) + 1;
+    const endIdx = text.indexOf("\n", b);
+    const end = endIdx < 0 ? text.length : endIdx;
+    const lines = text.slice(start, end).split("\n").map((l, i) => make(i) + l);
+    const joined = lines.join("\n");
+    caretRef.current = start + joined.length;
+    setText(text.slice(0, start) + joined + text.slice(end));
+  };
+  const insertLink = () => {
+    const url = window.prompt("リンク先の URL (https://…)", "https://");
+    if (!url || !/^https?:\/\/\S+$/.test(url.trim())) return;
+    const el = ta.current;
+    const a = el?.selectionStart ?? text.length;
+    const b = el?.selectionEnd ?? a;
+    const sel = text.slice(a, b);
+    const ins = sel ? `${sel} ${url.trim()} ` : `${url.trim()} `;
+    caretRef.current = a + ins.length;
+    setText(text.slice(0, a) + ins + text.slice(b));
+  };
+  const insertText = (v: string) => {
+    const el = ta.current;
+    const a = el?.selectionStart ?? text.length;
+    const b = el?.selectionEnd ?? a;
+    caretRef.current = a + v.length;
+    setText(text.slice(0, a) + v + text.slice(b));
+  };
+  const FORMATS: { label: string; icon: typeof Bold; run: () => void; key?: string }[] = [
+    { label: "太字 (Ctrl + B)", icon: Bold, run: () => wrap("*"), key: "b" },
+    { label: "斜体 (Ctrl + I)", icon: Italic, run: () => wrap("_"), key: "i" },
+    { label: "取り消し線 (Ctrl + Shift + X)", icon: Strikethrough, run: () => wrap("~") },
+    { label: "リンク", icon: Link2, run: insertLink },
+    { label: "箇条書き", icon: List, run: () => prefixLines(() => "・ ") },
+    { label: "番号つきの箇条書き", icon: ListOrdered, run: () => prefixLines((i) => `${i + 1}. `) },
+    { label: "引用", icon: Quote, run: () => prefixLines(() => "> ") },
+    { label: "コード", icon: Code, run: () => wrap("`") },
+    { label: "コードのかたまり", icon: SquareCode, run: () => wrap("```\n", "\n```") },
+  ];
+
   const uploading = files.some((f) => !f.uploadId && !f.error);
   const failed = files.some((f) => f.error);
   const canSend = !sending && !uploading && !failed && (text.trim().length > 0 || files.length > 0);
@@ -251,7 +322,7 @@ export function Composer({
     setErr("");
     try {
       const fileAccess = Object.fromEntries(files.filter((f) => f.uploadId && f.access === "managers").map((f) => [f.uploadId!, "managers" as const]));
-      const r = await sendChatMessage({ channelId: channel.id, parentId, body: text, important: important && !parentId, uploadIds: files.map((f) => f.uploadId!).filter(Boolean), fileAccess, task: taskOn && !parentId ? task : undefined });
+      const r = await sendChatMessage({ channelId: channel.id, parentId, alsoChannel: Boolean(parentId && alsoChannel), body: text, important: important && !parentId, uploadIds: files.map((f) => f.uploadId!).filter(Boolean), fileAccess, task: taskOn && !parentId ? task : undefined });
       if (!r.ok || !r.data) {
         setErr(r.error ?? "送れませんでした。");
         return;
@@ -263,6 +334,7 @@ export function Composer({
       setImportant(false);
       setTaskOn(false);
       setTask(emptyTask());
+      setAlsoChannel(false);
       onSent(r.data.message, { taskError: r.data.taskError });
       requestAnimationFrame(() => ta.current?.focus());
     } catch {
@@ -290,6 +362,26 @@ export function Composer({
         setSug(null);
         return;
       }
+    }
+    // 書式のショートカット (Slack と同じ)
+    if ((e.ctrlKey || e.metaKey) && !e.nativeEvent.isComposing) {
+      const k = e.key.toLowerCase();
+      if (k === "b" || k === "i") {
+        e.preventDefault();
+        wrap(k === "b" ? "*" : "_");
+        return;
+      }
+      if (k === "x" && e.shiftKey) {
+        e.preventDefault();
+        wrap("~");
+        return;
+      }
+    }
+    // 空の入力欄で ↑ = 最後に送った自分のメッセージを編集
+    if (e.key === "ArrowUp" && !text && onEditLast && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      onEditLast();
+      return;
     }
     if (e.key !== "Enter" || e.nativeEvent.isComposing || e.keyCode === 229) return;
     // パソコン: Enter で送信・Shift + Enter で改行。スマートフォン: Enter は改行 (送信はボタン)。Ctrl / ⌘ + Enter はいつも送信
@@ -361,13 +453,36 @@ export function Composer({
           ))}
         </ul>
       )}
+      {parentId && channel.kind !== "dm" && (
+        <label className="mb-1.5 flex items-center gap-1.5 text-[12px] text-ink-2">
+          <input type="checkbox" checked={alsoChannel} onChange={(e) => setAlsoChannel(e.target.checked)} className="h-3.5 w-3.5 accent-accent" data-testid="chat-also-channel" />
+          # {channel.name} にも送信する
+        </label>
+      )}
       <div className={clsx("rounded-2xl border bg-panel transition focus-within:border-accent focus-within:ring-4 focus-within:ring-accent/15", important ? "border-warn" : "border-line-strong")}>
+        {showFormat && (
+          <div className="flex items-center gap-0.5 overflow-x-auto rounded-t-2xl border-b border-line bg-subtle/50 px-1.5 py-1" role="toolbar" aria-label="書式">
+            {FORMATS.map((f, i) => (
+              <span key={f.label} className="contents">
+                {(i === 3 || i === 4 || i === 7) && <span className="mx-0.5 h-4 w-px shrink-0 bg-line-strong" aria-hidden />}
+                <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={f.run} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-2 hover:bg-panel hover:text-ink" aria-label={f.label} title={f.label}>
+                  <f.icon className="h-4 w-4" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <textarea
           ref={ta}
           value={text}
           onChange={(e) => {
             setText(e.target.value);
             refreshSug(e.target.value, e.target.selectionStart ?? e.target.value.length);
+            // 入力中を知らせる (3 秒に 1 回まで)
+            if (e.target.value.trim() && Date.now() - typedAt.current > 3000) {
+              typedAt.current = Date.now();
+              void chatTyping(channel.id, parentId).catch(() => undefined);
+            }
           }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
@@ -380,7 +495,7 @@ export function Composer({
           data-testid={parentId ? "chat-reply-input" : "chat-input"}
           className="block max-h-[220px] min-h-[44px] w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-[14px] leading-relaxed outline-none placeholder:text-ink-3"
         />
-        <div className="flex items-center gap-0.5 px-1.5 pb-1.5">
+        <div className="flex items-center gap-0.5 overflow-x-auto px-1.5 pb-1.5">
           <button type="button" onClick={() => fileInput.current?.click()} className="rounded-lg p-2 text-ink-2 hover:bg-subtle hover:text-ink" aria-label="資料・写真を添付" title="資料・写真を添付 (貼り付け・ドラッグでも追加できます)">
             <Paperclip className="h-[18px] w-[18px]" />
           </button>
@@ -389,6 +504,12 @@ export function Composer({
               <Camera className="h-[18px] w-[18px]" />
             </button>
           )}
+          <button type="button" onClick={() => setShowFormat((x) => !x)} aria-pressed={showFormat} className={clsx("rounded-lg p-2 hover:bg-subtle hover:text-ink", showFormat ? "text-accent" : "text-ink-2")} aria-label="書式のボタンを出す・しまう" title="書式 (太字・斜体・箇条書き・コード など)">
+            <Type className="h-[18px] w-[18px]" />
+          </button>
+          <button type="button" onClick={(e) => setEmoji(e.currentTarget.getBoundingClientRect())} className="rounded-lg p-2 text-ink-2 hover:bg-subtle hover:text-ink" aria-label="絵文字" title="絵文字">
+            <Smile className="h-[18px] w-[18px]" />
+          </button>
           <button type="button" onClick={insertAt} className="rounded-lg p-2 text-ink-2 hover:bg-subtle hover:text-ink" aria-label="メンション (@)" title="メンション (@名前・@店舗)">
             <AtSign className="h-[18px] w-[18px]" />
           </button>
@@ -412,6 +533,10 @@ export function Composer({
           </button>
         </div>
       </div>
+      <p className={clsx("mt-1 h-4 truncate text-[11px] text-ink-3", !typing.length && "invisible")} aria-live="polite" data-testid="chat-typing">
+        {typing.length ? `${typing.slice(0, 3).map((id) => nameOf(dir, id)).join("、")}${typing.length > 3 ? ` ほか ${typing.length - 3} 人` : ""} さんが入力中…` : "\u00a0"}
+      </p>
+      {emoji && <EmojiPicker anchor={emoji} onPick={(e) => insertText(e)} onClose={() => setEmoji(null)} />}
       {important && <p className="mt-1.5 text-[11px] text-warn-ink">重要メッセージとして送ります。チャンネルのメンバーが「確認しました」を押すまで要対応に残り、確認の状態が分かります。</p>}
       {sug && suggestions.length > 0 && (
         <ul className="absolute bottom-full left-3 z-20 mb-1 w-72 overflow-hidden rounded-xl border border-line bg-panel p-1 shadow-pop" role="listbox" aria-label="メンションの候補">
