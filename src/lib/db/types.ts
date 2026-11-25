@@ -146,6 +146,8 @@ export interface Customer {
   /** 取引停止 (見積・受注の登録時に警告する) と、その理由 */
   tradeStopped?: boolean;
   tradeStopNote?: string;
+  /** 法人・施設の代表者 (社長など) のお名前 (お客様のご質問 2026-11-23「法人登録の社長名はどこに入力すれば良いですか」) */
+  representative?: string;
   /** 請求の締め (法人のお客様のまとめ請求。src/lib/billing.ts)。未設定・batch = false は案件ごとの請求 */
   billingTerms?: CustomerBillingTerms;
 }

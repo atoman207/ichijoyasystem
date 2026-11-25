@@ -133,6 +133,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
                       ],
                     ] as [string, React.ReactNode][])
                   : []),
+                ...(c.representative || c.type === "corporate" ? ([["代表者", c.representative ?? "未登録"]] as [string, React.ReactNode][]) : []),
                 ["メール", c.email],
                 ["LINE", c.lineId ?? "未登録"],
                 ["希望する連絡手段", CHANNEL_LABEL[c.preferredChannel]],

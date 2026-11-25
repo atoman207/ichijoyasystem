@@ -407,6 +407,50 @@ export function productionByDay(rows: ProductionRow[]): Map<string, DayTotal> {
   return out;
 }
 
+/** 使う材料の合計 (畳製造予定の日ごと・期間。お客様のご質問 2026-11-23「その日に使う材料や減りが分かるところある？」) */
+export interface MaterialTotals {
+  /** 畳表 (表替え・新調。裏返しは今の表を使う) */
+  omote: { name: string; qty: number }[];
+  /** 畳縁 (縁無を除く) */
+  heri: { name: string; qty: number }[];
+  /** 縁無 (へり無し畳) の畳数 */
+  herinashi: number;
+  /** 畳床 (新調だけ。表替え・裏返しは今の床) */
+  doko: { name: string; qty: number }[];
+  /** 仕様が未確認 (部屋ごとの仕様がない) の畳数 */
+  unknown: number;
+}
+
+/**
+ * 製造の予定の行から、使う材料 (畳表・畳縁・畳床) を畳数で合計する。部屋ごとの仕様 (rooms) の品名ごと。
+ * 品名が空の部屋は「未確認」、仕様のない行は unknown に数える。取り消した行は数えない
+ */
+export function productionMaterials(rows: Pick<ProductionRow, "rooms" | "qty" | "status" | "roomsSource">[]): MaterialTotals {
+  const omote = new Map<string, number>();
+  const heri = new Map<string, number>();
+  const doko = new Map<string, number>();
+  let herinashi = 0;
+  let unknown = 0;
+  const add = (m: Map<string, number>, k: string, n: number) => m.set(k, (m.get(k) ?? 0) + n);
+  for (const r of rows) {
+    if (r.status === "cancelled") continue;
+    const rooms = r.roomsSource === "count" ? [] : r.rooms.filter((x) => x.qty > 0);
+    if (!rooms.length) {
+      unknown += r.qty;
+      continue;
+    }
+    for (const x of rooms) {
+      if (x.work !== "ura") add(omote, x.omote?.trim() || "畳表 未確認", x.qty);
+      if (x.herinashi) herinashi += x.qty;
+      else add(heri, x.heri?.trim() || "縁 未確認", x.qty);
+      if (x.work === "new") add(doko, `${x.doko?.trim() || "畳床 未確認"}${x.dokoThickness ? ` ${x.dokoThickness}` : ""}`, x.qty);
+    }
+  }
+  // 未確認は最後、ほかは畳数の多い順
+  const list = (m: Map<string, number>) => [...m].map(([name, qty]) => ({ name, qty })).sort((a, b) => Number(a.name.includes("未確認")) - Number(b.name.includes("未確認")) || b.qty - a.qty || a.name.localeCompare(b.name, "ja"));
+  return { omote: list(omote), heri: list(heri), herinashi, doko: list(doko), unknown };
+}
+
 /** 次の営業日 (休日カレンダーの休業日を飛ばす) */
 export function nextWorkDay(db: Pick<Database, "holidays">, from: string): string {
   let d = addDays(from, 1);

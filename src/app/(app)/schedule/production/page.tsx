@@ -14,7 +14,7 @@ import { TatamiRoomsTable, pendingRoomCount } from "@/components/schedule/Tatami
 import { TatamiRoomsEditor } from "@/components/schedule/TatamiRoomsEditor";
 import { roomsFromSheetMemo } from "@/lib/tatami-spec";
 import { quoteRooms } from "@/lib/tatami-rooms";
-import { carryTarget, productionByDay, productionRows, productionView, type ProductionRow } from "@/lib/production/plan";
+import { carryTarget, productionByDay, productionMaterials, productionRows, productionView, type ProductionRow } from "@/lib/production/plan";
 import { productionTableReady } from "@/lib/production/tables";
 
 /**
@@ -33,6 +33,31 @@ const STATUS_STYLE = {
 
 function num(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
+/** 使う材料 (畳表・畳縁・畳床の畳数。部屋ごとの仕様から。縁の在庫は縁在庫の画面) */
+function Materials({ rows, title }: { rows: ProductionRow[]; title?: string }) {
+  const m = productionMaterials(rows);
+  const part = (label: string, xs: { name: string; qty: number }[]) =>
+    xs.length ? (
+      <span>
+        <span className="text-ink-3">{label}</span> {xs.map((x) => `${x.name} ${num(x.qty)}`).join("・")}
+      </span>
+    ) : null;
+  if (!m.omote.length && !m.heri.length && !m.doko.length && !m.herinashi && !m.unknown) return null;
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-line bg-subtle/40 px-4 py-1.5 text-[11px] text-ink-2" data-testid="production-materials">
+      <span className="font-medium text-ink">{title ?? "使う材料"}</span>
+      {part("畳表", m.omote)}
+      {part("畳縁", m.heri)}
+      {m.herinashi > 0 && <span className="text-critical-ink">縁無 {num(m.herinashi)}</span>}
+      {part("畳床 (新調)", m.doko)}
+      {m.unknown > 0 && <span className="text-warn-ink">仕様の未確認 {num(m.unknown)}</span>}
+      <Link href="/heri" className="ml-auto text-accent hover:underline">
+        縁の在庫
+      </Link>
+    </div>
+  );
 }
 
 function Totals({ rows, compact = false }: { rows: ProductionRow[]; compact?: boolean }) {
@@ -347,6 +372,11 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
       )}
 
       <div className="space-y-4">
+        {days > 1 && view.inRange.length > 0 && (
+          <Card padded={false} id="materials">
+            <Materials rows={view.inRange} title={`この期間 (${periodTitle}) に使う材料`} />
+          </Card>
+        )}
         {dateRange(from, to).map((d) => {
           const list = view.inRange.filter((r) => r.date === d);
           const t = byDay.get(d);
@@ -373,6 +403,7 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
                   この日の予定表
                 </Link>
               </div>
+              {list.length > 0 && <Materials rows={list} />}
               {list.length > 0 && (
                 <ul className="divide-y divide-line @container">
                   {list.map((r) => (

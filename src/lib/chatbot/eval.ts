@@ -850,6 +850,10 @@ export async function runEval(db: Database, ask: AskFn, opts: { label?: string; 
   const jobs = cases.flatMap((c) => caseVariants(db, c).map((v) => ({ c, v })));
   const runners = opts.runners ?? {};
   const cdb = chatbotDb();
+  // 途中で止まった評価 (デプロイ・再起動でアプリが止まった) は「実行中」のまま残るので、2 時間を過ぎたものは途中までの結果で「中断」にする
+  for (const r of cdb.prepare("select id from eval_runs where status = 'running' and started_at < ?").all(new Date(Date.now() - 2 * 3600_000).toISOString()) as { id: number }[]) {
+    cdb.prepare("update eval_runs set status = 'stopped', finished_at = ?, metrics = ? where id = ?").run(nowIso(), JSON.stringify(computeMetrics(r.id)), r.id);
+  }
   const runId = Number(cdb.prepare("insert into eval_runs (started_at, status, label, started_by, provider, total, revision) values (?, 'running', ?, ?, ?, ?, ?)").run(nowIso(), (opts.label ?? "").slice(0, 60), opts.by ?? "", opts.provider ?? "", jobs.length, currentRevision()).lastInsertRowid);
   runtime.__ichijoyaEvalRun = { runId, stop: false };
   // この評価の AI の呼び出し (トークン・費用) を問題ごとに数える

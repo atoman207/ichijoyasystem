@@ -42,7 +42,7 @@ import { applyEventMove, applyEventRemoval, parseHandoverRef } from "@/lib/hando
 import { pendingHandoverChange, savePlan } from "@/lib/handover-save";
 import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { AUTO_APPROVAL_NOTE, settleOwnApproval } from "@/lib/approval-decide";
-import { caseChainOf, pendingStoreChange, storeChangeBlocker } from "@/lib/case-store";
+import { caseChainOf, pendingStoreChange, storeChangeBlocker, type CaseChain } from "@/lib/case-store";
 import { closeScheduleRequests } from "@/lib/inquiry-requests";
 import { taskNotices } from "@/lib/notify/events";
 import { PAIR_PREFIX, eventPair } from "@/lib/schedule-pair";
@@ -973,6 +973,30 @@ export async function changeEventStore(id: string, formData: FormData) {
     revalidateSchedule(e);
     redirect(withMsg(returnTo, `予定の店舗を${storeName(to)}にしました。`));
   }
+  await requestCaseStoreChange(user, chain0, to, reason, returnTo);
+}
+
+/**
+ * 見積・受注の画面から施工店舗 (売上を計上する店舗) を変える (予定表の予定から変えるのと同じ申請 store_change。
+ * 店長・管理者は承認を省略、確定した売上の受注は管理者の承認。判定は case-store-view.ts の caseStoreChangeInfo と同じ)
+ */
+export async function changeCaseStore(recordId: string, formData: FormData) {
+  const user = await requireActionUser();
+  const to = str(formData, "storeId");
+  const reason = str(formData, "reason").slice(0, 200);
+  const db0 = getDb();
+  const chain0 = caseChainOf(db0, recordId);
+  const returnTo = safePath(str(formData, "returnTo")) ?? (chain0 ? `/${chain0.head.type === "order" ? "orders" : chain0.head.type === "quote" ? "quotes" : "inquiries"}/${recordId}` : "/cases");
+  if (!chain0) fail(returnTo, "案件が見つかりません (削除された可能性があります)。");
+  if (!db0.stores.some((s) => s.id === to)) fail(returnTo, "店舗を選んでください。");
+  if (to === chain0.head.storeId) fail(returnTo, "今と同じ店舗です。");
+  await requestCaseStoreChange(user, chain0, to, reason, returnTo);
+}
+
+/** 案件の施工店舗の変更の申請 (店長・管理者は承認を省略してすぐ反映)。予定から・見積・受注の画面からの共通の処理 */
+async function requestCaseStoreChange(user: User, chain0: CaseChain, to: string, reason: string, returnTo: string) {
+  const db0 = getDb();
+  const storeName = (sid: string) => db0.stores.find((s) => s.id === sid)?.name ?? sid;
   if (!canEditCaseStore(user, chain0.head.storeId)) fail(returnTo, `${storeName(chain0.head.storeId)}の案件の施工店舗を変える権限がありません (その店舗のメンバー・店長・本部・管理者が申請できます)。`);
   const blocker = storeChangeBlocker(db0, chain0, to);
   if (blocker) fail(returnTo, blocker);

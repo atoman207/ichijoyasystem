@@ -45,6 +45,9 @@ export function CustomerForm({
             <option value="corporate">法人・施設</option>
           </Select>
         </Field>
+        <Field label="代表者 (法人・施設の社長など)" hint="法人・施設のお客様のとき。個人のお客様は空欄">
+          <Input name="representative" defaultValue={customer?.representative} placeholder="例: 代表取締役 山田 太郎" />
+        </Field>
         <Field label="担当店舗" hint={allStores ? undefined : "店舗ロールは自店舗に固定されます"}>
           <Select name="storeId" defaultValue={storeId} disabled={!allStores}>
             {stores.map((s) => (

@@ -111,8 +111,10 @@ export async function createCustomer(formData: FormData) {
       contacts: contactsOf(formData),
       tradeStopped: str(formData, "tradeStopped") === "1" || undefined,
       tradeStopNote: str(formData, "tradeStopNote") || undefined,
+      representative: str(formData, "representative").slice(0, 100) || undefined,
     };
     if (!c.contacts?.length) delete c.contacts;
+    if (!c.representative) delete c.representative;
     db.customers.push(c);
     addAudit(db, { userId: user.id, action: "create", entity: "customer", entityId: id, entityLabel: `${c.code} ${c.name}`, summary: `顧客を登録 (${c.name})${dupNote}`, storeId });
   });
@@ -159,6 +161,8 @@ export async function updateCustomer(id: string, formData: FormData) {
       contacts: formData.has("contacts") ? contactsOf(formData) : c.contacts,
       tradeStopped: str(formData, "tradeStopped") === "1" || undefined,
       tradeStopNote: str(formData, "tradeStopNote") || undefined,
+      // 画面に欄がないフォーム (受付・問い合わせからの登録など) では今の値を残す
+      representative: formData.has("representative") ? str(formData, "representative").slice(0, 100) || undefined : c.representative,
     };
     if (!next.contacts?.length) next.contacts = undefined;
     const important = diffChanges(before, next, [...CUSTOMER_IMPORTANT_FIELDS]);
@@ -171,7 +175,7 @@ export async function updateCustomer(id: string, formData: FormData) {
     Object.assign(c, applied);
     // 住所が変わったら、施工場所がお客様の住所と同じ進行中の受注と、お客様の場所に合わせている今後の予定にも反映する
     if (before.address !== c.address) propagated = propagateCustomerAddress(db, user, c, before.address);
-    const changes = diffChanges(before, c, ["name", "kana", "type", "phone", "email", "lineId", "postalCode", "address", "storeId", "assignedUserId", "preferredChannel", "tags", "notes", "tradeStopped", "tradeStopNote"]);
+    const changes = diffChanges(before, c, ["name", "kana", "type", "phone", "email", "lineId", "postalCode", "address", "storeId", "assignedUserId", "preferredChannel", "tags", "notes", "tradeStopped", "tradeStopNote", "representative"]);
     const contactsBefore = contactLines(before);
     const contactsAfter = contactLines(c);
     if (JSON.stringify(contactsBefore) !== JSON.stringify(contactsAfter)) changes.push({ field: "contacts", before: contactsBefore, after: contactsAfter });

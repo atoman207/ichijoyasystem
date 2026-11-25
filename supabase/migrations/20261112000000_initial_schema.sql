@@ -93,6 +93,7 @@ create table if not exists customers (
   contacts jsonb,
   trade_stopped boolean,
   trade_stop_note text,
+  representative text,
   billing_terms jsonb
 );
 comment on table customers is '顧客';
@@ -1724,6 +1725,7 @@ alter table customers add column if not exists updated_at timestamptz not null;
 alter table customers add column if not exists contacts jsonb;
 alter table customers add column if not exists trade_stopped boolean;
 alter table customers add column if not exists trade_stop_note text;
+alter table customers add column if not exists representative text;
 alter table customers add column if not exists billing_terms jsonb;
 alter table inquiries add column if not exists number text not null unique;
 alter table inquiries add column if not exists customer_id text references customers(id) on delete set null;

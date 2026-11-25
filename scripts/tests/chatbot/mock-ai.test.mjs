@@ -379,6 +379,12 @@ section("総合的な分析にする質問 (全体像を先に用意する) と�
   handler = () => oaText("合志店が一番です。");
   await askChatbot(db, admin, [], "店舗を比べて、今年の課題を教えて");
   ok(allText(requests[0]).includes("会社の全体像 (business_overview の結果"), "課題を聞く質問は総合的な分析 (全体像を先に用意する)");
+  for (const q of ["店舗を変更するにはどうしたら良いですか？", "問い合わせで登録した案件を施工予定に変更するにはどうしたらいいですか？"]) {
+    requests.length = 0;
+    handler = () => oaText("使い方の資料の手順です。");
+    await askChatbot(db, admin, [], q);
+    ok(requests[0] && !allText(requests[0]).includes("会社の全体像 (business_overview の結果"), `操作の質問は総合的な分析にしない: ${q}`);
+  }
   requests.length = 0;
   handler = () => oaText("使い方の資料に書かれた手順です。");
   const h = await askChatbot(db, admin, [], "見積書はどの画面で作りますか？手順を教えて");

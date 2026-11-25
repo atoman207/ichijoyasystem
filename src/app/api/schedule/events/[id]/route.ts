@@ -11,8 +11,8 @@ import { scheduleWork } from "@/lib/schedule-work";
 import { workDescription, workText } from "@/lib/work-summary";
 import type { EventQuickData, QuickCase, QuickMap, QuickPair, QuickRemove, QuickRequest, QuickStaff, QuickStoreChange } from "@/components/schedule/quick-types";
 import { approverRole, skipsApproval } from "@/lib/auth/permissions";
-import { caseChainOf, pendingStoreChange, storeChangeBlocker } from "@/lib/case-store";
-import { touchesConfirmedSales } from "@/lib/approval-decide";
+import { caseChainOf } from "@/lib/case-store";
+import { caseStoreChangeInfo } from "@/lib/case-store-view";
 import type { Order } from "@/lib/db/types";
 import type { Database, ScheduleEvent, StoreId, User } from "@/lib/db/types";
 import { canEditRecordMap, canViewRecordMap } from "@/lib/maps/access";
@@ -117,33 +117,12 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   return NextResponse.json(data, { headers: NO_STORE });
 }
 
-/** 施工店舗の変更 (案件の予定だけ。案件のない予定は「詳しく変更」で店舗を変える) */
+/** 施工店舗の変更 (案件の予定だけ。案件のない予定は「詳しく変更」で店舗を変える。判定は見積・受注の画面と共通: case-store-view.ts) */
 function quickStoreChange(db: Database, user: User, e: ScheduleEvent, canEdit: boolean, resolver: ReturnType<typeof createCaseResolver>): QuickStoreChange | undefined {
   const ref = resolver.ofEvent(e);
   const chain = ref ? caseChainOf(db, ref.id) : undefined;
   if (!chain) return undefined;
-  const storeName = (id: string) => db.stores.find((s) => s.id === id)?.name ?? id;
-  const pending = pendingStoreChange(db, chain);
-  const to = pending?.changes?.find((c) => c.field === "storeId")?.after;
-  // 承認が要るか: 店長・管理者は省略 (確定した売上の受注は管理者の承認)
-  const confirmed = touchesConfirmedSales(db, { type: "store_change", targetId: chain.head.id });
-  const needsApproval = !skipsApproval(user, "store_change") || (user.role !== "admin" && confirmed);
-  const role = confirmed ? "admin" : approverRole(db.users, chain.head.storeId, false, user.id);
-  // 店舗によらない理由 (請求書・キャンセル・月次確定) を先に出す (ほかの店舗のどれかで確かめる)
-  const other = db.stores.find((s) => s.id !== chain.head.storeId);
-  const reason = other ? storeChangeBlocker(db, chain, other.id) : undefined;
-  return {
-    mode: "case",
-    caseLabel: `${ref!.stage} ${chain.head.number}`,
-    current: chain.head.storeId,
-    currentName: storeName(chain.head.storeId),
-    options: db.stores.filter((s) => s.id !== chain.head.storeId).map((s) => ({ id: s.id, name: s.name })),
-    canChange: canEdit && canEditCaseStore(user, chain.head.storeId) && !reason && !pending,
-    blocked: reason,
-    pending: pending ? `${storeName(String(to ?? ""))}への変更を申請中 (${pending.createdAt.slice(5, 10).replace("-", "/")}・${db.users.find((u) => u.id === pending.requestedBy)?.name ?? "-"})` : undefined,
-    needsApproval,
-    approver: role === "admin" ? "管理者" : `${storeName(chain.head.storeId)}の店長`,
-  };
+  return caseStoreChangeInfo(db, user, chain, canEdit, `${ref!.stage} ${chain.head.number}`);
 }
 
 /** 予定の削除 (小さな画面のいちばん下) */

@@ -335,6 +335,21 @@ const byDay = P.productionByDay(rows());
 ok([...byDay.values()].every((t) => t.count >= 1), "日ごとの合計 (予定表のリンク)");
 
 /* ================================================================== */
+{
+  // 使う材料 (畳表・畳縁・畳床の畳数。お客様のご質問 2026-11-23「その日に使う材料や減りが分かるところある？」)
+  const room = (o) => ({ id: "r", work: "omote", qty: 6, ...o });
+  const m = P.productionMaterials([
+    { status: "planned", qty: 12, roomsSource: "order", rooms: [room({ omote: "きずな", heri: "マス菊" }), room({ work: "new", qty: 4, omote: "きずな", herinashi: true, doko: "建材床", dokoThickness: "55mm" })] },
+    { status: "planned", qty: 6, roomsSource: "order", rooms: [room({ work: "ura", heri: "マス菊" })] },
+    { status: "planned", qty: 8, roomsSource: "count", rooms: [] },
+    { status: "cancelled", qty: 6, roomsSource: "order", rooms: [room({ omote: "銀白" })] },
+    { status: "done", qty: 3, roomsSource: "auto", rooms: [room({ qty: 3 })] },
+  ]);
+  eq(m.omote, [{ name: "きずな", qty: 10 }, { name: "畳表 未確認", qty: 3 }], "畳表は表替え・新調の畳数 (裏返しは今の表。取り消した行は数えない。品名なしは未確認)");
+  eq(m.heri, [{ name: "マス菊", qty: 12 }, { name: "縁 未確認", qty: 3 }], "畳縁は裏返しも数える (縁無は別)");
+  eq([m.herinashi, m.doko, m.unknown], [4, [{ name: "建材床 55mm", qty: 4 }], 8], "縁無・畳床 (新調だけ・厚みつき)・仕様のない行の畳数");
+}
+
 section("6. ヘッダーの件数の印 (承認の申請が届いたら画面を新しくする)");
 const live = await imp("lib/notify-live.ts");
 const s1 = live.liveSignature(admin);

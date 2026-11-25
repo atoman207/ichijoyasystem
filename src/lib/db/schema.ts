@@ -115,6 +115,8 @@ export const TABLES: TableDef[] = [
       ["contacts", "jsonb"],
       ["tradeStopped", "boolean"],
       ["tradeStopNote", "text"],
+      // 2026-11-25: 法人・施設の代表者のお名前
+      ["representative", "text"],
       // 2026-11-23: 請求の締め (法人のまとめ請求)
       ["billingTerms", "jsonb"],
     ],

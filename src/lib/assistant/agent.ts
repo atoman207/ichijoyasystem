@@ -390,6 +390,7 @@ function systemPrompt(db: Database, user: User, now: Date): string {
     "5c. 「お客様ごと・店舗ごと・担当者ごとで一番多い〜」は、まずその単位で合計 (group by) してから比べる。1 件の請求・受注の最大と取り違えない。前の質問の続き (「その中で〜」) でも同じ。",
     "5b. 「比較して」は、質問にある軸 (店舗・商品・担当者など) どうしの比較のこと。前年・前の期間との比較 (compare) は、質問に「前年」「昨年」「前期」「去年と」などの言葉があるときだけ使う。",
     "6. 直接集計できないとき (データがない・軸がない・権限がない) は、その理由を書き、search_guides で調べて、経営ダッシュボード・CSV 出力などの画面で目的の集計にたどり着く手順を案内する。",
+    "7a. 短くて何の操作か分からない質問 (「編集仕方」「やり方は？」「どうするの？」) は、前の会話の対象 (見積・顧客・予定など) についての質問として答える。前の会話からも決められないときは「使い方の資料には見当たりません」で終わらせず、「何を編集しますか？ (例: 顧客・見積・受注・予定)」のように 1 行で聞き返し、よくある候補 2〜3 個の画面へのリンクを添える。",
     "7. 操作方法の質問は、質問に付いた「参考資料」か search_guides の結果に書かれている画面・ボタン・手順だけで答える (一般的なシステムの知識で補わない)。「メニュー → 画面 → ボタン」の順に番号付きの手順で、画面・ボタンの名前は資料の表記のまま「」で書く。最初に出てくる画面の名前には、資料にある画面のリンクを付ける (例: [見積](/quotes))。資料に書かれていない操作は「使い方の資料には見当たりません」と書き、店長・管理者への確認を勧める。権限がない操作は、誰に頼めばよいかを書く。",
     `8. この AI は自分では何も変えない。データを変える依頼のうち、${Object.values(ACTION_LABEL).join("・")} は propose_action で実行の確認のカードを出す (利用者が「実行する」を押すと実行される。回答に「実行しました」「登録しました」と書かない)。それ以外の操作 (見積・請求・入金・経費・顧客の変更など) は行えないので、画面での操作手順を案内する。`,
     "9. 会話の続き (「店舗別にして」「前年と比べて」「その中で一番は？」) は、前の回答の [分析条件] を引き継いで analyze を呼び直す。[分析条件] は内部の情報なので、回答には書かない。",
@@ -724,7 +725,13 @@ const ANALYTICAL = /なぜ|原因|分析|傾向|課題|改善|対策|比較|比�
  */
 const SPECIFIC_ASK = /何\s*[%％]|何パーセント|何割|いくら|何円|何件|何人|何台|何枚|何倍|何日|何か月|どこ(で|が|か|です)|どの店|誰|どなた|どれ|どちら|一番|最も|もっとも/;
 const DEEP_ONLY = /なぜ|原因|理由|分析|傾向|課題|改善|対策|総合|振り返|レポート|強み|弱み|どうすれば|どうしたら|状況|まとめ/;
-const isAnalytical = (q: string) => ANALYTICAL.test(q) && !/(?<!お客)様/.test(q) && !(SPECIFIC_ASK.test(q) && !DEEP_ONLY.test(q));
+/**
+ * 操作の質問 (「店舗を変更するにはどうしたら」「問い合わせで登録した案件を施工予定に変更するにはどうしたら」) は、
+ * 業績の言葉 (店舗・問い合わせ・受注…) と「どうしたら」があっても総合的な分析にしない (使い方の資料で答える。全体像の数字で答えていた)
+ */
+const OPERATION = /変更|登録|削除|入力|追加|設定|作成|修正|紐付|紐づ|ひも付|反映|移動|変え|消す|消し|取り込|取込|編集|直す|直し|印刷|送信|送る|出力|開く|開け|見る|見れ|見られ|確認|申請|承認|撮影|アップロード/;
+const ASKS_HOW = /には|方法|手順|仕方|やり方|どうしたら|どうすれば|どうやって|どこで|どこから|どこに|どの画面|できますか|できる[？?]|できない[？?]/;
+const isAnalytical = (q: string) => ANALYTICAL.test(q) && !/(?<!お客)様/.test(q) && !(SPECIFIC_ASK.test(q) && !DEEP_ONLY.test(q)) && !(OPERATION.test(q) && ASKS_HOW.test(q) && !/なぜ|原因|課題|改善|対策|分析|傾向/.test(q));
 
 /** 管理会計で答える質問 (管理会計を見られる人だけ) */
 const MGMT_QUESTION = /粗利|損益|利益|原価率|材料費|外注費|内部受注|案分|按分|共通経費|独立採算|管理会計|管理売上|仕入請求書|仕入明細/;
@@ -798,10 +805,12 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   if (split || opts.prefetchGuides || deep || (canViewMgmt(readUser) && MGMT_QUESTION.test(question))) progress({ type: "phase", phase: "prepare", label: "関係する資料・データを用意しています" });
   if (opts.prefetchGuides && !split) {
     const before = out.sources.length;
-    const guides = await execute({ id: "prefetch", name: "search_guides", args: { query: question } });
+    // 短い続きの質問 (「写真をとって登録できない？」「設定の仕方は」) は、前の質問とあわせて探す (その質問だけでは何の操作か分からない)
+    const guideQuery = lastAsked && question.length <= 30 ? `${lastAsked.slice(0, 120)} ${question}` : question;
+    const guides = await execute({ id: "prefetch", name: "search_guides", args: { query: guideQuery } });
     prefetched = out.sources.slice(before);
     out.tools.pop();
-    messages[messages.length - 1] = { role: "user", content: `${question}\n\n---\n参考資料 (システムが自動で探した使い方・社内資料。操作の案内はここに書かれた画面・ボタンの名前と手順だけを使う。足りなければ search_guides で探し直す)\n${guides.slice(0, 12000)}` };
+    messages[messages.length - 1] = { role: "user", content: `${question}\n\n---\n参考資料 (システムが自動で探した使い方・社内資料。操作の案内はここに書かれた画面・ボタンの名前と手順だけを使う。足りなければ search_guides で探し直す)\n${guides.slice(0, 9000)}` };
   }
   // 総合的な分析は、全体像を先に用意する (1 回分の往復を省き、必ず全体から考える)
   // 管理会計の質問 (店舗別の粗利益・損益・原価率・内部受注・案分): 管理会計の店舗別損益を先に渡す (経営ダッシュボードの簡易粗利と混ぜない)
