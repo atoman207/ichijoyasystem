@@ -461,7 +461,7 @@ function specSummary(s: AnalysisSpec): string {
 /** 質問に期間の言葉があるか (ない件数・一覧・順位は全期間で数える: 答え方のルール 5・5a) */
 const PERIOD_WORDS = /今日|本日|昨日|明日|今週|先週|来週|今月|先月|来月|今年|昨年|去年|来年|今期|前期|年度|上期|下期|直近|最近|過去|以降|以前|期間|\d+\s*(年|月|日)|\d{4}[-/]|年間|か月|ヶ月|カ月|週間|四半期/;
 
-function makeExecutor(db: Database, user: User, now: Date, out: { tables: AnalysisResult[]; sources: AgentSource[]; tools: AgentReply["tools"]; usedData: boolean; usedKnowledge: boolean; docKeys: string[]; actions?: ProposedAction[] }, opts: { periodless?: boolean; evidence?: () => number[]; actor?: User } = {}) {
+function makeExecutor(db: Database, user: User, now: Date, out: { tables: AnalysisResult[]; sources: AgentSource[]; tools: AgentReply["tools"]; usedData: boolean; usedKnowledge: boolean; docKeys: string[]; actions?: ProposedAction[] }, opts: { periodless?: boolean; evidence?: () => number[]; actor?: User; question?: string } = {}) {
   // actor = ログインした本人 (実行の確認・相談の履歴は本人の権限。user は読み取りの範囲: scope.ts)
   const actor = opts.actor ?? user;
   const addSource = (s: AgentSource) => {
@@ -526,6 +526,12 @@ function makeExecutor(db: Database, user: User, now: Date, out: { tables: Analys
         };
         // 期間の言葉がない質問で、AI が終わりを今日にしたときは、今日より後の日付の記録も数える (全期間。ルール 5a を確実に守る)
         if (opts.periodless && spec.to && spec.to >= toDateKey(now) && spec.to < "2099-12-31") spec.to = "2099-12-31";
+        // 「今年」の質問で、期間の始まりを前の年にした (前年と比べる質問で 1 年ずらした回答があった): 呼び直させる
+        const thisYear = toDateKey(now).slice(0, 4);
+        if (opts.question && /今年|本年/.test(opts.question) && spec.from && spec.from < `${thisYear}-01-01` && (spec.compare === "previous_year" || !/昨年|去年|前年|過去|\d{4}\s*年|年間|年度/.test(opts.question))) {
+          out.tools.push({ name: "集計", summary: `期間の誤り (from=${spec.from})` });
+          return `期間が質問と合いません: 質問の「今年」は ${thisYear}-01-01〜${toDateKey(now)} です (渡した from=${spec.from})。from を ${thisYear}-01-01、to を ${toDateKey(now)} にして呼び直してください (前年の同じ期間と比べるときは compare=previous_year のまま。前年の期間は自動で 1 年前になります)。`;
+        }
         const r = runAnalysis(db, user, spec, now);
         if (!r.ok) {
           out.tools.push({ name: "集計", summary: `できませんでした: ${r.error}` });
@@ -775,6 +781,7 @@ export async function runAgent(db: Database, user: User, history: AgentTurn[], q
   const executeTool = makeExecutor(db, readUser, now, out, {
     actor: user,
     periodless: !PERIOD_WORDS.test(question) && !PERIOD_WORDS.test(lastAsked),
+    question,
     evidence: () => buildEvidence([...toolOutputs, question, historyText], out.tables).values,
   });
   const execute = async (call: ToolCall) => {

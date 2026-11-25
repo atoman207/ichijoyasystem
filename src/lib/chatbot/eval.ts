@@ -401,30 +401,31 @@ export function seedEvalCases(db: Database, by = "system"): number {
   const store = stores[0];
   const other = stores[1] ?? stores[0];
   let added = 0;
+  const fill = (t: string) => t.replace(/\{store_name\}/g, store?.name ?? "").replace(/\{other_name\}/g, other?.name ?? "").replace(/\{store_id\}/g, store?.id ?? "").replace(/\{other_id\}/g, other?.id ?? "");
   for (const s of EVAL_SEEDS) {
-    const exists = chatbotDb().prepare("select id, answer_note, created_at, updated_at from eval_cases where seed_key = ?").get(s.key) as { id: number; answer_note: string; created_at: string; updated_at: string } | undefined;
+    const e = s.input.expect;
+    const input: EvalCaseInput = {
+      ...s.input,
+      expect: { ...e, ...(e.sql ? { sql: fill(e.sql) } : {}), ...(e.forbidSql ? { forbidSql: fill(e.forbidSql) } : {}), ...(e.pick ? { pick: fill(e.pick) } : {}) },
+      question: fill(s.input.question),
+      history: s.input.history?.map(fill),
+      storeId: s.input.storeId === ":store" ? store?.id : s.input.storeId === ":other" ? other?.id : s.input.storeId,
+      origin: "seed",
+    };
+    const exists = chatbotDb().prepare("select id, question, history, expect, answer_note, evidence_note, created_at, updated_at from eval_cases where seed_key = ?").get(s.key) as
+      | { id: number; question: string; history: string; expect: string; answer_note: string; evidence_note: string; created_at: string; updated_at: string }
+      | undefined;
     if (exists) {
-      // 人が直していない質問 (登録したときのまま) は、正しい回答の説明だけを新しい説明にする (正解の条件・質問は変えない)
-      const untouched = exists.updated_at === exists.created_at;
-      const note = (s.input.answerNote ?? "").slice(0, 3000);
-      if (untouched && note && exists.answer_note !== note) chatbotDb().prepare("update eval_cases set answer_note = ? where id = ?").run(note, exists.id);
+      // 人が直していない質問 (登録したときのまま = 直した時刻と登録の時刻が同じ) は、始めの質問の新しい定義 (質問・前の質問・正解の条件・説明) にそろえる。
+      // 人が直した質問は変えない。時刻は変えない (人が直していない印を残す)
+      if (exists.updated_at !== exists.created_at) continue;
+      const next = { question: input.question.trim().slice(0, 1000), history: JSON.stringify((input.history ?? []).map((h) => h.slice(0, 500)).slice(0, 5)), expect: JSON.stringify(input.expect ?? {}).slice(0, 8000), answer_note: (input.answerNote ?? "").slice(0, 3000), evidence_note: (input.evidenceNote ?? "").slice(0, 1000) };
+      if (next.question !== exists.question || next.history !== exists.history || next.expect !== exists.expect || next.answer_note !== exists.answer_note || next.evidence_note !== exists.evidence_note) {
+        chatbotDb().prepare("update eval_cases set question = ?, history = ?, expect = ?, answer_note = ?, evidence_note = ? where id = ?").run(next.question, next.history, next.expect, next.answer_note, next.evidence_note, exists.id);
+      }
       continue;
     }
-    const fill = (t: string) => t.replace(/\{store_name\}/g, store?.name ?? "").replace(/\{other_name\}/g, other?.name ?? "").replace(/\{store_id\}/g, store?.id ?? "").replace(/\{other_id\}/g, other?.id ?? "");
-    const e = s.input.expect;
-    saveEvalCase(
-      {
-        ...s.input,
-        expect: { ...e, ...(e.sql ? { sql: fill(e.sql) } : {}), ...(e.forbidSql ? { forbidSql: fill(e.forbidSql) } : {}), ...(e.pick ? { pick: fill(e.pick) } : {}) },
-        question: fill(s.input.question),
-        history: s.input.history?.map(fill),
-        storeId: s.input.storeId === ":store" ? store?.id : s.input.storeId === ":other" ? other?.id : s.input.storeId,
-        origin: "seed",
-      },
-      by,
-      undefined,
-      s.key,
-    );
+    saveEvalCase(input, by, undefined, s.key);
     added++;
   }
   return added;
@@ -434,7 +435,8 @@ export function seedEvalCases(db: Database, by = "system"): number {
 /* 採点                                                                 */
 /* ================================================================== */
 
-const flat = (s: string) => s.normalize("NFKC").replace(/[\s,，、・　]/g, "").toLowerCase();
+// 会社の種類の書き方の違い (「(株)」「㈱」「株式会社」) は同じとみなす
+const flat = (s: string) => s.normalize("NFKC").replace(/\(株\)|株式会社/g, "株").replace(/\(有\)|有限会社/g, "有").replace(/[\s,，、・　]/g, "").toLowerCase();
 
 /** 回答に数字 e が (書き方・丸めの違いを許して) 含まれる */
 export function answerHasNumber(answer: string, e: number): boolean {

@@ -379,6 +379,18 @@ section("総合的な分析にする質問 (全体像を先に用意する) と�
   handler = () => oaText("合志店が一番です。");
   await askChatbot(db, admin, [], "店舗を比べて、今年の課題を教えて");
   ok(allText(requests[0]).includes("会社の全体像 (business_overview の結果"), "課題を聞く質問は総合的な分析 (全体像を先に用意する)");
+  // 「今年」の質問で、前年と比べるときに期間の始まりを前の年にした: 道具が断って呼び直させる
+  requests.length = 0;
+  let step = 0;
+  handler = (e) => {
+    step++;
+    if (step === 1) return oaTools([{ name: "analyze", args: { ...analyzeArgs, from: `${Number(year) - 1}-01-01`, compare: "previous_year" } }]);
+    if (step === 2) return oaTools([{ name: "analyze", args: { ...analyzeArgs, compare: "previous_year" } }]);
+    return oaText("今年は昨年の同じ期間と比べて増えました。");
+  };
+  const yoy = await askChatbot(db, admin, [], "今年 (1月1日〜今日) の売上は、昨年の同じ期間と比べて何%増減しましたか？");
+  const firstTool = msgs(requests[1] ?? { body: {} }).filter((m) => m.role === "tool").map((m) => String(m.content)).join("\n");
+  ok(firstTool.includes("期間が質問と合いません") && firstTool.includes(`${year}-01-01`) && yoy.tables?.[0]?.spec?.from === `${year}-01-01`, "「今年」の質問で期間を前の年からにしたら、道具が断って今年の期間で呼び直させる");
   for (const q of ["店舗を変更するにはどうしたら良いですか？", "問い合わせで登録した案件を施工予定に変更するにはどうしたらいいですか？"]) {
     requests.length = 0;
     handler = () => oaText("使い方の資料の手順です。");
