@@ -25,7 +25,8 @@ import { myReviewItems, reviewCtx } from "@/lib/knowledge-review";
 import { cronHealth } from "@/lib/knowledge-sync";
 import { docDraftAttention } from "@/lib/doc-drafts";
 import { casePostAttention } from "@/lib/case-posts";
-import { pendingReceptionCount } from "@/lib/reception";
+import { pendingReceptionIds } from "@/lib/reception";
+import { seenKey } from "@/lib/notify-seen";
 import { chatState } from "@/lib/chat/inbox";
 import { prefsOf } from "@/lib/chat/repo";
 import type { ChatSummary } from "@/lib/chat/types";
@@ -40,11 +41,22 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const signups = canManageUsers(user) ? getDb().users.filter((u) => u.signupStatus === "pending" && canApproveSignup(user, u)) : [];
   // FAX: 要確認の受信 (仕分けをする本部・管理者)、自分が担当の未確認の返信、自分が送って失敗した送信
   const faxes = getDb().faxMessages;
-  const faxReview = canTriageFax(user) ? faxes.filter((f) => f.direction === "inbound" && f.triage === "review").length : 0;
-  const faxReplies = faxes.filter((f) => f.direction === "inbound" && f.assignedUserId === user.id && f.purchaseOrderId && !f.checkedAt && (f.triage === "auto" || f.triage === "accepted") && canViewFax(user, f)).length;
-  const faxFailed = faxes.filter((f) => f.direction === "outbound" && f.userId === user.id && (f.status === "failed" || f.status === "unknown") && !f.nextRetryAt).length;
+  const faxReviewKeys = canTriageFax(user) ? faxes.filter((f) => f.direction === "inbound" && f.triage === "review").map((f) => seenKey("fax", f.id)) : [];
+  const faxReplyKeys = faxes.filter((f) => f.direction === "inbound" && f.assignedUserId === user.id && f.purchaseOrderId && !f.checkedAt && (f.triage === "auto" || f.triage === "accepted") && canViewFax(user, f)).map((f) => seenKey("fax", f.id));
+  const faxFailedKeys = faxes.filter((f) => f.direction === "outbound" && f.userId === user.id && (f.status === "failed" || f.status === "unknown") && !f.nextRetryAt).map((f) => seenKey("fax", f.id, f.status));
+  const faxReview = faxReviewKeys.length;
+  const faxReplies = faxReplyKeys.length;
+  const faxFailed = faxFailedKeys.length;
+  // ヘッダーの数字は確認していない記録の数だけを出す (記録ごとのキー。src/lib/notify-seen.ts・AppShell)
+  const approvalKeys = n.pendingApprovals.map((a) => seenKey("apv", a.id));
+  const inquiryKeys = n.newInquiryIds.map((id) => seenKey("inq", id));
+  const receptionKeys = pendingReceptionIds(getDb(), user).map((id) => seenKey("rcp", id));
+  const invoiceKeys = n.overdueInvoiceIds.map((id) => seenKey("inv", id));
+  const conflictKeys = [...new Set(n.conflictPairs)].map((pair) => seenKey("cf", pair));
   // 休暇の申請 (承認できる人: 店長は自店舗の社員、管理者は全員。src/lib/hr)
   const leavePending = (getDb().leaveRequests ?? []).filter((r) => r.status === "pending" && canApproveLeave(user, r));
+  const leaveKeys = leavePending.map((r) => seenKey("lv", r.id));
+  const signupKeys = signups.map((u) => seenKey("su", u.id));
   // チャットのアイコン (要対応 = 業務依頼・未確認の重要メッセージ・未読のメンション / 未読)。チャットのデータ (SQLite) が読めなくても画面は出す
   let chat: ChatSummary | undefined;
   try {
@@ -58,13 +70,13 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const nav: NavItem[] = [
     { href: "/", label: "ダッシュボード", short: "ホーム", icon: "dashboard" },
     { href: "/customers", label: "顧客", icon: "customers", group: "営業・施工" },
-    { href: "/inquiries", label: "問い合わせ", icon: "inquiries", group: "営業・施工", badge: n.newInquiries + pendingReceptionCount(getDb(), user) || undefined },
+    { href: "/inquiries", label: "問い合わせ", icon: "inquiries", group: "営業・施工", badge: inquiryKeys.length + receptionKeys.length || undefined, seenKeys: [...inquiryKeys, ...receptionKeys] },
     { href: "/quotes", label: "見積", icon: "quotes", group: "営業・施工" },
     { href: "/orders", label: "受注・施工", icon: "orders", group: "営業・施工" },
     { href: "/cases", label: "案件の進捗 (問い合わせ〜入金・全処理完了)", short: "案件進捗", icon: "cases", group: "営業・施工" },
-    { href: "/schedule", label: "予定表", icon: "schedule", group: "営業・施工", badge: n.myConflicts || undefined, pinned: true },
+    { href: "/schedule", label: "予定表", icon: "schedule", group: "営業・施工", badge: conflictKeys.length || undefined, seenKeys: conflictKeys, pinned: true },
     { href: "/work-reports", label: "作業日報 (引取・納品の件数・枚数の月次集計)", short: "作業日報", icon: "workReport", group: "営業・施工" },
-    { href: "/invoices", label: "請求・入金", icon: "invoices", group: "経理", badge: n.overdueInvoices || undefined },
+    { href: "/invoices", label: "請求・入金", icon: "invoices", group: "経理", badge: n.overdueInvoices || undefined, seenKeys: invoiceKeys },
     { href: "/finance", label: "入出金の予定 (未入金・支払待ち)", short: "入出金予定", icon: "finance", group: "経理" },
     { href: "/expenses", label: "経費精算", icon: "expenses", group: "経理" },
     { href: "/cashbook", label: "現金出納帳", short: "現金出納", icon: "cashbook", group: "経理" },
@@ -81,21 +93,22 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   }
   nav.push(
     { href: "/capture", label: "書類取込 (紙→データ)", short: "書類取込", icon: "capture", group: "業務支援" },
-    { href: "/approvals", label: "承認", icon: "approvals", group: "業務支援", badge: n.pendingApprovals.length || undefined },
+    { href: "/approvals", label: "承認", icon: "approvals", group: "業務支援", badge: n.pendingApprovals.length || undefined, seenKeys: approvalKeys },
     // チャット (チャンネル・DM) と業務依頼・社内連絡の通知をまとめる (お客様のご要望 2026-11-25「■6」)。数字 = 要対応
     // pinned: ロゴの右 (予定表の隣) に常に出す (お客様のご要望 2026-11-25「チャットをヘッダーに常に表示・目立たせる」)
     { href: "/chat", label: "チャット・業務依頼 (チャンネル・DM・社内連絡)", short: "チャット", icon: "chat", group: "業務支援", badge: (chat ? chat.action : n.mentions.length + n.taskCount) || undefined, pinned: true },
-    { href: "/fax", label: "FAX 送受信 (受信の仕分け・発注書の送信の記録)", short: "FAX", icon: "fax", group: "業務支援", badge: faxReview + faxReplies + faxFailed || undefined },
+    { href: "/fax", label: "FAX 送受信 (受信の仕分け・発注書の送信の記録)", short: "FAX", icon: "fax", group: "業務支援", badge: faxReview + faxReplies + faxFailed || undefined, seenKeys: [...faxReviewKeys, ...faxReplyKeys, ...faxFailedKeys] },
     { href: "/contacts", label: "連絡履歴 (お客様・協力業者)", short: "連絡履歴", icon: "contacts", group: "業務支援" },
     { href: "/ai", label: "AIアシスタント (質問・検索・文書の作成)", short: "AI", icon: "ai", group: "業務支援" },
     { href: "/knowledge", label: "社内資料 (ナレッジ・AI の回答の根拠)", short: "社内資料", icon: "knowledge", group: "業務支援" },
     { href: "/materials", label: "資料・写真", icon: "materials", group: "業務支援" },
   );
-  nav.push({ href: "/leave", label: "有給・休日出勤 (休暇の申請・承認・振休・年度の取得状況)", short: "有給・休暇", icon: "leave", group: "業務支援", badge: leavePending.length || undefined });
+  nav.push({ href: "/leave", label: "有給・休日出勤 (休暇の申請・承認・振休・年度の取得状況)", short: "有給・休暇", icon: "leave", group: "業務支援", badge: leavePending.length || undefined, seenKeys: leaveKeys });
   // 事務 (事務改善シート・慶弔リスト) と縁在庫。縁在庫のバッジ = 共通在庫が規定量を下回った品番の数 (事務担当・本部・管理者・店長)
-  const heriBadge = canManageHeriStock(user, officeCtx(getDb())) || user.role === "store_manager" ? heriBelow(getDb()).length : 0;
+  const heriKeys = canManageHeriStock(user, officeCtx(getDb())) || user.role === "store_manager" ? heriBelow(getDb()).map((r) => seenKey("heri", r.material.id, r.common)) : [];
+  const heriBadge = heriKeys.length;
   nav.push({ href: "/office", label: "事務 (事務改善シート・慶弔リスト)", short: "事務", icon: "office", group: "業務支援" });
-  nav.push({ href: "/heri", label: "縁在庫 (品番 × 場所の数量・入庫・振り分け・使用・棚卸)", short: "縁在庫", icon: "heri", group: "業務支援", badge: heriBadge || undefined });
+  nav.push({ href: "/heri", label: "縁在庫 (品番 × 場所の数量・入庫・振り分け・使用・棚卸)", short: "縁在庫", icon: "heri", group: "業務支援", badge: heriBadge || undefined, seenKeys: heriKeys });
   nav.push({ href: "/kpi", label: "KPI (アンケート・クレーム・口コミ・インセンティブ)", short: "KPI", icon: "kpi", group: "管理" });
   // 経営の数字の画面は、閲覧の範囲の設定で全社員に広げられる (src/lib/access-policy.ts)
   const figureReader = policyReader(getDb(), user);
@@ -118,7 +131,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     nav.push({ href: "/maps", label: "地図・住宅地図 (場所・住宅地図の PDF・一括処理)", short: "地図", icon: "maps", group: "管理" });
   }
   nav.push({ href: "/audit", label: "変更履歴", icon: "audit", group: "管理" });
-  nav.push({ href: "/settings", label: canManageSettings(user) ? "設定" : canManageUsers(user) ? "設定 (閲覧・自店舗のアカウント管理)" : "設定 (閲覧)", short: "設定", icon: "settings", group: "管理", badge: signups.length || undefined });
+  nav.push({ href: "/settings", label: canManageSettings(user) ? "設定" : canManageUsers(user) ? "設定 (閲覧・自店舗のアカウント管理)" : "設定 (閲覧)", short: "設定", icon: "settings", group: "管理", badge: signups.length || undefined, seenKeys: signupKeys });
   nav.push({ href: "/help", label: "使い方 (操作説明)", short: "使い方", icon: "help", group: "管理" });
 
   // 業務依頼・メンションは依頼の画面へ。案件の依頼は、その画面にお客様の電話・住所・内容と日程の登録が出る (お客様のご要望 2026-11-25「メンションからの日程調整・予定登録」)
@@ -130,6 +143,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       title: `承認依頼: ${APPROVAL_TYPE_LABEL[a.type]}`,
       detail: a.type === "record_view" || a.type === "handover_change" || a.type === "store_change" || a.type === "inquiry_delete" ? a.title : `${a.title} (${yen(a.amount)})`,
       href: "/approvals?tab=mine",
+      keys: [seenKey("apv", a.id)],
     })),
     ...(chat
       ? []
@@ -138,11 +152,12 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           title: `${m.from} さんからメンション`,
           detail: m.body,
           href: threadLink(m.threadId),
+          keys: [seenKey("th", m.threadId, m.at)],
         }))),
   ];
   if (!chat) {
     for (const t of n.tasks) {
-      notifications.push({ kind: "task", title: t.title, detail: t.detail, href: threadLink(t.threadId) });
+      notifications.push({ kind: "task", title: t.title, detail: t.detail, href: threadLink(t.threadId), keys: [seenKey("th", t.threadId, t.title)] });
     }
   }
   for (const e of n.assignedEvents) {
@@ -151,75 +166,76 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       title: `${e.updated ? "予定が変更されました" : "予定の担当になりました"}: ${e.title}`,
       detail: `${e.when} · ${e.updated ? "変更" : "登録"} ${e.by}`,
       href: `/schedule/${e.id}`,
+      keys: [seenKey("ev", e.id, e.stamp)],
     });
   }
   if (n.myConflicts > 0) {
-    notifications.push({ kind: "conflict", title: `あなたの予定が ${n.myConflicts} 件重複しています`, detail: "今後 2 週間に時間の重なる予定があります。予定表で日時・担当を調整してください", href: "/schedule?view=list&user=me&store=all&conflicts=1" });
+    notifications.push({ kind: "conflict", title: `あなたの予定が ${n.myConflicts} 件重複しています`, detail: "今後 2 週間に時間の重なる予定があります。予定表で日時・担当を調整してください", href: "/schedule?view=list&user=me&store=all&conflicts=1", keys: conflictKeys });
   }
   if (n.newInquiries > 0) {
-    notifications.push({ kind: "inquiry", title: `未対応の問い合わせ ${n.newInquiries} 件`, detail: "担当者の割当と初回対応をお願いします", href: "/inquiries?status=new" });
+    notifications.push({ kind: "inquiry", title: `未対応の問い合わせ ${n.newInquiries} 件`, detail: "担当者の割当と初回対応をお願いします", href: "/inquiries?status=new", keys: inquiryKeys });
   }
   if (n.overdueInvoices > 0) {
-    notifications.push({ kind: "overdue", title: `支払期日超過の請求 ${n.overdueInvoices} 件`, detail: "入金確認・督促が必要です", href: "/invoices?status=overdue" });
+    notifications.push({ kind: "overdue", title: `支払期日超過の請求 ${n.overdueInvoices} 件`, detail: "入金確認・督促が必要です", href: "/invoices?status=overdue", keys: invoiceKeys });
   }
   if (faxReview > 0) {
-    notifications.push({ kind: "fax", title: `要確認の受信 FAX ${faxReview} 件`, detail: "未登録の番号からの FAX です。「取り込む」か「不要」を選んでください", href: "/fax?tab=review" });
+    notifications.push({ kind: "fax", title: `要確認の受信 FAX ${faxReview} 件`, detail: "未登録の番号からの FAX です。「取り込む」か「不要」を選んでください", href: "/fax?tab=review", keys: faxReviewKeys });
   }
   if (faxReplies > 0) {
-    notifications.push({ kind: "fax", title: `発注書への返信 FAX ${faxReplies} 件`, detail: "仕入先からの返信を確認してください (納期・数量の回答など)", href: "/fax?tab=inbox&unchecked=1" });
+    notifications.push({ kind: "fax", title: `発注書への返信 FAX ${faxReplies} 件`, detail: "仕入先からの返信を確認してください (納期・数量の回答など)", href: "/fax?tab=inbox&unchecked=1", keys: faxReplyKeys });
   }
   if (faxFailed > 0) {
-    notifications.push({ kind: "fax", title: `FAX の送信に失敗 ${faxFailed} 件`, detail: "理由を確認して再送してください", href: "/fax?tab=outbox" });
+    notifications.push({ kind: "fax", title: `FAX の送信に失敗 ${faxFailed} 件`, detail: "理由を確認して再送してください", href: "/fax?tab=outbox", keys: faxFailedKeys });
   }
   // 文書の下書き (src/lib/doc-drafts.ts): 承認を待っている文書 (承認できる人)・差し戻された自分の文書
   const drafts = docDraftAttention(getDb(), user);
   if (drafts.toApprove.length > 0) {
-    notifications.push({ kind: "approval", title: `文書の承認依頼 ${drafts.toApprove.length} 件`, detail: `${drafts.toApprove.slice(0, 3).map((d) => d.title).join("・")}${drafts.toApprove.length > 3 ? " ほか" : ""}。内容を読んで承認するか差し戻してください`, href: "/ai/drafts?view=approve" });
+    notifications.push({ kind: "approval", title: `文書の承認依頼 ${drafts.toApprove.length} 件`, detail: `${drafts.toApprove.slice(0, 3).map((d) => d.title).join("・")}${drafts.toApprove.length > 3 ? " ほか" : ""}。内容を読んで承認するか差し戻してください`, href: "/ai/drafts?view=approve", keys: drafts.toApprove.map((d) => seenKey("dr", d.id, d.status)) });
   }
   if (drafts.returned.length > 0) {
-    notifications.push({ kind: "task", title: `差し戻された文書 ${drafts.returned.length} 件`, detail: "理由を確かめて文面を直し、もう一度「内容を確認した」を押してください", href: "/ai/drafts?view=returned" });
+    notifications.push({ kind: "task", title: `差し戻された文書 ${drafts.returned.length} 件`, detail: "理由を確かめて文面を直し、もう一度「内容を確認した」を押してください", href: "/ai/drafts?view=returned", keys: drafts.returned.map((d) => seenKey("dr", d.id, "returned")) });
   }
   // 施工事例の投稿 (src/lib/case-posts.ts): 確認を待っている投稿 (確認する人)・差し戻された自分の投稿・承認されてまだ投稿していない自分の投稿
   const posts = casePostAttention(getDb(), user);
   if (posts.toReview.length > 0) {
-    notifications.push({ kind: "approval", title: `施工事例の投稿の確認依頼 ${posts.toReview.length} 件`, detail: `${posts.toReview.slice(0, 3).map((p) => p.title || p.number).join("・")}${posts.toReview.length > 3 ? " ほか" : ""}。投稿文と写真を確かめて承認するか差し戻してください`, href: "/materials?tab=cases&view=review" });
+    notifications.push({ kind: "approval", title: `施工事例の投稿の確認依頼 ${posts.toReview.length} 件`, detail: `${posts.toReview.slice(0, 3).map((p) => p.title || p.number).join("・")}${posts.toReview.length > 3 ? " ほか" : ""}。投稿文と写真を確かめて承認するか差し戻してください`, href: "/materials?tab=cases&view=review", keys: posts.toReview.map((p) => seenKey("cp", p.id, p.status)) });
   }
   if (posts.returned.length > 0) {
-    notifications.push({ kind: "task", title: `差し戻された施工事例の投稿 ${posts.returned.length} 件`, detail: "理由を確かめて直し、もう一度「確認を依頼する」を押してください", href: "/materials?tab=cases&view=draft" });
+    notifications.push({ kind: "task", title: `差し戻された施工事例の投稿 ${posts.returned.length} 件`, detail: "理由を確かめて直し、もう一度「確認を依頼する」を押してください", href: "/materials?tab=cases&view=draft", keys: posts.returned.map((p) => seenKey("cp", p.id, p.status)) });
   }
   if (posts.toPost.length > 0) {
-    notifications.push({ kind: "task", title: `承認された施工事例の投稿 ${posts.toPost.length} 件 (投稿待ち)`, detail: "文面をコピー・写真を保存して投稿し、投稿したら記録してください", href: "/materials?tab=cases&view=approved" });
+    notifications.push({ kind: "task", title: `承認された施工事例の投稿 ${posts.toPost.length} 件 (投稿待ち)`, detail: "文面をコピー・写真を保存して投稿し、投稿したら記録してください", href: "/materials?tab=cases&view=approved", keys: posts.toPost.map((p) => seenKey("cp", p.id, p.status)) });
   }
   if (leavePending.length > 0) {
     const nameOf = (id: string) => getDb().users.find((u) => u.id === id)?.name ?? "";
-    notifications.push({ kind: "approval", title: `休暇の申請 ${leavePending.length} 件`, detail: `${leavePending.slice(0, 3).map((r) => `${nameOf(r.userId)} ${r.date.slice(5).replace("-", "/")}`).join("・")}${leavePending.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/leave?tab=approve" });
+    notifications.push({ kind: "approval", title: `休暇の申請 ${leavePending.length} 件`, detail: `${leavePending.slice(0, 3).map((r) => `${nameOf(r.userId)} ${r.date.slice(5).replace("-", "/")}`).join("・")}${leavePending.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/leave?tab=approve", keys: leaveKeys });
   }
   // 社内資料: 自分が担当で確認期限を過ぎたもの / スプレッドシートの同期の失敗・定期の同期の停止 (本部・管理者)。src/lib/knowledge-review.ts・knowledge-sync.ts
   {
     const kdb = getDb();
     const mine = myReviewItems(kdb.knowledge.filter((k) => canViewKnowledge(user, k)), user.id, reviewCtx(kdb));
     if (mine.overdue.length > 0) {
-      notifications.push({ kind: "knowledge", title: `確認期限を過ぎた社内資料 ${mine.overdue.length} 件`, detail: `${mine.overdue.slice(0, 3).map((k) => k.title).join("・")}${mine.overdue.length > 3 ? " ほか" : ""}。内容を確かめて「確認した」を押してください`, href: "/knowledge?health=mine" });
+      notifications.push({ kind: "knowledge", title: `確認期限を過ぎた社内資料 ${mine.overdue.length} 件`, detail: `${mine.overdue.slice(0, 3).map((k) => k.title).join("・")}${mine.overdue.length > 3 ? " ほか" : ""}。内容を確かめて「確認した」を押してください`, href: "/knowledge?health=mine", keys: mine.overdue.map((k) => seenKey("kn", k.id, k.reviewDue)) });
     }
     if (canManageKnowledgeSources(user)) {
       const sources = knowledgeSources(kdb);
       for (const s of sources.filter((x) => x.failCount)) {
-        notifications.push({ kind: "knowledge", title: `社内資料の同期に失敗: ${s.label}`, detail: `${s.failCount} 回続けて失敗 · ${(s.lastError ?? "").slice(0, 80)}`, href: `/knowledge/sources/${s.id}` });
+        notifications.push({ kind: "knowledge", title: `社内資料の同期に失敗: ${s.label}`, detail: `${s.failCount} 回続けて失敗 · ${(s.lastError ?? "").slice(0, 80)}`, href: `/knowledge/sources/${s.id}`, keys: [seenKey("ks", s.id, s.lastSuccessAt ?? "never")] });
       }
       const cron = cronHealth(kdb);
-      if (sources.length && !cron.ok && BACKEND === "supabase") notifications.push({ kind: "knowledge", title: "社内資料の定期の同期が止まっています", detail: cron.detail, href: "/knowledge" });
+      if (sources.length && !cron.ok && BACKEND === "supabase") notifications.push({ kind: "knowledge", title: "社内資料の定期の同期が止まっています", detail: cron.detail, href: "/knowledge", keys: [seenKey("kc", "cron")] });
     }
   }
   // 案件の変更のお知らせ (予定・明細・金額・担当・お客様の付け替えなど。担当店舗・本部・管理者。src/lib/change-notices.ts)
   {
     const changes = unreadNotices(getDb(), user);
     for (const c of changes.slice(0, 4)) {
-      notifications.push({ kind: "change", title: `${c.topic}: ${[c.number, c.title].filter(Boolean).join(" ")}`.slice(0, 80), detail: `${c.lines.slice(0, 2).map(lineText).join(" / ")} · ${userName(c.actorId)} ${noticeTime(c.at)}`, href: `/notices/${c.id}/open` });
+      notifications.push({ kind: "change", title: `${c.topic}: ${[c.number, c.title].filter(Boolean).join(" ")}`.slice(0, 80), detail: `${c.lines.slice(0, 2).map(lineText).join(" / ")} · ${userName(c.actorId)} ${noticeTime(c.at)}`, href: `/notices/${c.id}/open`, keys: [seenKey("chg", c.id, c.at)] });
     }
-    if (changes.length > 4) notifications.push({ kind: "change", title: `ほかの変更のお知らせ ${changes.length - 4} 件`, detail: "変更のお知らせの一覧で確かめてください", href: "/notices" });
+    if (changes.length > 4) notifications.push({ kind: "change", title: `ほかの変更のお知らせ ${changes.length - 4} 件`, detail: "変更のお知らせの一覧で確かめてください", href: "/notices", keys: changes.slice(4).map((c) => seenKey("chg", c.id, c.at)) });
   }
   if (signups.length > 0) {
-    notifications.push({ kind: "signup", title: `新規登録の申請 ${signups.length} 件`, detail: `${signups.slice(0, 3).map((u) => `${u.name} (${ROLE_LABEL[u.role]})`).join("・")}${signups.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/staff#signups" });
+    notifications.push({ kind: "signup", title: `新規登録の申請 ${signups.length} 件`, detail: `${signups.slice(0, 3).map((u) => `${u.name} (${ROLE_LABEL[u.role]})`).join("・")}${signups.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/staff#signups", keys: signupKeys });
   }
 
   return (
@@ -239,7 +255,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       }}
       nav={nav}
       notifications={notifications}
-      counts={{ approvals: n.pendingApprovals.length, mentions: n.mentions.length, signups: signups.length }}
+      counts={{ approvals: n.pendingApprovals.length, mentions: n.mentions.length, signups: signups.length, approvalKeys, signupKeys }}
       live={{ sig: liveSignature(user, n).sig }}
       chat={chat}
       logoutAction={logout}

@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import Link from "@/components/ui/Link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { keysViewedAt, unseenCount } from "@/lib/notify-seen";
+import { addSeen, dropLegacyRead, seenSnapshot, subscribeSeen } from "./seen-store";
 import clsx from "clsx";
 import {
   ACCENT_BUTTON,
@@ -120,6 +122,8 @@ export interface NavItem {
   short?: string;
   icon: NavIcon;
   badge?: number;
+  /** 数字の元の記録のキー (src/lib/notify-seen.ts)。あれば数字は確認していない記録の数 (0 件なら出さない) */
+  seenKeys?: string[];
   group?: string;
   /** ヘッダー左上 (ロゴの右) に常に表示する重要な機能。タブの列には出さない */
   pinned?: boolean;
@@ -147,6 +151,8 @@ export interface NotificationItem {
   title: string;
   detail?: string;
   href: string;
+  /** この通知が知らせる記録のキー (src/lib/notify-seen.ts)。すべて確認すると既読 */
+  keys?: string[];
 }
 
 const NOTIFICATION_STYLE: Record<NotificationItem["kind"], { icon: LucideIcon; cls: string }> = {
@@ -178,6 +184,8 @@ const CREATE_ITEMS: { href: string; label: string; desc: string; icon: LucideIco
 
 type MenuId = "notif" | "user" | "create" | "search" | "more" | null;
 
+const NO_KEYS: ReadonlySet<string> = new Set();
+
 /** ヘッダー左上に常に表示する重要な機能のボタン (光の輪・光の帯・アイコンの揺れで目立たせる) */
 function PinnedButton({ item, active, onClick }: { item: NavItem; active: boolean; onClick: () => void }) {
   const Icon = ICONS[item.icon];
@@ -204,6 +212,17 @@ function PinnedButton({ item, active, onClick }: { item: NavItem; active: boolea
       {item.badge ? <CountBubble n={item.badge} className="absolute -top-1.5 -right-1.5" /> : null}
     </Link>
   );
+}
+
+/** 画面を開いたら、その画面で見られる記録 (問い合わせ・請求書の画面、承認の一覧など) を確認済みにする (src/lib/notify-seen.ts) */
+function SeenOnVisit({ keys, onSeen }: { keys: ReadonlySet<string>; onSeen: (keys: string[]) => void }) {
+  const pathname = usePathname();
+  const search = useSearchParams();
+  const query = search.toString();
+  useEffect(() => {
+    onSeen(keysViewedAt(keys, pathname, new URLSearchParams(query)));
+  }, [keys, pathname, query, onSeen]);
+  return null;
 }
 
 function SearchBox({ autoFocus }: { autoFocus?: boolean }) {
@@ -243,7 +262,7 @@ export function AppShell({
   nav: NavItem[];
   notifications: NotificationItem[];
   /** signups: 自分が承認できる新規登録の申請 (社員管理のメニューに件数を出す) */
-  counts: { approvals: number; mentions: number; signups?: number };
+  counts: { approvals: number; mentions: number; signups?: number; approvalKeys?: string[]; signupKeys?: string[] };
   /** ヘッダーの件数の印 (src/lib/notify-live.ts)。1 分ごとに確かめ、変わったら画面を読み直す */
   live?: { sig: string };
   /** チャットのアイコン (要対応・未読の数と通知音の設定。src/lib/chat/inbox.ts) */
@@ -290,10 +309,21 @@ export function AppShell({
   const [drawer, setDrawer] = useState(false);
   const [menu, setMenu] = useState<MenuId>(null);
   const [lastPath, setLastPath] = useState(pathname);
-  const [readNotifications, setReadNotifications] = useState<Set<string>>(new Set());
+  // 確認済みの記録 (ヘッダーの数字は確認していない記録の数だけ。src/lib/notify-seen.ts・seen-store.ts)。
+  // サーバーと最初の表示は null (= 読み込む前。保存した確認済みを反映する前の数字を一瞬出さない)
+  const storageKey = `ichijoya:seen:${user.id}`;
+  const subscribe = useCallback((onChange: () => void) => subscribeSeen(storageKey, onChange), [storageKey]);
+  const seenSnap = useSyncExternalStore<ReadonlySet<string> | null>(subscribe, () => seenSnapshot(storageKey), () => null);
+  const seenReady = seenSnap !== null;
+  const seen = seenSnap ?? NO_KEYS;
+  // メニューの数字: 記録のキーがあれば確認していない記録の数 (0 件・読み込む前は出さない)
+  const navShown = useMemo(
+    () => nav.map((it) => (it.seenKeys ? { ...it, badge: (seenReady ? unseenCount(it.seenKeys, seen) : 0) || undefined } : it)),
+    [nav, seen, seenReady],
+  );
   // ロゴの右に常に出す重要な機能 (予定表・チャット)。タブの列には出さない
-  const pinnedItems = nav.filter((it) => it.pinned);
-  const tabs = nav.filter((it) => !it.pinned);
+  const pinnedItems = navShown.filter((it) => it.pinned);
+  const tabs = navShown.filter((it) => !it.pinned);
   const [visibleCount, setVisibleCount] = useState(tabs.length);
   const headerRef = useRef<HTMLElement>(null);
   const navRef = useRef<HTMLElement>(null);
@@ -381,46 +411,23 @@ export function AppShell({
     setMenu(null);
     setDrawer(false);
   };
-  const notifKey = (n: NotificationItem) => `${n.kind}|${n.href}|${n.title}|${n.detail ?? ""}`;
-  const storageKey = `ichijoya:read-notifications:${user.id}`;
+  const notifKeys = (n: NotificationItem) => n.keys ?? [`n:${n.kind}|${n.href}|${n.title}`];
+  const allKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const it of nav) for (const k of it.seenKeys ?? []) set.add(k);
+    for (const n of notifications) for (const k of n.keys ?? [`n:${n.kind}|${n.href}|${n.title}`]) set.add(k);
+    for (const k of counts.approvalKeys ?? []) set.add(k);
+    for (const k of counts.signupKeys ?? []) set.add(k);
+    return set;
+  }, [nav, notifications, counts.approvalKeys, counts.signupKeys]);
+  const markSeen = useCallback((keys: readonly string[]) => addSeen(storageKey, keys), [storageKey]);
+  useEffect(() => dropLegacyRead(user.id), [user.id]);
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      const arr = raw ? (JSON.parse(raw) as string[]) : [];
-      if (!Array.isArray(arr)) return;
-      setReadNotifications(new Set(arr));
-    } catch {
-      // localStorage が使えない環境では既読の保持を省略する
-    }
-  }, [storageKey]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify([...readNotifications]));
-    } catch {
-      // 保存できない場合も表示は続行する
-    }
-  }, [readNotifications, storageKey]);
-
-  useEffect(() => {
-    const current = new Set(notifications.map(notifKey));
-    setReadNotifications((prev) => {
-      const next = new Set([...prev].filter((id) => current.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [notifications]);
-
-  const unreadCount = notifications.reduce((sum, n) => (readNotifications.has(notifKey(n)) ? sum : sum + 1), 0);
-  const markRead = (n: NotificationItem) => {
-    const key = notifKey(n);
-    setReadNotifications((prev) => {
-      if (prev.has(key)) return prev;
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
-  };
+  const unseenOf = (keys: readonly string[] | undefined, fallback: number) => (!seenReady ? 0 : keys ? unseenCount(keys, seen) : fallback);
+  const isUnread = (n: NotificationItem) => seenReady && notifKeys(n).some((k) => !seen.has(k));
+  const unreadCount = notifications.filter(isUnread).length;
+  const approvalsUnseen = unseenOf(counts.approvalKeys, counts.approvals);
+  const signupsUnseen = unseenOf(counts.signupKeys, counts.signups ?? 0);
 
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`));
   const shown = tabs.slice(0, visibleCount);
@@ -429,7 +436,7 @@ export function AppShell({
   const overflowBadge = overflow.reduce((a, it) => a + (it.badge ?? 0), 0);
 
   const groups: { name: string; items: NavItem[] }[] = [];
-  for (const item of nav) {
+  for (const item of navShown) {
     const g = item.group ?? "";
     let grp = groups.find((x) => x.name === g);
     if (!grp) {
@@ -618,13 +625,13 @@ export function AppShell({
                 href="/approvals?tab=mine"
                 prefetch={false}
                 onClick={closeAll}
-                aria-label={counts.approvals > 0 ? `承認 (承認を待っている申請 ${counts.approvals} 件)` : "承認 (承認を待っている申請はありません)"}
-                title={counts.approvals > 0 ? `承認を待っている申請 ${counts.approvals} 件` : "承認"}
+                aria-label={counts.approvals > 0 ? `承認 (承認を待っている申請 ${counts.approvals} 件${approvalsUnseen > 0 ? `・未確認 ${approvalsUnseen} 件` : ""})` : "承認 (承認を待っている申請はありません)"}
+                title={counts.approvals > 0 ? `承認を待っている申請 ${counts.approvals} 件${approvalsUnseen > 0 ? ` (未確認 ${approvalsUnseen} 件)` : ""}` : "承認"}
                 data-testid="header-approvals"
                 className={clsx(ICON_BUTTON, "relative max-sm:hidden", isActive("/approvals") && "bg-subtle text-ink")}
               >
                 <ClipboardCheck className={clsx("h-5 w-5", ICON_ZOOM)} />
-                {counts.approvals > 0 && <CountBubble n={counts.approvals} className="absolute top-1 right-1" />}
+                {approvalsUnseen > 0 && <CountBubble n={approvalsUnseen} className="absolute top-1 right-1" />}
               </Link>
             )}
 
@@ -637,7 +644,7 @@ export function AppShell({
                 type="button"
                 className={clsx(ICON_BUTTON, "relative", menu === "notif" && "bg-subtle text-ink")}
                 onClick={toggle("notif")}
-                aria-label="通知"
+                aria-label={unreadCount > 0 ? `通知 (未確認 ${unreadCount} 件)` : "通知"}
                 aria-haspopup="menu"
                 aria-expanded={menu === "notif"}
               >
@@ -646,32 +653,56 @@ export function AppShell({
               </button>
               {menu === "notif" && (
                 <div role="menu" aria-label="通知" className={clsx(MENU_PANEL, "w-[360px]")}>
-                  <div className="flex items-center justify-between border-b border-line px-4 py-3">
+                  <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
                     <span className="text-sm font-semibold text-ink">通知</span>
-                    <span className="text-xs text-ink-3">{unreadCount} 件</span>
+                    <span className="flex items-center gap-2 text-xs text-ink-3">
+                      {unreadCount > 0 ? `未確認 ${unreadCount} 件` : notifications.length > 0 ? "すべて確認済み" : ""}
+                      {unreadCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => markSeen(notifications.flatMap(notifKeys))}
+                          className="rounded-md px-1.5 py-0.5 font-medium text-accent transition hover:bg-accent-soft"
+                        >
+                          すべて確認済みにする
+                        </button>
+                      )}
+                    </span>
                   </div>
                   <div className="max-h-[min(420px,calc(100dvh-7rem))] overflow-y-auto p-1.5">
                     {notifications.length === 0 && <div className="px-4 py-10 text-center text-xs text-ink-3">新しい通知はありません</div>}
                     {notifications.map((n, i) => {
                       const st = NOTIFICATION_STYLE[n.kind];
+                      const keys = notifKeys(n);
+                      const left = seenReady ? unseenCount(keys, seen) : 0;
+                      const unread = left > 0;
                       return (
                         <Link
                           key={i}
                           href={n.href}
                           role="menuitem"
                           onClick={() => {
-                            markRead(n);
+                            markSeen(keys);
                             closeAll();
                           }}
-                          className={clsx("flex items-start gap-3 rounded-xl px-2.5 py-2 transition hover:bg-subtle", readNotifications.has(notifKey(n)) && "opacity-70")}
+                          className={clsx("flex items-start gap-3 rounded-xl px-2.5 py-2 transition hover:bg-subtle", !unread && "opacity-70")}
                         >
                           <span className={clsx("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", st.cls)}>
                             <st.icon className="h-4 w-4" />
                           </span>
-                          <span className="min-w-0">
-                            <span className="block text-sm font-medium text-ink">{n.title}</span>
+                          <span className="min-w-0 flex-1">
+                            <span className={clsx("block text-sm text-ink", unread ? "font-semibold" : "font-medium")}>{n.title}</span>
                             {n.detail && <span className="mt-0.5 line-clamp-2 block text-[11px] leading-snug text-ink-3">{n.detail}</span>}
                           </span>
+                          {/* 未確認の印: まとめた通知は確認していない件数 (確認するたびに減り、すべて確認すると消える) */}
+                          {unread &&
+                            (keys.length > 1 ? (
+                              <span className="mt-1 shrink-0 rounded-full bg-critical px-1.5 text-[10px] leading-4 font-semibold text-white tnum" title={`未確認 ${left} 件`}>
+                                {left > 99 ? "99+" : left}
+                              </span>
+                            ) : (
+                              <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-critical" aria-hidden />
+                            ))}
+                          {unread && <span className="sr-only">（未確認{keys.length > 1 ? ` ${left} 件` : ""}）</span>}
                         </Link>
                       );
                     })}
@@ -724,8 +755,8 @@ export function AppShell({
                   <div className="border-t border-line p-1.5">
                     {[
                       { href: "/profile", label: "プロフィール", icon: CircleUser, count: 0 },
-                      ...(user.canManageStaff ? [{ href: "/staff", label: "社員管理", icon: UserCog, count: counts.signups ?? 0 }] : []),
-                      { href: "/approvals?tab=mine", label: "あなたの承認待ち", icon: ClipboardCheck, count: counts.approvals },
+                      ...(user.canManageStaff ? [{ href: "/staff", label: "社員管理", icon: UserCog, count: signupsUnseen }] : []),
+                      { href: "/approvals?tab=mine", label: "あなたの承認待ち", icon: ClipboardCheck, count: approvalsUnseen },
                       { href: "/chat", label: "チャット・業務依頼", icon: MessagesSquare, count: chat?.action ?? counts.mentions },
                       { href: "/schedule?view=list&user=me&store=all", label: "自分の予定", icon: CalendarDays, count: 0 },
                       { href: "/settings", label: "設定", icon: Settings, count: 0 },
@@ -798,7 +829,7 @@ export function AppShell({
                 >
                   <ClipboardCheck className="h-4 w-4 text-accent" />
                   <span className="flex-1">承認</span>
-                  {counts.approvals > 0 && <span className="rounded-full bg-accent px-1.5 text-[10px] font-semibold text-white tnum">{counts.approvals}</span>}
+                  {approvalsUnseen > 0 && <span className="rounded-full bg-accent px-1.5 text-[10px] font-semibold text-white tnum">{approvalsUnseen}</span>}
                 </Link>
               )}
             </div>
@@ -820,6 +851,10 @@ export function AppShell({
       <main id="main-content" className={MAIN_PAD}>
         <div className={MAIN_INNER}>{children}</div>
       </main>
+      {/* 開いた画面の記録を確認済みにする (表示なし) */}
+      <Suspense fallback={null}>
+        <SeenOnVisit keys={allKeys} onSeen={markSeen} />
+      </Suspense>
       {/* チャットの数の確認・通知音・アプリのアイコンの数字 (表示なし。1 つだけ) */}
       {chat && <ChatLive initial={chat} />}
       {/* チャットの画面は入力欄が画面の下にあるため、左下の「質問する」と右下の「↑」を出さない */}

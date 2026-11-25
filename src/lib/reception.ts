@@ -582,5 +582,10 @@ export function receptionTitle(f: ReceptionFields): string {
 
 /** 利用者が見られる確認待ちの受付の件数 (ヘッダーの問い合わせのバッジ・一覧の案内) */
 export function pendingReceptionCount(db: Pick<Database, "documents">, user: User): number {
-  return db.documents.filter((d) => isPendingReception(d) && canAccessStore(user, d.storeId)).length;
+  return pendingReceptionIds(db, user).length;
+}
+
+/** 利用者が見られる確認待ちの受付の ID (ヘッダーの数字の「確認済み」。src/lib/notify-seen.ts) */
+export function pendingReceptionIds(db: Pick<Database, "documents">, user: User): string[] {
+  return db.documents.filter((d) => isPendingReception(d) && canAccessStore(user, d.storeId)).map((d) => d.id);
 }

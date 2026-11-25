@@ -98,10 +98,15 @@ export interface NotificationSummary {
   mentions: { threadId: string; threadTitle: string; from: string; at: string; body: string }[];
   overdueInvoices: number;
   newInquiries: number;
+  /** 数字の記録 (ヘッダーの「確認済み」に使う。src/lib/notify-seen.ts) */
+  overdueInvoiceIds: string[];
+  newInquiryIds: string[];
+  /** 重なっている自分の予定の組 (予定 ID + 予定 ID) */
+  conflictPairs: string[];
   /** 今日の予定 (自分・自店舗・全社共通。全店舗ロールは全件) */
   todayEvents: number;
   /** 他の人があなたを担当者にして登録・変更した今後の予定 (直近 3 日以内の更新) */
-  assignedEvents: { id: string; title: string; when: string; by: string; updated: boolean }[];
+  assignedEvents: { id: string; title: string; when: string; by: string; updated: boolean; stamp: string }[];
   /** あなたが担当する今後 14 日間の予定のうち、時間帯が重なっている組み合わせの数 */
   myConflicts: number;
   /** 業務依頼: あなたへの未完了の依頼 (未確認・期限超過を先に) と、あなたの依頼への報告 (確認待ち) */
@@ -124,8 +129,10 @@ export function notificationsFor(user: User): NotificationSummary {
     .reverse()
     .map((m) => ({ threadId: m.threadId, threadTitle: threads.get(m.threadId)?.title ?? "", from: userName(m.userId), at: m.at, body: m.body }));
   const invoices = scopeByStore(user, db.invoices);
-  const overdueInvoices = invoices.filter((i) => i.status === "overdue" || (i.status === "issued" && i.dueDate < today)).length;
-  const newInquiries = scopeByStore(user, db.inquiries).filter((i) => i.status === "new").length;
+  const overdueInvoiceIds = invoices.filter((i) => i.status === "overdue" || (i.status === "issued" && i.dueDate < today)).map((i) => i.id);
+  const newInquiryIds = scopeByStore(user, db.inquiries).filter((i) => i.status === "new").map((i) => i.id);
+  const overdueInvoices = overdueInvoiceIds.length;
+  const newInquiries = newInquiryIds.length;
   const allStores = canSeeAllStores(user);
   const todayEvents = db.schedule.filter((e) => occursOn(e, today) && (allStores || e.assigneeIds.includes(user.id) || e.storeId === user.storeId || e.companyWide)).length;
   const horizon = addDays(today, 14);
@@ -139,8 +146,9 @@ export function notificationsFor(user: User): NotificationSummary {
     })
     .sort(compareEvents)
     .slice(0, 5)
-    .map((e) => ({ id: e.id, title: e.title, when: periodLabel(e), by: userName(e.updatedBy ?? e.createdBy), updated: Boolean(e.createdAt && e.updatedAt && e.updatedAt > e.createdAt) }));
-  const myConflicts = analyzeConflicts(mine).pairs.filter((p) => p.userId === user.id).length;
+    .map((e) => ({ id: e.id, title: e.title, when: periodLabel(e), by: userName(e.updatedBy ?? e.createdBy), updated: Boolean(e.createdAt && e.updatedAt && e.updatedAt > e.createdAt), stamp: e.updatedAt ?? e.createdAt ?? "" }));
+  const conflictPairs = analyzeConflicts(mine).pairs.filter((p) => p.userId === user.id).map((p) => [p.aId, p.bId].sort().join("+"));
+  const myConflicts = conflictPairs.length;
   // 業務依頼
   const toMe = db.threads.filter((t) => t.taskStatus && (t.taskStatus === "requested" || t.taskStatus === "acknowledged") && (t.assigneeIds ?? []).includes(user.id));
   const reports = db.threads.filter((t) => t.taskStatus === "reported" && t.createdBy === user.id);
@@ -160,6 +168,9 @@ export function notificationsFor(user: User): NotificationSummary {
     mentions,
     overdueInvoices,
     newInquiries,
+    overdueInvoiceIds,
+    newInquiryIds,
+    conflictPairs,
     todayEvents,
     assignedEvents,
     myConflicts,
