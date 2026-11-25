@@ -19,6 +19,7 @@ import { QuoteEditor } from "@/components/features/QuoteEditor";
 import type { TaxMode } from "@/lib/quote-calc";
 import { itemCategoryProps } from "@/lib/mgmt/categories";
 import { dokoChoiceInfo } from "@/lib/mgmt/costing";
+import { attachmentsOf } from "@/lib/attachments";
 import { Button, Card, Field, Flash, FormActions, Input, LinkButton, Note, PageHeader, Select, Textarea } from "@/components/ui";
 
 export default async function NewQuotePage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
@@ -68,11 +69,44 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
   const newCustomerHref = `/customers/new?${new URLSearchParams({ ...(exText("customerName") ? { name: exText("customerName") } : {}), ...(exText("furigana") ? { kana: exText("furigana") } : {}), ...(exText("phone") ? { phone: exText("phone") } : {}), ...(exText("siteAddress") ? { address: exText("siteAddress") } : {}), returnTo: `/quotes/new?documentId=${doc?.id ?? ""}` })}`;
   const staff = db.users.filter((u) => u.active).sort((a, b) => Number(b.storeId === (customer?.storeId ?? user.storeId)) - Number(a.storeId === (customer?.storeId ?? user.storeId)));
   const docCategoryValue = sp.category ? category : (docCategory ?? category);
+  // 予定表の小さな画面から撮影して作るとき: 保存のあとその画面に戻る (お客様のご要望 2026-11-25「②」)
+  const returnTo = sp.returnTo && sp.returnTo.startsWith("/") && !sp.returnTo.startsWith("//") ? sp.returnTo : undefined;
+  const original = doc ? attachmentsOf(db, "document", doc.id)[0] : undefined;
+  const warnings = Array.isArray(ex._warnings) ? (ex._warnings as string[]).slice(0, 6) : [];
 
   return (
     <div className="max-w-5xl">
-      <Flash err={sp.err} />
-      <PageHeader title="見積を作成" back={{ href: inquiry ? `/inquiries/${inquiry.id}` : "/quotes", label: inquiry ? "問い合わせに戻る" : "見積一覧" }} />
+      <Flash msg={sp.msg} err={sp.err} />
+      <PageHeader title="見積を作成" back={returnTo ? { href: returnTo, label: "予定表に戻る" } : { href: inquiry ? `/inquiries/${inquiry.id}` : "/quotes", label: inquiry ? "問い合わせに戻る" : "見積一覧" }} />
+      {doc && (original || warnings.length > 0) && (
+        <div className="mb-3 grid grid-cols-1 gap-3 rounded-2xl border border-line bg-panel p-3 @xl:grid-cols-[10rem_minmax(0,1fr)]" data-testid="quote-doc-original">
+          {original ? (
+            original.kind === "photo" ? (
+              <a href={`/api/attachments/${original.id}`} target="_blank" rel="noopener" className="block overflow-hidden rounded-lg border border-line bg-subtle" title="押すと元の大きさで開きます">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={`/api/attachments/${original.id}${original.thumbKey ? "?size=thumb" : ""}`} alt="撮影した見積書" className="max-h-56 w-full object-contain" />
+              </a>
+            ) : (
+              <a href={`/api/attachments/${original.id}`} target="_blank" rel="noopener" className="flex h-24 items-center justify-center rounded-lg border border-line bg-subtle text-xs text-accent hover:underline">
+                元の書類 (PDF) を開く
+              </a>
+            )
+          ) : (
+            <span />
+          )}
+          <div className="min-w-0 space-y-1 text-xs">
+            <p className="font-medium text-ink">撮影した見積書「{doc.fileName}」の読み取り結果を下に入れています。写真と見比べて確かめてください。</p>
+            {warnings.map((w, i) => (
+              <p key={i} className="text-warn-ink">
+                ⚠ {w}
+              </p>
+            ))}
+            <a href={`/capture?doc=${doc.id}`} className="inline-flex text-accent hover:underline">
+              読み取りの確認の画面で直す・読み直す
+            </a>
+          </div>
+        </div>
+      )}
       <Note tone="accent">
         合計 {approvalSettings(db).quoteAdminThreshold.toLocaleString("ja-JP")} 円未満は店長承認、以上は管理者承認が必要です (本部の案件・店長の申請・承認できる店長がいない店舗は管理者)。「承認を申請」すると承認者に通知され、承認後にお客様へ送付できます。
         {doc && <> この見積は取込書類「{doc.fileName}」の読取結果を初期値にしています (品名は商品マスタに対応づけ、単価が読み取れない行はマスタの単価)。内容を確認・修正してください。</>}
@@ -84,10 +118,11 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
       )}
       <Card className="mt-4">
         {choices.searchable && (
-          <CustomerSearch total={choices.total} q={sp.cq} shown={customers.filter((c) => c.id !== customerId).length} keep={{ customerId: sp.customerId, inquiryId: sp.inquiryId, documentId: sp.documentId, category: sp.category }} />
+          <CustomerSearch total={choices.total} q={sp.cq} shown={customers.filter((c) => c.id !== customerId).length} keep={{ customerId: sp.customerId, inquiryId: sp.inquiryId, documentId: sp.documentId, category: sp.category, returnTo: sp.returnTo }} />
         )}
         <form action={createQuote} className="space-y-5">
           {inquiry && <input type="hidden" name="inquiryId" value={inquiry.id} />}
+          {returnTo && <input type="hidden" name="returnTo" value={returnTo} />}
           {doc && <><input type="hidden" name="documentId" value={doc.id} /><input type="hidden" name="source" value="ocr" /><input type="hidden" name="paperNo" value={exText("paperNo")} /><input type="hidden" name="quoteDate" value={exText("quoteDate")} /></>}
           {doc && !customerId && (exText("customerName") || exText("phone")) && (
             <div className="rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn-ink">

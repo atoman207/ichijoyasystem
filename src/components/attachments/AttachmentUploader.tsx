@@ -4,6 +4,9 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Camera, CircleAlert, CircleCheck, LoaderCircle, Paperclip } from "lucide-react";
 import { prepareFile } from "./image-prep";
+import type { AttachmentCategory } from "@/lib/db/types";
+import { ATTACHMENT_CATEGORIES, ATTACHMENT_CATEGORY } from "@/lib/attachment-category";
+import clsx from "clsx";
 import { CameraDialog, useTouchDevice } from "./CameraDialog";
 
 /** 1 回に選べるファイルの数 */
@@ -19,7 +22,26 @@ interface Row {
  * 写真・資料の登録 (スマートフォン・タブレットのカメラ / アルバム / ファイル。パソコンはブラウザーのカメラ = CameraDialog で続けて撮影)。
  * 写真は縮小してから 1 枚ずつ送り、すべて終わったら画面を更新する
  */
-export function AttachmentUploader({ parentType, parentId, accept, endpoint = "/api/attachments", note }: { parentType: string; parentId: string; accept: string; endpoint?: string; note?: string }) {
+export function AttachmentUploader({
+  parentType,
+  parentId,
+  accept,
+  endpoint = "/api/attachments",
+  note,
+  categories = false,
+  onDone,
+}: {
+  parentType: string;
+  parentId: string;
+  accept: string;
+  endpoint?: string;
+  note?: string;
+  /** 資料の種類 (現場図面・採寸図・現場の写真・施工前・施工後・資料) を選んで登録する (お客様のご要望 2026-11-25「⑤」) */
+  categories?: boolean;
+  /** 登録が終わったとき (予定表の小さな画面は画面の更新の代わりに読み直す) */
+  onDone?: (count: number) => void;
+}) {
+  const [category, setCategory] = useState<AttachmentCategory | "">("");
   const router = useRouter();
   const cameraRef = useRef<HTMLInputElement>(null);
   const pickRef = useRef<HTMLInputElement>(null);
@@ -54,6 +76,7 @@ export function AttachmentUploader({ parentType, parentId, accept, endpoint = "/
         if (p.height) fd.set("height", String(p.height));
         if (p.takenAt) fd.set("takenAt", p.takenAt);
         if (caption.trim()) fd.set("caption", caption.trim());
+        if (category) fd.set("category", category);
         const res = await fetch(endpoint, { method: "POST", body: fd });
         const body = res.headers.get("content-type")?.includes("application/json") ? ((await res.json()) as { ok: boolean; error?: string }) : null;
         if (!body) throw new Error(res.status === 413 ? "ファイルが大きすぎます (1 ファイル 4 MB まで)。" : "ログインの有効期限が切れた可能性があります。ログインし直してください。");
@@ -70,7 +93,8 @@ export function AttachmentUploader({ parentType, parentId, accept, endpoint = "/
     if (pickRef.current) pickRef.current.value = "";
     if (ok > 0) {
       setCaption("");
-      router.refresh();
+      if (onDone) onDone(ok);
+      else router.refresh();
     }
     // 全件成功したら一覧を数秒後に閉じる
     if (ok === files.length) setTimeout(() => setRows((r) => (r === next ? [] : r)), 4000);
@@ -79,6 +103,27 @@ export function AttachmentUploader({ parentType, parentId, accept, endpoint = "/
   const done = rows.filter((r) => r.state === "done").length;
   return (
     <div className="rounded-xl border border-dashed border-line-strong bg-subtle/40 p-3">
+      {categories && (
+        <div className="mb-2" role="radiogroup" aria-label="資料の種類">
+          <div className="mb-1 text-[11px] font-semibold text-ink-2">何の資料ですか (選んでから撮影・選択)</div>
+          <div className="flex flex-wrap gap-1.5">
+            {ATTACHMENT_CATEGORIES.map((c) => (
+              <button
+                key={c}
+                type="button"
+                role="radio"
+                aria-checked={category === c}
+                onClick={() => setCategory(category === c ? "" : c)}
+                title={ATTACHMENT_CATEGORY[c].hint}
+                className={clsx("rounded-lg border px-2.5 py-1.5 text-xs", category === c ? "border-accent bg-accent-soft font-medium text-accent-ink" : "border-line bg-panel text-ink-2 hover:border-accent/50")}
+                data-testid={`att-cat-${c}`}
+              >
+                {ATTACHMENT_CATEGORY[c].short}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         {pc ? (
           <button type="button" onClick={() => setCamera(true)} disabled={busy} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-accent px-4 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-60">

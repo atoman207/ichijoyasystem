@@ -4,7 +4,7 @@
  * 金額はすべて円の整数。日付は "YYYY-MM-DD"。描画は src/lib/pdf/render.ts
  */
 
-export interface PdfBankAccount { bank: string; branch: string; type: string; number: string; holder: string }
+export interface PdfBankAccount { bank: string; branch: string; type: string; number: string; holder: string; holderKana?: string }
 
 export interface PdfCompany {
   name: string; postalCode?: string; address?: string; tel?: string; fax?: string; email?: string; website?: string;
@@ -53,6 +53,8 @@ export interface ReceiptPdfData {
   amount: number; /** tax-exclusive amount and tax for the 10% rate breakdown */ taxable: number; tax: number;
   /** e.g. "畳工事代として" */ purpose: string; paymentMethod?: string; invoiceNumber?: string;
   company: PdfCompany; reissue?: boolean;
+  /** 再発行の何回目 (2 回目以降の出力。領収書の台帳の出力記録から) */ reissueNo?: number;
+  /** 支払方法ごとの内訳 (お客様のご要望 2026-11-25「⑧」。合計 = amount) */ parts?: { label: string; amount: number }[];
   /** 非課税の取引 (内訳を「非課税」で表示) */ taxExempt?: boolean;
 }
 

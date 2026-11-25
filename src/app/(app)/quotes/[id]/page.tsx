@@ -80,10 +80,11 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
         description={<span className="inline-flex flex-wrap items-center gap-2">{customer?.name} 様 · {CATEGORY_LABEL[q.category]} · <StoreTag store={store} /> · 見積担当 {userName(q.estimatorId ?? q.createdBy)} · 作成 {userName(q.createdBy)} {fmtDate(q.createdAt)}{q.paperNo ? ` · 手書き見積書 No.${q.paperNo}` : ""}{q.handedOver ? " · 現場で手渡し済み" : ""}</span>}
         back={{ href: "/quotes", label: "見積一覧" }}
         actions={
-          viewOnly ? undefined : <>
+          // 帳票の出力は閲覧のみの社員もできる (お客様のご要望 2026-11-25「⑥」。出力の記録が残る)
+          <>
             <LinkButton href={`/api/pdf/quotes/${q.id}`} variant="secondary" size="sm" target="_blank">見積書 PDF</LinkButton>
             <LinkButton href={`/print/quotes/${q.id}`} variant="ghost" size="sm">画面で表示・印刷</LinkButton>
-            {["draft", "approved", "sent", "accepted"].includes(q.status) && !q.pendingChange && !lock.locked && <LinkButton href={`/quotes/${q.id}/edit`} variant="secondary" size="sm">{q.status === "draft" ? "編集" : "変更を申請 (金額・数量・施工内容)"}</LinkButton>}
+            {!viewOnly && ["draft", "approved", "sent", "accepted"].includes(q.status) && !q.pendingChange && !lock.locked && <LinkButton href={`/quotes/${q.id}/edit`} variant="secondary" size="sm">{q.status === "draft" ? "編集" : "変更を申請 (金額・数量・施工内容)"}</LinkButton>}
           </>
         }
       />

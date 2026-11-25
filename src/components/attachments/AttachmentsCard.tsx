@@ -45,7 +45,8 @@ export function AttachmentsCard({
         action={items.length > 0 ? <span className="text-xs text-ink-3">写真 {photos} 枚 · 資料 {items.length - photos} 件</span> : undefined}
       />
       <div className="space-y-4">
-        {canAdd && <AttachmentUploader parentType={p.type} parentId={p.id} accept={ATTACHMENT_ACCEPT} />}
+        {/* 案件の記録は資料の種類 (現場図面・採寸図・現場の写真・施工前・施工後・資料) を選んで登録する (お客様のご要望 2026-11-25「⑤」) */}
+        {canAdd && <AttachmentUploader parentType={p.type} parentId={p.id} accept={ATTACHMENT_ACCEPT} categories={p.type === "customer" || p.type === "inquiry" || p.type === "quote" || p.type === "order"} />}
         {items.length > 0 ? (
           <AttachmentGallery items={items} deleteAction={deleteAttachment} returnTo={returnTo} showParent={Boolean(customerId)} />
         ) : (

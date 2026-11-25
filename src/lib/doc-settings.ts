@@ -13,7 +13,10 @@ export interface BankAccount {
   /** 普通 / 当座 */
   type: string;
   number: string;
+  /** 口座名義 (例: 株式会社 一畳屋) */
   holder: string;
+  /** 口座名義のカナ (振込のときの受取人名。例: カ）イチジョウヤ)。空は印字しない */
+  holderKana?: string;
 }
 
 export interface DocumentSettings {
@@ -74,7 +77,7 @@ export function documentSettings(db: Pick<Database, "stores" | "settings">): Doc
   const v = (db.settings ?? []).find((s) => s.id === DOCUMENT_SETTINGS_ID)?.value ?? {};
   const banks = Array.isArray(v.bankAccounts)
     ? (v.bankAccounts as Record<string, unknown>[])
-        .map((b) => ({ bank: str(b?.bank, 60) ?? "", branch: str(b?.branch, 60) ?? "", type: str(b?.type, 10) ?? "普通", number: str(b?.number, 20) ?? "", holder: str(b?.holder, 80) ?? "" }))
+        .map((b) => ({ bank: str(b?.bank, 60) ?? "", branch: str(b?.branch, 60) ?? "", type: str(b?.type, 10) ?? "普通", number: str(b?.number, 20) ?? "", holder: str(b?.holder, 80) ?? "", ...(str(b?.holderKana, 80) ? { holderKana: str(b?.holderKana, 80) } : {}) }))
         .filter((b) => b.bank && b.number)
     : d.bankAccounts;
   return {

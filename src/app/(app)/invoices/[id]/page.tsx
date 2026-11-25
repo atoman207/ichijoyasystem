@@ -7,6 +7,7 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canManageFinance, isManagerOrAbove } from "@/lib/auth/permissions";
 import { customerName, userName } from "@/lib/db/queries";
+import { ReceiptsCard } from "@/components/finance/ReceiptsCard";
 import { logInvoiceContact, recordPayment, updateExpectedPayment, updateInvoiceInfo, voidInvoice } from "@/lib/actions/invoices";
 import { settlePayment } from "@/lib/actions/cases";
 import { fmtDate, toDateKey, yen } from "@/lib/format";
@@ -56,9 +57,10 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
         description={<span className="inline-flex flex-wrap items-center gap-2"><StoreTag store={db.stores.find((s) => s.id === inv.storeId)} /> · 発行 {fmtDate(inv.issueDate)} · 支払期限 {fmtDate(inv.dueDate)}{batch ? ` · まとめ請求 (${inv.periodFrom ? `${fmtDate(inv.periodFrom)}〜` : ""}${fmtDate(inv.periodTo)} 締め)` : order?.salesDate ? ` · 売上計上日 ${fmtDate(order.salesDate)} (施工完了日)` : ""} · 発行者 {userName(inv.createdBy)}</span>}
         back={{ href: "/invoices", label: "請求・入金一覧" }}
         actions={
-          viewOnly ? undefined : <>
+          // 帳票の出力は閲覧のみの社員もできる (お客様のご要望 2026-11-25「⑥」。出力の記録が残る)
+          <>
             <LinkButton href={`/api/pdf/invoices/${inv.id}`} variant="secondary" size="sm" target="_blank">請求書 PDF</LinkButton>
-            {inv.paidAmount > 0 && inv.status !== "void" && <LinkButton href={`/api/pdf/receipts/${inv.id}`} variant="secondary" size="sm" target="_blank">領収書 PDF</LinkButton>}
+            {inv.status !== "void" && <LinkButton href="#receipts" variant="secondary" size="sm">領収書</LinkButton>}
             <LinkButton href={`/print/invoices/${inv.id}`} variant="ghost" size="sm">画面で表示・印刷</LinkButton>
           </>
         }
@@ -212,6 +214,10 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
         </div>
       </div>
       </ReadOnlyArea>
+      {/* 領収書の発行・印刷は閲覧のみの社員もできる (現場で集金した社員。お客様のご要望 2026-11-25「⑥」「⑧」) */}
+      <div className="mt-4">
+        <ReceiptsCard db={db} user={user} inv={inv} returnTo={returnTo} />
+      </div>
     </div>
   );
 }

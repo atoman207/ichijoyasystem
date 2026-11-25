@@ -623,6 +623,8 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
     byStore("work_report_days"),
     ...(figures ? [] : [manager ? byStore("promotions") : none("promotions")]),
     ...unless(records, v("payments", "select * from main.payments where invoice_id in (select id from main.invoices where store_id = " + store + ")")),
+    // 領収書・帳票の出力記録 (お客様の名前・金額): 請求書と同じ (顧客情報を全店舗に広げたときは全店舗)
+    ...(records ? [] : ["receipts", "doc_outputs"].map(byStore)),
     // 経費: 店長は自店舗、店舗スタッフは自分の申請 / 仕入: 店長は自店舗 / 仕入先: 店長のみ
     v("expenses", `select * from main.expenses where ${manager ? `store_id = ${store}` : `submitted_by = ${me}`}`),
     manager ? byStore("purchases") : none("purchases"),

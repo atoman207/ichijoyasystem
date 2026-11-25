@@ -1,5 +1,9 @@
-import type { CaseRequestKind, MediaKey, QuoteItem, ScheduleKind, StoreId } from "@/lib/db/types";
+import type { CaseRequestKind, MediaKey, QuoteItem, ReceiptPart, ScheduleKind, StoreId } from "@/lib/db/types";
 import type { TaxMode } from "@/lib/quote-calc";
+import type { AttachmentView } from "@/lib/attachments";
+import type { HandoverFormRow } from "@/lib/handover";
+import type { FormStore, FormUser } from "./form-parts";
+import type { ReceiptCheck } from "@/lib/receipts";
 
 /** 予定表で予定を押したときの小さな画面の中身 (/api/schedule/events/[id] → EventQuickDialog) */
 export interface EventQuickData {
@@ -60,6 +64,8 @@ export interface EventQuickData {
   caseEdit?: QuickCase;
   /** 担当店舗・担当者への依頼 (メンション。お客様のご要望 2026-11-25「⑪」。src/lib/case-requests.ts) */
   request?: QuickRequest;
+  /** この案件で: 見積書の撮影・受注 (日程)・資料・帳票 (お客様のご要望 2026-11-25「②〜⑧」) */
+  caseWork?: QuickWork;
 }
 
 export interface QuickRequest {
@@ -198,4 +204,57 @@ export interface QuickPair {
   addMode: "order" | "event";
   /** 受注の日程で納品日が決まっていない品目 (名前) */
   undated: string[];
+}
+
+/** 予定表の小さな画面の「この案件で」(お客様のご要望 2026-11-25「予定表 → 案件 → 見積書撮影・登録 → 受注登録 → 日程登録 → 資料登録 → 帳票出力」) */
+export interface QuickWork {
+  caseLabel: string;
+  /** ② 手書きの見積書を撮影して見積を作る (見積のない案件) */
+  capture?: { inquiryId?: string; customerId?: string };
+  /** 見積の画面 (見積がある案件) */
+  quote?: { id: string; number: string; status: string; href: string };
+  /** ③④ 受注にする (日程つき)。見積が承認前なら「現場で受注」(見積の承認とあわせて申請) */
+  toOrder?: {
+    quoteId: string;
+    quoteNumber: string;
+    total: number;
+    onsite: boolean;
+    own: boolean;
+    approvalNote: string;
+    initial: HandoverFormRow[];
+    /** 手書きの見積書の「引取日時」「納品日時」(日程の案の元) */
+    sourceText?: string;
+    workerIds: string[];
+    siteAddress: string;
+    storeId: StoreId;
+    users: FormUser[];
+    stores: FormStore[];
+    currentUserId: string;
+  };
+  /** 受注にできない理由 (承認待ちの変更など) */
+  orderBlocked?: string;
+  order?: { id: string; number: string; status: string; href: string };
+  /** ⑤ 資料・写真 (案件の問い合わせ・見積・受注に登録したもの。登録先は一番進んだ記録) */
+  files?: { parentType: "inquiry" | "quote" | "order"; parentId: string; parentLabel: string; canAdd: boolean; accept: string; items: AttachmentView[]; more: number };
+  /** ⑥⑦⑧ 帳票 */
+  docs?: QuickDocs;
+}
+
+export interface QuickDocs {
+  quote?: { id: string; number: string; version: number; draft: boolean; outputs: number; canPrint: boolean };
+  invoice?: { id: string; number: string; total: number; paidAmount: number; outputs: number; canPrint: boolean; href: string };
+  /** 請求書がないとき: 発行できるか (店長・本部・管理者。施工完了の前も) */
+  invoiceIssue?: { ok: boolean; pre: boolean; reason?: string; orderId: string; total: number };
+  receipt?: {
+    wanted: boolean;
+    auto: boolean;
+    reason: string;
+    canSetWanted: boolean;
+    orderId: string;
+    issued: { id: string; number: string; amount: number; parts: string; outputs: number; status: "issued" | "void" }[];
+    form?: { invoiceId: string; invoiceNumber: string; total: number; paidAmount: number; remaining: number; amount: number; parts: ReceiptPart[]; beforePayment: boolean; addressee: string; honorific: "様" | "御中"; purpose: string };
+    checks: ReceiptCheck[];
+  };
+  /** まとめて印刷の画面 (その日・その店舗) */
+  batchHref: string;
 }

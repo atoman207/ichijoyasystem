@@ -1,6 +1,6 @@
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
-import { CalendarDays, CalendarOff, ChartGantt, ChevronLeft, ChevronRight, Columns3, Factory, FileSpreadsheet, Gauge, LayoutGrid, List, Plus, Route, Rows3, TriangleAlert, UserRound } from "lucide-react";
+import { CalendarDays, CalendarOff, ChartGantt, ChevronLeft, ChevronRight, Columns3, Factory, FileSpreadsheet, Gauge, LayoutGrid, List, Plus, Printer, Route, Rows3, TriangleAlert, UserRound } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { defaultScheduleStore } from "@/lib/schedule-default";
@@ -272,6 +272,11 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
             <LinkButton href={`/schedule/production?date=${view === "day" ? anchor : from >= today || view === "list" ? from : today}${view === "day" ? "&days=1" : ""}${storeFilter ? `&store=${storeFilter}` : ""}`} variant="secondary" size="sm">
               <Factory />
               畳製造予定
+            </LinkButton>
+            {/* その日の納品・施工の請求書・領収書をまとめて印刷 (お客様のご要望 2026-11-25「⑦」) */}
+            <LinkButton href={`/schedule/print?date=${view === "day" ? anchor : today}${storeFilter ? `&store=${storeFilter}` : ""}`} variant="secondary" size="sm">
+              <Printer />
+              帳票をまとめて印刷
             </LinkButton>
             <LinkButton href="/schedule/planning" variant="secondary" size="sm">
               <Route />

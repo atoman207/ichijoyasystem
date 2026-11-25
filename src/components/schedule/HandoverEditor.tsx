@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Link2, Plus, Trash, Unlink } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { Link2, Plus, Split, Trash, Unlink } from "lucide-react";
 import type { HandoverItem, OrderHandover, StoreId } from "@/lib/db/types";
 import {
   HANDOVER_ITEM,
@@ -148,6 +148,9 @@ export function HandoverEditor({
   stores,
   storeId,
   currentUserId,
+  submitLabel,
+  hidden,
+  extra,
 }: {
   action: (formData: FormData) => void | Promise<void>;
   initial: HandoverFormRow[];
@@ -167,6 +170,12 @@ export function HandoverEditor({
   stores: FormStore[];
   storeId: StoreId;
   currentUserId: string;
+  /** 保存のボタンの文字 (受注登録と同時に日程を入れるとき: 「受注登録して予定表に載せる」) */
+  submitLabel?: string;
+  /** フォームに足す値 (受注登録: returnTo・onsite など) */
+  hidden?: Record<string, string>;
+  /** 日程の欄の上に出す欄 (受注登録のメモなど) */
+  extra?: ReactNode;
 }) {
   const [rows, setRows] = useState<Row[]>(() => {
     const base: Row[] = initial.map((r) => ({
@@ -276,6 +285,21 @@ export function HandoverEditor({
     ]);
   };
 
+  /**
+   * 同じ品目を分けて納品する (お客様のご要望 2026-11-25「④」: 襖・障子・網戸の納品を 2 日に分けるなど)。
+   * 引き取りは同じ日時のまま、納品日が空の 2 回目の行を足す。名前に数量を書き分ける (例: 襖 4枚 / 襖 2枚)
+   */
+  const splitRow = (id: string) =>
+    setRows((rs) => {
+      const i = rs.findIndex((r) => r.id === id);
+      if (i < 0) return rs;
+      const src = rs[i];
+      const base = src.label.trim() || HANDOVER_ITEM[src.item].label;
+      const n = rs.filter((r) => r.item === src.item).length + 1;
+      const copy: Row = { ...src, id: newHandoverId(), label: `${base.replace(/\s*\(\d+回目\)$/, "")} (${n}回目)`, same: false, deliveryDate: "", deliveryStart: "", deliveryEnd: "", deliverySlot: "", deliveryMode: "", linked: false };
+      return [...rs.slice(0, i + 1), copy, ...rs.slice(i + 1)];
+    });
+
   /** 行の印: 保存済みの日付のある引き取り・納品 (施工) が変わった = 変更 (承認)、日付のなかったところに入れた = 登録 (すぐ反映) */
   const status = (r: Row): { text: string; tone: string } | null => {
     const s = savedById.get(r.id);
@@ -307,6 +331,10 @@ export function HandoverEditor({
   return (
     <form action={action} className="@container space-y-4">
       <input type="hidden" name="handovers" value={JSON.stringify(plan)} />
+      {Object.entries(hidden ?? {}).map(([k, v]) => (
+        <input key={k} type="hidden" name={k} value={v} />
+      ))}
+      {extra}
       {suggested && (
         <p className="rounded-lg bg-info-soft px-3 py-2 text-xs text-info-ink">
           見積の明細と手書きの「引取日時」「納品日時」から入れた案です。日程を確かめて「保存する」を押すと予定表に載ります。
@@ -338,6 +366,12 @@ export function HandoverEditor({
                   <Input value={r.label} onChange={(e) => update(r.id, { label: e.target.value })} placeholder={def.label} maxLength={40} aria-label={`名前 ${n}`} />
                 </Field>
                 {st && <span className={`mb-2 rounded-full px-2 py-0.5 text-[11px] font-medium ${st.tone}`}>{st.text}</span>}
+                {!isInstall(r) && (
+                  <button type="button" onClick={() => splitRow(r.id)} className="mb-1 inline-flex items-center gap-1 rounded px-2 py-2 text-[11px] text-ink-2 hover:bg-subtle hover:text-ink" aria-label={`品目 ${n} を分けて納品する`} title="同じ品目の納品を 2 回に分ける (引き取りは同じ)">
+                    <Split className="h-4 w-4" />
+                    分けて納品
+                  </button>
+                )}
                 <button type="button" onClick={() => setRows((rs) => rs.filter((x) => x.id !== r.id))} className="mb-1 rounded p-2 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`品目 ${n} を削除`}>
                   <Trash className="h-4 w-4" />
                 </button>
@@ -459,7 +493,7 @@ export function HandoverEditor({
             <Plus /> 品目を追加
           </Button>
           <span className="text-[11px] text-ink-3">
-            襖・障子・網戸は 1 つの品目に入れた日程がほかの品目にも入ります (別の日にする品目は「この品目だけ別の日程にする」)。引き取りの日時は、まだ日程のないほかの品目にも同じ値が入ります。
+            襖・障子・網戸は 1 つの品目に入れた日程がほかの品目にも入ります (別の日にする品目は「この品目だけ別の日程にする」)。引き取りの日時は、まだ日程のないほかの品目にも同じ値が入ります。同じ品目の納品を 2 日に分けるときは「分けて納品」(名前に枚数を書き分けてください)。
           </span>
         </div>
       </div>
@@ -510,7 +544,7 @@ export function HandoverEditor({
 
       <div className="flex flex-wrap items-center gap-3">
         <Button type="submit" disabled={blocked}>
-          {diff.needsApproval && !own ? "保存して変更を申請" : "保存する"}
+          {diff.needsApproval && !own ? "保存して変更を申請" : (submitLabel ?? "保存する")}
         </Button>
         <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-ink-2">
           <input type="checkbox" name="allowOverlap" value="1" className="h-4 w-4 accent-accent" />

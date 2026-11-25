@@ -283,6 +283,32 @@ export function canDownloadBackup(user: User): boolean {
   return user.role === "admin";
 }
 
+/**
+ * 帳票 (見積書・請求書・領収書) の出力・印刷 (お客様のご要望 2026-11-25「⑥」: 全社員が出力できる。出力の記録 = doc_outputs)。
+ * access = 記録の閲覧の判定 (case-access.ts の *AccessInfo)。見られる記録なら出力できる。金額・請求内容・入金を変える権限とは別
+ */
+export function canOutputDocument(user: User, access: "edit" | "view" | "none"): boolean {
+  return user.active && access !== "none";
+}
+
+/**
+ * 領収書の発行 (支払方法の内訳つき。src/lib/receipts.ts)。現場で集金した社員が発行するため、帳票の出力と同じく記録を見られる社員。
+ * 発行しても入金の記録は変わらない (入金の記録は請求書の店舗の社員: recordPayment)
+ */
+export function canIssueReceipt(user: User, access: "edit" | "view" | "none"): boolean {
+  return canOutputDocument(user, access);
+}
+
+/** 領収書の取り消し (書き損じ・作り直し): 請求書の店舗の社員・本部・管理者と、発行した本人 */
+export function canVoidReceipt(user: User, r: { storeId: StoreId; createdBy: string }): boolean {
+  return user.active && (canAccessStore(user, r.storeId) || r.createdBy === user.id);
+}
+
+/** 請求書の発行 (受注から): 店長・本部・管理者 (その店舗の請求書。canAccessStore と合わせて使う) */
+export function canIssueInvoice(user: User): boolean {
+  return canManageFinance(user) || isManagerOrAbove(user);
+}
+
 /** 予定表は全社で共有する (予定の重複防止・人員配置の調整・社内の情報共有のため、全ロールが全店舗の予定を閲覧) */
 export function canViewCompanySchedule(user: User): boolean {
   return user.active;

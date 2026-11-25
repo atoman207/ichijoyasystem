@@ -137,7 +137,7 @@ export async function updateDocumentSettings(formData: FormData) {
   const registrationNumber = str(formData, "registrationNumber").normalize("NFKC").replace(/[\s-]/g, "").toUpperCase();
   if (!validRegistrationNumber(registrationNumber)) fail(back, "登録番号は T と 13 桁の数字で入力してください (例: T1234567890123)。");
   const banks = [0, 1, 2]
-    .map((i) => ({ bank: str(formData, `bank${i}`), branch: str(formData, `branch${i}`), type: str(formData, `type${i}`) || "普通", number: str(formData, `number${i}`).normalize("NFKC"), holder: str(formData, `holder${i}`) }))
+    .map((i) => ({ bank: str(formData, `bank${i}`), branch: str(formData, `branch${i}`), type: str(formData, `type${i}`) || "普通", number: str(formData, `number${i}`).normalize("NFKC"), holder: str(formData, `holder${i}`), holderKana: str(formData, `holderKana${i}`).normalize("NFKC") || undefined }))
     .filter((b) => b.bank || b.number);
   if (banks.some((b) => !b.bank || !b.number || !b.holder)) fail(back, "振込先は銀行名・口座番号・口座名義をすべて入力してください。");
   const value = {

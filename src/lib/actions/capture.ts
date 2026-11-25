@@ -12,7 +12,7 @@ import { calcSheet, compareTranscription } from "@/lib/quote-sheet-calc";
 import { REGISTER_TARGETS } from "@/lib/capture-fields";
 import { DOCUMENT_KIND_LABEL } from "@/lib/constants";
 import { findOrderByPostcard, storeFromPostcard, surveyFromExtracted } from "@/lib/survey-link";
-import { assertCaseStore, assertStore, choice, fail, requireActionUser, resolveStoreId, str, withErr, withMsg } from "./guards";
+import { assertCaseStore, assertStore, choice, fail, requireActionUser, resolveStoreId, safeReturn, str, withErr, withMsg } from "./guards";
 import { canEditCaseStore } from "@/lib/auth/permissions";
 import { customerHasPhone } from "@/lib/customer-contacts";
 
@@ -113,6 +113,45 @@ export async function uploadDocument(formData: FormData) {
   redirect(withMsg(docPath(id, mode), readMessage(result, mode)));
 }
 
+/**
+ * 予定表の小さな画面から手書きの見積書を撮影 → AI で読み取り → その案件 (問い合わせ・お客様) の見積の作成の画面へ
+ * (お客様のご要望 2026-11-25「② 予定表からの見積書登録」: 案件を探し直さない)。見積の作成の画面は読み取った明細・手書きの日時が入った状態で開き、
+ * 保存すると予定表の小さな画面 (returnTo) に戻る。読み取りに失敗したときは書類取込の確認の画面 (手入力・読み直し)
+ */
+export async function captureCaseQuote(formData: FormData) {
+  const user = await requireActionUser();
+  const ret = safeReturn(str(formData, "returnTo"), "/schedule");
+  const db0 = getDb();
+  const inq = db0.inquiries.find((i) => i.id === str(formData, "inquiryId"));
+  const customer = db0.customers.find((c) => c.id === (str(formData, "customerId") || inq?.customerId));
+  if (!inq && !customer) fail(ret, "見積を作る案件 (お客様) が見つかりません。");
+  const storeId = inq?.storeId ?? customer!.storeId;
+  if (!canEditCaseStore(user, storeId)) fail(ret, "この案件の見積を作る権限がありません (担当店舗の社員・店長が作れます)。");
+  if (inq?.quoteId && db0.quotes.some((q) => q.id === inq.quoteId && q.status !== "rejected" && q.status !== "expired")) fail(ret, "この案件にはすでに見積があります。見積の画面で直してください。");
+  const up = await readUpload(formData, ret);
+  if (!up && aiEnabled()) fail(ret, "見積書を撮影してください。");
+  const fileName = up?.fileName ?? "sample.jpg";
+  const result = await extractDocument({ kind: "handwritten_quote", fileName, mimeType: up?.mimeType ?? "image/jpeg", base64: up?.base64, products: db0.products, storeId });
+  const id = newId("doc");
+  const original = up ? await storeOriginal(user, formData, { id, storeId, fileName }, up) : undefined;
+  const failed = result.provider === "error";
+  const extracted = { ...toExtracted(result, !up), _case: { inquiryId: inq?.id, customerId: customer?.id, eventId: str(formData, "eventId") || undefined, returnTo: ret } };
+  await mutate((d) => {
+    if (original) d.attachments.push(original!);
+    d.documents.push({ id, kind: "handwritten_quote", fileName, uploadedBy: user.id, storeId, uploadedAt: nowIso(), status: failed ? "failed" : "extracted", extracted, confidence: result.confidence });
+    addAudit(d, { userId: user.id, action: "create", entity: "document", entityId: id, entityLabel: fileName, summary: `予定表の案件から手書きの見積書を撮影・AI読取 (${inq ? `問い合わせ ${inq.number}` : `${customer?.name ?? ""} 様`} / ${PROVIDER_LABEL[result.provider]}${failed ? `: ${result.error}` : ""})`, storeId });
+  }).catch(async (err) => {
+    if (original) await discardStored(original);
+    throw err;
+  });
+  revalidatePath("/capture");
+  if (failed) redirect(withErr(docPath(id), failMessage(result)));
+  const qs = new URLSearchParams({ documentId: id, returnTo: ret });
+  if (customer) qs.set("customerId", customer.id);
+  if (inq) qs.set("inquiryId", inq.id);
+  redirect(withMsg(`/quotes/new?${qs.toString()}`, readMessage(result)));
+}
+
 function findDoc(db: Database, user: User, id: string): CapturedDocument {
   const doc = db.documents.find((d) => d.id === id);
   if (!doc) fail("/capture", "書類が見つかりません。");
@@ -190,7 +229,7 @@ function parseEdited(formData: FormData, kind: DocumentKind, back: string): Reco
   return Object.fromEntries(Object.entries(data as Record<string, unknown>).filter(([k]) => allowed.has(k)).map(([k, v]) => [k, clip(v)]));
 }
 
-const META_KEYS = ["_provider", "_model", "_aiWarnings", "_error", "_ms", "_readAt", "_sample", "_ai", "_accountCandidates", "_mode", "_calc", "_calcCheck"];
+const META_KEYS = ["_case", "_provider", "_model", "_aiWarnings", "_error", "_ms", "_readAt", "_sample", "_ai", "_accountCandidates", "_mode", "_calc", "_calcCheck"];
 
 /** 読取の確認が必要か (AI が自信がないとした項目・行が残っている) */
 function needsConfirmation(prev: Record<string, unknown> | undefined, edited: Record<string, unknown>): boolean {
@@ -291,6 +330,14 @@ export async function saveExtraction(formData: FormData) {
     case "quote": {
       const cq = customerQuery(extracted.customerName ?? extracted.siteName);
       const qs = new URLSearchParams({ documentId: id });
+      // 予定表の案件から撮影した見積書: その案件 (お客様・問い合わせ) の見積にして、予定表に戻る (captureCaseQuote)
+      const ctx = doc0.extracted?._case as { inquiryId?: string; customerId?: string; returnTo?: string } | undefined;
+      if (ctx?.customerId || ctx?.inquiryId) {
+        if (ctx.customerId) qs.set("customerId", ctx.customerId);
+        if (ctx.inquiryId) qs.set("inquiryId", ctx.inquiryId);
+        if (ctx.returnTo) qs.set("returnTo", safeReturn(ctx.returnTo, "/schedule"));
+        redirect(`/quotes/new?${qs.toString()}`);
+      }
       // 電話番号が 1 人のお客様と一致すれば、そのお客様を選ぶ
       const digits = typeof extracted.phone === "string" ? extracted.phone.replace(/\D/g, "") : "";
       const byPhone = !customerId && digits.length >= 9 ? getDb().customers.filter((c) => customerHasPhone(c, digits) && canEditCaseStore(user, c.storeId)) : [];

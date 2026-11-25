@@ -205,12 +205,13 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                     {[0, 1, 2].map((i) => {
                       const b = docSet.bankAccounts[i];
                       return (
-                        <div key={i} className="grid grid-cols-2 gap-2 @3xl:grid-cols-5">
+                        <div key={i} className="grid grid-cols-2 gap-2 @3xl:grid-cols-6">
                           <Input name={`bank${i}`} defaultValue={b?.bank} placeholder="銀行名" aria-label={`振込先${i + 1} 銀行名`} />
                           <Input name={`branch${i}`} defaultValue={b?.branch} placeholder="支店名" aria-label={`振込先${i + 1} 支店名`} />
                           <Select name={`type${i}`} defaultValue={b?.type ?? "普通"} aria-label={`振込先${i + 1} 種別`}><option value="普通">普通</option><option value="当座">当座</option></Select>
                           <Input name={`number${i}`} defaultValue={b?.number} placeholder="口座番号" inputMode="numeric" aria-label={`振込先${i + 1} 口座番号`} />
-                          <Input name={`holder${i}`} defaultValue={b?.holder} placeholder="口座名義 (カナ)" aria-label={`振込先${i + 1} 口座名義`} className="col-span-2 @3xl:col-span-1" />
+                          <Input name={`holder${i}`} defaultValue={b?.holder} placeholder="口座名義 (例: 株式会社 ○○)" aria-label={`振込先${i + 1} 口座名義`} />
+                          <Input name={`holderKana${i}`} defaultValue={b?.holderKana} placeholder="口座名義 (カナ)" aria-label={`振込先${i + 1} 口座名義 (カナ)`} />
                         </div>
                       );
                     })}
@@ -230,7 +231,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 <div><dt className="text-xs text-ink-3">登録番号</dt><dd>{docSet.registrationNumber || "未設定"}</dd></div>
                 <div><dt className="text-xs text-ink-3">住所</dt><dd>〒{docSet.postalCode} {docSet.address}</dd></div>
                 <div><dt className="text-xs text-ink-3">電話</dt><dd>{docSet.tel || "-"}</dd></div>
-                <div className="@xl:col-span-2"><dt className="text-xs text-ink-3">振込先</dt><dd>{docSet.bankAccounts.length ? docSet.bankAccounts.map((b) => `${b.bank} ${b.branch} ${b.type} ${b.number} ${b.holder}`).join(" / ") : "未設定"}</dd></div>
+                <div className="@xl:col-span-2"><dt className="text-xs text-ink-3">振込先</dt><dd>{docSet.bankAccounts.length ? docSet.bankAccounts.map((b) => `${b.bank} ${b.branch} ${b.type} ${b.number} ${b.holder}${b.holderKana ? ` (${b.holderKana})` : ""}`).join(" / ") : "未設定"}</dd></div>
               </dl>
             )}
           </Card>

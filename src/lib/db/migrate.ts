@@ -26,6 +26,9 @@ export const DRAFT_COLLECTIONS = ["docDrafts"] as const;
 /** 案件の変更のお知らせ (後から追加。無ければ空で作る) */
 export const NOTICE_COLLECTIONS = ["changeNotices"] as const;
 
+/** 帳票の出力記録・領収書の発行台帳のコレクション (後から追加。無ければ空で作る) */
+export const DOC_COLLECTIONS = ["receipts", "docOutputs"] as const;
+
 /** 施工事例の投稿・整理整頓チェックのコレクション (後から追加。無ければ空で作る) */
 export const POST_COLLECTIONS = ["casePosts", "tidyChecks"] as const;
 
@@ -45,7 +48,7 @@ export const DATA_VERSION = 3;
 export function migrateDb(db: Database): Database {
   const version = db.meta?.version ?? 1;
   if (version < 2) migrateV2(db);
-  for (const key of ["holidays", "surveys", "qualityIssues", "reviews", "sourceFiles", "photoAlbums", "settings", "attachments", "cashEntries", "deliveries", "knowledge", "purchaseOrders", "faxMessages", "faxNumbers", "mapLocations", "mapLocationRefs", "mapDocuments", "mapDocumentLinks", ...MGMT_COLLECTIONS, ...PLAN_COLLECTIONS, ...HR_COLLECTIONS, ...OPS_COLLECTIONS, ...PRODUCTION_COLLECTIONS, ...OFFICE_COLLECTIONS, ...DRAFT_COLLECTIONS, ...SURVEY_HISTORY_COLLECTIONS, ...POST_COLLECTIONS, ...NOTICE_COLLECTIONS] as const) {
+  for (const key of ["holidays", "surveys", "qualityIssues", "reviews", "sourceFiles", "photoAlbums", "settings", "attachments", "cashEntries", "deliveries", "knowledge", "purchaseOrders", "faxMessages", "faxNumbers", "mapLocations", "mapLocationRefs", "mapDocuments", "mapDocumentLinks", ...MGMT_COLLECTIONS, ...PLAN_COLLECTIONS, ...HR_COLLECTIONS, ...OPS_COLLECTIONS, ...PRODUCTION_COLLECTIONS, ...OFFICE_COLLECTIONS, ...DRAFT_COLLECTIONS, ...SURVEY_HISTORY_COLLECTIONS, ...POST_COLLECTIONS, ...NOTICE_COLLECTIONS, ...DOC_COLLECTIONS] as const) {
     if (!Array.isArray(db[key])) (db as unknown as Record<string, unknown[]>)[key] = [];
   }
   if (version < DATA_VERSION) db.meta = { ...db.meta, version: DATA_VERSION };

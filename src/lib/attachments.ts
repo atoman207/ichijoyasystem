@@ -1,5 +1,6 @@
 import "server-only";
-import type { Attachment, AttachmentParent, Database, StoreId, User } from "@/lib/db/types";
+import type { Attachment, AttachmentCategory, AttachmentParent, Database, StoreId, User } from "@/lib/db/types";
+import { ATTACHMENT_CATEGORY } from "@/lib/attachment-category";
 import { canAccessStore, canDeleteAttachment, canEditCaseStore, canManageFinance, canViewExpense } from "@/lib/auth/permissions";
 import { customerAccess, inquiryAccess, orderAccess, quoteAccess } from "@/lib/case-access";
 import { newId, nowIso } from "@/lib/db/store";
@@ -176,6 +177,15 @@ export interface AttachmentView {
   parentLabel: string;
   parentHref: string;
   canDelete: boolean;
+  /** 資料の種類 (現場図面・採寸図など) */
+  category?: AttachmentCategory;
+  categoryLabel?: string;
+  /** 書き込みをした写真 (元の写真がある) */
+  derived?: boolean;
+  parentType: AttachmentParent;
+  parentId: string;
+  /** 書き込みをして新しい写真として保存できる (登録先に写真を足せる人。写真だけ) */
+  canAnnotate: boolean;
 }
 
 export function toView(db: Database, user: User, a: Attachment): AttachmentView {
@@ -194,6 +204,11 @@ export function toView(db: Database, user: User, a: Attachment): AttachmentView 
     parentHref: p?.href ?? "#",
     // 店舗は登録先の現在の店舗で判定する (問い合わせ・案件を他店舗へ回した場合も正しく判定するため)
     canDelete: canDeleteAttachment(user, { uploadedBy: a.uploadedBy, storeId: p?.storeId ?? a.storeId }),
+    ...(a.category ? { category: a.category, categoryLabel: ATTACHMENT_CATEGORY[a.category]?.short } : {}),
+    ...(a.derivedFrom ? { derived: true } : {}),
+    parentType: a.parentType,
+    parentId: a.parentId,
+    canAnnotate: a.kind === "photo" && Boolean(p && canAddToParent(user, db, p)),
   };
 }
 
@@ -216,6 +231,10 @@ export async function storeFile(opts: {
   height?: number;
   takenAt?: string;
   caption?: string;
+  /** 資料の種類 (現場図面・採寸図など。src/lib/attachment-category.ts) */
+  category?: AttachmentCategory;
+  /** 書き込みをした写真の元の写真 */
+  derivedFrom?: string;
 }): Promise<Attachment> {
   const { parent, file } = opts;
   const t = detectType(file.name, file.type);
@@ -252,6 +271,8 @@ export async function storeFile(opts: {
     width: opts.width && opts.width > 0 ? Math.round(opts.width) : undefined,
     height: opts.height && opts.height > 0 ? Math.round(opts.height) : undefined,
     caption: opts.caption?.trim().slice(0, 200) || undefined,
+    ...(opts.category ? { category: opts.category } : {}),
+    ...(opts.derivedFrom ? { derivedFrom: opts.derivedFrom } : {}),
     takenAt,
     uploadedBy: opts.user.id,
     uploadedAt: nowIso(),

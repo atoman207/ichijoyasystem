@@ -2,7 +2,9 @@ import { notFound, redirect } from "next/navigation";
 import { storePhone } from "@/lib/store-contact";
 import { requireUser } from "@/lib/auth/session";
 import { syncDb } from "@/lib/db/store";
-import { canEditCaseStore } from "@/lib/auth/permissions";
+import { canOutputDocument } from "@/lib/auth/permissions";
+import { quoteAccessInfo } from "@/lib/case-access";
+import { recordOutputs } from "@/lib/doc-print";
 import { fmtDate, yen } from "@/lib/format";
 import { PrintToolbar } from "@/components/features/PrintToolbar";
 import { IchijoyaLogo } from "@/components/brand/Logo";
@@ -16,14 +18,15 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
   const db = await syncDb();
   const q = db.quotes.find((x) => x.id === id);
   if (!q) notFound();
-  // 見積を扱える店舗 (店長は全店舗。permissions.ts の canEditCaseStore)
-  if (!canEditCaseStore(user, q.storeId)) redirect("/quotes");
+  // 見積を見られる社員は出力できる (お客様のご要望 2026-11-25「⑥」)。出力の記録を残す
+  if (!canOutputDocument(user, quoteAccessInfo(db, user, q).access)) redirect("/quotes");
   const customer = db.customers.find((c) => c.id === q.customerId);
   const store = db.stores.find((s) => s.id === q.storeId)!;
   const creator = db.users.find((u) => u.id === q.createdBy);
   // 施工場所 (お客様の住所と違うときだけ載せる): 見積の施工場所 → 受注の現場住所
   const order = db.orders.find((o) => o.quoteId === q.id && o.status !== "cancelled");
   const site = [q.siteAddress, order?.siteAddress].find((a) => a && a !== customer?.address);
+  await recordOutputs(user, [{ kind: "quote", refId: q.id, number: q.number, version: q.version, storeId: q.storeId, customerId: q.customerId, orderId: order?.id, via: "view" }]);
 
   return (
     <div className="min-h-screen bg-subtle py-6 print:bg-white print:py-0">

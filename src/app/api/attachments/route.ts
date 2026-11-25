@@ -4,13 +4,16 @@ import { getSessionUser } from "@/lib/auth/session";
 import { BACKEND, addAudit, mutate, syncDb } from "@/lib/db/store";
 import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
 import { canAddToParent, discardStored, resolveParent, storeFile, UserError, type IncomingFile } from "@/lib/attachments";
+import { ATTACHMENT_CATEGORY, isAttachmentCategory } from "@/lib/attachment-category";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
  * 添付ファイルの登録 (1 回の送信で 1 ファイル。複数枚は画面側で順に送る)
- * multipart/form-data: parentType, parentId, file, thumb (写真の縮小画像・任意), width, height, takenAt, caption
+ * multipart/form-data: parentType, parentId, file, thumb (写真の縮小画像・任意), width, height, takenAt, caption,
+ *   category (資料の種類: 現場図面・採寸図・現場の写真・施工前・施工後・資料。お客様のご要望 2026-11-25「⑤」),
+ *   derivedFrom (書き込みをして保存した写真の元の写真の ID。元の写真は残す)
  */
 export async function POST(req: Request) {
   // 他のサイトからの送信を拒否する (Cookie は SameSite=Lax だが念のため)
@@ -35,6 +38,11 @@ export async function POST(req: Request) {
   const file = await incoming(form.get("file"));
   if (!file) return json(400, "ファイルを選んでください。");
   const thumb = await incoming(form.get("thumb"));
+  const category = isAttachmentCategory(form.get("category")) ? (form.get("category") as Parameters<typeof storeFile>[0]["category"]) : undefined;
+  // 書き込みの元の写真は同じ登録先の写真だけ
+  const fromId = String(form.get("derivedFrom") ?? "");
+  const from = fromId ? db.attachments.find((a) => a.id === fromId && a.parentType === parent.type && a.parentId === parent.id) : undefined;
+  if (fromId && !from) return json(400, "書き込みの元の写真が見つかりません。");
 
   let stored;
   try {
@@ -46,7 +54,9 @@ export async function POST(req: Request) {
       width: Number(form.get("width")) || undefined,
       height: Number(form.get("height")) || undefined,
       takenAt: String(form.get("takenAt") ?? "") || undefined,
-      caption: String(form.get("caption") ?? ""),
+      caption: String(form.get("caption") ?? "") || (from ? `${from.caption ?? from.fileName} (書き込み)` : ""),
+      category: category ?? from?.category,
+      derivedFrom: from?.id,
     });
   } catch (err) {
     if (err instanceof UserError) return json(400, err.message);
@@ -63,7 +73,7 @@ export async function POST(req: Request) {
         entity: parent.entity,
         entityId: parent.id,
         entityLabel: parent.label,
-        summary: `${stored.kind === "photo" ? "写真" : "資料"}を添付 (${stored.fileName})`,
+        summary: from ? `写真に書き込みをして保存 (${stored.fileName}。元の写真 ${from.fileName} は残す)` : `${stored.category ? ATTACHMENT_CATEGORY[stored.category].short : stored.kind === "photo" ? "写真" : "資料"}を添付 (${stored.fileName})`,
         storeId: parent.storeId,
       });
     });

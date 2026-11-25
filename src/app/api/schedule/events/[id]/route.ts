@@ -30,6 +30,18 @@ import { canLinkToCustomer, caseRelinkBlocker, isPlaceholderCustomer } from "@/l
 import { liveInvoicesOfOrder } from "@/lib/billing";
 import { taxModeOf } from "@/lib/quote-calc";
 import { WORK_ROLES, WORK_ROLE_LABEL, workStaffOf } from "@/lib/work-staff";
+import type { QuickWork } from "@/components/schedule/quick-types";
+import { ATTACHMENT_ACCEPT, canAddToParent, canViewAttachment, resolveParent, toView } from "@/lib/attachments";
+import { canIssueInvoice, canIssueReceipt, canOutputDocument } from "@/lib/auth/permissions";
+import { invoiceAccessInfo, quoteAccessInfo } from "@/lib/case-access";
+import { canIssueFor } from "@/lib/invoice-rules";
+import { partLabel, receiptChecks, receiptDraft, receiptHeading, receiptWanted } from "@/lib/receipts";
+import { outputsOf } from "@/lib/doc-outputs";
+import { HANDOVER_ITEM, suggestHandovers, toFormRows } from "@/lib/handover";
+import { quoteHandoverLines } from "@/lib/handover-save";
+import { formStores, formUsers } from "@/components/schedule/form-data";
+import { QUOTE_STATUS, ORDER_STATUS } from "@/lib/constants";
+import { toDateKey } from "@/lib/format";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -112,6 +124,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     pair: quickPair(db, user, e, canEdit, labeler, users, resolver),
     caseEdit: quickCase(db, user, e, resolver),
     request: quickRequest(db, e, resolver),
+    caseWork: quickWork(db, user, e),
   };
   return NextResponse.json(data, { headers: NO_STORE });
 }
@@ -269,4 +282,99 @@ function quickRequest(db: Database, e: ScheduleEvent, resolver: ReturnType<typeo
     kinds: CASE_REQUEST_KINDS.map((k) => ({ id: k, label: CASE_REQUEST_KIND[k].label, hint: CASE_REQUEST_KIND[k].hint })),
     open,
   };
+}
+
+/**
+ * この案件で (お客様のご要望 2026-11-25「②〜⑧」): 手書きの見積書の撮影 → 見積 / 受注 (品目ごとの日程つき) / 資料・写真 (種類つき) / 帳票 (見積書・請求書・領収書)。
+ * それぞれの権限は画面と同じ (見積を作る・受注にする = canEditCaseStore、資料 = canAddToParent、帳票の出力 = 記録を見られる人、請求書の発行 = 店長・本部・管理者)
+ */
+function quickWork(db: Database, user: User, e: ScheduleEvent): QuickWork | undefined {
+  const chain = caseChainOf(db, e.orderId ?? e.quoteId ?? e.inquiryId);
+  const customerId = chain ? (chain.order?.customerId ?? chain.quote?.customerId ?? chain.inquiry?.customerId) : e.customerId;
+  const customer = customerId ? db.customers.find((c) => c.id === customerId) : undefined;
+  if (!chain && !customer) return undefined;
+  const storeId = chain?.head.storeId ?? customer!.storeId;
+  const canCase = canEditCaseStore(user, storeId);
+  const out: QuickWork = { caseLabel: [chain ? `${chain.head.number}` : "", customer ? `${customer.name} 様` : ""].filter(Boolean).join(" ") };
+  const today = toDateKey(new Date());
+  const q = chain?.quote && !["rejected", "expired"].includes(chain.quote.status) ? chain.quote : undefined;
+  const o = chain?.order && chain.order.status !== "cancelled" ? chain.order : undefined;
+  // ② 見積書の撮影 (見積のない案件。案件がなければお客様の新しい見積)
+  if (!q && !o && canCase) out.capture = { inquiryId: chain?.inquiry?.id, customerId: customer?.id };
+  if (q) out.quote = { id: q.id, number: q.number, status: QUOTE_STATUS[q.status]?.label ?? q.status, href: `/quotes/${q.id}` };
+  if (o) out.order = { id: o.id, number: o.number, status: ORDER_STATUS[o.status]?.label ?? o.status, href: `/orders/${o.id}` };
+  // ③④ 受注にする (品目ごとの日程つき)
+  if (q && !o && canCase) {
+    if (q.pendingChange) out.orderBlocked = "見積の変更が承認待ちです。承認・差戻しのあとに受注にできます。";
+    else if (["draft", "pending_approval", "approved", "sent"].includes(q.status)) {
+      const onsite = q.status === "draft" || q.status === "pending_approval";
+      const own = skipsApproval(user, "order");
+      let rows = suggestHandovers({ lines: quoteHandoverLines(db, q.items), category: q.category, pickupText: q.siteInfo?.pickupAt, deliveryText: q.siteInfo?.deliveryAt, fallbackPickup: e.date >= today ? e.date : today, ref: today });
+      // 畳・襖・障子・網戸のない見積 (リフォームなど) は施工日の行
+      if (!rows.length) rows = [{ id: `hv_${Date.now().toString(36)}`, item: "reform", label: HANDOVER_ITEM.reform.label, pickupDate: e.date >= today ? e.date : today }];
+      const sourceText = [q.siteInfo?.pickupAt && `引取: ${q.siteInfo.pickupAt}`, q.siteInfo?.deliveryAt && `納品: ${q.siteInfo.deliveryAt}`].filter(Boolean).join(" / ") || undefined;
+      out.toOrder = {
+        quoteId: q.id,
+        quoteNumber: q.number,
+        total: q.total,
+        onsite,
+        own,
+        approvalNote: own
+          ? "店長・管理者のため承認は省略し、その場で受注 (契約) を確定します。"
+          : onsite
+            ? "見積の承認と受注 (契約) の承認をあわせて申請します (受注を承認すると見積も承認済み)。承認の前でも日程は予定表に載ります。"
+            : "受注 (契約) の承認を申請します。承認の前でも日程は予定表に載ります。",
+        initial: toFormRows(rows),
+        sourceText,
+        workerIds: e.assigneeIds,
+        siteAddress: q.siteAddress || customer?.address || "",
+        storeId: q.storeId,
+        users: formUsers(db),
+        stores: formStores(db),
+        currentUserId: user.id,
+      };
+    } else out.orderBlocked = "この状態の見積は受注にできません。";
+  }
+  // ⑤ 資料・写真 (登録先は一番進んだ記録)
+  const headType = o ? "order" : q ? "quote" : chain?.inquiry ? "inquiry" : undefined;
+  const headId = o?.id ?? q?.id ?? chain?.inquiry?.id;
+  if (headType && headId) {
+    const parent = resolveParent(db, headType, headId);
+    if (parent) {
+      const ids = new Set([chain?.inquiry?.id, q?.id, o?.id].filter(Boolean));
+      const all = db.attachments.filter((a) => (a.parentType === "inquiry" || a.parentType === "quote" || a.parentType === "order") && ids.has(a.parentId) && canViewAttachment(user, db, a)).sort((a, b) => (b.takenAt ?? b.uploadedAt).localeCompare(a.takenAt ?? a.uploadedAt));
+      out.files = { parentType: headType, parentId: headId, parentLabel: parent.label, canAdd: canAddToParent(user, db, parent), accept: ATTACHMENT_ACCEPT, items: all.slice(0, 24).map((a) => toView(db, user, a)), more: Math.max(0, all.length - 24) };
+    }
+  }
+  // ⑥⑦⑧ 帳票
+  const docs: NonNullable<QuickWork["docs"]> = { batchHref: `/schedule/print?date=${e.date}&store=${e.storeId}` };
+  if (q) docs.quote = { id: q.id, number: q.number, version: q.version, draft: q.status === "draft" || q.status === "pending_approval", outputs: outputsOf(db, "quote", q.id, q.version).length, canPrint: canOutputDocument(user, quoteAccessInfo(db, user, q).access) };
+  if (o) {
+    const inv = liveInvoicesOfOrder(db.invoices, o)[0];
+    const w = receiptWanted(o);
+    const canSetWanted = canEditCaseStore(user, o.storeId) || canAccessStore(user, o.storeId);
+    if (inv) {
+      const access = invoiceAccessInfo(db, user, inv).access;
+      docs.invoice = { id: inv.id, number: inv.number, total: inv.total, paidAmount: inv.paidAmount, outputs: outputsOf(db, "invoice", inv.id).length, canPrint: canOutputDocument(user, access), href: `/invoices/${inv.id}` };
+      const d = receiptDraft(db, inv, o);
+      const head = receiptHeading(customer, inv, o);
+      docs.receipt = {
+        wanted: w.wanted,
+        auto: w.auto,
+        reason: w.reason,
+        canSetWanted,
+        orderId: o.id,
+        issued: (db.receipts ?? []).filter((r) => r.invoiceId === inv.id).map((r) => ({ id: r.id, number: r.number, amount: r.amount, parts: r.parts.map((p) => `${partLabel(p)} ¥${p.amount.toLocaleString("ja-JP")}`).join("・"), outputs: outputsOf(db, "receipt", r.id).length, status: r.status })),
+        form: canIssueReceipt(user, access) && d.remaining > 0 && inv.status !== "void" ? { invoiceId: inv.id, invoiceNumber: inv.number, total: inv.total, paidAmount: inv.paidAmount, remaining: d.remaining, amount: d.amount, parts: d.parts, beforePayment: d.beforePayment, addressee: head.addressee, honorific: head.honorific, purpose: head.purpose } : undefined,
+        checks: receiptChecks(db, inv, o),
+      };
+    } else {
+      const can = canIssueFor(db, o);
+      const allowed = canIssueInvoice(user) && canAccessStore(user, o.storeId);
+      docs.invoiceIssue = { ok: can.ok && allowed, pre: can.pre, reason: !can.ok ? can.reason : allowed ? undefined : "請求書の発行は店長・本部・管理者 (その店舗) が行えます。", orderId: o.id, total: o.total };
+      docs.receipt = { wanted: w.wanted, auto: w.auto, reason: w.reason, canSetWanted, orderId: o.id, issued: [], checks: [] };
+    }
+  }
+  if (docs.quote || docs.invoice || docs.invoiceIssue) out.docs = docs;
+  return out;
 }

@@ -30,10 +30,11 @@ import { linkableInquiries } from "@/lib/link-search";
 import { linkInquiryFromForm } from "@/lib/actions/inquiries";
 import { InquiryLinkSearch } from "@/components/features/LinkSearch";
 import { Camera, Link2 } from "lucide-react";
+import { CustomerCasesCard, customerCaseRows } from "@/components/customers/CustomerCases";
 
-export default async function CustomerDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
+export default async function CustomerDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string; cases?: string }> }) {
   const { id } = await params;
-  const { msg, err } = await searchParams;
+  const { msg, err, cases } = await searchParams;
   const user = await requireUser();
   const db = getDb();
   const c = db.customers.find((x) => x.id === id);
@@ -105,9 +106,9 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
 
       <div className="mb-6 grid grid-cols-2 gap-3 @3xl:grid-cols-4">
         <Stat label="累計売上 (税込)" value={viewOnly && info.basis === "open" ? "-" : yen(t.lifetime)} />
-        <Stat label="案件数 (受注)" value={`${t.orders.length} 件`} sub={`見積 ${t.quotes.length} 件 · 問い合わせ ${t.inquiries.length} 件`} />
-        <Stat label="進行中" value={`${openItems} 件`} />
-        <Stat label="未入金" value={yen(receivable)} tone={receivable > 0 ? "warn" : undefined} />
+        <Stat label="案件数 (受注) · 押すと過去の案件" value={`${t.orders.length} 件`} sub={`見積 ${t.quotes.length} 件 · 問い合わせ ${t.inquiries.length} 件`} href="#cases-past" />
+        <Stat label="進行中 · 押すと一覧" value={`${openItems} 件`} href="#cases-open" />
+        <Stat label="未入金" value={yen(receivable)} tone={receivable > 0 ? "warn" : undefined} href="#billing" />
       </div>
 
       <div className="grid grid-cols-1 gap-4 @3xl:grid-cols-3">
@@ -145,21 +146,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
               ]}
             />
           </Card>
-          {dupRows.length > 0 && (
-            <Card className="border-warn/40 bg-warn-soft/30">
-              <CardHeader title="重複の可能性がある顧客" description="同じお客様が別の顧客として登録されていないか確認してください (全店舗の顧客と照合)" />
-              <ul className="space-y-2 text-xs">
-                {dupRows.map((m) => (
-                  <li key={m.id}>
-                    {canReadStoreRecords(policyReader(db, user), m.storeId) ? <Link href={`/customers/${m.id}`} className="font-medium text-accent hover:underline">{m.code} {m.name}</Link> : <span className="font-medium text-ink">{m.code} {m.name}</span>}
-                    <span className="text-ink-3"> · {db.stores.find((s) => s.id === m.storeId)?.name}{m.area ? ` · 地区 ${m.area}` : ""}</span>
-                    <div className="text-ink-3">{m.label}: {m.reasons.join("・")}</div>
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          )}
-          <Card>
+          <Card id="billing">
             <CardHeader title="請求状況" description={`請求 ${billed.length} 件 · 請求額 ${yen(billed.reduce((a, i) => a + i.total, 0))} · 入金済 ${yen(billed.reduce((a, i) => a + i.paidAmount, 0))}`} action={<LinkButton href={`/invoices?view=customers&q=${encodeURIComponent(c.name)}`} variant="ghost" size="sm">顧客別の一覧</LinkButton>} />
             {billed.filter((i) => i.total - i.paidAmount > 0).length === 0 ? (
               <p className="text-xs text-ink-3">未入金の請求はありません</p>
@@ -177,15 +164,68 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
             )}
           </Card>
           {!viewOnly && <BillingTermsCard customer={c} user={user} />}
-          <AiSummary kind="customer" id={c.id} label="AI で履歴を要約" />
-          <RecordDocDrafts db={db} user={user} type="customer" id={c.id} number={c.code} />
-          <RecordStamp db={db} targets={[{ entity: "customer", id: c.id }]} created={{ at: c.createdAt }} />
-          {changeApprovals.length > 0 && <ApprovalHistoryCard approvals={changeApprovals} title="重要情報の変更の承認履歴" />}
-          <HistoryCard db={db} user={user} targets={[{ entity: "customer", id: c.id }]} description="顧客情報の登録・変更 (変更前と変更後の値)・承認の記録" />
+          <MapInfoCard db={db} user={user} target={{ type: "customer", id: c.id }} returnTo={returnTo} />
         </div>
 
         <div className="space-y-4 @3xl:col-span-2">
-          <MapInfoCard db={db} user={user} target={{ type: "customer", id: c.id }} returnTo={returnTo} />
+          <CaseScheduleCard
+            title="予定"
+            description="このお客様の案件の予定 (現地調査・採寸・引き取り・納品・施工・訪問)。登録すると担当者とともに店舗の共通カレンダーに反映されます"
+            events={t.events}
+            allEvents={db.schedule}
+            users={new Map(db.users.map((u) => [u.id, u]))}
+            stores={new Map(db.stores.map((s) => [s.id, s]))}
+            today={toDateKey(new Date())}
+            newParams={`customerId=${c.id}`}
+            returnTo={`/customers/${c.id}`}
+            quickKinds={["visit", "survey", "onsite_quote", "measure"]}
+            canAdd={canAccessStore(user, c.storeId)}
+          />
+          <AttachmentsCard db={db} user={user} parent={{ type: "customer", id: c.id }} customerId={c.id} returnTo={`/customers/${c.id}`} />
+          <CustomerCasesCard rows={customerCaseRows(db, t)} all={cases === "all"} allHref={`/customers/${c.id}?cases=all#cases-past`} />
+          <Card>
+            <CardHeader title="外部とのやりとり履歴" description={`${t.comms.length} 件 · 電話・メール・LINE・Web・対面のやりとりを案件に紐付けて残します。メール・LINE は「相手に送信する」で送れます`} />
+            <ContactLogForm returnTo={returnTo} customerId={c.id} defaultChannel={c.preferredChannel === "line" ? "line" : c.preferredChannel === "email" ? "email" : "phone"} canSend />
+            <div className="mt-4 border-t border-line pt-3">
+              <ContactList db={db} logs={t.comms.slice(0, 50)} showParty={false} returnTo={returnTo} linkable empty="やりとりの記録はありません" />
+            </div>
+          </Card>
+
+          {(db.photoAlbums.some((a) => a.customerId === c.id) || db.surveys.some((x) => x.customerId === c.id)) && (
+            <Card>
+              <CardHeader title="移行した現場写真フォルダ・お客様アンケート" description="移行前の現場写真は Google ドライブのフォルダ (リンク)、アンケートはハガキの回答から" />
+              <ul className="divide-y divide-line text-sm">
+                {db.photoAlbums
+                  .filter((a) => a.customerId === c.id)
+                  .map((a) => (
+                    <li key={a.id} className="flex flex-wrap items-center gap-2 py-2">
+                      <Badge tone="accent" dot={false}>写真 {a.photoCount} 枚</Badge>
+                      <span className="text-ink">{a.title}</span>
+                      {a.driveUrl && (
+                        <a href={a.driveUrl} target="_blank" rel="noreferrer" className="ml-auto text-xs font-medium text-accent hover:underline">
+                          ドライブで開く
+                        </a>
+                      )}
+                    </li>
+                  ))}
+                {db.surveys
+                  .filter((x) => x.customerId === c.id)
+                  .map((x) => (
+                    <li key={x.id} className="py-2 text-xs text-ink-2">
+                      <span className="font-medium text-ink">アンケート {fmtDate(x.receivedAt)}</span> · 電話 {x.phoneScore ?? "-"} / 営業 {x.salesScore ?? "-"} / 職人 {x.craftsmanScore ?? "-"} / 仕上り {x.finishScore ?? "-"}
+                      {x.priorities && <> · 重視: {x.priorities}</>}
+                      {x.media && <> · 媒体: {x.media}</>}
+                    </li>
+                  ))}
+              </ul>
+            </Card>
+          )}
+
+        </div>
+      </div>
+      {/* 紐付け・重複の可能性・案件の流れ・要約・履歴は下に (お客様のご要望 2026-11-25「①」: 予定・資料・請求状況を優先) */}
+      {(canLink || dupRows.length > 0) && (
+      <div className="mt-4 grid grid-cols-1 gap-4 @3xl:grid-cols-2">
           {canLink && (
             <Card>
               <CardHeader
@@ -201,7 +241,24 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
               </details>
             </Card>
           )}
-          <Card>
+          {dupRows.length > 0 && (
+            <Card className="border-warn/40 bg-warn-soft/30">
+              <CardHeader title="重複の可能性がある顧客" description="同じお客様が別の顧客として登録されていないか確認してください (全店舗の顧客と照合)" />
+              <ul className="space-y-2 text-xs">
+                {dupRows.map((m) => (
+                  <li key={m.id}>
+                    {canReadStoreRecords(policyReader(db, user), m.storeId) ? <Link href={`/customers/${m.id}`} className="font-medium text-accent hover:underline">{m.code} {m.name}</Link> : <span className="font-medium text-ink">{m.code} {m.name}</span>}
+                    <span className="text-ink-3"> · {db.stores.find((s) => s.id === m.storeId)?.name}{m.area ? ` · 地区 ${m.area}` : ""}</span>
+                    <div className="text-ink-3">{m.label}: {m.reasons.join("・")}</div>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+        </div>
+      )}
+      <div className="mt-4 space-y-4">
+        <Card>
             <CardHeader title="案件の流れ" description="問い合わせ → 見積 → 受注・施工 → 請求 → 入金 がすべて紐づきます" />
             {t.quotes.length === 0 && t.inquiries.length === 0 && <p className="text-sm text-ink-3">まだ案件はありません</p>}
             <div className="space-y-3">
@@ -237,60 +294,11 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
             </div>
           </Card>
 
-          <Card>
-            <CardHeader title="外部とのやりとり履歴" description={`${t.comms.length} 件 · 電話・メール・LINE・Web・対面のやりとりを案件に紐付けて残します。メール・LINE は「相手に送信する」で送れます`} />
-            <ContactLogForm returnTo={returnTo} customerId={c.id} defaultChannel={c.preferredChannel === "line" ? "line" : c.preferredChannel === "email" ? "email" : "phone"} canSend />
-            <div className="mt-4 border-t border-line pt-3">
-              <ContactList db={db} logs={t.comms.slice(0, 50)} showParty={false} returnTo={returnTo} linkable empty="やりとりの記録はありません" />
-            </div>
-          </Card>
-
-          <AttachmentsCard db={db} user={user} parent={{ type: "customer", id: c.id }} customerId={c.id} returnTo={`/customers/${c.id}`} />
-
-          {(db.photoAlbums.some((a) => a.customerId === c.id) || db.surveys.some((x) => x.customerId === c.id)) && (
-            <Card>
-              <CardHeader title="移行した現場写真フォルダ・お客様アンケート" description="移行前の現場写真は Google ドライブのフォルダ (リンク)、アンケートはハガキの回答から" />
-              <ul className="divide-y divide-line text-sm">
-                {db.photoAlbums
-                  .filter((a) => a.customerId === c.id)
-                  .map((a) => (
-                    <li key={a.id} className="flex flex-wrap items-center gap-2 py-2">
-                      <Badge tone="accent" dot={false}>写真 {a.photoCount} 枚</Badge>
-                      <span className="text-ink">{a.title}</span>
-                      {a.driveUrl && (
-                        <a href={a.driveUrl} target="_blank" rel="noreferrer" className="ml-auto text-xs font-medium text-accent hover:underline">
-                          ドライブで開く
-                        </a>
-                      )}
-                    </li>
-                  ))}
-                {db.surveys
-                  .filter((x) => x.customerId === c.id)
-                  .map((x) => (
-                    <li key={x.id} className="py-2 text-xs text-ink-2">
-                      <span className="font-medium text-ink">アンケート {fmtDate(x.receivedAt)}</span> · 電話 {x.phoneScore ?? "-"} / 営業 {x.salesScore ?? "-"} / 職人 {x.craftsmanScore ?? "-"} / 仕上り {x.finishScore ?? "-"}
-                      {x.priorities && <> · 重視: {x.priorities}</>}
-                      {x.media && <> · 媒体: {x.media}</>}
-                    </li>
-                  ))}
-              </ul>
-            </Card>
-          )}
-
-          <CaseScheduleCard
-            title="予定"
-            description="このお客様の案件の予定 (現地調査・採寸・引き取り・納品・施工・訪問)。登録すると担当者とともに店舗の共通カレンダーに反映されます"
-            events={t.events}
-            allEvents={db.schedule}
-            users={new Map(db.users.map((u) => [u.id, u]))}
-            stores={new Map(db.stores.map((s) => [s.id, s]))}
-            today={toDateKey(new Date())}
-            newParams={`customerId=${c.id}`}
-            returnTo={`/customers/${c.id}`}
-            quickKinds={["visit", "survey", "onsite_quote", "measure"]}
-            canAdd={canAccessStore(user, c.storeId)}
-          />
-        </div>
+          <AiSummary kind="customer" id={c.id} label="AI で履歴を要約" />
+          <RecordDocDrafts db={db} user={user} type="customer" id={c.id} number={c.code} />
+          <RecordStamp db={db} targets={[{ entity: "customer", id: c.id }]} created={{ at: c.createdAt }} />
+          {changeApprovals.length > 0 && <ApprovalHistoryCard approvals={changeApprovals} title="重要情報の変更の承認履歴" />}
+          <HistoryCard db={db} user={user} targets={[{ entity: "customer", id: c.id }]} description="顧客情報の登録・変更 (変更前と変更後の値)・承認の記録" />
       </div>
       </ReadOnlyArea>
     </div>

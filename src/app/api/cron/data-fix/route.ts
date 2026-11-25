@@ -14,6 +14,7 @@ import { POSTAL_FETCHED_AT, POSTAL_SOURCE, postalFromAddress } from "@/lib/posta
 import { areaStoreOf } from "@/lib/store-area";
 import type { Database, ScheduleKind } from "@/lib/db/types";
 import { DAY_LOAD_ID, dayLoadChanges, readDayLoadSettings, writeDayLoadSettings, type DayLoadSettings } from "@/lib/day-sheet";
+import { DOCUMENT_SETTINGS_ID, documentSettings } from "@/lib/doc-settings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,6 +43,9 @@ export const maxDuration = 60;
  *     店舗ごとの対象から外す社員 (お客様のご指示 2026-11-25「合志店は現段階では 2 名を対象人数から除外」)。社員の名前はコードに書かず、
  *     本文 (JSON) = { stores: { <店舗 ID>: { excludeUserIds: [社員の ID], people?: 人数 } }, perPerson?: 枚数 } で受け取る
  *     (書いた店舗だけ置き換え、ほかの店舗・項目は今の値)。既定は確認だけ、apply=1 で書き込み、変更履歴
+ *   task = doc-bank: 請求書に印字する振込先 (設定 → 帳票。お客様のご指示 2026-11-25「⑨」)。口座はコードに書かず、
+ *     本文 (JSON) = { accounts: [{ bank, branch, type, number, holder, holderKana }] } で受け取り、振込先をこの内容に置き換える
+ *     (帳票のほかの項目は今の値)。既定は確認だけ、apply=1 で書き込み、変更履歴
  */
 export async function POST(req: Request) {
   const secret = (process.env.CRON_SECRET ?? "").trim();
@@ -56,6 +60,7 @@ export async function POST(req: Request) {
   if (task === "postal-codes") return postalCodes(url);
   if (task === "schedule-onsite" || task === "schedule-kinds") return scheduleOnsite(url);
   if (task === "day-load") return dayLoadFix(url, req);
+  if (task === "doc-bank") return docBankFix(url, req);
   if (task !== "quote-line-units") return NextResponse.json({ error: "unknown task" }, { status: 400 });
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? from;
@@ -287,4 +292,27 @@ async function dayLoadFix(url: URL, req: Request) {
     addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "settings", entityId: DAY_LOAD_ID, entityLabel: "1 日の対応可能枚数", summary: `1 日の対応可能枚数の設定を変更 (${changes.length} 項目。お客様のご指示)`, changes });
   });
   return NextResponse.json({ ok: true, applied: true, changes, at: nowIso() });
+}
+
+/** 請求書の振込先 (設定 → 帳票の bankAccounts) を本文の内容に置き換える */
+async function docBankFix(url: URL, req: Request) {
+  const apply = url.searchParams.get("apply") === "1";
+  const body = (await req.json().catch(() => null)) as { accounts?: Record<string, unknown>[] } | null;
+  if (!Array.isArray(body?.accounts) || !body.accounts.length || body.accounts.length > 3) return NextResponse.json({ error: "accounts (1〜3 件) を JSON で送ってください" }, { status: 400 });
+  const txt = (v: unknown, max: number) => (typeof v === "string" ? v.normalize("NFKC").trim().slice(0, max) : "");
+  const accounts = body.accounts.map((a) => ({ bank: txt(a.bank, 60), branch: txt(a.branch, 60), type: txt(a.type, 10) || "普通", number: txt(a.number, 20), holder: txt(a.holder, 80), ...(txt(a.holderKana, 80) ? { holderKana: txt(a.holderKana, 80) } : {}) }));
+  if (accounts.some((a) => !a.bank || !a.number || !a.holder)) return NextResponse.json({ error: "銀行名・口座番号・口座名義は必須です" }, { status: 400 });
+  const db0 = await syncDb();
+  const before = documentSettings(db0).bankAccounts;
+  const changed = JSON.stringify(before) !== JSON.stringify(accounts);
+  if (!apply || !changed) return NextResponse.json({ ok: true, applied: false, changed, before: before.length, after: accounts.length });
+  await mutate((db) => {
+    const now = nowIso();
+    const row = db.settings.find((s) => s.id === DOCUMENT_SETTINGS_ID);
+    if (row) row.value = { ...(row.value ?? {}), bankAccounts: accounts };
+    else db.settings.push({ id: DOCUMENT_SETTINGS_ID, value: { ...documentSettings(db), bankAccounts: accounts }, updatedBy: SYSTEM_USER, updatedAt: now });
+    if (row) Object.assign(row, { updatedBy: SYSTEM_USER, updatedAt: now });
+    addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "settings", entityId: DOCUMENT_SETTINGS_ID, entityLabel: "帳票の会社情報", summary: `請求書の振込先を登録 (${accounts.length} 件。お客様のご指示)` });
+  });
+  return NextResponse.json({ ok: true, applied: true, accounts: accounts.length, at: nowIso() });
 }

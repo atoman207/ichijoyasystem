@@ -1,5 +1,5 @@
 import type { Customer, Database, Invoice, PurchaseInvoice, PurchasePayMethod, StoreId, Supplier } from "@/lib/db/types";
-import { allocatePaid, batchTerms, invoiceOrderIds, isRecognizedSale } from "@/lib/billing";
+import { allocatePaid, awaitsCompletion, batchTerms, invoiceOrderIds, isRecognizedSale } from "@/lib/billing";
 import { payDateOf, termsLabel } from "@/lib/suppliers";
 import { PURCHASE_PAY_METHOD_LABEL } from "@/lib/constants";
 
@@ -88,6 +88,8 @@ export function receivablesAsOf(db: Pick<Database, "orders" | "invoices" | "paym
   const byOrder = new Map<string, Invoice[]>();
   for (const i of live) for (const id of invoiceOrderIds(i)) byOrder.set(id, [...(byOrder.get(id) ?? []), i]);
   const recognized = new Set(db.orders.filter(isRecognizedSale).map((o) => o.id));
+  const orderMap = new Map(db.orders.map((o) => [o.id, o]));
+  const orderOf = (id: string) => orderMap.get(id);
   const lines: ArLine[] = [];
   for (const o of db.orders) {
     if (!recognized.has(o.id) || o.salesDate! > asOf || !inScope(o.storeId)) continue;
@@ -101,7 +103,7 @@ export function receivablesAsOf(db: Pick<Database, "orders" | "invoices" | "paym
   }
   // 受注で計上できない請求書 (受注がない・移行データの受注など) は請求書の発行日で計上している (会計データと同じ)
   for (const i of live) {
-    if (!(i.total > 0) || i.issueDate > asOf || !inScope(i.storeId) || invoiceOrderIds(i).some((id) => recognized.has(id))) continue;
+    if (!(i.total > 0) || i.issueDate > asOf || !inScope(i.storeId) || invoiceOrderIds(i).some((id) => recognized.has(id)) || awaitsCompletion(i, orderOf)) continue;
     const got = paid.get(i.id) ?? 0;
     const balance = i.total - got;
     if (balance === 0) continue;

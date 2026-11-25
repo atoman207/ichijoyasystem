@@ -5,14 +5,14 @@ import { revalidatePath } from "next/cache";
 import { addAudit, getDb, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
 import { categoryName, isItemCategory, syncInvoiceLineCategories } from "@/lib/mgmt/categories";
 import { closedReason } from "@/lib/mgmt/close";
-import type { Approval, Database, Quote, QuoteItem, StoreId, User } from "@/lib/db/types";
+import type { Approval, Database, OrderHandover, Quote, QuoteItem, StoreId, User } from "@/lib/db/types";
 import { AUTO_APPROVAL_NOTE, settleOwnApproval } from "@/lib/approval-decide";
 import { addDays, toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { approvalSettings, manYen } from "@/lib/approval-rules";
 import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { syncOrderEvent } from "@/lib/db/schedule";
-import { hasHandoverItems, suggestHandovers } from "@/lib/handover";
+import { cleanHandovers, handoverSpan, hasHandoverItems, suggestHandovers } from "@/lib/handover";
 import { quoteHandoverLines } from "@/lib/handover-save";
 import { approverLabel, approverRole, canSeeAllStores } from "@/lib/auth/permissions";
 import { relinkDocumentAttachments } from "@/lib/attachments";
@@ -153,7 +153,7 @@ const submittedText = (r: { role: string; auto: boolean }) => (r.auto ? `${AUTO_
  */
 function newQuoteBack(formData: FormData): string {
   const qs = new URLSearchParams();
-  for (const k of ["documentId", "inquiryId", "customerId"]) {
+  for (const k of ["documentId", "inquiryId", "customerId", "returnTo"]) {
     const v = str(formData, k);
     if (v) qs.set(k, v);
   }
@@ -247,7 +247,9 @@ export async function createQuote(formData: FormData) {
   });
   await notifyNewApprovals(approvalIds, user.id);
   revalidatePath("/quotes");
-  redirect(withMsg(`/quotes/${id}`, intent === "submit" ? `見積を作成し、${submitted}` : "見積を下書き保存しました。"));
+  // 予定表の小さな画面から撮影して作った見積は、その画面に戻る (お客様のご要望 2026-11-25「②」)
+  const ret = safeReturn(str(formData, "returnTo"), "");
+  redirect(withMsg(ret || `/quotes/${id}`, intent === "submit" ? `見積を作成し、${submitted}` : ret ? "見積を下書き保存しました。続けて「受注にする」で受注と日程を登録できます。" : "見積を下書き保存しました。"));
 }
 
 export async function updateQuote(id: string, formData: FormData) {
@@ -401,24 +403,58 @@ export async function sendQuote(id: string, formData: FormData) {
 }
 
 /** お客様の承諾 → 受注 (契約承認待ち) を作成 */
+/**
+ * 見積から受注 (契約) を登録する。
+ * onsite = 1 (予定表の小さな画面・見積の画面の「現場で受注」。お客様のご要望 2026-11-25「③」): 承認前 (下書き・承認待ち) の見積も受注にできる。
+ *   下書きは見積の承認も申請し、受注 (契約) を承認すると見積も承認済みになる (approval-decide.ts)。店長・管理者は承認を省略。
+ * handovers (JSON) があれば品目ごとの引取日・納品日 (施工日) をそのまま受注の日程にして予定表に載せる (「④」: 手書きの日時からの案を直したもの)。
+ * returnTo があれば、登録のあとその画面 (予定表の小さな画面) に戻る
+ */
 export async function convertQuoteToOrder(id: string, formData: FormData) {
   const user = await requireActionUser();
-  const back = `/quotes/${id}`;
+  const ret = safeReturn(str(formData, "returnTo"), "");
+  const back = ret || `/quotes/${id}`;
+  const onsite = str(formData, "onsite") === "1";
   let orderId = "";
   let role = "";
   let auto = false;
   let approvalId = "";
+  let quoteNote = "";
+  const approvalIds: string[] = [];
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
     assertCaseStore(user, q.storeId, back);
-    if (!["approved", "sent"].includes(q.status)) fail(back, "承認済み・送付済みの見積のみ受注にできます。");
+    if (!["approved", "sent"].includes(q.status) && !(onsite && ["draft", "pending_approval"].includes(q.status))) fail(back, "承認済み・送付済みの見積のみ受注にできます (現場で受注が決まったときは「現場で受注」から、見積の承認とあわせて申請できます)。");
     if (q.orderId) fail(back, "この見積はすでに受注登録されています。");
+    if (q.pendingChange) fail(back, "見積の変更が承認待ちです。承認・差戻しのあとに受注にしてください。");
+    // 現場で受注: 下書きの見積は見積の承認も申請する (店長・管理者は承認を省略してその場で承認済み)
+    if (onsite && q.status === "draft") {
+      const r = requestApproval(db, q, user, "現場で受注が決まったため、受注 (契約) とあわせて申請");
+      approvalIds.push(db.approvals[db.approvals.length - 1].id);
+      quoteNote = r.auto ? "" : ` 見積の承認も${r.role === "admin" ? "管理者" : "店長"}へ申請しました (受注を承認すると見積も承認済みになります)。`;
+    } else if (onsite && q.status === "pending_approval") {
+      quoteNote = " 見積は承認待ちのままです (受注を承認すると見積も承認済みになります)。";
+    }
     const customer = db.customers.find((c) => c.id === q.customerId);
     const now = nowIso();
     const today = toDateKey(new Date());
     orderId = newId("o");
-    const scheduledStart = str(formData, "scheduledStart") || undefined;
+    // 品目ごとの日程 (受注登録と同時に入れたとき)
+    let plan: OrderHandover[] | undefined;
+    if (formData.has("handovers")) {
+      let raw: unknown = [];
+      try {
+        raw = JSON.parse(str(formData, "handovers") || "[]");
+      } catch {
+        fail(back, "日程を読めませんでした。もう一度入力してください。");
+      }
+      const c = cleanHandovers(raw);
+      if (c.error) fail(back, c.error);
+      plan = c.rows;
+    }
+    const span = plan ? handoverSpan(plan) : {};
+    const scheduledStart = span.start ?? (str(formData, "scheduledStart") || undefined);
     const workerIds = formData.getAll("workerIds").map(String).filter(Boolean);
     db.orders.push({
       id: orderId,
@@ -432,7 +468,7 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
       total: q.total,
       status: "pending_approval",
       scheduledStart,
-      scheduledEnd: scheduledStart,
+      scheduledEnd: span.end ?? scheduledStart,
       workerIds,
       siteAddress: str(formData, "siteAddress") || q.siteAddress || customer?.address || "",
       receiptName: q.receiptName,
@@ -452,7 +488,8 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
     const created = db.orders[db.orders.length - 1];
     // 畳・襖・障子・網戸の見積: 入れた日を引取日にして品目ごとの日程を作る (表替え・裏返しは当日納品、ほかの納品日は手書きの日時か後で入れる。src/lib/handover.ts)
     const hvLines = quoteHandoverLines(db, q.items);
-    if (scheduledStart && hasHandoverItems(hvLines, q.category)) {
+    if (plan?.length) created.handovers = plan;
+    else if (scheduledStart && hasHandoverItems(hvLines, q.category)) {
       created.handovers = suggestHandovers({ lines: hvLines, category: q.category, pickupText: q.siteInfo?.pickupAt, deliveryText: q.siteInfo?.deliveryAt, pickupDate: scheduledStart, ref: today });
     }
     if (created.scheduledStart) syncOrderEvent(db, created, user.id);
@@ -462,12 +499,14 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
     approvalId = newId("ap");
     const contract: Approval = { id: approvalId, type: "order", targetId: orderId, title: `${db.orders[db.orders.length - 1].number} ${q.title}`, amount: q.total, storeId: q.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: str(formData, "note") || undefined, createdAt: now };
     db.approvals.push(contract);
-    addAudit(db, { userId: user.id, action: "create", entity: "order", entityId: orderId, entityLabel: db.orders[db.orders.length - 1].number, summary: `見積 ${q.number} から受注を登録し契約承認を申請`, storeId: q.storeId });
+    addAudit(db, { userId: user.id, action: "create", entity: "order", entityId: orderId, entityLabel: db.orders[db.orders.length - 1].number, summary: `見積 ${q.number} から受注を登録し契約承認を申請${onsite ? " (現場で受注)" : ""}${plan?.length ? ` · 日程 ${plan.length} 品目` : ""}`, storeId: q.storeId });
     auto = settleOwnApproval(db, contract, user, back);
   });
-  await notifyNewApprovals([approvalId], user.id);
+  await notifyNewApprovals([...approvalIds, approvalId], user.id);
   revalidatePath("/orders");
-  redirect(withMsg(`/orders/${orderId}`, auto ? `受注を登録しました。${AUTO_APPROVAL_NOTE}し、契約を確定しました。施工手配へ進めます。` : `受注を登録しました。${role === "admin" ? "管理者" : "店長"}の契約承認後に施工手配へ進めます。`));
+  revalidatePath("/schedule");
+  const msg = (auto ? `受注を登録しました。${AUTO_APPROVAL_NOTE}し、契約を確定しました。施工手配へ進めます。` : `受注を登録しました。${role === "admin" ? "管理者" : "店長"}の契約承認後に施工手配へ進めます。`) + quoteNote;
+  redirect(withMsg(ret || `/orders/${orderId}`, msg));
 }
 
 export async function markQuoteLost(id: string, formData: FormData) {

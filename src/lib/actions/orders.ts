@@ -2,12 +2,14 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { addAudit, diffChanges, getDb, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
+import { addAudit, diffChanges, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Approval, StoreId } from "@/lib/db/types";
 import { AUTO_APPROVAL_NOTE, settleOwnApproval } from "@/lib/approval-decide";
-import { addDays, toDateKey } from "@/lib/format";
+import { toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, PROGRESS_KIND_LABEL } from "@/lib/constants";
-import { approverRole, canEditCaseStore, canManageFinance, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
+import { approverRole, canEditCaseStore, canIssueInvoice, canSeeAllStores, isManagerOrAbove } from "@/lib/auth/permissions";
+import { buildOrderInvoice } from "@/lib/invoice-issue";
+import { liveInvoicesOfOrder } from "@/lib/billing";
 import { approvalSettings } from "@/lib/approval-rules";
 import { fieldLabel, fieldValue } from "@/lib/field-labels";
 import { notifyNewApprovals } from "@/lib/notify/approvals";
@@ -188,7 +190,8 @@ export async function completeOrder(id: string, formData: FormData) {
     const closed = closedReason(db, date, "施工完了 (売上計上)");
     if (closed) fail(back, closed);
     batch = usesBatchBilling(db.customers.find((c) => c.id === o.customerId));
-    o.status = "completed";
+    // 施工完了の前に請求書を発行した案件 (納品・施工の日にお渡し) は、施工完了で請求済に
+    o.status = o.invoiceId && liveInvoicesOfOrder(db.invoices, o).length ? "invoiced" : "completed";
     o.completedAt = date;
     o.salesDate = date;
     o.updatedAt = nowIso();
@@ -208,57 +211,20 @@ export async function completeOrder(id: string, formData: FormData) {
 export async function createInvoiceFromOrder(id: string, formData: FormData) {
   const user = await requireActionUser();
   const back = `/orders/${id}`;
-  if (!canManageFinance(user) && !isManagerOrAbove(user)) fail(back, "請求書の発行は店長・本部・管理者が行えます。");
+  if (!canIssueInvoice(user)) fail(back, "請求書の発行は店長・本部・管理者が行えます。");
   let invoiceId = "";
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
     // 請求書の発行はその店舗の社員 (店長もほかの店舗の請求書は発行しない。canAccessStore)
     assertStore(user, o.storeId, back);
-    if (o.status !== "completed") fail(back, "施工完了後に請求書を発行できます。");
+    if (o.status !== "completed") fail(back, "施工完了後に請求書を発行できます (納品・施工の日にお渡しする請求書は、予定表の「帳票をまとめて印刷」で発行できます)。");
     if (o.invoiceId) fail(back, "すでに請求書が発行されています。");
-    const q = db.quotes.find((x) => x.id === o.quoteId);
     const customer = db.customers.find((c) => c.id === o.customerId);
     const today = toDateKey(new Date());
     const dueDays = Number(str(formData, "dueDays")) || (customer?.type === "corporate" ? 30 : 14);
     const sentVia = choice(formData, "sentVia", CHANNEL_LABEL, "mail");
-    const now = nowIso();
-    invoiceId = newId("inv");
-    // 税抜の金額 = 合計 − 消費税 (税込の見積は内税)
-    const subtotal = q && q.total === o.total ? q.total - q.tax : Math.round(o.total / 1.1);
-    const tax = o.total - subtotal;
-    // 発行時の明細を請求書に残す (見積があれば見積の明細。ない案件は「件名 一式」)
-    const items = q && q.total === o.total ? q.items.map((i) => ({ ...i })) : [{ id: newId("qi"), name: o.title, qty: 1, unit: "式", unitPrice: subtotal, amount: subtotal }];
-    const notes = str(formData, "notes") || undefined;
-    db.invoices.push({
-      id: invoiceId,
-      number: nextNumber(db, "INV", db.invoices, today),
-      orderId: o.id,
-      customerId: o.customerId,
-      storeId: o.storeId,
-      issueDate: today,
-      dueDate: addDays(today, dueDays),
-      subtotal,
-      tax,
-      total: o.total,
-      paidAmount: 0,
-      status: "issued",
-      sentVia,
-      title: o.title,
-      items,
-      taxIncluded: q && q.total === o.total ? q.taxIncluded : undefined,
-      taxExempt: q && q.total === o.total ? q.taxExempt : undefined,
-      notes,
-      createdBy: user.id,
-      createdAt: now,
-      updatedAt: now,
-    });
-    o.invoiceId = invoiceId;
-    o.status = "invoiced";
-    o.updatedAt = now;
-    const num = db.invoices[db.invoices.length - 1].number;
-    db.commLogs.push({ id: newId("cl"), customerId: o.customerId, storeId: o.storeId, channel: sentVia, direction: "outbound", subject: `ご請求書 ${num}`, body: `施工完了に伴い、ご請求書 (¥${o.total.toLocaleString("ja-JP")}) を${CHANNEL_LABEL[sentVia]}でお送りしました。お支払期限: ${addDays(today, dueDays)}`, at: now, userId: user.id, relatedType: "invoice", relatedId: invoiceId });
-    addAudit(db, { userId: user.id, action: "create", entity: "invoice", entityId: invoiceId, entityLabel: num, summary: `請求書を発行 (¥${o.total.toLocaleString("ja-JP")} / ${CHANNEL_LABEL[sentVia]})`, storeId: o.storeId });
+    invoiceId = buildOrderInvoice(db, user, o, { issueDate: today, dueDays, sentVia, notes: str(formData, "notes") || undefined });
   });
   revalidatePath("/invoices");
   redirect(withMsg(`/invoices/${invoiceId}`, "請求書を発行しました。"));

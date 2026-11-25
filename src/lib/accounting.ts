@@ -1,7 +1,7 @@
 import type { CashEntry, Database, PurchasePayMethod, StoreId } from "@/lib/db/types";
 import { CASH_IN_ACCOUNTS, CASH_OUT_ACCOUNTS, EXPENSE_ACCOUNTS, EXPENSE_METHOD_LABEL, PAYMENT_METHOD_LABEL, PURCHASE_PAY_METHOD_LABEL } from "@/lib/constants";
 import { encodeShiftJis } from "@/lib/sjis";
-import { invoiceOrderIds, isRecognizedSale, liveInvoicesOfOrder, orderTaxIndex } from "@/lib/billing";
+import { awaitsCompletion, invoiceOrderIds, isRecognizedSale, liveInvoicesOfOrder, orderTaxIndex } from "@/lib/billing";
 import { purchaseMethodOf } from "@/lib/ar-ap";
 
 /**
@@ -187,6 +187,8 @@ export function buildJournal(db: Database, q: JournalQuery): JournalRow[] {
 
   // 売上: 受注の売上計上日 (= 施工完了日)。請求書の発行日とは別 (まとめ請求の締め日に発行しても、売上は案件ごとの完了日)
   const recognized = new Set(db.orders.filter(isRecognizedSale).map((o) => o.id));
+  const orderMap = new Map(db.orders.map((o) => [o.id, o]));
+  const orderOf = (id: string) => orderMap.get(id);
   if (want("sales")) {
     const taxOf = orderTaxIndex(db);
     for (const o of db.orders) {
@@ -197,7 +199,7 @@ export function buildJournal(db: Database, q: JournalQuery): JournalRow[] {
     }
     // 受注で計上できない請求書 (受注が見つからない・移行データの受注の請求書): 従来どおり請求書の発行日
     for (const i of db.invoices) {
-      if (i.status === "void" || !storeOk(i.storeId) || !inRange(i.issueDate, q) || !(i.total > 0) || invoiceOrderIds(i).some((id) => recognized.has(id))) continue;
+      if (i.status === "void" || !storeOk(i.storeId) || !inRange(i.issueDate, q) || !(i.total > 0) || invoiceOrderIds(i).some((id) => recognized.has(id)) || awaitsCompletion(i, orderOf)) continue;
       const name = customer(i.customerId);
       rows.push({ date: i.issueDate, kind: "sales", ref: i.number, partner: name, memo: `${i.number} ${name} 様 ${i.title ?? ""}`.trim(), debit: side(s.receivable, s.taxNone, i.total, i.storeId), credit: side(s.sales, s.taxSales, i.total, i.storeId, i.tax) });
     }

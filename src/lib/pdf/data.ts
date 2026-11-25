@@ -1,5 +1,6 @@
 import "server-only";
-import type { Customer, Database, Invoice, Quote, QuoteItem, StoreId } from "@/lib/db/types";
+import type { Customer, Database, Invoice, Quote, QuoteItem, Receipt, StoreId } from "@/lib/db/types";
+import { partLabel } from "@/lib/receipts";
 import { documentSettings } from "@/lib/doc-settings";
 import { PAYMENT_METHOD_LABEL } from "@/lib/constants";
 import type { InvoicePdfData, PdfCompany, PdfLine, QuotePdfData, ReceiptPdfData } from "./types";
@@ -174,6 +175,31 @@ export function receiptPdfData(db: Database, inv: Invoice): ReceiptPdfData | nul
     invoiceNumber: inv.number,
     company: pdfCompany(db, inv.storeId),
     taxExempt: inv.taxExempt || undefined,
+  };
+}
+
+/**
+ * 領収書の台帳の 1 枚 (お客様のご要望 2026-11-25「⑧」: 支払方法ごとの内訳つき)。reissueNo = 再発行の何回目 (0 = 最初の出力)
+ */
+export function receiptRecordPdfData(db: Database, r: Receipt, reissueNo: number): ReceiptPdfData {
+  const inv = db.invoices.find((i) => i.id === r.invoiceId);
+  const parts = r.parts.filter((p) => p.amount > 0).map((p) => ({ label: partLabel(p), amount: p.amount }));
+  return {
+    number: r.number,
+    issuedOn: r.issueDate,
+    customerName: r.addressee,
+    honorific: r.honorific,
+    amount: r.amount,
+    taxable: r.amount - r.tax,
+    tax: r.tax,
+    purpose: r.purpose,
+    paymentMethod: parts.map((p) => p.label).join("・") || undefined,
+    parts,
+    invoiceNumber: inv?.number,
+    company: pdfCompany(db, r.storeId),
+    reissue: reissueNo > 0,
+    reissueNo: reissueNo > 0 ? reissueNo : undefined,
+    taxExempt: r.taxExempt || undefined,
   };
 }
 

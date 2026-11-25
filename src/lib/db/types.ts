@@ -20,6 +20,8 @@ import type { DocDraft } from "./types-drafts";
 export type * from "./types-drafts";
 import type { CasePost, TidyCheck } from "./types-posts";
 export type * from "./types-posts";
+import type { DocOutput, Receipt } from "./types-docs";
+export type * from "./types-docs";
 
 export type Role = "admin" | "store_manager" | "store_staff" | "hq_staff";
 
@@ -555,6 +557,11 @@ export interface Order {
   scheduleStatus?: "adjusting";
   /** 領収書の宛名 (お客様名と違うとき。例: 個人のお客様の依頼で会社名義の領収書)。空のときは顧客名 */
   receiptName?: string;
+  /**
+   * 領収書: true = 発行する / false = 発行しない / 未設定 = 入金の予定方法から自動 (現金・訪問集金は発行する、カード・電子決済はご希望があれば)。
+   * お客様のご要望 2026-11-25「⑦」(src/lib/receipts.ts の receiptWanted)
+   */
+  receiptWanted?: boolean;
   /** 請求書の発行: required = 必要 (業者・後日振込など) / not_required = 不要 (現場で集金など)。未設定は自動判定 */
   billing?: "required" | "not_required";
   /** 入金の予定方法 (cash / transfer / visit / card / epay / trade) */
@@ -1251,6 +1258,9 @@ export type AttachmentParent = "customer" | "inquiry" | "quote" | "order" | "exp
  * 添付ファイル (資料・写真)。本体はこのサーバー (VPS) のディスク (src/lib/storage.ts。本番: /srv/ichijoya/data/uploads) に置き、
  * ここには台帳 (どの記録の添付か・誰がいつ登録したか) だけを持つ
  */
+/** 資料の種類 (src/lib/attachment-category.ts) */
+export type AttachmentCategory = "site_plan" | "measure" | "site_photo" | "before" | "after" | "doc";
+
 export interface Attachment {
   id: string;
   parentType: AttachmentParent;
@@ -1269,6 +1279,10 @@ export interface Attachment {
   width?: number;
   height?: number;
   caption?: string;
+  /** 資料の種類 (現場図面・採寸図・現場の写真・施工前・施工後・資料。src/lib/attachment-category.ts)。お客様のご要望 2026-11-25「⑤」 */
+  category?: AttachmentCategory;
+  /** 書き込みをして保存した写真の元の写真 (元の写真は残す) */
+  derivedFrom?: string;
   /** 撮影日時 (写真の Exif、なければファイルの更新日時) */
   takenAt?: string;
   uploadedBy: string;
@@ -1868,6 +1882,9 @@ export interface Database {
   condolences: Condolence[];
   /* 文書の下書き (types-drafts.ts。AI アシスタントの「文書の作成」の保存・確認・承認・送信) */
   docDrafts: DocDraft[];
+  /* 帳票の出力記録・領収書の発行台帳 (types-docs.ts。src/lib/doc-outputs.ts・src/lib/receipts.ts) */
+  receipts: Receipt[];
+  docOutputs: DocOutput[];
   /* 施工事例の投稿・整理整頓チェック (types-posts.ts。src/lib/case-posts.ts・src/lib/tidy.ts) */
   casePosts: CasePost[];
   tidyChecks: TidyCheck[];

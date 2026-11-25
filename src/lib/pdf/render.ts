@@ -458,7 +458,7 @@ function sectionHeading(s: Sheet, x: number, top: number, width: number, label: 
   return top + SECTION_HEAD_H;
 }
 
-const bankHeight = (count: number): number => SECTION_HEAD_H + (count ? count * 30 + 4 : 20);
+const bankHeight = (accounts: PdfBankAccount[]): number => SECTION_HEAD_H + (accounts.length ? accounts.reduce((a, b) => a + (b.holderKana ? 42 : 30), 0) + 4 : 20);
 
 /** お振込先 (口座ごとに 2 行)。下端を返す */
 function drawBankAccounts(s: Sheet, x: number, top: number, width: number, accounts: PdfBankAccount[]): number {
@@ -473,6 +473,10 @@ function drawBankAccounts(s: Sheet, x: number, top: number, width: number, accou
     s.text(joinText([a.bank, a.branch], "　"), x + 4, t, { size: 9, weight: "bold", maxWidth: width - 8 });
     t += 13;
     s.text(joinText([a.type, a.number, a.holder && `口座名義 ${a.holder}`], "　"), x + 4, t, { size: 8.5, maxWidth: width - 8 });
+    if (a.holderKana) {
+      t += 12;
+      s.text(`口座名義 (カナ) ${a.holderKana}`, x + 4, t, { size: 8.5, maxWidth: width - 8 });
+    }
     t += 3;
   }
   return t + 4;
@@ -609,7 +613,7 @@ export async function renderInvoicePdf(data: InvoicePdfData): Promise<Uint8Array
   // 合計・税率別内訳 (右) とお振込先 (左) を並べる
   const sums: Sums = { subtotal: num(data.subtotal), discount: num(data.discount), tax: num(data.tax), total, taxIncluded: Boolean(data.taxIncluded), taxExempt: Boolean(data.taxExempt) };
   const banks = (data.company.bankAccounts ?? []).filter((b) => b && (s.ts.clean(b.bank) || s.ts.clean(b.number)));
-  const height = Math.max(bankHeight(banks.length), totalsHeight(sums, true));
+  const height = Math.max(bankHeight(banks), totalsHeight(sums, true));
   s.y += 12;
   s.ensure(height);
   drawBankAccounts(s, LEFT, s.y, CONTENT_W - TOTALS_W - 24, banks);
@@ -661,8 +665,21 @@ function receiptDetails(s: Sheet, x: number, top: number, width: number, data: R
     t += 5;
     s.hline(x, x + width, t, { width: 0.4, color: C.ruleLight });
   }
+  // 支払方法ごとの内訳 (2 つ以上、または 1 つでも金額つき)。1 つだけのときは「お支払方法」の行
+  const parts = data.parts ?? [];
+  if (parts.length > 1) {
+    t += 16;
+    s.text("お支払の内訳", x + 4, t, { size: 8.5, weight: "bold", color: C.sub });
+    for (const p of parts) {
+      t += 14;
+      s.text(p.label, x + 10, t, { size: 8.5, color: C.sub, maxWidth: 90 });
+      s.text(fmtYen(p.amount), x + width - 4, t, { size: 9, align: "right", maxWidth: width - 100, shrinkTo: 6 });
+    }
+    t += 5;
+    s.hline(x, x + width, t, { width: 0.4, color: C.ruleLight });
+  }
   const extra: [string, string | undefined][] = [
-    ["お支払方法", data.paymentMethod],
+    ["お支払方法", parts.length > 1 ? undefined : (parts[0]?.label ?? data.paymentMethod)],
     ["請求書番号", data.invoiceNumber],
   ];
   for (const [label, value] of extra) {
@@ -682,7 +699,7 @@ function stampBox(s: Sheet, x: number, top: number, width: number, height: numbe
 
 export async function renderReceiptPdf(data: ReceiptPdfData): Promise<Uint8Array> {
   const s = await Sheet.create({
-    title: `領収書 ${data.number}${data.reissue ? " (再発行)" : ""}`,
+    title: `領収書 ${data.number}${data.reissue ? ` (再発行${data.reissueNo ? ` ${data.reissueNo} 回目` : ""})` : ""}`,
     subject: "領収書",
     author: data.company.name,
   });
@@ -693,7 +710,7 @@ export async function renderReceiptPdf(data: ReceiptPdfData): Promise<Uint8Array
   const inL = LEFT + pad;
   const inR = RIGHT - pad;
 
-  titleBlock(s, "領収書", top + 52, 26, data.reissue ? "再発行" : undefined);
+  titleBlock(s, "領収書", top + 52, 26, data.reissue ? (data.reissueNo ? `再発行 ${data.reissueNo}` : "再発行") : undefined);
 
   // 宛名 (左) / 番号・発行日 (右)
   const rowTop = top + 84;

@@ -6,9 +6,9 @@ import { addAudit, mutate, newId, nowIso } from "@/lib/db/store";
 import { toDateKey } from "@/lib/format";
 import { CHANNEL_LABEL, PAYMENT_METHOD_LABEL } from "@/lib/constants";
 import { canManageFinance, isManagerOrAbove } from "@/lib/auth/permissions";
-import { postCash } from "@/lib/cashbook";
-import { invoiceOrderIds, settleInvoiceOrders } from "@/lib/billing";
+import { invoiceOrderIds } from "@/lib/billing";
 import { assertStore, choice, fail, numField, requireActionUser, str, withMsg } from "./guards";
+import { applyPayment } from "@/lib/payments";
 
 export async function recordPayment(invoiceId: string, formData: FormData) {
   const user = await requireActionUser();
@@ -19,35 +19,10 @@ export async function recordPayment(invoiceId: string, formData: FormData) {
     const inv = db.invoices.find((x) => x.id === invoiceId);
     if (!inv) fail("/invoices", "請求書が見つかりません。");
     assertStore(user, inv.storeId, back);
-    if (inv.status === "void") fail(back, "無効化された請求書には入金できません。");
-    const remaining = inv.total - inv.paidAmount;
-    if (amount > remaining) fail(back, `入金額が残高 (¥${remaining.toLocaleString("ja-JP")}) を超えています。`);
-    const now = nowIso();
-    const method = choice(formData, "method", PAYMENT_METHOD_LABEL, "transfer");
     const date = str(formData, "date") || toDateKey(new Date());
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) fail(back, "入金日を正しく入力してください。");
-    const paymentId = newId("pay");
-    db.payments.push({ id: paymentId, invoiceId, date, amount, method, memo: str(formData, "memo") || undefined, recordedBy: user.id, createdAt: now });
-    // 現金の入金は店舗の現金出納帳に記帳する
-    if (method === "cash") {
-      const name = db.customers.find((c) => c.id === inv.customerId)?.name;
-      postCash(db, { storeId: inv.storeId, date, direction: "in", amount, account: "売掛金回収 (現金入金)", counterparty: name, description: `${inv.number} の入金`, source: "payment", sourceId: paymentId, userId: user.id });
-    }
-    // 入金予定: 全額の入金・予定額を満たす入金で消す。予定額の一部の入金は予定額を減らす (予定額なし = 残高の全額の予定は、一部の入金では残す)
-    if (inv.expectedDate) {
-      const clearPlan = amount >= remaining || (inv.expectedAmount !== undefined && amount >= inv.expectedAmount);
-      if (clearPlan) {
-        inv.expectedDate = undefined;
-        inv.expectedAmount = undefined;
-        inv.expectedNote = undefined;
-      } else if (inv.expectedAmount !== undefined) inv.expectedAmount -= amount;
-    }
-    inv.paidAmount += amount;
-    inv.status = inv.paidAmount >= inv.total ? "paid" : "partially_paid";
-    inv.updatedAt = now;
-    // 受注の状態: 入金を割り当てた額 (まとめ請求は売上計上日の古い順) が受注の金額に届いた案件を入金済みに
-    settleInvoiceOrders(db, inv, now);
-    addAudit(db, { userId: user.id, action: "create", entity: "payment", entityId: invoiceId, entityLabel: inv.number, summary: `入金を登録 (¥${amount.toLocaleString("ja-JP")} / ${PAYMENT_METHOD_LABEL[method]})${inv.status === "paid" ? " → 入金完了" : ""}`, storeId: inv.storeId });
+    const err = applyPayment(db, user.id, inv, { date, amount, method: choice(formData, "method", PAYMENT_METHOD_LABEL, "transfer"), memo: str(formData, "memo") || undefined });
+    if (err) fail(back, err);
   });
   revalidatePath("/invoices");
   revalidatePath("/cashbook");

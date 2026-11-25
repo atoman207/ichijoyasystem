@@ -147,6 +147,18 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
         o.approvedBy = userId;
         const q = db.quotes.find((x) => x.id === o.quoteId);
         if (q) {
+          // 現場で受注 (見積の承認の前に受注を登録。お客様のご要望 2026-11-25「③」): 契約の承認で見積の承認も済ませる
+          const qa = db.approvals.find((x) => x.type === "quote" && x.targetId === q.id && x.status === "pending");
+          if (qa) {
+            qa.status = "approved";
+            qa.decidedBy = userId;
+            qa.decidedAt = now;
+            qa.decisionComment = "受注 (契約) の承認とあわせて承認";
+          }
+          if (!q.approvedAt) {
+            q.approvedBy = userId;
+            q.approvedAt = now;
+          }
           q.status = "accepted";
           q.updatedAt = now;
           const inq = db.inquiries.find((x) => x.id === q.inquiryId);

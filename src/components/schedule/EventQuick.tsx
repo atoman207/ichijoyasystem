@@ -20,6 +20,7 @@ import { CopyAddress } from "@/components/maps/CopyAddress";
 import { mapViewHref, reopenHref } from "@/lib/maps/links";
 import { KINDS_BY_GROUP, KindMark, kindLabel } from "./parts";
 import type { EventQuickData, QuickMap, QuickStaff } from "./quick-types";
+import { CaseWorkSection } from "./CaseWork";
 
 /**
  * 予定表で予定を押したときの小さな画面 (お客様のご要望 2026-11-24「■3」「■4」、追加「②」「⑥」「⑦」「⑧」)
@@ -30,7 +31,7 @@ import type { EventQuickData, QuickMap, QuickStaff } from "./quick-types";
  * EventQuickHost は予定表のビューを包み、予定のリンク (data-ev) を押したときだけ開く (Ctrl・Shift で押したときは今までどおり別の画面)
  */
 
-type Open = { id: string; search: string; returnTo: string };
+type Open = { id: string; search: string; returnTo: string; flash?: { msg?: string; err?: string } };
 
 /** 検索の文字から qe (開く予定の印) を外す */
 function withoutQe(search: string): string {
@@ -57,7 +58,10 @@ export function EventQuickHost({ children, fromUrl = true }: { children: ReactNo
     const back = new URLSearchParams(search);
     for (const k of ["msg", "err", "_r"]) back.delete(k);
     back.set("_r", Math.random().toString(36).slice(2, 8));
-    return { id: qe, search, returnTo: `${pathname}?${back.toString()}` };
+    // 保存のあとに開き直したときは、結果の知らせ (msg・err) を小さな画面の上に出す (予定表の上の知らせは小さな画面に隠れるため)
+    const msg = params.get("msg") ?? undefined;
+    const err = params.get("err") ?? undefined;
+    return { id: qe, search, returnTo: `${pathname}?${back.toString()}`, flash: msg || err ? { msg, err } : undefined };
   });
   // 印 (qe) は URL から外す (読み込み直しで開き直さない)。Next.js が履歴の書き換えを受け取る仕組みは画面の一番上の部品の
   // useEffect で用意されるため (子の useEffect が先に動く)、そのあとで書き換える。状態は null (Next.js の内部の状態 __NA を渡すと内部の書き換えとみなされる)
@@ -86,7 +90,7 @@ export function EventQuickHost({ children, fromUrl = true }: { children: ReactNo
     <div onClickCapture={onClickCapture}>
       {children}
       {open && open.search === search && (
-        <EventQuickDialog key={`${open.returnTo}|${open.id}`} id={open.id} returnTo={open.returnTo} onClose={() => setOpen(null)} onOpenEvent={(id) => setOpen((o) => (o ? { ...o, id } : o))} />
+        <EventQuickDialog key={`${open.returnTo}|${open.id}`} id={open.id} returnTo={open.returnTo} flash={open.flash} onClose={() => setOpen(null)} onOpenEvent={(id) => setOpen((o) => (o ? { ...o, id, flash: undefined } : o))} />
       )}
     </div>
   );
@@ -94,7 +98,7 @@ export function EventQuickHost({ children, fromUrl = true }: { children: ReactNo
 
 export type TimeMode = "allday" | "am" | "pm" | "time";
 
-function EventQuickDialog({ id, returnTo, onClose, onOpenEvent }: { id: string; returnTo: string; onClose: () => void; onOpenEvent: (id: string) => void }) {
+function EventQuickDialog({ id, returnTo, flash, onClose, onOpenEvent }: { id: string; returnTo: string; flash?: { msg?: string; err?: string }; onClose: () => void; onOpenEvent: (id: string) => void }) {
   const [data, setData] = useState<EventQuickData | null>(null);
   const [error, setError] = useState("");
   const [rev, setRev] = useState(0);
@@ -157,6 +161,11 @@ function EventQuickDialog({ id, returnTo, onClose, onOpenEvent }: { id: string; 
           </button>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          {flash && (flash.err || flash.msg) && (
+            <p role="status" className={clsx("mb-2 rounded-lg px-3 py-2 text-sm", flash.err ? "bg-critical-soft text-critical-ink" : "bg-good-soft text-good-ink")} data-testid="event-quick-flash">
+              {flash.err ?? flash.msg}
+            </p>
+          )}
           {error && <p className="rounded-lg bg-critical-soft px-3 py-2 text-sm text-critical-ink">{error}</p>}
           {!data && !error && <div className="h-40 animate-pulse rounded-xl bg-subtle" />}
           {data && <QuickBody key={data.id} data={data} returnTo={returnTo} onOpenEvent={onOpenEvent} onReload={() => setRev((r) => r + 1)} />}
@@ -571,18 +580,29 @@ function CustomerBlock({ data }: { data: EventQuickData }) {
           <span className="text-xs text-warn-ink">顧客未登録</span>
         </div>
       ) : null}
-      {(c?.phones.length ? c.phones : data.contactPhone ? [data.contactPhone] : []).map((p) => (
-        <a key={p} href={`tel:${p.replace(/[^0-9+]/g, "")}`} className="flex items-center gap-2 text-accent tnum hover:underline">
-          <Phone className="h-3.5 w-3.5" aria-hidden />
-          {p}
-        </a>
-      ))}
-      {c?.address && (
-        <div className="flex items-start gap-2 text-xs text-ink-2">
-          <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-3" aria-hidden />
-          <span>{c.address}</span>
-        </div>
-      )}
+      {/* 住所 (左) と電話 (右。押すとそのまま電話をかける)。お客様のご要望 2026-11-25「⑩」 */}
+      {(() => {
+        const phones = c?.phones.length ? c.phones : data.contactPhone ? [data.contactPhone] : [];
+        if (!c?.address && !phones.length) return null;
+        return (
+          <div className="flex items-start gap-2" data-testid="event-quick-contact">
+            <div className="flex min-w-0 flex-1 items-start gap-1.5 pt-1 text-xs text-ink">
+              <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-3" aria-hidden />
+              <span className="min-w-0 break-words">{c?.address || <span className="text-ink-3">住所の登録なし</span>}</span>
+            </div>
+            {phones.length > 0 && (
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                {phones.map((p) => (
+                  <a key={p} href={`tel:${p.replace(/[^0-9+]/g, "")}`} className="inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-panel px-2.5 py-1.5 text-sm font-semibold text-accent tnum hover:bg-accent-soft" title="押すと電話をかけます">
+                    <Phone className="h-3.5 w-3.5" aria-hidden />
+                    {p}
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
       {data.location && data.location !== c?.address && (
         <div className="flex items-start gap-2 text-xs text-ink-2">
           <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
@@ -647,6 +667,7 @@ function QuickBody({ data, returnTo, onOpenEvent, onReload }: { data: EventQuick
       </div>
 
       <CustomerBlock data={data} />
+      {data.caseWork && <CaseWorkSection work={data.caseWork} eventId={data.id} returnTo={returnTo} onReload={onReload} />}
       <CaseEditSection data={data} returnTo={returnTo} />
 
       {!data.canEdit ? (

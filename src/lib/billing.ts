@@ -79,6 +79,21 @@ export function paidForOrder(inv: Pick<Invoice, "orderId" | "orderIds" | "orderL
  * 売上として計上する受注 (会計データの仕訳・売掛一覧で共通): 売上計上日 (= 施工完了日) があり、キャンセルでなく、金額がある。
  * 販売管理ソフトから移行した過去の受注 (source = import。入金済み・請求書なし) は、移行前の会計で処理済みのため含めない
  */
+/** 施工完了の前の受注 (新システムの受注で、まだ売上に計上していない) */
+const AWAITING = new Set(["pending_approval", "returned", "confirmed", "scheduled", "in_progress"]);
+
+/**
+ * 施工完了の前に発行した請求書 (納品・施工の日にお渡しする請求書をまとめて印刷したとき。お客様のご要望 2026-11-25「⑦」)。
+ * 対象の受注がすべて施工完了の前なら true: 売上・売掛は施工完了 (売上計上日) から数え、それまでは請求書の発行日で計上しない
+ */
+export function awaitsCompletion(inv: Pick<Invoice, "orderId" | "orderIds">, orderById: (id: string) => Pick<Order, "status" | "source"> | undefined): boolean {
+  const ids = invoiceOrderIds(inv);
+  return ids.length > 0 && ids.every((id) => {
+    const o = orderById(id);
+    return Boolean(o && o.source !== "import" && AWAITING.has(o.status));
+  });
+}
+
 export function isRecognizedSale(o: Pick<Order, "salesDate" | "status" | "source" | "total">): boolean {
   return Boolean(o.salesDate) && o.status !== "cancelled" && o.source !== "import" && o.total > 0;
 }

@@ -2,7 +2,9 @@ import { notFound, redirect } from "next/navigation";
 import { storePhone } from "@/lib/store-contact";
 import { requireUser } from "@/lib/auth/session";
 import { syncDb } from "@/lib/db/store";
-import { canAccessStore } from "@/lib/auth/permissions";
+import { canOutputDocument } from "@/lib/auth/permissions";
+import { invoiceAccessInfo } from "@/lib/case-access";
+import { recordOutputs } from "@/lib/doc-print";
 import { fmtDate, yen } from "@/lib/format";
 import { PrintToolbar } from "@/components/features/PrintToolbar";
 import { IchijoyaLogo } from "@/components/brand/Logo";
@@ -16,7 +18,9 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
   const db = await syncDb();
   const inv = db.invoices.find((x) => x.id === id);
   if (!inv) notFound();
-  if (!canAccessStore(user, inv.storeId)) redirect("/invoices");
+  // 請求書を見られる社員は出力できる (お客様のご要望 2026-11-25「⑥」)。出力の記録を残す
+  if (!canOutputDocument(user, invoiceAccessInfo(db, user, inv).access)) redirect("/invoices");
+  await recordOutputs(user, [{ kind: "invoice", refId: inv.id, number: inv.number, storeId: inv.storeId, customerId: inv.customerId, orderId: inv.orderId, via: "view" }]);
   const customer = db.customers.find((c) => c.id === inv.customerId);
   const order = db.orders.find((o) => o.id === inv.orderId);
   const quote = order ? db.quotes.find((q) => q.id === order.quoteId) : undefined;
@@ -76,7 +80,7 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
         </table>
         <div className="mt-6 rounded border border-line p-3 text-[11px] leading-relaxed">
           <div className="font-medium">お振込先</div>
-          {settings.bankAccounts.length ? settings.bankAccounts.map((b, i) => <div key={i}>{b.bank} {b.branch} {b.type} {b.number} {b.holder}</div>) : <div>お振込先は別途ご案内いたします。</div>}
+          {settings.bankAccounts.length ? settings.bankAccounts.map((b, i) => <div key={i}>{b.bank} {b.branch} {b.type} {b.number} {b.holder}{b.holderKana ? ` (${b.holderKana})` : ""}</div>) : <div>お振込先は別途ご案内いたします。</div>}
           {(inv.notes || settings.invoiceNote) && <div className="mt-1 whitespace-pre-wrap text-ink-3">{[inv.notes, settings.invoiceNote].filter(Boolean).join("\n")}</div>}
         </div>
       </div>
