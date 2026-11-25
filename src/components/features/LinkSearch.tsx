@@ -66,7 +66,7 @@ export function CaseCustomerSearch({ action, returnTo, initialQuery = "" }: { ac
 }
 
 /** 問い合わせの画面: 既存の顧客を探して紐づける (付け替える) */
-export function CustomerLinkSearch({ action, inquiryId, returnTo, initialQuery = "", relink = false }: { action: (fd: FormData) => Promise<void>; inquiryId: string; returnTo: string; initialQuery?: string; relink?: boolean }) {
+export function CustomerLinkSearch({ action, inquiryId, returnTo, initialQuery = "", relink = false, scopeChoice = false }: { action: (fd: FormData) => Promise<void>; inquiryId: string; returnTo: string; initialQuery?: string; relink?: boolean; scopeChoice?: boolean }) {
   const s = useSearch<CustomerHit>("/api/customers/search", [], initialQuery);
   return (
     <div className="space-y-2" data-testid="customer-link-search">
@@ -77,6 +77,20 @@ export function CustomerLinkSearch({ action, inquiryId, returnTo, initialQuery =
         <form action={action}>
           {inquiryId && <input type="hidden" name="inquiryId" value={inquiryId} />}
           <input type="hidden" name="returnTo" value={returnTo} />
+          {/* 見積・受注のある問い合わせ: 問い合わせだけを付け替えるか、案件ごと付け替えるか (お客様のご要望 2026-11-25「④」) */}
+          {scopeChoice && (
+            <fieldset className="mb-2 space-y-1 rounded-lg border border-line bg-subtle/50 px-3 py-2 text-xs">
+              <legend className="px-1 font-semibold text-ink-2">付け替える範囲</legend>
+              <label className="flex items-center gap-2">
+                <input type="radio" name="scope" value="inquiry" defaultChecked className="h-3.5 w-3.5" />
+                この問い合わせだけ (見積・受注は今のお客様のまま)
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" name="scope" value="case" className="h-3.5 w-3.5" />
+                問い合わせ・見積・受注・予定をまとめて
+              </label>
+            </fieldset>
+          )}
           <ul className="max-h-80 divide-y divide-line overflow-y-auto rounded-lg border border-line bg-panel">
             {s.items.map((c) => (
               <li key={c.id} className="flex items-start gap-2 px-3 py-2">
@@ -132,8 +146,8 @@ export function ReceptionCustomerSearch({ initialQuery = "" }: { initialQuery?: 
                 <div className="mt-0.5 text-sm text-ink">{c.address || "住所未登録"}</div>
                 <div className="text-ink-3">{c.phone || "電話未登録"}</div>
               </div>
-              <Button type="submit" name="quick" value={`inquiry:${c.id}`} size="sm" className="w-full shrink-0 @xl:w-auto">
-                このお客様に紐付けて登録
+              <Button type="submit" name="quick" value={`link:${c.id}`} formNoValidate size="sm" className="w-full shrink-0 @xl:w-auto">
+                このお客様に紐付ける
               </Button>
             </li>
           ))}

@@ -14,7 +14,6 @@ import { canAccessStore, canEditCaseStore, canSeeAllStores, canViewAuditEntry } 
 import { userName } from "@/lib/db/queries";
 import { clearInquiryScheduleHold, linkInquiryFromForm, mergeInquiryIntoCase, registerCustomerFromInquiry, requestInquiry, setInquiryScheduleHold, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
 import { customerCases } from "@/lib/reception";
-import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { taskStep } from "@/lib/actions/messages";
 import { caseFlow } from "@/lib/case-flow";
 import { CaseFlowBar } from "@/components/features/CaseFlowBar";
@@ -127,7 +126,8 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const defaultTab: ActionTab = tabParam ?? (state === "request_waiting" || (state === "overdue" && !flow.inquiryFlow?.request && !inq.scheduleHold) ? "request" : "schedule");
   const openPerson = requests.find((t) => isOpenRequest(t) && !t.assigneeStoreId && (t.assigneeIds ?? []).length === 1);
   // 同じお客様の進行中の案件 (この問い合わせ以外)。既存の案件の連絡なら「この案件にまとめる」(お客様のご要望 2026-11-24「追加 ④」)
-  const canCreateCustomer = userCanCreateCustomer(db, user);
+  // 問い合わせのお客様の登録は誰でも (問い合わせは必ずお客様に紐付けて残す。お客様のご要望 2026-11-25。二重登録は重複の確認で防ぐ)
+  const canCreateCustomer = true;
   const otherCases = customer && canLink && !quote ? customerCases(db, customer.id).filter((c) => c.open && !(c.type === "inquiry" && c.id === inq.id) && canEditCaseStore(user, c.storeId)).slice(0, 5) : [];
   const scheduleKinds: ScheduleKind[] = order ? ["pickup", "delivery", "install", "site", "visit", "measure"] : ["survey", "onsite_quote", "site_survey", "measure", "visit", "pickup", "delivery", "install", "site"];
 
@@ -317,6 +317,14 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
           )}
 
           <CasePlanCard recordType="inquiry" recordId={inq.id} user={user} />
+          {/* 場所から訪問の候補日を探す (同じ町名・近くに予定のある日、予定の少ない日。お客様のご要望 2026-11-25「② 予定表からの日程候補検索」) */}
+          {(inq.siteAddress || contact.address || inq.area) && !viewOnly && (
+            <div className="-mb-2 flex justify-end">
+              <LinkButton href={`/schedule?find=${encodeURIComponent(inq.siteAddress || contact.address || inq.area || "")}&findCase=${encodeURIComponent(inq.id)}`} size="sm" variant="secondary">
+                場所から候補日を探す (予定表)
+              </LinkButton>
+            </div>
+          )}
           <CaseScheduleCard
             events={events}
             allEvents={db.schedule}
@@ -430,9 +438,9 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                 <div className="mt-2 flex flex-wrap gap-1">{customer.tags.map((t) => <Badge key={t} dot={false}>{t}</Badge>)}</div>
                 {canLink && !relinkBlocked && (
                   <details className="mt-3 rounded-xl border border-line bg-subtle/50 p-3" open={placeholder}>
-                    <summary className="cursor-pointer text-xs font-semibold text-ink">{placeholder ? "予定表の取込で仮に作った顧客です。既存のお客様を探して付け替える" : "別の既存のお客様に付け替える"}</summary>
-                    <p className="mt-1 mb-2 text-xs text-ink-3">付け替えると、この問い合わせの予定・資料・やりとりの記録も新しいお客様に移ります{placeholder ? " (仮の顧客にほかの記録がなければ、仮の顧客は削除します)" : ""}。</p>
-                    <CustomerLinkSearch action={linkInquiryFromForm} inquiryId={inq.id} returnTo={here} relink initialQuery={placeholder ? customer.name.split(/[\s　]+/)[0] : ""} />
+                    <summary className="cursor-pointer text-xs font-semibold text-ink">{placeholder ? "予定表の取込で仮に作った顧客です。既存のお客様を探して付け替える" : "紐付け先のお客様を直す (この問い合わせを正しいお客様へ付け替える)"}</summary>
+                    <p className="mt-1 mb-2 text-xs text-ink-3">付け替えると、この問い合わせの内容・予定・資料・やりとりの記録が正しいお客様の履歴に移ります (前のお客様の情報は変わりません){placeholder ? "。仮の顧客にほかの記録がなければ、仮の顧客は削除します" : ""}。</p>
+                    <CustomerLinkSearch action={linkInquiryFromForm} inquiryId={inq.id} returnTo={here} relink scopeChoice={Boolean(inq.quoteId)} initialQuery={placeholder ? customer.name.split(/[\s　]+/)[0] : ""} />
                   </details>
                 )}
               </div>

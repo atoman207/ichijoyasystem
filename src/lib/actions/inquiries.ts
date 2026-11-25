@@ -3,7 +3,6 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nextNumber, nowIso, nextCustomerCode } from "@/lib/db/store";
-import { userCanCreateCustomer } from "@/lib/ops-settings";
 import type { Inquiry, InquiryStatus } from "@/lib/db/types";
 import { toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS } from "@/lib/constants";
@@ -60,10 +59,44 @@ export async function createInquiry(formData: FormData) {
   const promotionId = str(formData, "promotionId") || undefined;
   const id = newId("inq");
   let areaNote = "";
+  let createdCode = "";
   await mutate((db) => {
-    const customer = db.customers.find((c) => c.id === str(formData, "customerId"));
-    // 店舗のロールは自店舗のお客様だけを選べる (店長は全店舗のお客様)
-    if (customer) assertCaseStore(user, customer.storeId, back);
+    let customer = db.customers.find((c) => c.id === str(formData, "customerId"));
+    // 紐付けられるお客様 = 顧客の一覧で見られるお客様 (ほかの店舗・本部で登録したお客様も。src/lib/customer-link.ts)
+    if (customer && !canLinkToCustomer(db, user, customer)) fail(back, "このお客様は閲覧の範囲の外のため選べません。店舗または本部に依頼してください。");
+    // 既存のお客様を選ばなかったときは、新規顧客として登録する (問い合わせは必ずお客様に紐付けて保存する。お客様のご要望 2026-11-25「問い合わせ登録時の顧客登録・紐付け」③)
+    if (!customer) {
+      const name = str(formData, "contactName").slice(0, 60);
+      if (!name) fail(back, "お客様名を入力するか、既存顧客を選択してください。");
+      const phone = str(formData, "contactPhone").slice(0, 40);
+      const addr = str(formData, "address").slice(0, 200);
+      const dup = findDuplicateCustomers(db, { name, phone, address: addr });
+      if (needsConfirmation(dup) && str(formData, "confirmDuplicate") !== "1") fail(back, `同じお客様の可能性がある顧客があります (${candidateLabel(dup)})。同じお客様なら「既存顧客を選択」で選び、別のお客様なら「確認したうえで新規に登録する」にチェックして登録してください。`);
+      const now0 = nowIso();
+      const cStore = newCaseStore(db, user, { requested: str(formData, "storeId"), auto: str(formData, "storeAuto") === "1", address: addr, customer: undefined }).storeId;
+      const c = {
+        id: newId("cust"),
+        code: nextCustomerCode(db),
+        name,
+        kana: "",
+        type: "individual" as const,
+        phone,
+        postalCode: withPostal(addr, ""),
+        address: addr,
+        storeId: cStore,
+        assignedUserId: str(formData, "assignedUserId") || user.id,
+        preferredChannel: "phone" as const,
+        firstContactChannel: choice(formData, "channel", CHANNEL_LABEL, "phone"),
+        tags: [],
+        notes: "問い合わせの登録から登録",
+        createdAt: now0,
+        updatedAt: now0,
+      };
+      db.customers.push(c);
+      customer = c;
+      createdCode = `${c.code} ${c.name}`;
+      addAudit(db, { userId: user.id, action: "create", entity: "customer", entityId: c.id, entityLabel: `${c.code} ${c.name}`, summary: `問い合わせの登録から顧客を登録${needsConfirmation(dup) ? ` · 重複候補 ${candidateLabel(dup)} を確認済み` : ""}`, storeId: cStore });
+    }
     // 担当店舗: 手で選んだ店舗 > 住所 (入力した住所 → お客様の住所) の担当エリア > お客様の店舗 > 自店舗 (お客様のご要望 2026-11-24「③」。src/lib/store-area.ts)
     const address = str(formData, "address").slice(0, 200);
     // 施工現場の住所 (依頼主の住所と違うとき)。担当店舗の担当エリアは現場の住所で決める
@@ -111,7 +144,7 @@ export async function createInquiry(formData: FormData) {
   });
   await notifyStoreGroup(id, user.id);
   revalidatePath("/inquiries");
-  redirect(withMsg(`/inquiries/${id}`, `問い合わせを登録しました。${areaNote}届いた書類・写真は下の「資料・写真」から添付できます。`));
+  redirect(withMsg(`/inquiries/${id}`, `問い合わせを登録しました${createdCode ? ` (新規顧客 ${createdCode} も登録し、このお客様の履歴として保存しました)` : ""}。${areaNote}届いた書類・写真は下の「資料・写真」から添付できます。`));
 }
 
 export async function updateInquiry(id: string, formData: FormData) {
@@ -194,7 +227,7 @@ export async function setInquiryStatus(id: string, status: InquiryStatus) {
 export async function registerCustomerFromInquiry(id: string, formData?: FormData) {
   const user = await requireActionUser();
   const back = `/inquiries/${id}`;
-  if (!userCanCreateCustomer(getDb(), user)) fail(back, "顧客の新規登録は事務担当が行います。既存のお客様なら「既存の顧客に紐づける」を使うか、事務担当に登録を依頼してください。");
+  // 問い合わせのお客様の登録は誰でも (問い合わせは必ずお客様に紐付けて残す。お客様のご要望 2026-11-25)。二重登録は下の重複の確認で防ぐ
   let customerId = "";
   const confirmed = formData ? str(formData, "confirmDuplicate") === "1" : false;
   await mutate((db) => {
@@ -248,7 +281,7 @@ export async function registerCustomerFromInquiry(id: string, formData?: FormDat
  * 問い合わせを既存の顧客に紐づける (付け替える)。問い合わせの画面 (重複の候補・検索) と顧客の画面 (この顧客にひも付ける) で共通。
  * 予定・資料・やりとりの記録も移し、予定表の取込で仮に作った顧客に何も残らなければ消す (src/lib/customer-link.ts)
  */
-export async function linkInquiryToCustomer(id: string, customerId: string, returnTo?: string) {
+export async function linkInquiryToCustomer(id: string, customerId: string, returnTo?: string, scope: "case" | "inquiry" = "case") {
   const user = await requireActionUser();
   const back = safeReturn(returnTo ?? "", `/inquiries/${id}`);
   if (!customerId) fail(back, "お客様を選んでください。");
@@ -266,7 +299,8 @@ export async function linkInquiryToCustomer(id: string, customerId: string, retu
       if (blocker) fail(back, blocker);
     }
     // 見積・受注のあとの案件: 見積・受注・予定もまとめて付け替える (お客様のご要望 2026-11-25「⑤」)
-    const chain = inq.quoteId ? caseChainOf(db, inq.id) : undefined;
+    // scope = inquiry: 問い合わせだけを付け替える (見積・受注は今のお客様のまま。お客様のご要望 2026-11-25「④ 問い合わせ内容だけを正しい顧客へ」)
+    const chain = inq.quoteId && scope === "case" ? caseChainOf(db, inq.id) : undefined;
     if (chain && (chain.quote || chain.order)) {
       if (chain.order) {
         const lock = completedCaseLock(db, user, chain.order);
@@ -306,7 +340,7 @@ export async function linkInquiryToCustomer(id: string, customerId: string, retu
 
 /** 問い合わせ画面・顧客画面の検索から紐づける (inquiryId・customerId・returnTo。ボタンの value で選んだ方を送る) */
 export async function linkInquiryFromForm(formData: FormData) {
-  await linkInquiryToCustomer(str(formData, "inquiryId"), str(formData, "customerId"), str(formData, "returnTo") || undefined);
+  await linkInquiryToCustomer(str(formData, "inquiryId"), str(formData, "customerId"), str(formData, "returnTo") || undefined, str(formData, "scope") === "inquiry" ? "inquiry" : "case");
 }
 
 /** 問い合わせ画面の検索プルダウンから既存顧客へ紐づける */

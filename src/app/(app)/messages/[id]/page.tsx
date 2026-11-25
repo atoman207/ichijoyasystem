@@ -143,7 +143,10 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
           </div>
           {ctx.schedule && (isAssignee || isRequester || canSeeAllStores(user)) && (
             <div className="mt-4 rounded-xl border-2 border-accent/40 bg-accent-soft/20 p-3" id="schedule">
-              <div className="mb-2 text-sm font-semibold text-ink">日程を登録する (お客様と決めた日時・担当者)</div>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold text-ink">日程を登録する (お客様と決めた日時・担当者)</span>
+                {ctx.visit && <Link href={`/schedule?find=${encodeURIComponent(ctx.visit.address)}&findCase=${encodeURIComponent(t.relatedId ?? "")}`} className="ml-auto text-xs text-accent hover:underline">場所から候補日を探す (予定表)</Link>}
+              </div>
               <RequestScheduleForm
                 threadId={t.id}
                 caseRef={ctx.schedule.caseRef}

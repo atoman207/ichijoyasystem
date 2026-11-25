@@ -145,7 +145,8 @@ eq(SA.newCaseStore(db(), staffUser, { auto: true, address: "どこか町" }).sto
 const IA = await imp("lib/actions/inquiries.ts");
 r = await act(staffUser, () => IA.createInquiry(form({ contactName: "見本 次郎", contactPhone: "090-0000-1111", channel: "phone", media: "unknown", summary: "畳の表替え", address: "熊本県テスト郡ためし町3-4", storeId: staffUser.storeId, storeAuto: "1", category: "tatami" })));
 const inq = db().inquiries.at(-1);
-eq([r.err, inq.storeId, inq.intake?.address], [null, other.id, "熊本県テスト郡ためし町3-4"], "問い合わせの登録: 住所の担当エリアの店舗・住所を残す");
+const inqCust = db().customers.find((c) => c.id === inq.customerId);
+eq([r.err, inq.storeId, inqCust?.name, inqCust?.address], [null, other.id, "見本 次郎", "熊本県テスト郡ためし町3-4"], "問い合わせの登録: 住所の担当エリアの店舗・新しいお客様を顧客として登録 (住所は顧客に)");
 ok(/担当にしました/.test(r.msg ?? ""), `登録の知らせに担当店舗 (${r.msg})`);
 // 地域一覧の取り込み直しで、手で足した地域は残す
 const plan = A.planAreaImport(db(), [{ store: third.name, town: "べつの町", ref: "2行目" }]);
@@ -310,9 +311,11 @@ eq(LS.searchCustomers(db(), staffUser, "北区見本町台33")[0]?.id ?? LS.sear
 const RAct = await imp("lib/actions/reception.ts");
 r = await act(staffUser, () => RAct.createReception(form({ source: "text", channel: "phone", storeId: staffUser.storeId, text: "見本様より電話。見本町台33。畳の表替え。" })));
 const rdoc = db().documents.filter((x) => x.kind === "reception").at(-1);
-r = await act(staffUser, () => RAct.registerReception(form({ id: rdoc.id, quick: "inquiry:cm_a", media: "repeat", confirmedUncertain: "on" })));
+// お客様を決める (紐付けはその場で完了) → 問い合わせとして登録 (お客様のご要望 2026-11-25)
+r = await act(staffUser, () => RAct.registerReception(form({ id: rdoc.id, quick: "link:cm_a", confirmedUncertain: "on" })));
+r = await act(staffUser, () => RAct.registerReception(form({ id: rdoc.id, intent: "inquiry", summary: "畳の表替え", media: "repeat", confirmedUncertain: "on" })));
 const linked = db().inquiries.at(-1);
-eq([r.err, linked.customerId], [null, "cm_a"], `ほかの店舗のお客様にワンタッチで紐付けて登録 (${r.msg ?? r.err})`);
+eq([r.err, linked.customerId], [null, "cm_a"], `ほかの店舗のお客様に紐付けて登録 (${r.msg ?? r.err})`);
 
 /* ================================================================== */
 section("郵便番号の自動設定 (住所 → 郵便番号) と電話番号の複数登録");
@@ -344,7 +347,8 @@ eq(diff.nodes.map((n) => `${n.id}:${n.kind}`), ["k2:mod"], "試験期間の引�
 await store.mutate((x) => x.customers.find((c) => c.id === "cm_a").storeId = staffUser.storeId);
 r = await act(staffUser, () => RAct.createReception(form({ source: "text", channel: "phone", storeId: staffUser.storeId, text: "見本様 携帯 080-7777-6666。見本町台33。襖の張替え。" })));
 const rdoc2 = db().documents.filter((x) => x.kind === "reception").at(-1);
-r = await act(staffUser, () => RAct.registerReception(form({ id: rdoc2.id, quick: "inquiry:cm_a", media: "repeat", confirmedUncertain: "on" })));
+r = await act(staffUser, () => RAct.registerReception(form({ id: rdoc2.id, quick: "link:cm_a", confirmedUncertain: "on" })));
+r = await act(staffUser, () => RAct.registerReception(form({ id: rdoc2.id, intent: "inquiry", summary: "襖の張替え", media: "repeat", confirmedUncertain: "on" })));
 const ca = db().customers.find((c) => c.id === "cm_a");
 ok(!r.err && (ca.contacts ?? []).some((x) => x.phone === "080-7777-6666") && /ほかの電話番号/.test(r.msg ?? ""), `紐付けたお客様に、メモの電話番号を「ほかの電話番号」として追加 (${r.msg ?? r.err})`);
 mr = RC.matchReception(db(), staffUser, fields({ customerName: "", address: "", phone: "08077776666" }));

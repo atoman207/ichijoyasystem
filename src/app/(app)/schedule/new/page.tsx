@@ -77,8 +77,9 @@ export default async function NewEventPage({ searchParams }: { searchParams: Pro
           assigneeIds,
           caseValue: fixedCase?.value ?? "",
           customerId: fixed?.customerId ?? customer?.id ?? "",
-          location: fixed?.location ?? customer?.address ?? "",
-          locationMode: "follow",
+          // 候補日の検索から来たときは、その場所 (?location=。お客様のご要望 2026-11-25「③ 候補日からの予定登録」)
+          location: fixed?.location ?? customer?.address ?? (sp.location ?? "").slice(0, 200),
+          locationMode: !fixed && !customer && sp.location ? "custom" : "follow",
           memo: "",
         }}
         users={formUsers(db)}

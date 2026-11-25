@@ -137,19 +137,26 @@ const newReception = async (user, text) => {
 let { doc } = await newReception(manager, `${real.name}様より電話。${real.phone}。住所は${real.address}。畳の表替え6畳。`);
 const m = R.matchReception(db(), manager, R.receptionFieldsOf(doc));
 ok(m.customers.some((c) => c.customer.id === real.id && c.level !== "name"), "住所・電話が同じお客様が候補 (「こちらのお客様に紐付けますか？」)");
-let r = await act(manager, () => RA.registerReception(form({ id: doc.id, quick: `inquiry:${real.id}`, media: "repeat", confirmedUncertain: "on" })));
+// お客様のご要望 2026-11-25「問い合わせ登録時の顧客登録・紐付け」: 最初にお客様を決めて (紐付け・新規顧客の登録はその場で完了)、そのあと選び直さずに登録する
+let r = await act(manager, () => RA.registerReception(form({ id: doc.id, quick: `link:${real.id}`, confirmedUncertain: "on" })));
 let inq = db().inquiries.find((i) => i.sourceRef === `reception:${doc.id}`);
-eq([r.err, inq?.customerId], [null, real.id], "「このお客様に紐付けて登録」1 回で問い合わせを登録・紐付け");
+eq([r.err, inq, R.receptionMetaOf(db().documents.find((x) => x.id === doc.id)).customerId], [null, undefined, real.id], `「このお客様に紐付ける」でお客様が決まる (問い合わせはまだ) (${r.msg ?? r.err})`);
+r = await act(manager, () => RA.registerReception(form({ id: doc.id, intent: "inquiry", summary: "畳の表替え6畳", media: "repeat", confirmedUncertain: "on" })));
+inq = db().inquiries.find((i) => i.sourceRef === `reception:${doc.id}`);
+eq([r.err, inq?.customerId], [null, real.id], "続けて「問い合わせとして登録する」(お客様を選び直さない)");
 ({ doc } = await newReception(manager, `${real.name}様より電話。${real.phone}。住所は${real.address}。網戸の張り替え。`));
 r = await act(manager, () => RA.registerReception(form({ id: doc.id, quick: "new", media: "unknown", confirmedUncertain: "on" })));
 ok(/同じお客様の可能性/.test(r.err ?? ""), "同じお客様の候補があるのに「新しいお客様」→「別のお客様です」の確認を求める (二重登録を防ぐ)");
 const before = db().customers.length;
 ({ doc } = await newReception(manager, "山之内 新太郎様より電話。090-1357-2468。住所は熊本県合志市幾久富1909-123。襖4枚の張り替え。"));
 // 確認の画面の欄 (AI が読んだ住所。AI なしのテストでは画面で直した値として送る) も一緒に送られる
-r = await act(manager, () => RA.registerReception(form({ id: doc.id, quick: "new", media: "flyer", confirmedUncertain: "on", customerName: "山之内 新太郎", phone: "090-1357-2468", address: "熊本県合志市幾久富1909-123" })));
+r = await act(manager, () => RA.registerReception(form({ id: doc.id, quick: "new", confirmedUncertain: "on", customerName: "山之内 新太郎", phone: "090-1357-2468", address: "熊本県合志市幾久富1909-123" })));
+const ncId = R.receptionMetaOf(db().documents.find((x) => x.id === doc.id)).customerId;
+const nc = db().customers.find((c) => c.id === ncId);
+ok(!r.err && db().customers.length === before + 1 && nc && /山之内/.test(nc.name) && nc.phone.replace(/\D/g, "") === "09013572468" && /幾久富/.test(nc.address) && /顧客として登録しました/.test(r.msg ?? ""), `「新規顧客として登録」でその場で顧客を保存 (${r.msg ?? r.err})`);
+r = await act(manager, () => RA.registerReception(form({ id: doc.id, intent: "inquiry", summary: "襖4枚の張り替え", media: "flyer", confirmedUncertain: "on" })));
 inq = db().inquiries.find((i) => i.sourceRef === `reception:${doc.id}`);
-const nc = inq ? db().customers.find((c) => c.id === inq.customerId) : undefined;
-ok(!r.err && db().customers.length === before + 1 && nc && /山之内/.test(nc.name) && nc.phone.replace(/\D/g, "") === "09013572468" && /幾久富/.test(nc.address), `「新しいお客様として登録」で顧客も登録して紐付け (${r.msg ?? r.err})`);
+eq([r.err, inq?.customerId, db().customers.length], [null, nc?.id, before + 1], "続けて問い合わせを登録 (新しいお客様の履歴。顧客は増えない)");
 const order = db().orders.find((o) => o.customerId === real.id && o.status !== "cancelled") ?? null;
 if (order) {
   ({ doc } = await newReception(manager, `${real.name}様より電話。${real.phone}。来週の引き取りの時間を変えたい。`));
@@ -165,9 +172,14 @@ if (staff) {
   const clerk = OS.userCanCreateCustomer(db(), staff);
   ({ doc } = await newReception(staff, "高宮 二郎様より電話。080-2468-1357。住所は熊本県合志市須屋9999-1。障子の張り替え。"));
   const c0 = db().customers.length;
-  r = await act(staff, () => RA.registerReception(form({ id: doc.id, quick: "new", media: "unknown", confirmedUncertain: "on" })));
+  // 問合せ登録からは、顧客を登録できない設定の社員でも新規顧客を登録する (問い合わせは必ずお客様に紐付けて残す。お客様のご要望 2026-11-25)
+  r = await act(staff, () => RA.registerReception(form({ id: doc.id, intent: "inquiry", summary: "障子の張り替え", media: "unknown", confirmedUncertain: "on" })));
+  ok(/先に上の「お客様・案件の確認」/.test(r.err ?? "") && !db().inquiries.some((i) => i.sourceRef === `reception:${doc.id}`), "お客様を決めずに問い合わせは登録しない (お客様のない問い合わせを作らない)");
+  r = await act(staff, () => RA.registerReception(form({ id: doc.id, quick: "new", confirmedUncertain: "on", customerName: "高宮 二郎", phone: "080-2468-1357", address: "熊本県合志市須屋9999-1" })));
+  ok(!clerk && !r.err && db().customers.length === c0 + 1, `顧客を登録できない設定の店舗スタッフも、問合せ登録では新規顧客を登録できる (${r.msg ?? r.err})`);
+  r = await act(staff, () => RA.registerReception(form({ id: doc.id, intent: "inquiry", summary: "障子の張り替え", media: "unknown", confirmedUncertain: "on" })));
   inq = db().inquiries.find((i) => i.sourceRef === `reception:${doc.id}`);
-  ok(clerk || (!r.err && inq && !inq.customerId && db().customers.length === c0 && /事務担当/.test(r.msg ?? "")), "顧客を登録できない社員は問い合わせだけ登録 (顧客は事務が登録)");
+  ok(!r.err && inq?.customerId && db().customers.find((c) => c.id === inq.customerId)?.name === "高宮 二郎", "問い合わせは新しいお客様に紐付けて保存");
 }
 
 /* ================================================================== */

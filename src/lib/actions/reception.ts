@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { BACKEND, addAudit, getDb, mutate, newId, nextCustomerCode, nextNumber, nowIso } from "@/lib/db/store";
 import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
-import type { Attachment, CapturedDocument, CommLog, Customer, Database, Inquiry, InquiryIntake, ScheduleEvent, ScheduleKind, Thread, User } from "@/lib/db/types";
+import type { Attachment, CapturedDocument, Channel, CommLog, Customer, Database, Inquiry, InquiryIntake, ScheduleEvent, ScheduleKind, Thread, User } from "@/lib/db/types";
 import { attachmentsOf, detectType, discardStored, relinkDocumentAttachments, storeFile } from "@/lib/attachments";
 import { readObject } from "@/lib/storage";
 import { CHANNEL_LABEL, SCHEDULE_KIND } from "@/lib/constants";
@@ -18,7 +18,6 @@ import { newCaseStore } from "@/lib/store-area";
 import { addInquiryPhone, canLinkToCustomer } from "@/lib/customer-link";
 import { withPostal } from "@/lib/postal/lookup";
 import { isCommonStaff } from "@/lib/staff-choices";
-import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { dueAtFrom } from "@/lib/inquiry-flow";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
@@ -314,16 +313,85 @@ function registerAppointments(d: Database, user: User, inq: Inquiry, list: Recep
   return out;
 }
 
+/**
+ * 問合せ登録の確認の画面の「お客様・案件の確認」(お客様のご要望 2026-11-25「問い合わせ登録時の顧客登録・紐付け」①②):
+ * - link (既存のお客様に紐付ける) / new (新規顧客として登録 = その場で顧客を保存する) / unlink (紐付けをやめる)
+ * 選んだお客様は受付に残し (_customerId)、そのあとの「問い合わせとして登録する」では、お客様を選び直さない。
+ * 新規顧客は、問合せ登録から登録するときは誰でも登録できる (同じお客様の候補があれば「別のお客様です」の確認が要る)。問い合わせはまだ登録しない
+ */
+async function chooseReceptionCustomer(user: User, id: string, formData: FormData, f: ReceptionFields, channel: Channel, what: "new" | "unlink" | string): Promise<never> {
+  const back = receptionHref(id);
+  let message = "";
+  await mutate((d) => {
+    const doc = findReception(d, user, id);
+    assertOpen(doc, back);
+    applyFields(doc, f, user, channel);
+    const x = doc.extracted as Record<string, unknown>;
+    if (what === "unlink") {
+      const before = x._customerId;
+      delete x._customerId;
+      message = before ? "お客様の紐付けをやめました。もう一度お客様を選んでください (登録した顧客の情報は残っています)。" : "お客様は紐付いていません。";
+      return;
+    }
+    if (what !== "new") {
+      const c = d.customers.find((y) => y.id === what);
+      if (!c) fail(back, "選んだお客様が見つかりません。");
+      if (!canLinkToCustomer(d, user, c)) fail(back, "このお客様は閲覧の範囲の外のため紐付けられません。店舗または本部に依頼してください。");
+      x._customerId = c.id;
+      addAudit(d, { userId: user.id, action: "update", entity: "document", entityId: id, entityLabel: doc.fileName, summary: `受付を既存の顧客 ${c.code} ${c.name} に紐付け`, storeId: doc.storeId });
+      message = `${c.name} 様 (${c.code}) に紐付けました。内容を確かめて「問い合わせとして登録する」を押してください。`;
+      return;
+    }
+    // 新規顧客として登録 (この時点で顧客を保存する)
+    const name = f.customerName || f.companyName;
+    if (!name) fail(back, "お名前 (会社のときは会社名) を入れてから「新規顧客として登録」を押してください。入力した内容は保存しました。");
+    const dup = findDuplicateCustomers(d, { name, phone: f.phone, otherPhones: [f.otherPhone].filter(Boolean), email: f.email, postalCode: f.postalCode, address: f.address });
+    if (needsConfirmation(dup) && formData.get("confirmDuplicate") !== "on") {
+      fail(back, `同じお客様の可能性がある顧客があります (${candidateLabel(dup)})。同じお客様なら候補の「このお客様に紐付ける」を、別のお客様なら「上の候補とは別のお客様です」にチェックしてから「新規顧客として登録」を押してください。`);
+    }
+    const now = nowIso();
+    const storeId = newCaseStore(d, user, { requested: str(formData, "storeId") || doc.storeId, address: f.address, customer: undefined }).storeId;
+    const c: Customer = {
+      id: newId("cust"),
+      code: nextCustomerCode(d),
+      name,
+      kana: f.kana,
+      type: !f.customerName && f.companyName ? "corporate" : "individual",
+      phone: f.phone,
+      ...(f.otherPhone ? { contacts: [{ id: newId("ct"), relation: "その他", phone: f.otherPhone }] } : {}),
+      ...(f.email ? { email: f.email } : {}),
+      postalCode: withPostal(f.address, f.postalCode),
+      address: f.address,
+      storeId,
+      assignedUserId: user.id,
+      preferredChannel: channel === "line" || channel === "email" ? channel : "phone",
+      firstContactChannel: channel,
+      tags: [],
+      notes: `問合せ登録 (${RECEPTION_SOURCE_LABEL[receptionMetaOf(doc).source]}) から登録`,
+      createdAt: now,
+      updatedAt: now,
+    };
+    d.customers.push(c);
+    x._customerId = c.id;
+    x._customerCreated = c.id;
+    addAudit(d, { userId: user.id, action: "create", entity: "customer", entityId: c.id, entityLabel: `${c.code} ${c.name}`, summary: `問合せ登録 (受付) から顧客を登録${needsConfirmation(dup) ? ` · 重複候補 ${candidateLabel(dup)} を確認済み` : ""}`, storeId });
+    message = `新しいお客様 ${c.name} 様 (${c.code}) を顧客として登録しました。内容を確かめて「問い合わせとして登録する」を押してください。`;
+  });
+  revalidatePath(back);
+  revalidatePath("/customers");
+  redirect(withMsg(back, message));
+}
+
 export async function registerReception(formData: FormData) {
   const user = await requireActionUser();
   const id = str(formData, "id");
   const back = receptionHref(id);
   // ワンタッチの登録 (確認の画面の上の「このお客様に紐付けて登録」「この案件のやりとりに追加」「新しいお客様として登録」。お客様のご要望 2026-11-24「追加 ③」)
   const quick = str(formData, "quick");
-  const quickCustomer = quick.startsWith("inquiry:") ? quick.slice("inquiry:".length) : undefined;
+  // お客様の紐付け・新規顧客の登録は、その場で完了させる (お客様のご要望 2026-11-25「問い合わせ登録時の顧客登録・紐付け」①②):
+  // link:<顧客> = このお客様に紐付ける / new = 新規顧客として登録する (顧客を保存) / unlink = 紐付けをやめる。どれも問い合わせはまだ登録しない
+  const linkTo = quick.startsWith("link:") ? quick.slice("link:".length) : quick.startsWith("inquiry:") ? quick.slice("inquiry:".length) : undefined;
   const quickCase = quick.startsWith("case:") ? quick.slice("case:".length) : undefined;
-  const newCustomer = quick === "new";
-  const intent = quickCustomer !== undefined || newCustomer ? "inquiry" : quickCase ? "case" : choice(formData, "intent", ["save", "inquiry", "case", "record", "dismiss"] as const, "save");
   const db0 = getDb();
   const doc0 = findReception(db0, user, id);
   assertOpen(doc0, back);
@@ -332,6 +400,8 @@ export async function registerReception(formData: FormData) {
   const meta0 = receptionMetaOf(doc0);
   const channel = channelOf(formData, meta0.channel);
   const confirmed = formData.get("confirmedUncertain") === "on";
+  if (linkTo !== undefined || quick === "new" || quick === "unlink") return chooseReceptionCustomer(user, id, formData, f, channel, quick === "new" ? "new" : quick === "unlink" ? "unlink" : linkTo!);
+  const intent = quickCase ? "case" : choice(formData, "intent", ["save", "inquiry", "case", "record", "dismiss"] as const, "save");
 
   if (intent === "save") {
     await mutate((d) => {
@@ -380,9 +450,17 @@ export async function registerReception(formData: FormData) {
   if (intent === "inquiry") {
     if (!f.summary) fail(back, "用件 (要約) を入力してください。");
     const media = readMedia(formData, back);
-    const customerId = quickCustomer ?? (newCustomer ? "" : str(formData, "customerId"));
-    const canCreate = newCustomer && userCanCreateCustomer(db0, user);
-    let createdCustomer = "";
+    // お客様は必ず決める (紐付けた既存のお客様か、この画面で登録した新規顧客)。お客様のない問い合わせは登録しない (お客様のご要望 2026-11-25「③」)
+    const customerId = meta0.customerId ?? "";
+    if (!customerId) {
+      await mutate((d) => {
+        const doc = findReception(d, user, id);
+        assertOpen(doc, back);
+        applyFields(doc, f, user, channel);
+      });
+      fail(back, "先に上の「お客様・案件の確認」で、既存のお客様に紐付けるか「新規顧客として登録」を押してください (問い合わせは必ずお客様に紐付けて保存します)。入力した内容は保存しました。");
+    }
+    const createdCustomer = meta0.customerId && (doc0.extracted as Record<string, unknown>)?._customerCreated === meta0.customerId ? db0.customers.find((c) => c.id === meta0.customerId)?.code ?? "" : "";
     let appointmentNote = "";
     const addedPhones: string[] = [];
     const assigneeId = str(formData, "assignedUserId") || user.id;
@@ -392,47 +470,12 @@ export async function registerReception(formData: FormData) {
     await mutate((d) => {
       const doc = findReception(d, user, id);
       assertOpen(doc, back);
-      let customer = customerId ? d.customers.find((c) => c.id === customerId) : undefined;
+      const customer = customerId ? d.customers.find((c) => c.id === customerId) : undefined;
       if (customerId && !customer) fail(back, "選んだお客様が見つかりません。");
       // 紐付けられるお客様 = 顧客の一覧で見られるお客様 (ほかの店舗・本部で登録したお客様も。src/lib/customer-link.ts)
       if (customer && !canLinkToCustomer(d, user, customer)) fail(back, "このお客様は閲覧の範囲の外のため紐付けられません。店舗または本部に依頼してください。");
       // 担当店舗: 選んだ店舗 (自店舗・住所の担当エリアの店舗。全店舗のロールはすべて) > 住所の担当エリア > お客様の店舗 > 受付の店舗 (お客様のご要望 2026-11-24「③」)
       const storeId = newCaseStore(d, user, { requested: str(formData, "storeId") || (customer?.storeId ?? doc.storeId), address: f.siteAddress || f.address, customer }).storeId;
-      // 新しいお客様として登録 (顧客も同時に登録。二重登録を防ぐため、同じお客様の候補があれば「別のお客様」の確認が要る)
-      if (newCustomer && canCreate) {
-        const name = f.customerName || f.companyName;
-        if (!name) fail(back, "お名前 (または会社名) を入力してから「新しいお客様として登録」を押してください。");
-        const dup = findDuplicateCustomers(d, { name, phone: f.phone, otherPhones: [f.otherPhone].filter(Boolean), email: f.email, postalCode: f.postalCode, address: f.address });
-        if (needsConfirmation(dup) && formData.get("confirmDuplicate") !== "on") {
-          applyFields(doc, f, user, channel);
-          fail(back, `同じお客様の可能性がある顧客があります (${candidateLabel(dup)})。同じお客様なら「このお客様に紐付けて登録」を、別のお客様なら「上の候補とは別のお客様です」にチェックしてから押してください。`);
-        }
-        const now0 = nowIso();
-        const c: Customer = {
-          id: newId("cust"),
-          code: nextCustomerCode(d),
-          name,
-          kana: f.kana,
-          type: !f.customerName && f.companyName ? "corporate" : "individual",
-          phone: f.phone,
-          ...(f.otherPhone ? { contacts: [{ id: newId("ct"), relation: "その他", phone: f.otherPhone }] } : {}),
-          ...(f.email ? { email: f.email } : {}),
-          postalCode: withPostal(f.address, f.postalCode),
-          address: f.address,
-          storeId,
-          assignedUserId: assigneeId,
-          preferredChannel: channel === "line" || channel === "email" ? channel : "phone",
-          firstContactChannel: channel,
-          tags: [],
-          notes: `問合せ登録 (${RECEPTION_SOURCE_LABEL[meta0.source]}) から登録`,
-          createdAt: now0,
-          updatedAt: now0,
-        };
-        d.customers.push(c);
-        customer = c;
-        createdCustomer = `${c.code} ${c.name}`;
-        addAudit(d, { userId: user.id, action: "create", entity: "customer", entityId: c.id, entityLabel: `${c.code} ${c.name}`, summary: `問合せ登録 (受付) から顧客を登録${needsConfirmation(dup) ? ` · 重複候補 ${candidateLabel(dup)} を確認済み` : ""}`, storeId });
-      }
       const contactName = customer?.name ?? f.customerName;
       if (!contactName) fail(back, "お客様のお名前を入力するか、登録済みのお客様を選んでください。");
       const assignee = d.users.find((u) => u.id === assigneeId && u.active);
@@ -509,7 +552,7 @@ export async function registerReception(formData: FormData) {
         notifyThreadId = t.id;
       }
       href = `/inquiries/${inqId}`;
-      message = `問い合わせ ${inq.number} を登録しました${createdCustomer ? `。新しいお客様 (${createdCustomer}) も登録しました` : customer ? ` (${customer.name} 様に紐付け${addedPhones.length ? `。電話番号 ${addedPhones.join("・")} をお客様の「ほかの電話番号」に追加` : ""})` : ""}${notifyThreadId ? ` (${assignee.name} さんに引き継ぎました)` : ""}。${customer ? "" : newCustomer ? "顧客の新規登録は事務担当が行います (問い合わせの画面の「顧客として登録する」)。" : "お客様が未登録のため、画面の「顧客として登録する」で登録できます。"}${appointmentNote}`;
+      message = `問い合わせ ${inq.number} を${customer ? `${customer.name} 様${createdCustomer ? ` (新規顧客 ${createdCustomer})` : ""}の履歴として` : ""}登録しました${addedPhones.length ? `。電話番号 ${addedPhones.join("・")} をお客様の「ほかの電話番号」に追加しました` : ""}${notifyThreadId ? ` (${assignee.name} さんに引き継ぎました)` : ""}。${appointmentNote}`;
     });
   } else if (intent === "case") {
     const key = quickCase ?? str(formData, "caseKey");

@@ -32,6 +32,19 @@ export interface ReviewCustomer {
   storeName: string;
 }
 
+export interface ChosenCustomer {
+  id: string;
+  name: string;
+  code: string;
+  address: string;
+  phone: string;
+  storeName: string;
+  /** この画面で新規顧客として登録した */
+  created: boolean;
+  /** 顧客の画面から取り込んだ受付 */
+  fromCustomer: boolean;
+}
+
 export interface ReviewCase {
   key: string;
   number: string;
@@ -76,8 +89,9 @@ export function ReceptionReview({
   currentUserId,
   defaultAssigneeId,
   mediaDefault,
-  canCreateCustomer = false,
+  canCreateCustomer = true,
   photo,
+  chosen,
 }: {
   action: (formData: FormData) => Promise<void>;
   id: string;
@@ -102,6 +116,8 @@ export function ReceptionReview({
   canCreateCustomer?: boolean;
   /** 受付メモの写真 (狭い画面では欄の上に出し、見比べながら直す。お客様のご要望 2026-11-25「⑧」) */
   photo?: { src: string; fullSrc: string };
+  /** 紐付けたお客様・この画面で登録した新規顧客 (選んだあとは選び直さない。お客様のご要望 2026-11-25「問い合わせ登録時の顧客登録・紐付け」) */
+  chosen?: ChosenCustomer;
 }) {
   const [act, setAct] = useState<ReceptionAction>(suggestion.action);
   const [customerId, setCustomerId] = useState(suggestion.customerId ?? "");
@@ -138,7 +154,7 @@ export function ReceptionReview({
           </div>
         </details>
       )}
-      <MatchPanel customers={customers} cases={cases} canCreateCustomer={canCreateCustomer} mediaDefault={mediaDefault} fields={fields} />
+      <MatchPanel customers={customers} cases={cases} canCreateCustomer={canCreateCustomer} mediaDefault={mediaDefault} fields={fields} chosen={chosen} />
       <section className="space-y-3">
         <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
           <label className="block">
@@ -211,16 +227,25 @@ export function ReceptionReview({
           ))}
         </div>
 
-        {(act === "inquiry" || act === "case") && customers.length > 0 && (
+        {act === "inquiry" &&
+          (chosen ? (
+            <p className="rounded-lg bg-good-soft px-3 py-2 text-sm text-good-ink" data-testid="reception-chosen-inline">
+              お客様: <span className="font-semibold">{chosen.name} 様</span> ({chosen.code}){chosen.created ? " · この画面で新規顧客として登録済み" : " · 紐付け済み"}。この問い合わせはこのお客様の履歴として保存します。
+            </p>
+          ) : (
+            <p className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn-ink" data-testid="reception-no-customer">
+              お客様がまだ決まっていません。上の「お客様・案件の確認」で既存のお客様に紐付けるか、「新規顧客として登録」を押してください (問い合わせは必ずお客様に紐付けて保存します)。
+            </p>
+          ))}
+        {act === "case" && customers.length > 0 && !chosen && (
           <label className="block">
-            <span className="label">お客様 (住所がいちばんの目印。電話・氏名だけでは別住所と取り違えることがあります)</span>
-            <select name="customerId" value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="field">
-              <option value="">{act === "inquiry" ? "(新しいお客様。あとで「顧客として登録する」)" : "(すべての候補の案件を表示)"}</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.level === "preset" ? "【このお客様】" : c.level === "address" ? "【住所】" : c.level === "phone" ? "【電話】" : "【名前】"} {c.label} — {c.reason}</option>)}
+            <span className="label">お客様 (案件の候補を絞る)</span>
+            <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="field">
+              <option value="">(すべての候補の案件を表示)</option>
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.level === "address" ? "【住所】" : c.level === "phone" ? "【電話】" : "【名前】"} {c.label} — {c.reason}</option>)}
             </select>
           </label>
         )}
-        {act === "inquiry" && customers.length === 0 && <input type="hidden" name="customerId" value="" />}
 
         {act === "inquiry" && (
           <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
@@ -318,7 +343,7 @@ export function ReceptionReview({
 
         <div className="flex flex-wrap justify-end gap-2 pt-1">
           <button type="submit" name="intent" value="save" formNoValidate className="inline-flex h-10 items-center rounded-lg border border-line bg-panel px-4 text-sm text-ink-2 hover:bg-subtle">修正を保存</button>
-          <button type="submit" name="intent" value={act} formNoValidate={act !== "inquiry"} className={`inline-flex h-10 items-center rounded-lg px-5 text-sm font-medium text-white ${act === "dismiss" ? "bg-ink-2 hover:bg-ink" : "bg-accent hover:bg-accent-hover"}`}>
+          <button type="submit" name="intent" value={act} formNoValidate={act !== "inquiry"} disabled={act === "inquiry" && !chosen} className={`inline-flex h-10 items-center rounded-lg px-5 text-sm font-medium text-white disabled:opacity-40 ${act === "dismiss" ? "bg-ink-2 hover:bg-ink" : "bg-accent hover:bg-accent-hover"}`}>
             {act === "inquiry" ? "問い合わせとして登録する" : act === "case" ? "案件のやりとりに追加する" : act === "record" ? "やりとりとして記録する" : "記録せずに閉じる"}
           </button>
         </div>
@@ -328,13 +353,13 @@ export function ReceptionReview({
 }
 
 /**
- * お客様・案件の確認 (お客様のご要望 2026-11-24「追加 ③」: 手書きメモを撮影して AI が住所などを読み取ったら、同じ住所のお客様を
- * 「こちらのお客様に紐付けますか？」と出し、ワンタッチで紐付ける。いなければそのまま新規顧客登録。既存の案件の連絡なら案件に紐付ける)。
- * ボタンは quick = inquiry:<顧客> / case:<案件> / new を送る (actions/reception.ts の registerReception)
+ * お客様・案件の確認 (お客様のご要望 2026-11-24「追加 ③」、2026-11-25「問い合わせ登録時の顧客登録・紐付け」①②)。
+ * 最初にお客様を決める: 候補・検索のお客様の「このお客様に紐付ける」(quick = link:<顧客>) か「新規顧客として登録」(quick = new。その場で顧客を保存)。
+ * 決めたお客様は受付に残り、そのあとは選び直さない (「別のお客様にする」= unlink で外す)。既存の案件の連絡なら「この案件のやりとりに追加」(case:<案件>)。
+ * 問い合わせの登録は、お客様が決まってから (actions/reception.ts の registerReception)
  */
-function MatchPanel({ customers, cases, canCreateCustomer, mediaDefault, fields }: { customers: ReviewCustomer[]; cases: ReviewCase[]; canCreateCustomer: boolean; mediaDefault?: MediaKey; fields: ReceptionFields }) {
+function MatchPanel({ customers, cases, mediaDefault, fields, chosen }: { customers: ReviewCustomer[]; cases: ReviewCase[]; canCreateCustomer: boolean; mediaDefault?: MediaKey; fields: ReceptionFields; chosen?: ChosenCustomer }) {
   // 候補の順 (お客様のご要望 2026-11-24): ① 住所の一致 → ② 電話番号の一致 → ③ 名字の一致
-  const preset = customers.find((c) => c.level === "preset");
   const byAddress = customers.filter((c) => c.level === "address");
   const byPhone = customers.filter((c) => c.level === "phone");
   const byName = customers.filter((c) => c.level === "name");
@@ -369,29 +394,69 @@ function MatchPanel({ customers, cases, canCreateCustomer, mediaDefault, fields 
       </div>
       <div className="mt-1 text-sm text-ink">{c.address || <span className="text-ink-3">住所未登録</span>}</div>
       {c.phone && <div className="text-xs text-ink-2 tnum">{c.phone}</div>}
-      <div className="mt-0.5 text-[11px] text-ink-3">{c.level === "preset" ? "顧客の画面から登録" : c.reason}</div>
-      <button type="submit" name="quick" value={`inquiry:${c.id}`} className={`${btn} mt-2 w-full ${primary ? "bg-accent text-white hover:bg-accent-hover" : "border border-accent/50 bg-panel text-accent-ink hover:bg-accent-soft"}`}>
-        このお客様に紐付けて登録
+      <div className="mt-0.5 text-[11px] text-ink-3">{c.reason}</div>
+      <button type="submit" name="quick" value={`link:${c.id}`} formNoValidate className={`${btn} mt-2 w-full ${primary ? "bg-accent text-white hover:bg-accent-hover" : "border border-accent/50 bg-panel text-accent-ink hover:bg-accent-soft"}`}>
+        このお客様に紐付ける
       </button>
       {caseButtons(c.id)}
     </li>
   );
+  const media = (
+    <label className="block">
+      <span className="label">媒体 (当社を知ったきっかけ) <span className="text-critical">*</span></span>
+      <MediaSelect name="media" defaultValue={mediaDefault ?? ""} required />
+    </label>
+  );
+  const uncertainBox = fields.uncertainFields.length > 0 && (
+    <label className="flex items-start gap-2 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn-ink">
+      <input type="checkbox" name="confirmedUncertain" className="mt-0.5" />
+      <span>黄色の項目 ({fields.uncertainFields.map((k) => RECEPTION_FIELD_LABEL[k as keyof ReceptionFields] ?? k).join("・")}) を下の欄でメモと見比べて確認しました</span>
+    </label>
+  );
+
+  // お客様が決まったあと: 選び直さない (変えるときだけ「別のお客様にする」)
+  if (chosen) {
+    return (
+      <section className="space-y-3 rounded-xl border-2 border-good/50 bg-good-soft/30 p-4" data-testid="reception-match">
+        <h3 className="text-sm font-semibold text-ink">① お客様 {chosen.created ? "(新規顧客として登録しました)" : "(紐付けました)"}</h3>
+        <div className="rounded-lg border border-good/40 bg-panel p-3" data-testid="reception-chosen">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="rounded bg-good-soft px-1.5 py-0.5 text-[10px] font-semibold text-good-ink">{chosen.created ? "新規顧客" : chosen.fromCustomer ? "顧客の画面から" : "紐付け済み"}</span>
+            <span className="text-base font-semibold text-ink">{chosen.name} 様</span>
+            <span className="text-[11px] text-ink-3">{chosen.code} · {chosen.storeName}</span>
+          </div>
+          <div className="mt-1 text-sm text-ink">{chosen.address || <span className="text-ink-3">住所未登録</span>}</div>
+          {chosen.phone && <div className="text-xs text-ink-2 tnum">{chosen.phone}</div>}
+          {caseButtons(chosen.id)}
+          <button type="submit" name="quick" value="unlink" formNoValidate className="mt-2 text-xs text-ink-2 hover:underline">
+            別のお客様にする (紐付けをやめる)
+          </button>
+        </div>
+        <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+          {media}
+          {uncertainBox}
+        </div>
+        <p className="text-[11px] text-ink-3">② 下の内容を確かめて「問い合わせとして登録する」を押してください。問い合わせはこのお客様の履歴として残ります (見積・受注に進まなくても残ります)。</p>
+        <button type="submit" name="intent" value="inquiry" className={`${btn} w-full bg-accent text-white hover:bg-accent-hover`} data-testid="reception-register-chosen">
+          この内容で問い合わせを登録する
+        </button>
+      </section>
+    );
+  }
+
   const memoName = fields.customerName.split(/[\s　]/)[0]?.replace(/(様|さま|さん)$/, "") ?? "";
   return (
     <section className="space-y-3 rounded-xl border-2 border-accent/40 bg-accent-soft/25 p-4" data-testid="reception-match">
-      <h3 className="text-sm font-semibold text-ink">お客様・案件の確認</h3>
-      {preset ? (
-        <p className="text-sm text-ink">お客様は決まっています。読み取った内容を確かめて登録してください。</p>
-      ) : byAddress.length ? (
+      <h3 className="text-sm font-semibold text-ink">① お客様・案件の確認 (最初にお客様を決めてください)</h3>
+      {byAddress.length ? (
         <p className="text-sm font-medium text-ink">住所が一致するお客様がいます。このお客様に紐付けますか？ (お名前と住所を確かめてください)</p>
       ) : byPhone.length ? (
         <p className="text-sm font-medium text-ink">電話番号が一致するお客様がいます。このお客様に紐付けますか？ (住所を確かめてください)</p>
       ) : byName.length ? (
         <p className="text-sm text-ink">住所・電話番号が一致するお客様は見つかりませんでした。名字が同じお客様がいます (住所を確かめて、同じお客様なら紐付けてください){fields.address ? "" : "。住所が読み取れていません。住所を直して「修正を保存」すると探し直します"}。</p>
       ) : (
-        <p className="text-sm text-ink">既存のお客様は見つかりませんでした{fields.address ? "" : " (住所が読み取れていません。住所を直して「修正を保存」すると探し直します)"}。下の検索でも探せます。</p>
+        <p className="text-sm text-ink">既存のお客様は見つかりませんでした{fields.address ? "" : " (住所が読み取れていません。住所を直して「修正を保存」すると探し直します)"}。新しいお客様なら「新規顧客として登録」を押してください。</p>
       )}
-      {preset && <ul className="grid grid-cols-1 gap-2">{card(preset, true)}</ul>}
       {byAddress.length > 0 && (
         <div>
           <p className="mb-1 text-xs font-semibold text-good-ink">① 住所が一致</p>
@@ -422,39 +487,27 @@ function MatchPanel({ customers, cases, canCreateCustomer, mediaDefault, fields 
             )}
           </div>
         ))}
-      {!preset && (
-        <details className="rounded-lg border border-line bg-panel/70 p-3" open={!strong.length}>
-          <summary className="cursor-pointer text-sm font-medium text-ink">候補にないときは: 既存のお客様を検索して紐付ける</summary>
-          <div className="mt-2">
-            <ReceptionCustomerSearch initialQuery={strong.length ? "" : memoName} />
-          </div>
-        </details>
-      )}
-      {!preset && (
-        <div className="rounded-lg border border-dashed border-line-strong bg-panel/70 p-3">
-          {customers.length > 0 && (
-            <label className="mb-2 flex items-start gap-2 text-xs text-ink">
-              <input type="checkbox" name="confirmDuplicate" className="mt-0.5 h-4 w-4" />
-              上の候補・検索のお客様とは別のお客様です
-            </label>
-          )}
-          <button type="submit" name="quick" value="new" className={`${btn} w-full ${strong.length ? "border border-line bg-panel text-ink hover:bg-subtle" : "bg-accent text-white hover:bg-accent-hover"}`}>
-            {canCreateCustomer ? "新しいお客様として登録 (顧客も登録)" : "新しいお客様の問合せとして登録 (顧客は事務が登録)"}
-          </button>
-          <p className="mt-1 text-[11px] text-ink-3">{canCreateCustomer ? "お名前・ふりがな・電話・住所を顧客の情報に入れて、問い合わせと一緒に登録します。" : "顧客の新規登録は事務担当が行います。問い合わせだけを登録します。"}</p>
+      <details className="rounded-lg border border-line bg-panel/70 p-3" open={!strong.length}>
+        <summary className="cursor-pointer text-sm font-medium text-ink">候補にないときは: 既存のお客様を検索して紐付ける</summary>
+        <div className="mt-2">
+          <ReceptionCustomerSearch initialQuery={strong.length ? "" : memoName} />
         </div>
-      )}
-      <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
-        <label className="block">
-          <span className="label">媒体 (当社を知ったきっかけ) <span className="text-critical">*</span></span>
-          <MediaSelect name="media" defaultValue={mediaDefault ?? ""} required />
-        </label>
-        {fields.uncertainFields.length > 0 && (
-          <label className="flex items-start gap-2 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn-ink">
-            <input type="checkbox" name="confirmedUncertain" className="mt-0.5" />
-            <span>黄色の項目 ({fields.uncertainFields.map((k) => RECEPTION_FIELD_LABEL[k as keyof ReceptionFields] ?? k).join("・")}) を下の欄でメモと見比べて確認しました</span>
+      </details>
+      <div className="rounded-lg border border-dashed border-line-strong bg-panel/70 p-3">
+        {customers.length > 0 && (
+          <label className="mb-2 flex items-start gap-2 text-xs text-ink">
+            <input type="checkbox" name="confirmDuplicate" className="mt-0.5 h-4 w-4" />
+            上の候補・検索のお客様とは別のお客様です
           </label>
         )}
+        <button type="submit" name="quick" value="new" formNoValidate className={`${btn} w-full ${strong.length ? "border border-line bg-panel text-ink hover:bg-subtle" : "bg-accent text-white hover:bg-accent-hover"}`} data-testid="reception-new-customer">
+          新規顧客として登録 (顧客情報を保存)
+        </button>
+        <p className="mt-1 text-[11px] text-ink-3">下の欄のお名前・ふりがな・電話・住所で、この時点で顧客を登録します。登録したあとは、続けて問い合わせを登録します (お客様を選び直す必要はありません)。</p>
+      </div>
+      <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+        {media}
+        {uncertainBox}
       </div>
     </section>
   );

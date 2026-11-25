@@ -253,6 +253,11 @@ let docId = "";
   ok(r.err?.includes("自信がない項目") && db().documents.find((d) => d.id === docId).status === "extracted", "要確認の項目 (AI なしの読み取り) が残っていると登録しない");
   const noMedia = await act(koshiStaff, () => actions.registerReception(form({ id: docId, intent: "inquiry", customerName: "受付 一郎", summary: "洋室に琉球畳", confirmedUncertain: "on", customerId: "cust_rc1" })));
   ok(noMedia.err?.includes("媒体"), "媒体がないと問い合わせにしない");
+  // お客様を決めずに問い合わせは登録しない → 最初に紐付ける (お客様のご要望 2026-11-25「問い合わせ登録時の顧客登録・紐付け」)
+  const noCust = await act(koshiStaff, () => actions.registerReception(form({ id: docId, intent: "inquiry", customerName: "受付 一郎", summary: "洋室に琉球畳", media: "flyer", confirmedUncertain: "on" })));
+  ok(/先に上の「お客様・案件の確認」/.test(noCust.err ?? ""), "お客様が決まっていないと問い合わせにしない");
+  const link = await act(koshiStaff, () => actions.registerReception(form({ id: docId, quick: "link:cust_rc1", customerName: "受付 一郎", phone: "090-8101-0001", summary: "洋室に琉球畳" })));
+  ok(/紐付けました/.test(link.msg ?? "") && R.receptionMetaOf(db().documents.find((d) => d.id === docId)).customerId === "cust_rc1", "「このお客様に紐付ける」でお客様が決まる");
   const before = db().inquiries.length;
   const ok1 = await act(koshiStaff, () => actions.registerReception(form({ id: docId, intent: "inquiry", channel: "mobile", customerName: "受付 一郎", phone: "090-8101-0001", summary: "洋室に琉球畳", detail: "洋室6畳に琉球畳。見積に来てほしい", desiredDate: "来週土曜の午前", category: "畳", media: "flyer", confirmedUncertain: "on", customerId: "cust_rc1", assignedUserId: koshiManager.id, handoff: "on" })));
   ok(ok1.path?.startsWith("/inquiries/inq") && ok1.msg?.includes("登録しました"), "問い合わせとして登録 → 問い合わせの画面へ");
@@ -344,9 +349,13 @@ aiOn();
   ok(att, "元の写真を受付の添付ファイルに保存");
   const m = R.matchReception(db(), koshiStaff, f);
   eq([m.suggestion.action, m.suggestion.customerId], ["inquiry", undefined], "新しいお客様の問い合わせを提案");
+  // 新しいお客様: 「新規顧客として登録」でその場で顧客を保存してから、問い合わせを登録する (お客様のご要望 2026-11-25)
+  const nc = await act(koshiStaff, () => actions.registerReception(form({ id, quick: "new", channel: "event", customerName: "写真 花子", phone: "090-8199-0001", address: "熊本県合志市幾久富 1-2", summary: "網戸4枚の張替え", category: "網戸", confirmedUncertain: "on" })));
+  const ncId = R.receptionMetaOf(db().documents.find((d) => d.id === id)).customerId;
+  ok(!nc.err && ncId && db().customers.find((c) => c.id === ncId)?.address === "熊本県合志市幾久富 1-2", `新規顧客として登録 (住所・電話を顧客に) (${nc.msg ?? nc.err})`);
   const reg = await act(koshiStaff, () => actions.registerReception(form({ id, intent: "inquiry", channel: "event", customerName: "写真 花子", phone: "090-8199-0001", address: "熊本県合志市幾久富 1-2", summary: "網戸4枚の張替え", category: "網戸", media: "event", confirmedUncertain: "on" })));
   const inq = db().inquiries.find((i) => i.id === reg.path?.split("/").pop());
-  ok(inq && !inq.customerId && inq.contactName === "写真 花子" && inq.channel === "event" && inq.intake?.address === "熊本県合志市幾久富 1-2", "未登録のお客様の問い合わせ (住所は受け取った項目に)");
+  ok(inq && inq.customerId === ncId && inq.contactName === "写真 花子" && inq.channel === "event", "新しいお客様の問い合わせとして登録 (お客様の履歴に残る)");
   const moved = db().attachments.find((a) => a.id === att.id);
   ok(moved.parentType === "inquiry" && moved.parentId === inq.id, "元の写真は問い合わせの資料・写真に付け替える");
   ok(db().commLogs.some((c) => c.relatedId === inq.id && c.body.includes("メモの文字") && c.body.includes("網戸4枚")), "やりとりの記録にメモの文字を残す");

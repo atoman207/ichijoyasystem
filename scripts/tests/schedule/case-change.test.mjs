@@ -393,6 +393,64 @@ const inqTh = db().threads.filter((x) => x.kind === "request" && x.relatedType =
 ok(Boolean(inqTh), `問い合わせの「担当へ依頼」(${r.msg ?? r.err})`);
 if (inqTh) ok(Boolean(RC.requestContext(db(), admin, inqTh, future(0))), "問い合わせの「担当へ依頼」の画面にもお客様の情報と日程の登録を出す");
 
+/* ================================================================== */
+section("予定表の検索・場所からの候補日 (お客様のご要望 2026-11-25)");
+const SF = await imp("lib/schedule-find.ts");
+const GEO = await imp("lib/geo/kumamoto.ts");
+const today0 = future(0);
+let fr = SF.searchSchedule(db(), staffUser, "変更 太郎", today0);
+const hitReq = fr.events.find((e) => e.id === regEv.id);
+ok(Boolean(hitReq) && hitReq.upcoming && /qe=/.test(hitReq.href) && hitReq.href.includes(`date=${hitReq.date}`), `お客様名で予定を探す → その日の予定表 (予定の小さな画面) へ (${fr.events.length} 件)`);
+fr = SF.searchSchedule(db(), staffUser, "090-1111", today0);
+ok(fr.mode === "phone" && fr.events.some((e) => e.id === regEv.id && e.reason === "電話番号"), "電話番号でも探せる");
+fr = SF.searchSchedule(db(), staffUser, "テスト市本町", today0);
+ok(fr.events.some((e) => e.id === regEv.id && /住所/.test(e.reason)) && fr.areaCount >= 1, "住所・地名で探すと、その地域の今後の予定");
+ok(fr.events.every((e, i, a) => i === 0 || !e.upcoming || !a[i - 1].upcoming || a[i - 1].date <= e.date), "今後の予定は日付の近い順");
+ok(SF.searchSchedule(db(), staffUser, "あ", today0).events.length === 0, "1 文字では探さない");
+// 場所からの候補日
+let cr = SF.placeCandidates(db(), { address: "熊本県テスト市本町1-2-3", storeId: M, today: today0, days: 60 });
+const dReq = cr.days.find((d) => d.date === future(42));
+eq([dReq?.tier, dReq?.same.some((e) => e.id === regEv.id)], ["same", true], "同じ町名に予定がある日 (同じ町名の予定つき)");
+ok(cr.days.some((d) => d.tier === "free" && d.count === 0), "予定のない日も候補");
+ok(cr.days.every((d, i, a) => i === 0 || a[i - 1].date < d.date), "日付の近い順");
+await store.mutate((x) => {
+  x.holidays = [...(x.holidays ?? []), { date: future(43), label: "テストの休業日" }];
+});
+cr = SF.placeCandidates(db(), { address: "熊本県テスト市本町1-2-3", storeId: M, today: today0, days: 60 });
+ok(!cr.days.some((d) => d.date === future(43)), "休業日は候補にしない");
+// 近隣 (目安の距離): 熊本の町名の位置で比べる (社内の計算。外部の地図サービスは使わない)
+const a1 = "熊本県合志市須屋100-1", a2 = "熊本県合志市幾久富1909-1";
+const g1 = GEO.geocodeAddress(a1), g2 = GEO.geocodeAddress(a2);
+await store.mutate((x) => {
+  x.schedule.push({ id: "ev_cc_near", title: "近隣テスト", kind: "survey", date: future(50), storeId: M, assigneeIds: [staffUser.id], location: a1, source: "manual", createdAt: now, updatedAt: now, createdBy: staffUser.id });
+  for (const n of [1, 2, 3, 4]) x.schedule.push({ id: `ev_cc_busy${n}`, title: `多い日${n}`, kind: "visit", date: future(51), storeId: M, assigneeIds: [staffUser.id], location: "熊本県玉名市岩崎1", source: "manual", createdAt: now, updatedAt: now, createdBy: staffUser.id });
+});
+cr = SF.placeCandidates(db(), { address: a2, storeId: M, today: today0, days: 60 });
+const dNear = cr.days.find((d) => d.date === future(50));
+if (g1 && g2) {
+  const km = GEO.roadKm(g1, g2);
+  ok(km <= 6 ? dNear?.tier === "near" && dNear.near[0]?.id === "ev_cc_near" : dNear?.tier !== "near", `近隣の予定 (道のりの目安 ${km.toFixed(1)} km。6 km 以内なら近くに予定あり)`);
+} else ok(Boolean(dNear), "位置の目安がないときも日の一覧は出す");
+const dBusy = cr.days.find((d) => d.date === future(51));
+ok(dBusy && dBusy.count >= 4 && (dBusy.tier === "busy" || dBusy.tier === "near"), "予定が 4 件以上で近くに予定のない日は「予定が多い日」");
+ok(SF.rankCandidates(cr.days)[0].tier !== "busy" && SF.rankCandidates(cr.days).at(-1).tier !== "same", "おすすめの順: 同じ町名 → 近く → 少ない → なし → 多い");
+ok(SF.placeCandidates(db(), { address: "", today: today0 }).days.length === 0, "住所が空なら候補なし");
+
+/* ================================================================== */
+section("問い合わせ登録の顧客 (必ず顧客に紐付けて残す・問い合わせだけの付け替え)");
+r = await act(staffUser, () => IA.createInquiry(form({ contactName: "変更 太郎", contactPhone: "090-1111-2222", channel: "phone", media: "repeat", summary: "畳の相談", category: "tatami", address: "熊本県テスト市本町1-2-3" })));
+ok(/同じお客様の可能性/.test(r.err ?? ""), "手入力の問い合わせ: 同じお客様の候補があると「別のお客様」の確認を求める (二重登録を防ぐ)");
+const cBefore = db().customers.length;
+r = await act(staffUser, () => IA.createInquiry(form({ contactName: "新規 三郎", contactPhone: "090-5555-6666", channel: "phone", media: "flyer", summary: "網戸の張替え", category: "amido", address: "熊本県テスト市西町9-9" })));
+const inqNew = db().inquiries.at(-1);
+const custNew = db().customers.find((c) => c.id === inqNew.customerId);
+eq([r.err, db().customers.length, custNew?.name, custNew?.phone, custNew?.address], [null, cBefore + 1, "新規 三郎", "090-5555-6666", "熊本県テスト市西町9-9"], `手入力の問い合わせ: 新しいお客様は顧客としても登録 (${r.msg ?? r.err})`);
+ok(db().commLogs.some((l) => l.relatedType === "inquiry" && l.relatedId === inqNew.id && l.customerId === custNew.id), "問い合わせの内容はお客様の履歴 (やりとり) に残る");
+// 問い合わせだけを正しいお客様へ付け替える (見積は今のお客様のまま)
+const qCust = db().quotes.find((x) => x.id === "q_cc_a").customerId;
+r = await act(manager, () => IA.linkInquiryFromForm(form({ inquiryId: "inq_cc_a", customerId: "c_cc_corp", scope: "inquiry", returnTo: "/inquiries/inq_cc_a" })));
+eq([r.err, db().inquiries.find((x) => x.id === "inq_cc_a").customerId, db().quotes.find((x) => x.id === "q_cc_a").customerId], [null, "c_cc_corp", qCust], `「この問い合わせだけ」: 問い合わせだけを付け替え、見積・受注はそのまま (${r.msg ?? r.err})`);
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   for (const f of fails) console.log("  ✗", f);

@@ -42,7 +42,7 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
                 ))}
               </Select>
             </Field>
-            <Field label="お客様名 (新規の場合)">
+            <Field label="お客様名 (新規の場合は顧客としても登録します)">
               <Input name="contactName" placeholder="例: 坂本 幸子" />
             </Field>
             <Field label="連絡先電話番号 (新規の場合)">
@@ -83,7 +83,7 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
               </Select>
             </Field>
           </div>
-          <DuplicateWatcher check={checkCustomerDuplicates} requireConfirm={false} fields={{ name: "contactName", phone: "contactPhone" }} hint="既存の顧客の場合は、上の「既存顧客を選択」で選ぶと履歴がつながります" />
+          <DuplicateWatcher check={checkCustomerDuplicates} requireConfirm fields={{ name: "contactName", phone: "contactPhone", address: "address" }} hint="既存の顧客の場合は、上の「既存顧客を選択」で選ぶと履歴がつながります。新しいお客様は、登録と同時に顧客としても登録します" />
           <Field label="問い合わせ内容 (要約)" required>
             <Input name="summary" required placeholder="例: 和室6畳の畳表替え、概算希望" />
           </Field>

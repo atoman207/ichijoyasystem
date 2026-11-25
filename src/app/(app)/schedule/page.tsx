@@ -24,6 +24,7 @@ import { holidayResolver } from "@/lib/holiday-calendar";
 import { expireHoldsNow } from "@/lib/actions/scheduling";
 import { eventLabeler } from "@/lib/schedule-label";
 import { EventQuickHost } from "@/components/schedule/EventQuick";
+import { ScheduleFinder } from "@/components/schedule/ScheduleFinder";
 import { initialsByUser } from "@/lib/schedule-sheet/initials";
 
 type View = "month" | "week" | "staff" | "day" | "list";
@@ -232,6 +233,9 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
 
       <LinkTabs items={storeTabs} current={link({ store: storeParam })} />
 
+      {/* 予定表の検索と、場所からの候補日 (お客様のご要望 2026-11-25。src/lib/schedule-find.ts) */}
+      <ScheduleFinder stores={db.stores.filter((s) => s.kind !== "hq").map((s) => ({ id: s.id, name: s.name }))} initialFind={sp.find} findCase={sp.findCase} />
+
       {legacyOrders.length > 0 && (
         <p className="mb-3 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn-ink" data-testid="handover-legacy">
           畳・襖などの受注 {legacyOrders.length} 件が、まだ施工期間 (間の日にも表示) のまま載っています。受注の画面の「引取・納品の日程」で日程を確かめて保存すると、引き取りの日・納品の日だけの表示になります:{" "}
@@ -338,7 +342,7 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
       </div>
 
       {/* 予定を押すと、予定表の上で日時・内容・種類を変えられる (お客様のご要望 2026-11-24「■4」) */}
-      <EventQuickHost>
+      <EventQuickHost key={sp.qe ?? "_"}>
       {view === "month" && <MonthView days={days} month={anchor.slice(0, 7)} events={shown} ctx={ctx} />}
       {view === "week" && <WeekView days={days} events={shown} ctx={ctx} />}
       {view === "staff" && <StaffView days={days} rows={rowUsers} events={personEvents} unassigned={userParam ? [] : shown.filter((e) => e.assigneeIds.length === 0 && !e.companyWide)} ctx={ctx} />}
@@ -360,7 +364,7 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
               icon={<TriangleAlert />}
               action={relevantPairs.length > 0 && !onlyConflicts ? <Link href={link({ conflicts: "1", view: "list" })} className="text-xs font-medium text-accent hover:underline">重複のみ表示</Link> : undefined}
             />
-            <EventQuickHost>
+            <EventQuickHost key={sp.qe ?? "_"}>
               <ConflictList pairs={relevantPairs} ctx={ctx} moreHref={link({ conflicts: "1", view: "list" })} />
             </EventQuickHost>
           </Card>

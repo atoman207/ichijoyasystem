@@ -27,7 +27,7 @@ import {
 } from "@/lib/reception";
 import { providerLabel } from "@/lib/reception-docs";
 import { userCanCreateCustomer } from "@/lib/ops-settings";
-import { ReceptionReview, type ReviewCase, type ReviewCustomer } from "@/components/reception/ReceptionReview";
+import { ReceptionReview, type ChosenCustomer, type ReviewCase, type ReviewCustomer } from "@/components/reception/ReceptionReview";
 import { MemoPhoto } from "@/components/reception/MemoPhoto";
 import { areaStoreOf } from "@/lib/store-area";
 import { isCommonStaff } from "@/lib/staff-choices";
@@ -53,6 +53,7 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
   const storeName = (sid: string) => db.stores.find((s) => s.id === sid)?.shortName ?? db.stores.find((s) => s.id === sid)?.name ?? sid;
 
   let review: ReactNode = null;
+  let chosen: ChosenCustomer | undefined;
   let matchWarnings: string[] = [];
   if (pending) {
     const m = matchReception(db, user, f);
@@ -61,7 +62,7 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
     // 顧客の画面から取り込んだ受付: お客様が決まっている → 問い合わせとして登録・そのお客様を選んだ状態で開く (お客様のご要望 2026-11-24「■6」)
     const preset = meta.customerId ? db.customers.find((c) => c.id === meta.customerId) : undefined;
     if (preset) {
-      m.suggestion = { action: "inquiry", customerId: preset.id, reason: `${preset.name} 様の画面から取り込んだ受付です (お客様は決まっています)。読み取った内容を確かめて「問い合わせとして登録」してください` };
+      m.suggestion = { action: "inquiry", customerId: preset.id, reason: `お客様は ${preset.name} 様に決まっています。読み取った内容を確かめて「問い合わせとして登録」してください` };
       m.customers = m.customers.filter((c) => c.customer.id !== preset.id);
     }
     // 候補のカードにお名前・住所・電話を出す (正しいお客様かその場で確かめる。お客様のご要望 2026-11-24)
@@ -72,10 +73,9 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
       code: c.code,
       storeName: storeName(c.storeId),
     });
-    const customers: ReviewCustomer[] = [
-      ...(preset ? [{ id: preset.id, label: custLabel(preset), level: "preset" as const, reason: "顧客の画面から登録", ...view(preset) }] : []),
-      ...m.customers.map((c) => ({ id: c.customer.id, label: custLabel(c.customer), level: c.level, reason: c.reason, ...view(c.customer) })),
-    ];
+    const customers: ReviewCustomer[] = m.customers.map((c) => ({ id: c.customer.id, label: custLabel(c.customer), level: c.level, reason: c.reason, ...view(c.customer) }));
+    // 紐付けたお客様・この画面で登録した新規顧客 (選んだあとは選び直さない。お客様のご要望 2026-11-25「問い合わせ登録時の顧客登録・紐付け」)
+    chosen = preset ? { id: preset.id, ...view(preset), created: ex._customerCreated === preset.id, fromCustomer: !ex._customerCreated && ex._fromCustomer === true } : undefined;
     // 案件: 住所・電話で一致したお客様の案件 + お名前で一致したお客様の案件 (選んだときに出す)
     const list: CaseCandidate[] = [...m.cases];
     if (preset) for (const k of customerCases(db, preset.id)) if (!list.some((x) => caseKey(x) === caseKey(k)) && canAccessStore(user, k.storeId)) list.unshift(k);
@@ -122,6 +122,7 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
         mediaDefault={mediaDefault}
         canCreateCustomer={userCanCreateCustomer(db, user)}
         photo={photo?.kind === "photo" ? { src: `/api/attachments/${photo.id}`, fullSrc: `/api/attachments/${photo.id}` } : undefined}
+        chosen={chosen}
       />
     );
   }
