@@ -9,7 +9,7 @@ import type { ConflictReport } from "@/lib/calendar";
 import { checkScheduleConflicts, createScheduleEvent } from "@/lib/actions/schedule";
 import { Button } from "@/components/ui";
 import { KindMark, kindLabel } from "./parts";
-import { AssigneePicker, type FormStore, type FormUser } from "./form-parts";
+import { AssigneePicker, CaseDuplicateChoice, type FormStore, type FormUser } from "./form-parts";
 
 /**
  * 案件の画面から、その場で日程を登録する (お客様のご要望 2026-11-24「■ 問い合わせ受付後の業務フロー ③」:
@@ -120,6 +120,9 @@ export function ScheduleQuickAdd(p: ScheduleQuickAddProps) {
         <span className="label">メモ (任意)</span>
         <input name="memo" maxLength={2000} className="field" placeholder="例: 網戸 大5 小2 / 駐車場あり" />
       </label>
+
+      {/* 同じ案件・同じ日の予定 (二重登録の確かめ) */}
+      {date && assignees.length > 0 && report?.day === date && <CaseDuplicateChoice items={report.caseDuplicates} />}
 
       {conflicts.length > 0 && (
         <div className="rounded-lg border border-critical/30 bg-critical-soft/60 px-3 py-2 text-xs text-critical-ink" role="alert">

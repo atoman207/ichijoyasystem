@@ -1,4 +1,5 @@
 import Link from "@/components/ui/Link";
+import { PdfLink } from "@/components/features/PdfLink";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
@@ -23,7 +24,7 @@ import { APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORD
 import { customerPhonesText } from "@/lib/customer-contacts";
 import { ApprovalDecision, ApprovalHistoryCard, HistoryCard, RecordStamp } from "@/components/features/History";
 import { ContactList, ContactLogForm } from "@/components/features/Contacts";
-import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea, buttonClass } from "@/components/ui";
 import { OrderScheduleForm } from "@/components/schedule/OrderScheduleForm";
 import { HandoverEditor } from "@/components/schedule/HandoverEditor";
 import { saveOrderHandovers } from "@/lib/actions/handovers";
@@ -166,9 +167,9 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           <>
             {chain.quote && <LinkButton href={`/quotes/${chain.quote.id}`} variant="secondary" size="sm">見積 {chain.quote.number}</LinkButton>}
             {/* 帳票の出力は閲覧のみの社員もできる (お客様のご要望 2026-11-25「⑥」。出力の記録が残る) */}
-            {chain.quote && <LinkButton href={`/api/pdf/quotes/${chain.quote.id}`} variant="ghost" size="sm" target="_blank">見積書 PDF</LinkButton>}
-            {o.status !== "cancelled" && <LinkButton href={`/api/pdf/delivery/${o.id}`} variant="ghost" size="sm" target="_blank">納品書 PDF</LinkButton>}
-            {chain.invoice && chain.invoice.status !== "void" && <LinkButton href={`/api/pdf/invoices/${chain.invoice.id}`} variant="secondary" size="sm" target="_blank">請求書 PDF</LinkButton>}
+            {chain.quote && <PdfLink href={`/api/pdf/quotes/${chain.quote.id}`} className={buttonClass("ghost", "sm")}>見積書 PDF</PdfLink>}
+            {o.status !== "cancelled" && <PdfLink href={`/api/pdf/delivery/${o.id}`} className={buttonClass("ghost", "sm")}>納品書 PDF</PdfLink>}
+            {chain.invoice && chain.invoice.status !== "void" && <PdfLink href={`/api/pdf/invoices/${chain.invoice.id}`} className={buttonClass("secondary", "sm")}>請求書 PDF</PdfLink>}
             {chain.invoice && chain.invoice.status !== "void" && <LinkButton href={`/invoices/${chain.invoice.id}#receipts`} variant="ghost" size="sm">領収書</LinkButton>}
           </>
         }

@@ -413,6 +413,17 @@ export interface ConflictQuery {
   /** 種類と店舗 (後続の予定・製造・期限への影響を調べる) */
   kind?: ScheduleEvent["kind"];
   storeId?: ScheduleEvent["storeId"];
+  /** お客様 (案件のつながっていない予定の二重登録の確かめ) */
+  customerId?: string;
+}
+
+/** 同じ案件・同じ日・同じ種類のまとまりの既存の予定 (二重登録の確かめ。src/lib/case-duplicates.ts) */
+export interface CaseDuplicateItem {
+  eventId: string;
+  label: string;
+  /** 「既存の予定をこの内容に直す」を選べるか (受注の日程と連動する予定は受注の画面で直す) */
+  replaceable: boolean;
+  note?: string;
 }
 
 export interface ConflictItem {
@@ -464,4 +475,6 @@ export interface ConflictReport {
   occurrences: number;
   /** 後続の予定・製造の予定・期限・お客様の希望・勤務日への影響 (src/lib/scheduling/impact.ts) */
   impacts?: string[];
+  /** 同じ案件・同じ日の予定 (二重登録の確かめ。選ぶまで登録しない) */
+  caseDuplicates?: CaseDuplicateItem[];
 }

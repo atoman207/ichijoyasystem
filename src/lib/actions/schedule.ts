@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Approval, ChangeNoticeLine, Database, ScheduleEvent, ScheduleKind, StoreId, User } from "@/lib/db/types";
+import { parseDuplicateChoice, sameCaseSameDay, type DuplicateCandidate } from "@/lib/case-duplicates";
+import type { CaseDuplicateItem } from "@/lib/calendar";
 import { QUICK_MAX_ASSIGNEES, SCHEDULE_KIND, SCHEDULE_KINDS, SCHEDULE_REPEAT, type ScheduleRepeat } from "@/lib/constants";
 import { approverRole, canAccessStore, canEditCaseStore, canEditEvent, canManageCompanyEvents, canManageSettings } from "@/lib/auth/permissions";
 import {
@@ -254,12 +256,36 @@ export async function createScheduleEvent(formData: FormData) {
   if (hits.length > 0 && !p.allowOverlap) {
     fail(back, `担当者の予定が重複しています: ${describeConflicts(db, hits)}。日時・担当者を見直すか、「重複を承知で登録する」にチェックしてください。`);
   }
+  // 同じ案件・同じ日の予定の二重登録を防ぐ (お客様のご連絡 2026-11-26。src/lib/case-duplicates.ts):
+  // 既存の予定があれば「既存の予定をこの内容に直す」(replace) か「別の予定として追加する」(add) を選ぶまで登録しない
+  const dupCand = { date: p.fields.date, kind: p.fields.kind, inquiryId: p.fields.inquiryId, quoteId: p.fields.quoteId, orderId: p.fields.orderId, customerId: p.fields.customerId };
+  const dups = p.dates.length === 1 ? sameCaseSameDay(db, dupCand) : [];
+  const dupChoice = parseDuplicateChoice(str(formData, "caseDuplicate"));
+  if (dups.length && !dupChoice) {
+    fail(back, `同じ案件の同じ日に予定がすでにあります (${dups.map((e) => `${SCHEDULE_KIND[e.kind].label} ${periodLabel(e)}`).join("・")})。二重に登録しないよう、「既存の予定をこの内容に直す」か「別の予定として追加する」を選んでください。`);
+  }
+  const replaceId = dupChoice?.mode === "replace" ? dupChoice.id : undefined;
+  if (replaceId) {
+    const target = dups.find((e) => e.id === replaceId);
+    if (!target) fail(back, "直す予定が見つかりません (すでに変わっています)。画面を読み込み直してください。");
+    if (target.source === "order") fail(back, "受注の日程と連動する予定は、受注の画面の「引取・納品の日程」で直してください。");
+  }
+  let replaced: ScheduleEvent | undefined;
   let firstId = "";
   let autoStarted = false;
   let closedRequests: string[] = [];
   let holdCleared = false;
   await mutate((db) => {
     const now = nowIso();
+    // 「既存の予定をこの内容に直す」: 既存の予定を外して、この内容の予定にする (担当者・時間・メモは入れた内容)
+    if (replaceId) {
+      const old = db.schedule.find((e) => e.id === replaceId);
+      if (old && old.source !== "order") {
+        replaced = { ...old };
+        db.schedule = db.schedule.filter((e) => e.id !== replaceId);
+        addAudit(db, { userId: user.id, action: "delete", entity: "schedule", entityId: old.id, entityLabel: old.title, summary: `同じ案件・同じ日の予定を、新しく入れた内容に置き換えました (${periodLabel(old)} ${SCHEDULE_KIND[old.kind].label} → 二重に登録しないため)`, storeId: old.storeId });
+      }
+    }
     const seriesId = p.dates.length > 1 ? newId("ser") : undefined;
     for (const d of p.dates) {
       const id = newId("ev");
@@ -321,7 +347,7 @@ export async function createScheduleEvent(formData: FormData) {
     revalidatePath("/messages");
   }
   const msg = [
-    p.dates.length > 1 ? `予定を ${p.dates.length} 件 (${SCHEDULE_REPEAT[p.repeat]}) 登録しました。` : "予定を登録しました。",
+    p.dates.length > 1 ? `予定を ${p.dates.length} 件 (${SCHEDULE_REPEAT[p.repeat]}) 登録しました。` : replaced ? `${periodLabel(replaced)} の${SCHEDULE_KIND[replaced.kind].label}の予定を、この内容に直しました (二重には登録していません)。` : "予定を登録しました。",
     closedRequests.length ? "日程の打ち合わせの依頼を完了にしました (依頼した人に知らせました)。" : "",
     holdCleared ? "日程未定を外しました。" : "",
     p.caseRef ? `案件 ${p.caseRef.number} と${p.fields.companyWide ? "全店舗" : "店舗"}のカレンダーに反映されています。` : "",
@@ -1108,7 +1134,25 @@ export async function checkScheduleConflicts(q: ConflictQuery): Promise<Conflict
   const kind = q.kind && SCHEDULE_KINDS.includes(q.kind) ? q.kind : undefined;
   const impactStore = q.storeId && db.stores.some((s) => s.id === q.storeId) ? q.storeId : ref?.storeId;
   const impacts = kind && impactStore ? changeImpacts(db, { id: q.eventId, kind, date: q.date, endDate, storeId: impactStore, assigneeIds, orderId: ref?.orderId, quoteId: ref?.quoteId, inquiryId: ref?.inquiryId }) : [];
-  return { conflicts, agenda, busy, day: q.date, occurrences: dates.length, impacts };
+  // 同じ案件・同じ日の予定 (二重登録の確かめ。src/lib/case-duplicates.ts)。繰り返しの登録では確かめない
+  const caseDuplicates = kind && dates.length === 1 ? caseDuplicateItems(db, { date: q.date, kind, inquiryId: ref?.inquiryId, quoteId: ref?.quoteId, orderId: ref?.orderId, customerId: (typeof q.customerId === "string" && q.customerId) || ref?.customerId }, q.eventId) : [];
+  return { conflicts, agenda, busy, day: q.date, occurrences: dates.length, impacts, caseDuplicates };
+}
+
+/** 同じ案件・同じ日の予定 (画面に出す形。src/lib/case-duplicates.ts) */
+function caseDuplicateItems(db: Database, c: DuplicateCandidate, excludeId?: string): CaseDuplicateItem[] {
+  return sameCaseSameDay(db, c, excludeId)
+    .slice(0, 5)
+    .map((e) => {
+      const who = e.assigneeIds.map((id) => db.users.find((u) => u.id === id)?.name.split(/[\s　]/)[0] ?? "-").join("・");
+      const fromMemo = Boolean(e.memo?.startsWith("メモの日程"));
+      return {
+        eventId: e.id,
+        label: `${SCHEDULE_KIND[e.kind].label} ${periodLabel(e)}${who ? ` (${who})` : ""}`,
+        replaceable: e.source !== "order",
+        note: e.source === "order" ? "受注の日程と連動する予定です (受注の画面で直します)" : fromMemo ? "問合せ登録のメモの日程から自動で登録した予定です" : undefined,
+      };
+    });
 }
 
 /* ---------------- AI 予定候補日の提案 ---------------- */

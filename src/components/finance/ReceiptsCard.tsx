@@ -1,5 +1,6 @@
 import type { Database, Invoice, User } from "@/lib/db/types";
-import { Card, CardHeader, LinkButton, Note } from "@/components/ui";
+import { PdfLink } from "@/components/features/PdfLink";
+import { Card, CardHeader, Note, buttonClass } from "@/components/ui";
 import { canAccessStore, canIssueReceipt, canVoidReceipt } from "@/lib/auth/permissions";
 import { invoiceAccessInfo } from "@/lib/case-access";
 import { partLabel, receiptChecks, receiptDraft, receiptHeading, receiptWanted } from "@/lib/receipts";
@@ -51,10 +52,10 @@ export function ReceiptsCard({ db, user, inv, returnTo }: { db: Database; user: 
                   <span className="font-semibold text-ink tnum">{yen(r.amount)}</span>
                   <span className="text-ink-2">{r.parts.map((p) => `${partLabel(p)} ${yen(p.amount)}`).join(" · ")}</span>
                   {r.status === "issued" && (
-                    <LinkButton href={`/api/pdf/receipts/${r.id}`} target="_blank" variant={out.count ? "secondary" : "primary"} size="sm" className="ml-auto">
+                    <PdfLink href={`/api/pdf/receipts/${r.id}`} className={buttonClass(out.count ? "secondary" : "primary", "sm", "ml-auto")}>
                       <Printer />
                       {out.count ? `再発行 (印刷 ${out.count + 1} 回目)` : "印刷 (PDF)"}
-                    </LinkButton>
+                    </PdfLink>
                   )}
                 </div>
                 <div className="text-[11px] text-ink-3">

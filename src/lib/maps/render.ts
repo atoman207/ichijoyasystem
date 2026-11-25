@@ -88,6 +88,11 @@ function pdftoppm(pdf: Buffer, page: number, width: number): Promise<Buffer> {
   });
 }
 
+/** PDF (中身) の 1 ページを PNG にする (帳票を画面の中で見る src/lib/doc-view.ts でも使う。同時に 2 つまで) */
+export function pdfPageToPng(pdf: Buffer, page: number, width: number): Promise<Buffer> {
+  return slot(() => pdftoppm(pdf, page, width));
+}
+
 /**
  * PDF の 1 ページを PNG にする (控えがあればそれを返す)。
  * null = PDF の本体がない。例外 = 画像にできない (pdftoppm がない・壊れた PDF・時間切れ)

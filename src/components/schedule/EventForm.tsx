@@ -10,7 +10,7 @@ import { SCHEDULE_GROUP_LABEL, SCHEDULE_KIND, SCHEDULE_REPEAT, type ScheduleGrou
 import { fromMinutes, isDateKey, periodLabel, repeatDates, shortDate, toMinutes, type ConflictQuery } from "@/lib/calendar";
 import { Card, Field, Input, Select, Textarea, buttonClass } from "@/components/ui";
 import { KINDS_BY_GROUP, KindIcon, kindStyle } from "./parts";
-import { AssigneePicker, ConflictPanel, useConflictReport, type FormStore, type FormUser } from "./form-parts";
+import { AssigneePicker, CaseDuplicateChoice, ConflictPanel, useConflictReport, type FormStore, type FormUser } from "./form-parts";
 import { SuggestPanel, SUGGESTABLE_KINDS } from "./SuggestPanel";
 import type { SuggestCandidate } from "@/lib/schedule-suggest";
 
@@ -210,6 +210,7 @@ export function EventForm({
         repeatUntil: repeat === "none" || repeatError ? undefined : until,
         kind: v.kind,
         storeId: v.storeId,
+        customerId: v.customerId || undefined,
       }
     : null;
   const { report, fresh, checking } = useConflictReport(query);
@@ -549,6 +550,12 @@ export function EventForm({
               onAck={(on) => setAckFor(on ? conflictKey : null)}
               ackLabel={mode === "create" ? "重複を承知で登録する (担当者・店長と調整済み)" : "重複を承知で保存する (担当者・店長と調整済み)"}
             />
+            {/* 同じ案件・同じ日の予定 (二重登録の確かめ。新しく登録するときだけ) */}
+            {mode === "create" && fresh && (
+              <div className="mt-3">
+                <CaseDuplicateChoice items={report?.caseDuplicates} />
+              </div>
+            )}
           </Card>
           <Card>
             <dl className="mb-4 space-y-1 text-xs text-ink-2">

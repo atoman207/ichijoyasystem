@@ -1,4 +1,5 @@
 import Link from "@/components/ui/Link";
+import { PdfLink } from "@/components/features/PdfLink";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { isDateKey } from "@/lib/calendar";
@@ -8,7 +9,7 @@ import { dayDocRows } from "@/lib/day-docs";
 import { prepareDayDocs } from "@/lib/actions/day-docs";
 import { RECEIPT_METHODS, RECEIPT_METHOD_LABEL } from "@/lib/receipts";
 import { ORDER_STATUS } from "@/lib/constants";
-import { Button, Card, Flash, LinkButton, Note, PageHeader, StatusBadge } from "@/components/ui";
+import { Button, Card, Flash, Note, PageHeader, StatusBadge, buttonClass } from "@/components/ui";
 import { Printer } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -38,10 +39,10 @@ export default async function SchedulePrintPage({ searchParams }: { searchParams
       {docCount > 0 && (
         <Card className="mb-4 border-accent/40 bg-accent-soft/30">
           <div className="flex flex-wrap items-center gap-3">
-            <LinkButton href={`/api/pdf/batch?docs=${encodeURIComponent(docs)}&date=${date}`} target="_blank" size="md">
+            <PdfLink href={`/api/pdf/batch?docs=${encodeURIComponent(docs)}&date=${date}`} className={buttonClass("primary", "md")}>
               <Printer />
               まとめて印刷 (PDF {docCount} 枚)
-            </LinkButton>
+            </PdfLink>
             <span className="text-xs text-ink-2">PDF が開いたら、ブラウザーの印刷 (プリンターのアイコン) で印刷してください。もう一度開くと、領収書は「再発行」として記録されます。</span>
           </div>
         </Card>

@@ -15,7 +15,7 @@ import { buttonClass } from "@/components/ui";
 
 const SCALES = [1, 1.5, 2, 3, 4];
 
-export function MapPageImage({ src, pdfSrc, alt, page, pages }: { src: string; pdfSrc: string; alt: string; page: number; pages: number }) {
+export function MapPageImage({ src, pdfSrc, alt, page, pages, failNote }: { src: string; pdfSrc: string; alt: string; page: number; pages: number; failNote?: string }) {
   const [scale, setScale] = useState(1);
   const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -50,7 +50,7 @@ export function MapPageImage({ src, pdfSrc, alt, page, pages }: { src: string; p
     return (
       <figure className="space-y-1">
         <iframe src={pdfSrc} title={alt} className="h-[75vh] w-full rounded-lg border border-line bg-white" />
-        <figcaption className="text-[11px] text-ink-3">地図を画像にできなかったため、PDF を表示しています。表示されないときは下の「ダウンロード」をお使いください。</figcaption>
+        <figcaption className="text-[11px] text-ink-3">{failNote ?? "地図を画像にできなかったため、PDF を表示しています。表示されないときは下の「ダウンロード」をお使いください。"}</figcaption>
       </figure>
     );
   }

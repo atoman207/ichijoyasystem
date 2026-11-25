@@ -1,5 +1,6 @@
 "use server";
 
+import { sameCaseSameDay } from "@/lib/case-duplicates";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { BACKEND, addAudit, getDb, mutate, newId, nextCustomerCode, nextNumber, nowIso } from "@/lib/db/store";
@@ -275,11 +276,18 @@ function decision(doc: CapturedDocument, d: ReceptionMeta["decision"]) {
  */
 function registerAppointments(d: Database, user: User, inq: Inquiry, list: ReceptionAppointment[], opts: { assigneeId: string; customerId?: string }): string[] {
   const out: string[] = [];
+  const skipped: string[] = [];
   const now = nowIso();
   const active = new Set(d.users.filter((u) => u.active).map((u) => u.id));
   for (const a of list) {
     if (!a.register || !isDateKey(a.date)) continue;
     const kind = a.kind as ScheduleKind;
+    // 同じ案件・同じ日の予定がすでにあれば登録しない (二重登録を防ぐ。お客様のご連絡 2026-11-26。src/lib/case-duplicates.ts)
+    const dupe = sameCaseSameDay(d, { date: a.date, kind, inquiryId: inq.id, quoteId: inq.quoteId, customerId: opts.customerId });
+    if (dupe.length) {
+      skipped.push(`${SCHEDULE_KIND[kind].label} ${a.date.slice(5).replace("-", "/")} は同じ案件の予定 (${dupe.map((e) => `${SCHEDULE_KIND[e.kind].label} ${periodLabel(e)}`).join("・")}) があるため登録しませんでした`);
+      continue;
+    }
     const assignee = a.assigneeId && active.has(a.assigneeId) ? a.assigneeId : opts.assigneeId;
     const ev: ScheduleEvent = {
       id: newId("ev"),
@@ -310,7 +318,7 @@ function registerAppointments(d: Database, user: User, inq: Inquiry, list: Recep
     if (inq.status === "new") inq.status = "in_progress";
     addChangeNotice(d, user.id, caseTarget(d, inq.id), "予定の追加", out.map((t) => ({ label: "予定", before: "(なし)", after: t })));
   }
-  return out;
+  return [...out, ...skipped];
 }
 
 /**

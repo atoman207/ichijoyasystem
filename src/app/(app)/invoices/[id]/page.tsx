@@ -1,4 +1,5 @@
 import Link from "@/components/ui/Link";
+import { PdfLink } from "@/components/features/PdfLink";
 import { CaseViewBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
 import { invoiceAccessInfo, deniedHref } from "@/lib/case-access";
 import { logRecordView } from "@/lib/record-views";
@@ -12,7 +13,7 @@ import { logInvoiceContact, recordPayment, updateExpectedPayment, updateInvoiceI
 import { settlePayment } from "@/lib/actions/cases";
 import { fmtDate, toDateKey, yen } from "@/lib/format";
 import { CHANNEL_LABEL, INVOICE_STATUS, PAYMENT_METHOD_LABEL } from "@/lib/constants";
-import { Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea } from "@/components/ui";
+import { Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, Textarea, buttonClass } from "@/components/ui";
 import { HistoryCard, RecordStamp } from "@/components/features/History";
 import { ContactList } from "@/components/features/Contacts";
 import { SendDocumentCard } from "@/components/features/SendDocument";
@@ -59,8 +60,8 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
         actions={
           // 帳票の出力は閲覧のみの社員もできる (お客様のご要望 2026-11-25「⑥」。出力の記録が残る)
           <>
-            <LinkButton href={`/api/pdf/invoices/${inv.id}`} variant="secondary" size="sm" target="_blank">請求書 PDF</LinkButton>
-            {!batch && order && inv.status !== "void" && <LinkButton href={`/api/pdf/delivery/${order.id}`} variant="secondary" size="sm" target="_blank">納品書 PDF</LinkButton>}
+            <PdfLink href={`/api/pdf/invoices/${inv.id}`} className={buttonClass("secondary", "sm")}>請求書 PDF</PdfLink>
+            {!batch && order && inv.status !== "void" && <PdfLink href={`/api/pdf/delivery/${order.id}`} className={buttonClass("secondary", "sm")}>納品書 PDF</PdfLink>}
             {inv.status !== "void" && <LinkButton href="#receipts" variant="secondary" size="sm">領収書</LinkButton>}
             <LinkButton href={`/print/invoices/${inv.id}`} variant="ghost" size="sm">画面で表示・印刷</LinkButton>
           </>

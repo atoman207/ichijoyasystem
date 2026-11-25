@@ -1,5 +1,7 @@
 "use client";
 
+import { CaseDuplicateChoice } from "./form-parts";
+
 import { useState } from "react";
 import clsx from "clsx";
 import { CalendarPlus } from "lucide-react";
@@ -113,6 +115,8 @@ export function RequestScheduleForm({
         </label>
       )}
       <ConflictNote report={report} label="重複を承知で登録する" />
+      {/* 同じ案件・同じ日の予定 (二重登録の確かめ。新しく登録するときだけ) */}
+      {mode === "new" && <CaseDuplicateChoice items={report?.caseDuplicates} />}
       <label className="flex items-start gap-2 text-sm text-ink">
         <input type="checkbox" name="close" value="1" checked={close} onChange={(e) => setClose(e.target.checked)} className="mt-0.5 h-4 w-4" />
         <span>登録したら、この依頼を報告・対応完了にする (依頼した人に知らせます)</span>

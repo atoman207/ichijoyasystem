@@ -6,7 +6,7 @@ import clsx from "clsx";
 import { CalendarCheck, CircleCheck, LoaderCircle, Search, TriangleAlert, UserPlus, Users, X } from "lucide-react";
 import type { StoreId } from "@/lib/db/types";
 import { checkScheduleConflicts } from "@/lib/actions/schedule";
-import { longDate, type BusyInfo, type ConflictQuery, type ConflictReport } from "@/lib/calendar";
+import { longDate, type BusyInfo, type CaseDuplicateItem, type ConflictQuery, type ConflictReport } from "@/lib/calendar";
 import { Avatar } from "@/components/ui";
 import { shortName } from "./parts";
 
@@ -316,6 +316,49 @@ export function ConflictPanel({
           担当者の予定との重複はありません
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * 同じ案件・同じ日の予定がすでにあるとき (二重登録の確かめ。お客様のご連絡 2026-11-26。src/lib/case-duplicates.ts):
+ * 「既存の予定をこの内容に直す」か「別の予定として追加する」を選ぶまで登録できない (サーバーでも確かめる)
+ */
+export function CaseDuplicateChoice({ items }: { items?: CaseDuplicateItem[] }) {
+  if (!items?.length) return null;
+  return (
+    <div role="alert" className="space-y-1.5 rounded-xl border border-warn/50 bg-warn-soft/70 p-3 text-xs text-warn-ink" data-testid="case-duplicate">
+      <p className="flex items-center gap-1.5 font-semibold">
+        <TriangleAlert className="h-4 w-4" aria-hidden />
+        この案件の同じ日の予定がすでにあります (二重登録になっていませんか？)
+      </p>
+      <ul className="space-y-0.5 text-ink">
+        {items.map((i) => (
+          <li key={i.eventId}>
+            ・{i.label}
+            {i.note && <span className="text-ink-3"> — {i.note}</span>}
+          </li>
+        ))}
+      </ul>
+      <fieldset className="space-y-1 rounded-lg bg-panel/80 px-2 py-1.5 text-ink">
+        <legend className="sr-only">二重登録の確かめ</legend>
+        {items
+          .filter((i) => i.replaceable)
+          .map((i) => (
+            <label key={i.eventId} className="flex cursor-pointer items-start gap-2">
+              <input type="radio" name="caseDuplicate" value={`replace:${i.eventId}`} required className="mt-0.5 h-4 w-4" />
+              <span>
+                <span className="font-medium">既存の予定をこの内容に直す</span> ({i.label} を、いま入れた日時・担当者・内容にします。予定は増えません)
+              </span>
+            </label>
+          ))}
+        <label className="flex cursor-pointer items-start gap-2">
+          <input type="radio" name="caseDuplicate" value="add" required className="mt-0.5 h-4 w-4" />
+          <span>
+            <span className="font-medium">別の予定として追加する</span> (同じ日にもう 1 件の予定が必要なとき)
+          </span>
+        </label>
+      </fieldset>
     </div>
   );
 }

@@ -426,6 +426,35 @@ section("8. 納品書 (請求書と同じ書式・内容で表題が「納品書
   eq((rr.sp?.get("docs") ?? "").split(",").map((d) => d.split(":")[0]), ["d", "i"], "まとめて印刷: 納品書 → 請求書");
 }
 
+
+/* ================================================================== */
+section("9. 帳票をシステムの画面の中で見る (スマートフォンで PDF のあと元の画面に戻れるように)");
+{
+  const DV = await imp("lib/doc-view.ts");
+  const OUT = await imp("lib/doc-outputs.ts");
+  const inv = db().invoices.find((i) => i.orderId === "o_rc1" && i.status !== "void");
+  eq([DV.isDocSrc(`/api/pdf/invoices/${inv.id}`), DV.isDocSrc("/api/pdf/quotes/q_rc1?version=1"), DV.isDocSrc("/api/pdf/batch?docs=i%3Ainv_1%2Cr%3Arc_2&date=2026-12-01"), DV.isDocSrc("https://example.com/x.pdf"), DV.isDocSrc("/api/attachments/att_1"), DV.isDocSrc("/api/pdf/invoices/../../etc")], [true, true, true, false, false, false], "開けるのは帳票の PDF の場所だけ");
+  const before = OUT.outputsOf(db(), "invoice", inv.id).length;
+  const r = await DV.loadDoc(db(), u("u_rc_mgr"), `/api/pdf/invoices/${inv.id}`, { record: true });
+  ok(r.ok && r.entry.pages >= 1 && /請求書/.test(r.entry.fileName), `請求書を開く (${r.ok ? r.entry.pages : 0} ページ)`);
+  eq(OUT.outputsOf(db(), "invoice", inv.id).length, before + 1, "画面で開いたときも出力の記録を残す");
+  const denied = await DV.loadDoc(db(), { ...u("u_rc_other"), active: false }, `/api/pdf/invoices/${inv.id}`, { record: false });
+  ok(!denied.ok, "見られない人は開けない");
+  const { execFileSync } = await import("node:child_process");
+  let poppler = true;
+  try {
+    execFileSync("pdftoppm", ["-v"], { stdio: "ignore" });
+  } catch {
+    poppler = false;
+  }
+  if (poppler) {
+    const png = await DV.docPagePng(db(), u("u_rc_mgr"), `/api/pdf/invoices/${inv.id}`, 1);
+    ok(png.ok && png.png[0] === 0x89 && png.png[1] === 0x50, "ページを画像 (PNG) にする");
+    const none = await DV.docPagePng(db(), u("u_rc_mgr"), `/api/pdf/invoices/${inv.id}`, 99);
+    ok(!none.ok, "ないページは出さない");
+  } else console.log("  (pdftoppm がないため画像の確かめは省略)");
+}
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   console.log(fails.map((f) => `  - ${f}`).join("\n"));

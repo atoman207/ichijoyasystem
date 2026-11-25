@@ -15,6 +15,7 @@ import { AttachmentUploader } from "@/components/attachments/AttachmentUploader"
 import { AttachmentGallery } from "@/components/attachments/AttachmentGallery";
 import { ReceiptForm } from "@/components/finance/ReceiptForm";
 import { HandoverEditor } from "./HandoverEditor";
+import { PdfLink } from "@/components/features/PdfLink";
 import type { QuickWork } from "./quick-types";
 import type { OrderHandover } from "@/lib/db/types";
 import { handoverGroups } from "@/lib/handover";
@@ -211,26 +212,26 @@ export function CaseWorkSection({ work, eventId, returnTo: listReturn, onReload 
           <div className="space-y-2.5 text-xs">
             <div className="flex flex-wrap gap-1.5">
               {docs.quote && docs.quote.canPrint && (
-                <a href={`/api/pdf/quotes/${docs.quote.id}`} target="_blank" rel="noopener" className={buttonClass("secondary", "sm")}>
+                <PdfLink href={`/api/pdf/quotes/${docs.quote.id}`} returnTo={returnTo} className={buttonClass("secondary", "sm")}>
                   <FileText />
                   見積書 {docs.quote.number}
                   {docs.quote.draft ? " (承認前)" : ""}
                   {docs.quote.outputs ? ` · 出力 ${docs.quote.outputs} 回` : ""}
-                </a>
+                </PdfLink>
               )}
               {docs.delivery && docs.delivery.canPrint && (
-                <a href={`/api/pdf/delivery/${docs.delivery.orderId}`} target="_blank" rel="noopener" className={buttonClass("secondary", "sm")} data-testid="case-delivery-note">
+                <PdfLink href={`/api/pdf/delivery/${docs.delivery.orderId}`} returnTo={returnTo} className={buttonClass("secondary", "sm")} testId="case-delivery-note">
                   <FileText />
                   納品書
                   {docs.delivery.outputs ? ` · 出力 ${docs.delivery.outputs} 回` : ""}
-                </a>
+                </PdfLink>
               )}
               {docs.invoice && docs.invoice.canPrint && (
-                <a href={`/api/pdf/invoices/${docs.invoice.id}`} target="_blank" rel="noopener" className={buttonClass("secondary", "sm")}>
+                <PdfLink href={`/api/pdf/invoices/${docs.invoice.id}`} returnTo={returnTo} className={buttonClass("secondary", "sm")}>
                   <FileText />
                   請求書 {docs.invoice.number} {yen(docs.invoice.total)}
                   {docs.invoice.outputs ? ` · 出力 ${docs.invoice.outputs} 回` : ""}
-                </a>
+                </PdfLink>
               )}
             </div>
             {docs.invoiceIssue &&
@@ -282,10 +283,10 @@ export function CaseWorkSection({ work, eventId, returnTo: listReturn, onReload 
                         {r.status === "void" ? (
                           <span className="text-critical-ink">取り消し</span>
                         ) : (
-                          <a href={`/api/pdf/receipts/${r.id}`} target="_blank" rel="noopener" className={clsx(buttonClass(r.outputs ? "secondary" : "primary", "sm"), "ml-auto")}>
+                          <PdfLink href={`/api/pdf/receipts/${r.id}`} returnTo={returnTo} className={clsx(buttonClass(r.outputs ? "secondary" : "primary", "sm"), "ml-auto")}>
                             <Printer />
                             {r.outputs ? `再発行 (${r.outputs + 1} 回目)` : "印刷"}
-                          </a>
+                          </PdfLink>
                         )}
                       </li>
                     ))}

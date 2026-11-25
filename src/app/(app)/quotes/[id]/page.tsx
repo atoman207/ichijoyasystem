@@ -1,4 +1,5 @@
 import { CaseChangeHistory } from "@/components/features/CaseChangeHistory";
+import { PdfLink } from "@/components/features/PdfLink";
 import { CaseStoreCard } from "@/components/features/CaseStoreCard";
 import { CaseRequestsCard } from "@/components/features/CaseRequestsCard";
 import { CaseCustomerSearch } from "@/components/features/LinkSearch";
@@ -22,7 +23,7 @@ import { convertQuoteToOrder, deleteQuote, markQuoteLost, sendQuote, submitQuote
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
 import { customerPhonesText } from "@/lib/customer-contacts";
-import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, buttonClass } from "@/components/ui";
 import { ApprovalDecision, ApprovalHistoryCard, HistoryCard, RecordStamp } from "@/components/features/History";
 import { ContactList, ContactLogForm } from "@/components/features/Contacts";
 import { SendDocumentCard } from "@/components/features/SendDocument";
@@ -82,7 +83,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
         actions={
           // 帳票の出力は閲覧のみの社員もできる (お客様のご要望 2026-11-25「⑥」。出力の記録が残る)
           <>
-            <LinkButton href={`/api/pdf/quotes/${q.id}`} variant="secondary" size="sm" target="_blank">見積書 PDF</LinkButton>
+            <PdfLink href={`/api/pdf/quotes/${q.id}`} className={buttonClass("secondary", "sm")}>見積書 PDF</PdfLink>
             <LinkButton href={`/print/quotes/${q.id}`} variant="ghost" size="sm">画面で表示・印刷</LinkButton>
             {!viewOnly && ["draft", "approved", "sent", "accepted"].includes(q.status) && !q.pendingChange && !lock.locked && <LinkButton href={`/quotes/${q.id}/edit`} variant="secondary" size="sm">{q.status === "draft" ? "編集" : "変更を申請 (金額・数量・施工内容)"}</LinkButton>}
           </>
@@ -206,7 +207,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
                       <td className="px-5 py-2 font-medium">第{q.version}版 (現在)</td>
                       <td className="px-3 py-2 text-right tnum">{yen(q.total)}</td>
                       <td className="px-3 py-2 text-xs text-ink-2">{q.approvedAt ? `承認 ${userName(q.approvedBy)} ${fmtDateTime(q.approvedAt)}` : "-"}</td>
-                      <td className="px-5 py-2 text-right"><a href={`/api/pdf/quotes/${q.id}`} target="_blank" rel="noopener" className="text-xs text-accent hover:underline">PDF</a></td>
+                      <td className="px-5 py-2 text-right"><PdfLink href={`/api/pdf/quotes/${q.id}`} className="text-xs text-accent hover:underline">PDF</PdfLink></td>
                     </tr>
                     {[...(q.revisions ?? [])].reverse().map((r) => (
                       <tr key={r.version} className="border-t border-line">
@@ -216,7 +217,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
                           {r.changeReason ? <>第{r.version + 1}版への変更理由: {r.changeReason}<br /></> : null}
                           <span className="text-ink-3">申請 {userName(r.changeRequestedBy)} · 承認 {userName(r.changeApprovedBy)} {fmtDateTime(r.replacedAt)}</span>
                         </td>
-                        <td className="px-5 py-2 text-right"><a href={`/api/pdf/quotes/${q.id}?version=${r.version}`} target="_blank" rel="noopener" className="text-xs text-accent hover:underline">PDF</a></td>
+                        <td className="px-5 py-2 text-right"><PdfLink href={`/api/pdf/quotes/${q.id}?version=${r.version}`} className="text-xs text-accent hover:underline">PDF</PdfLink></td>
                       </tr>
                     ))}
                   </tbody>

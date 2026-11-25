@@ -339,7 +339,7 @@ export async function scheduleFromRequest(threadId: string, formData: FormData) 
   if (!chain) fail(ret, "依頼の案件が見つかりません。");
   const mode = str(formData, "mode") === "move" && t0.eventId ? "move" : "new";
   const fd = new FormData();
-  for (const k of ["date", "timeMode", "startTime", "endTime", "memo", "allowOverlap"]) if (formData.has(k)) fd.set(k, str(formData, k));
+  for (const k of ["date", "timeMode", "startTime", "endTime", "memo", "allowOverlap", "caseDuplicate"]) if (formData.has(k)) fd.set(k, str(formData, k));
   const assignees = [...new Set(formData.getAll("assigneeIds").map(String))];
   for (const a of assignees) fd.append("assigneeIds", a);
   fd.set("returnTo", ret);
