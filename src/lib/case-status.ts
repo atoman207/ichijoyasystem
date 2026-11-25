@@ -279,7 +279,7 @@ export function buildCases(db: Pick<Database, "orders" | "quotes" | "inquiries" 
     rows.push(quoteCase(q, ix));
   }
   for (const i of db.inquiries) {
-    if (i.quoteId || quotedInquiries.has(i.id) || !inScope(i.storeId)) continue;
+    if (i.deleted || i.quoteId || quotedInquiries.has(i.id) || !inScope(i.storeId)) continue;
     rows.push(inquiryCase(i, ix, today));
   }
   return rows;

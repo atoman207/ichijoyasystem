@@ -2,6 +2,8 @@ import { CaseChangeHistory } from "@/components/features/CaseChangeHistory";
 import { CaseRequestsCard } from "@/components/features/CaseRequestsCard";
 import type { ReactNode } from "react";
 import { CaseViewBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
+import { deletedLabel, inquiryDeleteBlocker, inquiryOnlyEvents, isDeletedInquiry, pendingInquiryDelete } from "@/lib/inquiry-delete";
+import { DeleteInquiryButton } from "@/components/inquiries/DeleteInquiry";
 import { inquiryAccessInfo, deniedHref } from "@/lib/case-access";
 import { logRecordView } from "@/lib/record-views";
 import Link from "@/components/ui/Link";
@@ -10,9 +12,9 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { staffForStore } from "@/lib/staff-choices";
 import { areaStoreOf } from "@/lib/store-area";
-import { canAccessStore, canEditCaseStore, canSeeAllStores, canViewAuditEntry } from "@/lib/auth/permissions";
+import { canAccessStore, canDeleteInquiryDirect, canEditCaseStore, canRequestInquiryDelete, canRestoreInquiry, canSeeAllStores, canViewAuditEntry } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
-import { clearInquiryScheduleHold, linkInquiryFromForm, mergeInquiryIntoCase, registerCustomerFromInquiry, requestInquiry, setInquiryScheduleHold, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
+import { clearInquiryScheduleHold, linkInquiryFromForm, mergeInquiryIntoCase, registerCustomerFromInquiry, requestInquiry, restoreDeletedInquiry, setInquiryScheduleHold, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
 import { customerCases } from "@/lib/reception";
 import { taskStep } from "@/lib/actions/messages";
 import { caseFlow } from "@/lib/case-flow";
@@ -50,12 +52,18 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   // ほかの店舗の記録は閲覧のみ (見られる範囲は閲覧の範囲の設定と案件の進み具合。承認制で申請できるときはお客様の画面の「閲覧の申請」へ。src/lib/case-access.ts)
   const info = inquiryAccessInfo(db, user, inq);
   if (info.access === "none") redirect(deniedHref(info, "/inquiries", "問い合わせ"));
-  const viewOnly = info.access === "view";
+  // 削除した問い合わせ (お客様のご要望 2026-11-25。src/lib/inquiry-delete.ts) は閲覧だけ (管理者は元に戻せる)
+  const deleted = isDeletedInquiry(inq);
+  const viewOnly = info.access === "view" || deleted;
   logRecordView(user, info, { entity: "inquiry", id: inq.id, label: inq.number, storeId: inq.storeId }, db.auditLogs);
   const customer = db.customers.find((c) => c.id === inq.customerId);
   const quote = db.quotes.find((q) => q.id === inq.quoteId);
   const order = quote ? db.orders.find((o) => o.quoteId === quote.id) : undefined;
   const store = db.stores.find((s) => s.id === inq.storeId);
+  // 削除のボタン: 店長以上はすぐに削除、店舗スタッフは店長への申請 (見積・受注のある問い合わせは削除できない)
+  const delMode = deleted || info.access !== "edit" ? undefined : canDeleteInquiryDirect(user, inq.storeId) ? ("direct" as const) : canRequestInquiryDelete(user, inq.storeId) ? ("request" as const) : undefined;
+  const delBlocked = delMode ? inquiryDeleteBlocker(db, inq) : undefined;
+  const delPending = pendingInquiryDelete(db, inq.id);
   // 担当者の選択肢: 担当店舗の社員 + 本部の社員 (全店舗共通。お客様のご要望 2026-11-24「④」)
   const users = canSeeAllStores(user) ? db.users.filter((u) => u.active) : staffForStore(db, inq.storeId, [inq.assignedUserId]);
   // 住所 (お客様の住所・受付で聞いた住所) の担当エリアの店舗 (お客様のご要望 2026-11-24「③」。src/lib/store-area.ts)
@@ -136,16 +144,31 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
       <Flash msg={msg} err={err} />
       <PageHeader
         title={inq.summary}
-        badge={<StatusBadge value={inq.status} map={INQUIRY_STATUS} />}
+        badge={deleted ? <Badge tone="critical">削除済み</Badge> : <StatusBadge value={inq.status} map={INQUIRY_STATUS} />}
         description={<span className="inline-flex flex-wrap items-center gap-2">{inq.number} · 受付 {fmtDateTime(inq.receivedAt)} · <ChannelTag channel={inq.channel} /> · 媒体 <MediaTag {...media} /> · {CATEGORY_LABEL[inq.category]} · <StoreTag store={store} /></span>}
         back={{ href: "/inquiries", label: "問い合わせ一覧" }}
         actions={
           viewOnly ? undefined : <>
             {!quote && customer && <LinkButton href={`/quotes/new?customerId=${customer.id}&inquiryId=${inq.id}&category=${inq.category}`} size="sm">見積を作成</LinkButton>}
             {quote && <LinkButton href={`/quotes/${quote.id}`} size="sm" variant="secondary">見積 {quote.number} を開く</LinkButton>}
+            {delMode && !delBlocked && !delPending && <DeleteInquiryButton inquiryId={inq.id} number={inq.number} summary={inq.summary} customer={customer?.name ?? inq.contactName} mode={delMode} events={inquiryOnlyEvents(db, inq).length} returnTo="/inquiries" />}
           </>
         }
       />
+      {deleted && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-critical/40 bg-critical-soft/60 px-4 py-3 text-sm text-critical-ink" data-testid="inquiry-deleted-banner">
+          <span className="font-semibold">この問い合わせは削除済みです。</span>
+          <span className="text-xs">{deletedLabel(inq, userName)}</span>
+          {canRestoreInquiry(user) && (
+            <form action={restoreDeletedInquiry.bind(null, inq.id)} className="ml-auto">
+              <Button type="submit" size="sm" variant="secondary">
+                削除を取り消す (元に戻す)
+              </Button>
+            </form>
+          )}
+        </div>
+      )}
+      {!deleted && delPending && <Note tone="warn">この問い合わせは削除の申請中です (店長の承認待ち。理由: {delPending.requestComment ?? "-"})。承認されると一覧から消えます。</Note>}
       {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what="問い合わせ" basis={info.basis} grantUntil={info.grantUntil} />}
       <ReadOnlyArea readOnly={viewOnly}>
 

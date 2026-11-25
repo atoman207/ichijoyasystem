@@ -257,6 +257,8 @@ export function dueFollowups(db: Pick<Database, "inquiries" | "threads" | "sched
   }
   // 日程未定の次回の連絡予定日 (当日の朝に 1 回)
   for (const inq of db.inquiries) {
+    // 削除した問い合わせ (src/lib/inquiry-delete.ts) には知らせない
+    if (inq.deleted) continue;
     const hold = inq.scheduleHold;
     if (!hold?.nextContact || hold.nextContact > today || hold.remindedOn === today) continue;
     if (hold.remindedOn && hold.remindedOn >= hold.nextContact) continue;

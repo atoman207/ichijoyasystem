@@ -175,7 +175,7 @@ export function searchSchedule(db: Database, user: User, raw: string, today: str
     if (matchCase(c, place, [])) pushCase(o.id, `受注 ${o.number}`, o.title, c, place, `/orders/${o.id}`);
   }
   for (const i of db.inquiries) {
-    if (!OPEN_INQ.has(i.status) || i.quoteId || withUpcoming.has(i.id)) continue;
+    if (i.deleted || !OPEN_INQ.has(i.status) || i.quoteId || withUpcoming.has(i.id)) continue;
     const c = i.customerId ? ix.customers.get(i.customerId) : undefined;
     const place = i.siteAddress || c?.address || i.intake?.address || "";
     if (matchCase(c, place, [i.contactPhone, i.intake?.phone], i.contactName)) pushCase(i.id, `問い合わせ ${i.number}`, i.summary, c ?? ({ name: i.contactName } as Customer), place, `/inquiries/${i.id}`);

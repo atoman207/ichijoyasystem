@@ -399,7 +399,8 @@ export function managementReport(db: Database, user: User, filter: MgmtFilter, n
   const win: Range = { from: prevRange.from, to: range.to };
   const orders = scoped.filter((o) => inRange(o.salesDate, win) || inRange(o.contractDate, win) || inRange(o.completedAt, win));
   const quotes = db.quotes.filter((q) => inStores.has(q.storeId) && (!staff || quoteStaff(q) === staff));
-  const inquiries = db.inquiries.filter((i) => inStores.has(i.storeId) && (!staff || i.assignedUserId === staff || i.createdBy === staff));
+  // 削除した問い合わせ (誤って登録したもの。src/lib/inquiry-delete.ts) は数えない
+  const inquiries = db.inquiries.filter((i) => !i.deleted && inStores.has(i.storeId) && (!staff || i.assignedUserId === staff || i.createdBy === staff));
   const invoices = db.invoices.filter((i) => inStores.has(i.storeId) && (!staff || orderIds.has(i.orderId) || (i.orderIds ?? []).some((id) => orderIds.has(id))) && i.status !== "draft" && i.status !== "void");
   const invoiceById = new Map(invoices.map((i) => [i.id, i]));
   const payments = db.payments.filter((p) => invoiceById.has(p.invoiceId));

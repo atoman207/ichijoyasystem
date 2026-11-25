@@ -15,7 +15,7 @@ export function ListTab({ db, user, storeIds, from, to, periodValue, periodLabel
   const stores = new Set(storeIds);
   const rows = (db.promotions ?? []).filter((p) => stores.has(p.storeId) && p.startDate >= from && p.startDate <= to && (!kind || p.kind === kind)).sort((a, b) => b.startDate.localeCompare(a.startDate) || b.number.localeCompare(a.number));
   const linked = new Map<string, number>();
-  for (const i of db.inquiries) if (i.promotionId) linked.set(i.promotionId, (linked.get(i.promotionId) ?? 0) + 1);
+  for (const i of db.inquiries) if (i.promotionId && !i.deleted) linked.set(i.promotionId, (linked.get(i.promotionId) ?? 0) + 1);
   const storeMap = new Map(db.stores.map((s) => [s.id, s]));
   // 今年度のチラシの計画と実施 (店舗別)
   const fy = fiscalYearOf(today, startMonth);

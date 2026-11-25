@@ -197,6 +197,19 @@ export interface OrderWorkStaff {
   updatedBy?: string;
 }
 
+export interface InquiryDeleted {
+  at: string;
+  /** 削除した人 (店舗スタッフの申請は申請した人) */
+  by: string;
+  /** 承認した人 (店舗スタッフの申請を店長が承認したとき) */
+  approvedBy?: string;
+  approvalId?: string;
+  reason?: string;
+  prevStatus: InquiryStatus;
+  /** あわせて削除した予定の件数 */
+  events?: number;
+}
+
 export interface Inquiry {
   id: string;
   number: string;
@@ -231,6 +244,11 @@ export interface Inquiry {
   promotionId?: string;
   /** 既存の AI システム (AI テキスト相談・AI 音声相談・AI 電話受付) から受け取った項目 (src/lib/ai-intake.ts)。顧客の登録・重複の確認に使う */
   intake?: InquiryIntake;
+  /**
+   * 削除 (誤って登録した問い合わせ。お客様のご要望 2026-11-25)。記録は残し、通常の一覧・集計に出さない (検索では「削除済み」と出す)。
+   * 状態は「完了」にし、削除の前の状態は prevStatus に残す (管理者が元に戻せる)。src/lib/inquiry-delete.ts
+   */
+  deleted?: InquiryDeleted;
   /** お客様都合で日程未定 (お客様のご要望 2026-11-24「⑤」。次回の連絡予定日。予定を登録すると外す。src/lib/inquiry-flow.ts) */
   scheduleHold?: InquiryScheduleHold;
   /**
@@ -859,7 +877,9 @@ export type ApprovalType =
   /** 受注の引取日・納品日 (品目ごと) の変更。はじめて入れる日程は承認なし、登録済みの日程の変更だけ (src/lib/handover.ts) */
   | "handover_change"
   /** 案件の施工店舗 (= 売上の店舗) の変更。予定表から申請し、今の施工店舗の店長が承認する (src/lib/case-store.ts) */
-  | "store_change";
+  | "store_change"
+  /** 問い合わせの削除 (店舗スタッフの申請。所属店舗の店長が承認。店長以上は承認なしで削除。src/lib/inquiry-delete.ts) */
+  | "inquiry_delete";
 
 /** returned = 差戻し (修正して再申請) / rejected = 却下 / cancelled = 取下げ */
 export type ApprovalStatus = "pending" | "approved" | "returned" | "rejected" | "cancelled";

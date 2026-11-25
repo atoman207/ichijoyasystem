@@ -581,7 +581,9 @@ const sq = (v: string) => `'${v.replace(/'/g, "''")}'`;
 
 /** 店舗のロールの閲覧範囲で、生の表を覆う一時ビュー。全店舗を見られる人は空 (覆わない) */
 export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): string[] {
-  if (canSeeAllStores(user as User)) return [];
+  // 削除した問い合わせ (誤って登録したもの。src/lib/inquiry-delete.ts) は全員の SQL から外す (集計に入れない)
+  const liveInquiries = (extra = "") => `create temp view inquiries as select * from main.inquiries where deleted is null${extra};`;
+  if (canSeeAllStores(user as User)) return [liveInquiries()];
   const store = sq(user.storeId as StoreId);
   const me = sq(user.id);
   const manager = user.role === "store_manager";
@@ -599,7 +601,8 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
   const salesCols = `order_id, number, sales_date, contract_date, status, store_id, store_name, null as customer_id, null as customer_code, null as customer_name, customer_type, null as area, null as title, total, ${AMOUNT_KEYS.map((k) => `amt_${k}`).join(", ")}, tatami_cost, purchase_cost, staff_names, worker_names, item_source`;
   return [
     // 顧客情報の表 (顧客・問い合わせ・見積・受注・請求書・クレーム・アンケート・写真・取込書類)
-    ...(records ? [] : ["customers", "inquiries", "quotes", "orders", "invoices", "quality_issues", "survey_responses", "photo_albums"].map(byStore)),
+    ...(records ? [] : ["customers", "quotes", "orders", "invoices", "quality_issues", "survey_responses", "photo_albums"].map(byStore)),
+    liveInquiries(records ? "" : ` and store_id = ${store}`),
     // 写真・資料: 顧客情報を全店舗に広げたときも、ほかの店舗の分はお客様・案件の写真だけ (経費のレシートなどは自店舗)
     records ? v("attachments", `select * from main.attachments where store_id = ${store} or parent_type in ('customer', 'inquiry', 'quote', 'order')`) : byStore("attachments"),
     // 店舗の表 (現金出納・承認・発注書・取込書類 (レシート・仕入の請求書を含む) は従来どおり自店舗)

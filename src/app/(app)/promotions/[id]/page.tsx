@@ -30,7 +30,7 @@ export default async function PromotionDetailPage({ params, searchParams }: { pa
   const ready = opsTablesReady(["promotions"]);
   const store = db.stores.find((s) => s.id === p.storeId);
   const kind = PROMOTION_KIND[p.kind];
-  const inquiries = db.inquiries.filter((i) => i.promotionId === p.id).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
+  const inquiries = db.inquiries.filter((i) => i.promotionId === p.id && !i.deleted).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
   const quoteIds = new Set(inquiries.map((i) => i.quoteId).filter(Boolean));
   const orders = db.orders.filter((o) => o.quoteId && quoteIds.has(o.quoteId) && o.status !== "cancelled");
   const sales = orders.reduce((a, o) => a + o.total, 0);

@@ -430,7 +430,7 @@ function otherAtoms(ctx: Ctx, subject: Subject, spec: AnalysisSpec, from: string
     case "inquiries": {
       const won = new Set(db.orders.filter((o) => o.status !== "cancelled").map((o) => o.quoteId).filter(Boolean) as string[]);
       for (const i of db.inquiries) {
-        if (!ctx.stores.has(i.storeId) || !inR(i.receivedAt) || !customerOk(i.customerId) || !staffOk([i.assignedUserId, i.createdBy]) || !catOk(i.category) || !statusOk(i.status, () => true)) continue;
+        if (i.deleted || !ctx.stores.has(i.storeId) || !inR(i.receivedAt) || !customerOk(i.customerId) || !staffOk([i.assignedUserId, i.createdBy]) || !catOk(i.category) || !statusOk(i.status, () => true)) continue;
         out.push({ date: i.receivedAt.slice(0, 10), store: i.storeId, customerId: i.customerId, dims: { channel: CHANNEL_LABEL[i.channel], category: CATEGORY_LABEL[i.category], status: INQUIRY_STATUS[i.status].label, staff: ctx.userName(i.assignedUserId), area: i.area || area(i.customerId) || "(不明)", customer: i.customerId ? ctx.customerLabel(i.customerId) : i.contactName }, v: { won: i.status === "won" || (i.quoteId && won.has(i.quoteId)) ? 1 : 0 } });
       }
       break;

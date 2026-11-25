@@ -394,7 +394,7 @@ function caseByNumber(db: MatchDb, hint: string): CaseCandidate | undefined {
 export function customerCases(db: MatchDb, customerId: string, today = new Date()): CaseCandidate[] {
   const recent = (d: string) => today.getTime() - Date.parse(d) < 183 * DAY;
   const out: CaseCandidate[] = [];
-  for (const i of db.inquiries) if (i.customerId === customerId && (OPEN_INQUIRY.has(i.status) || recent(i.updatedAt || i.receivedAt))) out.push(caseOfInquiry(db, i.id, "このお客様の問い合わせ")!);
+  for (const i of db.inquiries) if (i.customerId === customerId && !i.deleted && (OPEN_INQUIRY.has(i.status) || recent(i.updatedAt || i.receivedAt))) out.push(caseOfInquiry(db, i.id, "このお客様の問い合わせ")!);
   for (const q of db.quotes) if (q.customerId === customerId && OPEN_QUOTE.has(q.status) && !db.orders.some((o) => o.quoteId === q.id)) out.push(caseOfQuote(db, q.id, "このお客様の見積")!);
   for (const o of db.orders) if (o.customerId === customerId && o.status !== "cancelled" && (o.status !== "paid" || recent(o.completedAt ?? o.updatedAt))) out.push(caseOfOrder(db, o.id, "このお客様の受注・施工")!);
   // 進行中を先に、新しい順。受注 > 見積 > 問い合わせ (同じ日なら案件の先の段階)

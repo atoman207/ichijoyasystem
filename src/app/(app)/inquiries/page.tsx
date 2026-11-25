@@ -16,6 +16,9 @@ import { inquiryContact } from "@/lib/link-search";
 import { isPlaceholderCustomer } from "@/lib/customer-link";
 import { FLOW_STATE, FLOW_TABS, dueLabel, flowIndex, inquiryFlow, type FlowState } from "@/lib/inquiry-flow";
 import { Badge } from "@/components/ui";
+import { canDeleteInquiryDirect, canRequestInquiryDelete } from "@/lib/auth/permissions";
+import { deletedLabel, inquiryDeleteBlocker, inquiryOnlyEvents, isDeletedInquiry, isLiveInquiry, pendingInquiryDelete } from "@/lib/inquiry-delete";
+import { DeleteInquiryButton } from "@/components/inquiries/DeleteInquiry";
 
 export default async function InquiriesPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -23,7 +26,9 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
   const db = getDb();
   const allStores = canSeeAllStores(user);
   const today = toDateKey(new Date());
-  const scoped = scopeByStore(user, db.inquiries);
+  // 削除した問い合わせ (誤って登録したもの) は通常の一覧に出さず、検索したときだけ「削除済み」として出す (お客様のご要望 2026-11-25。src/lib/inquiry-delete.ts)
+  const withDeleted = scopeByStore(user, db.inquiries);
+  const scoped = withDeleted.filter(isLiveInquiry);
   const status = sp.status as InquiryStatus | "open" | undefined;
   // 対応状況 (担当者への依頼待ち・日程調整中・期限超過・お客様都合で日程未定・日程確定…。お客様のご要望 2026-11-24「業務フロー ⑥」。src/lib/inquiry-flow.ts)
   const now = new Date();
@@ -41,6 +46,8 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
   const contactOf = (i: (typeof rows)[number]) => inquiryContact(i, i.customerId ? customerMap.get(i.customerId) : undefined);
   const q = (sp.q ?? "").trim().toLowerCase();
   const qDigits = q.replace(/[^0-9]/g, "");
+  // 検索のときは削除済みも探す (状態・入口などの絞り込みは同じ)
+  if (q) rows = [...rows, ...withDeleted.filter((i) => isDeletedInquiry(i) && (!flowParam || flowParam === "closed") && (!status || status === "closed") && (!sp.channel || i.channel === sp.channel) && (!allStores || !sp.store || i.storeId === sp.store))];
   if (q)
     rows = rows.filter((i) => {
       const c = i.customerId ? customerMap.get(i.customerId) : undefined;
@@ -121,6 +128,7 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
         )}
         <Button type="submit" variant="secondary">絞り込む</Button>
       </form>
+      {q && <p className="mb-2 text-xs text-ink-3">検索の結果には、削除した問い合わせも「削除済み」として出ます (通常の一覧には出ません)。</p>}
       <Table>
         <thead>
           <tr>
@@ -136,18 +144,28 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
             <Th>媒体</Th>
             <Th>受付日時</Th>
             <Th>次のアクション</Th>
+            <Th><span className="sr-only">削除</span></Th>
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={11} />}
+          {rows.length === 0 && <EmptyRow colSpan={12} />}
           {paged.items.map((i) => {
             const customer = i.customerId ? customerMap.get(i.customerId) : undefined;
             const ct = contactOf(i);
             const overdue = i.nextActionDue && i.nextActionDue < today && ["new", "in_progress"].includes(i.status);
+            const deleted = isDeletedInquiry(i);
+            const delMode = deleted ? undefined : canDeleteInquiryDirect(user, i.storeId) ? "direct" : canRequestInquiryDelete(user, i.storeId) ? "request" : undefined;
+            const delBlocked = delMode ? inquiryDeleteBlocker(db, i) : undefined;
+            const delPending = delMode === "request" && Boolean(pendingInquiryDelete(db, i.id));
             return (
-              <Tr key={i.id}>
+              <Tr key={i.id} className={deleted ? "bg-subtle/60 text-ink-3" : undefined}>
                 <Td className="min-w-[10rem]">
-                  {(() => {
+                  {deleted ? (
+                    <div className="space-y-0.5" data-testid="inquiry-deleted">
+                      <Badge tone="critical">削除済み</Badge>
+                      <div className="text-[11px] leading-snug text-ink-3">{deletedLabel(i, userName)}</div>
+                    </div>
+                  ) : (() => {
                     const f = flowOf.get(i.id);
                     if (!f) return <StatusBadge value={i.status} map={INQUIRY_STATUS} />;
                     return (
@@ -193,6 +211,12 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
                   ) : (
                     <span className="text-ink-3">-</span>
                   )}
+                </Td>
+                <Td>
+                  {delMode && !delBlocked && !delPending && (
+                    <DeleteInquiryButton inquiryId={i.id} number={i.number} summary={i.summary} customer={customer?.name ?? i.contactName} mode={delMode} events={inquiryOnlyEvents(db, i).length} returnTo={`/inquiries${sp.q ? `?q=${encodeURIComponent(sp.q)}` : ""}`} compact />
+                  )}
+                  {delPending && <span className="text-[10px] whitespace-nowrap text-warn-ink">削除の承認待ち</span>}
                 </Td>
               </Tr>
             );

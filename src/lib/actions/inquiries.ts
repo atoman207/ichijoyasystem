@@ -6,7 +6,9 @@ import { addAudit, diffChanges, getDb, mutate, newId, nextNumber, nowIso, nextCu
 import type { Inquiry, InquiryStatus } from "@/lib/db/types";
 import { toDateKey } from "@/lib/format";
 import { CATEGORY_LABEL, CHANNEL_LABEL, INQUIRY_STATUS } from "@/lib/constants";
-import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
+import { approverRole, canAccessStore, canDeleteInquiryDirect, canEditCaseStore, canRequestInquiryDelete, canRestoreInquiry, canSeeAllStores } from "@/lib/auth/permissions";
+import { applyInquiryDelete, inquiryDeleteBlocker, pendingInquiryDelete, restoreInquiry } from "@/lib/inquiry-delete";
+import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
 import { linkInquiryLogs } from "@/lib/ai-intake";
 import { DUE_CHOICES, REQUEST_PURPOSE, dueAtFrom, dueLabel, type DueChoice } from "@/lib/inquiry-flow";
@@ -555,4 +557,64 @@ export async function mergeInquiryIntoCase(id: string, formData: FormData) {
   revalidatePath(href);
   revalidatePath("/inquiries");
   redirect(withMsg(href, `問い合わせを ${label} にまとめました (内容はこの案件のやりとりに残しました)。`));
+}
+
+/**
+ * 問い合わせの削除 (誤って登録したもの。お客様のご要望 2026-11-25。src/lib/inquiry-delete.ts)。確認の画面 (「本当に削除しますか？」) から呼ぶ。
+ * 店長以上 (店長・本部・管理者) はすぐに削除、店舗スタッフは所属店舗の店長へ削除の申請 (承認で削除)。記録は残し、通常の一覧・集計には出さない
+ */
+export async function deleteInquiry(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const ret = safeReturn(str(formData, "returnTo"), "/inquiries");
+  const reason = [str(formData, "reasonChoice"), str(formData, "reason")].filter(Boolean).join(" / ").slice(0, 200);
+  const db0 = getDb();
+  const inq0 = db0.inquiries.find((x) => x.id === id);
+  if (!inq0) fail(ret, "問い合わせが見つかりません。");
+  const direct = canDeleteInquiryDirect(user, inq0.storeId);
+  if (!direct && !canRequestInquiryDelete(user, inq0.storeId)) fail(ret, "この問い合わせを削除する権限がありません (その店舗の社員・店長・本部・管理者が削除できます)。");
+  if (!reason) fail(ret, "削除の理由を選んでください (例: 誤って登録)。");
+  let approvalId = "";
+  let role = "";
+  let events = 0;
+  await mutate((db) => {
+    const inq = db.inquiries.find((x) => x.id === id);
+    if (!inq) fail(ret, "問い合わせが見つかりません。");
+    const blocker = inquiryDeleteBlocker(db, inq);
+    if (blocker) fail(ret, blocker);
+    const now = nowIso();
+    if (direct) {
+      events = applyInquiryDelete(db, inq, { by: user.id, at: now, reason });
+      addAudit(db, { userId: user.id, action: "delete", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `問い合わせを削除 (${inq.summary.slice(0, 40)} · 理由: ${reason}${events ? ` · 予定 ${events} 件もあわせて削除` : ""})`, storeId: inq.storeId, changes: [{ field: "status", before: INQUIRY_STATUS[inq.deleted!.prevStatus].label, after: "削除済み" }] });
+      return;
+    }
+    if (pendingInquiryDelete(db, inq.id)) fail(ret, "この問い合わせはすでに削除を申請しています (店長の承認待ち)。");
+    const r = approverRole(db.users, inq.storeId, false, user.id);
+    role = r;
+    approvalId = newId("ap");
+    db.approvals.push({ id: approvalId, type: "inquiry_delete", targetId: inq.id, title: `${inq.number} ${inq.summary.slice(0, 40)}`, amount: 0, storeId: inq.storeId, requestedBy: user.id, requiredRole: r, status: "pending", requestComment: reason, createdAt: now });
+    addAudit(db, { userId: user.id, action: "submit", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `問い合わせの削除を申請 (理由: ${reason})`, storeId: inq.storeId });
+  });
+  revalidatePath("/inquiries");
+  revalidatePath("/schedule");
+  if (approvalId) {
+    await notifyNewApprovals([approvalId], user.id);
+    redirect(withMsg(`/inquiries/${id}`, `${inq0.number} の削除を${role === "admin" ? "管理者" : "店長"}へ申請しました。承認されると削除されます。`));
+  }
+  redirect(withMsg(ret.startsWith(`/inquiries/${id}`) ? "/inquiries" : ret, `${inq0.number} を削除しました${events ? ` (予定 ${events} 件もあわせて削除)` : ""}。一覧には出ませんが、検索すると「削除済み」として確認できます。`));
+}
+
+/** 削除した問い合わせを元に戻す (管理者。消した予定は戻さない) */
+export async function restoreDeletedInquiry(id: string) {
+  const user = await requireActionUser();
+  const back = `/inquiries/${id}`;
+  if (!canRestoreInquiry(user)) fail(back, "削除した問い合わせを元に戻せるのは管理者です。");
+  await mutate((db) => {
+    const inq = db.inquiries.find((x) => x.id === id);
+    if (!inq?.deleted) fail(back, "削除されていない問い合わせです。");
+    const prev = inq.deleted.prevStatus;
+    restoreInquiry(inq, nowIso());
+    addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: "削除した問い合わせを元に戻しました", storeId: inq.storeId, changes: [{ field: "status", before: "削除済み", after: INQUIRY_STATUS[prev].label }] });
+  });
+  revalidatePath("/inquiries");
+  redirect(withMsg(back, "問い合わせを元に戻しました (あわせて削除した予定は戻りません)。"));
 }

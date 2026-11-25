@@ -266,7 +266,7 @@ section("統合データモデル: v_activity と変更履歴の範囲");
   ok(staffScope && staffScope.includes("store_id = 'koshi'") && staffScope.includes("entity != 'session'") && staffScope.includes("'customer'"), "店舗スタッフの変更履歴は所属店舗・対象を絞って覆う (ログインは除く)");
   const mgrScope = MODEL.scopeStatements(koshiMgr).find((s) => s.includes("view audit_logs"));
   ok(mgrScope && !mgrScope.includes("entity in"), "店長は所属店舗の変更履歴すべて");
-  eq(MODEL.scopeStatements(admin).length, 0, "全店舗を見られる人は覆わない");
+  eq(MODEL.scopeStatements(admin).filter((x) => !x.includes("view inquiries as")).length, 0, "全店舗を見られる人は覆わない (削除した問い合わせを外すビューだけ)");
   // 実際の SQLite で v_activity を作って数える
   const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
   const sq = new DatabaseSync(":memory:");

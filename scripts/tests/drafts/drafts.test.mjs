@@ -247,7 +247,7 @@ section("AI の SQL の閲覧範囲: 店舗のロールは所属店舗と自分�
 {
   const scope = MODEL.scopeStatements(koshiStaff).join("\n");
   ok(/create temp view doc_drafts as select \* from main\.doc_drafts where store_id = 'koshi' or created_by = '/.test(scope), "店舗のロールには doc_drafts を範囲で覆う");
-  eq(MODEL.scopeStatements(hq), [], "全店舗ロールは覆わない");
+  eq(MODEL.scopeStatements(hq).filter((x) => !x.includes("view inquiries as")), [], "全店舗ロールは覆わない (削除した問い合わせを外すビューだけ)");
 }
 
 /* ================================================================== */

@@ -2,7 +2,7 @@ import "server-only";
 import { addAudit, nowIso } from "@/lib/db/store";
 import type { Approval, AuditChange, Database, User } from "@/lib/db/types";
 import { skipsApproval } from "@/lib/auth/permissions";
-import { APPROVAL_TYPE_LABEL } from "@/lib/constants";
+import { APPROVAL_TYPE_LABEL, INQUIRY_STATUS } from "@/lib/constants";
 import { removeUpcomingOrderEvents, syncOrderEvent } from "@/lib/db/schedule";
 import { followMovedEvents, syncHandoverEvents } from "@/lib/db/handover-events";
 import { cleanHandovers, handoverChangeLines, sameHandovers } from "@/lib/handover";
@@ -11,6 +11,7 @@ import { fail } from "@/lib/actions/guards";
 import { propagateCustomerAddress } from "@/lib/maps/store";
 import { closedReason } from "@/lib/mgmt/close";
 import { applyCaseStoreChange, caseChainOf, storeChangeBlocker } from "@/lib/case-store";
+import { applyInquiryDelete, inquiryDeleteBlocker } from "@/lib/inquiry-delete";
 import { approvalSettings, manYen } from "@/lib/approval-rules";
 import { addChangeNotice, caseTarget, noticeLines, quoteItemLines } from "@/lib/change-notices";
 
@@ -284,6 +285,21 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
       } else {
         if (chain.order) chain.order.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `施工店舗の変更 (${what}) が${word}されました${note}` });
         addAudit(db, { userId, action: "reject", entity: chain.head.type, entityId: chain.head.id, entityLabel: chain.head.number, summary: `施工店舗の変更 (${what}) を${word}${note}`, storeId: chain.head.storeId });
+      }
+      break;
+    }
+    case "inquiry_delete": {
+      // 問い合わせの削除 (店舗スタッフの申請。src/lib/inquiry-delete.ts)。承認で削除 (記録は残し、一覧・集計に出さない)
+      const inq = db.inquiries.find((x) => x.id === a.targetId);
+      if (!inq) return;
+      if (decision === "approved") {
+        const blocker = inquiryDeleteBlocker(db, inq);
+        if (blocker) fail(back, `${blocker} この申請は却下してください。`);
+        const prev = inq.status;
+        const events = applyInquiryDelete(db, inq, { by: a.requestedBy, at: now, reason: a.requestComment, approvedBy: userId, approvalId: a.id });
+        addAudit(db, { userId, action: "delete", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `問い合わせの削除を承認して削除 (申請 ${db.users.find((u) => u.id === a.requestedBy)?.name ?? "-"} さん${a.requestComment ? ` · 理由: ${a.requestComment}` : ""}${events ? ` · 予定 ${events} 件もあわせて削除` : ""})`, storeId: inq.storeId, changes: [{ field: "status", before: INQUIRY_STATUS[prev].label, after: "削除済み" }] });
+      } else {
+        addAudit(db, { userId, action: "reject", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `問い合わせの削除の申請を${word}${note}`, storeId: inq.storeId });
       }
       break;
     }

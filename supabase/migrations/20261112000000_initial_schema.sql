@@ -125,6 +125,7 @@ create table if not exists inquiries (
   media text,
   promotion_id text,
   intake jsonb,
+  deleted jsonb,
   schedule_hold jsonb,
   site_address text
 );
@@ -1799,6 +1800,7 @@ alter table inquiries add column if not exists source_ref text;
 alter table inquiries add column if not exists media text;
 alter table inquiries add column if not exists promotion_id text;
 alter table inquiries add column if not exists intake jsonb;
+alter table inquiries add column if not exists deleted jsonb;
 alter table inquiries add column if not exists schedule_hold jsonb;
 alter table inquiries add column if not exists site_address text;
 alter table products add column if not exists category text not null;

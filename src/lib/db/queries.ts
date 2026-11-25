@@ -251,7 +251,7 @@ export function channelCounts(db: Database, days = 90, now = new Date()) {
   const from = addDays(toDateKey(now), -days);
   const map = new Map<string, number>();
   for (const i of db.inquiries) {
-    if (i.receivedAt.slice(0, 10) < from) continue;
+    if (i.deleted || i.receivedAt.slice(0, 10) < from) continue;
     map.set(i.channel, (map.get(i.channel) ?? 0) + 1);
   }
   return [...map.entries()].sort((a, b) => b[1] - a[1]);
@@ -280,7 +280,8 @@ export function staffPerformance(db: Database, months = 3, now = new Date()) {
 /* ---------------- customer 360 ---------------- */
 
 export function customerTimeline(db: Database, customerId: string) {
-  const inquiries = db.inquiries.filter((i) => i.customerId === customerId);
+  // 削除した問い合わせ (src/lib/inquiry-delete.ts) はお客様の案件に出さない
+  const inquiries = db.inquiries.filter((i) => i.customerId === customerId && !i.deleted);
   const quotes = db.quotes.filter((q) => q.customerId === customerId);
   const orders = db.orders.filter((o) => o.customerId === customerId);
   const invoices = db.invoices.filter((i) => i.customerId === customerId);

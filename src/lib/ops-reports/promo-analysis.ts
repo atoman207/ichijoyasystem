@@ -132,7 +132,8 @@ export function inquiryFacts(db: AnalysisDb, scope: PromoScope, ctx: Ctx = conte
   const stores = new Set(scope.storeIds);
   const out: InquiryFact[] = [];
   for (const inq of db.inquiries) {
-    if (!stores.has(inq.storeId)) continue;
+    // 削除した問い合わせ (誤って登録したもの) は数えない
+    if (inq.deleted || !stores.has(inq.storeId)) continue;
     const d = inquiryDate(inq);
     if (d < scope.from || d > scope.to) continue;
     out.push(factOf(ctx, inq));
@@ -515,7 +516,7 @@ export function promoReport(db: AnalysisDb, user: User, opts: { from: string; to
     .filter((p) => stores.has(p.storeId) && p.startDate >= scope.from && p.startDate <= scope.to)
     .sort((a, b) => b.startDate.localeCompare(a.startDate))
     .map((p) => {
-      const linked = db.inquiries.filter((i) => i.promotionId === p.id).map((i) => factOf(ctx, i));
+      const linked = db.inquiries.filter((i) => i.promotionId === p.id && !i.deleted).map((i) => factOf(ctx, i));
       return { promotion: p, inquiries: linked.length, won: linked.filter((f) => f.won).length, sales: linked.reduce((a, f) => a + f.sales, 0), per1000: per1000(linked.length, p.copies) };
     });
 

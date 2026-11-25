@@ -79,7 +79,7 @@ export async function cancelApproval(approvalId: string, formData: FormData) {
       const p = db.purchases.find((x) => x.id === a.targetId);
       if (p && p.status === "pending_approval") p.status = "received";
     }
-    // order_change / customer_change / handover_change / store_change は申請を取り下げるだけ (対象は変えていない)
+    // order_change / customer_change / handover_change / store_change / inquiry_delete は申請を取り下げるだけ (対象は変えていない)
     addAudit(db, { userId: user.id, action: "status", entity: "approval", entityId: a.id, entityLabel: a.title, summary: `${APPROVAL_TYPE_LABEL[a.type]}の申請を取下げ`, storeId: a.storeId });
   });
   revalidatePath("/", "layout");

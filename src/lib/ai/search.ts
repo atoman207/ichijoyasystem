@@ -69,7 +69,7 @@ export function searchRecords(db: Database, user: User, question: string): Recor
   const customersAll = visible(db.customers);
   const orders = visible(db.orders);
   const quotes = visible(db.quotes);
-  const inquiries = visible(db.inquiries);
+  const inquiries = visible(db.inquiries.filter((i) => !i.deleted));
   const invoices = visible(db.invoices);
   const found = new Map<string, Customer>();
   const tooMany: { name: string; count: number }[] = [];

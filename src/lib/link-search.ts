@@ -118,7 +118,7 @@ export function linkableInquiries(db: Pick<Database, "inquiries" | "customers" |
   for (const e of db.schedule) if (e.inquiryId) eventCount.set(e.inquiryId, (eventCount.get(e.inquiryId) ?? 0) + 1);
   const out: { inq: Inquiry; score: number; reason?: string }[] = [];
   for (const inq of db.inquiries) {
-    if (inq.customerId === customer.id) continue;
+    if (inq.deleted || inq.customerId === customer.id) continue;
     if (!canEditCaseStore(user, inq.storeId)) continue;
     const cur = inq.customerId ? customers.get(inq.customerId) : undefined;
     // お客様が未登録か、予定表の取込で仮に作った顧客の問い合わせだけ (ほかのお客様の案件は付け替えない)。見積の後の案件は除く

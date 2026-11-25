@@ -304,6 +304,24 @@ export function canVoidReceipt(user: User, r: { storeId: StoreId; createdBy: str
   return user.active && (canAccessStore(user, r.storeId) || r.createdBy === user.id);
 }
 
+/**
+ * 問い合わせの削除 (誤って登録した問い合わせ。お客様のご要望 2026-11-25。src/lib/inquiry-delete.ts):
+ * 店長以上 (店長・本部・管理者) は承認なしで削除 (その問い合わせを変更できる店舗)
+ */
+export function canDeleteInquiryDirect(user: User, storeId: StoreId): boolean {
+  return (user.role === "admin" || user.role === "hq_staff" || user.role === "store_manager") && canEditCaseStore(user, storeId);
+}
+
+/** 問い合わせの削除の申請: 店舗スタッフ (所属店舗の問い合わせ。所属店舗の店長が承認する = approverRole) */
+export function canRequestInquiryDelete(user: User, storeId: StoreId): boolean {
+  return user.role === "store_staff" && canEditCaseStore(user, storeId);
+}
+
+/** 削除した問い合わせを元に戻す: 管理者 */
+export function canRestoreInquiry(user: User): boolean {
+  return user.role === "admin";
+}
+
 /** 請求書の発行 (受注から): 店長・本部・管理者 (その店舗の請求書。canAccessStore と合わせて使う) */
 export function canIssueInvoice(user: User): boolean {
   return canManageFinance(user) || isManagerOrAbove(user);

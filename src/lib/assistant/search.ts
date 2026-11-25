@@ -95,7 +95,7 @@ function buildIndex(db: Database): Entry[] {
   const push = (type: RecordType, id: string, head: string, body: (string | undefined)[], date: string | undefined, storeId?: StoreId) =>
     out.push({ type, id, head: normText(head), text: normText([head, ...body].filter(Boolean).join(" ")), date: (date ?? "").slice(0, 10), storeId });
   for (const c of db.customers) push("customer", c.id, `${c.name} ${c.kana} ${c.code}`, [c.phone, ...(c.contacts ?? []).map(contactLine), customerPhoneDigits(c).join(" "), c.email, c.address, c.area, c.tags.join(" "), c.notes, c.tradeStopped ? `取引停止 ${c.tradeStopNote ?? ""}` : ""], c.updatedAt, c.storeId);
-  for (const i of db.inquiries) push("inquiry", i.id, `${i.number} ${i.summary}`, [i.contactName, i.contactPhone, cname.get(i.customerId ?? ""), i.detail, i.nextAction, i.result, i.area, CATEGORY_LABEL[i.category], CHANNEL_LABEL[i.channel], uname.get(i.assignedUserId ?? "")], i.receivedAt, i.storeId);
+  for (const i of db.inquiries) if (!i.deleted) push("inquiry", i.id, `${i.number} ${i.summary}`, [i.contactName, i.contactPhone, cname.get(i.customerId ?? ""), i.detail, i.nextAction, i.result, i.area, CATEGORY_LABEL[i.category], CHANNEL_LABEL[i.channel], uname.get(i.assignedUserId ?? "")], i.receivedAt, i.storeId);
   for (const q of db.quotes) push("quote", q.id, `${q.number} ${q.title}`, [cname.get(q.customerId), q.workDetails, q.notes, q.siteAddress, q.receiptName, q.items.map((x) => `${x.name} ${x.spec ?? ""}`).join(" "), siteInfoText(q.siteInfo), uname.get(q.estimatorId ?? q.createdBy)], q.issuedAt ?? q.createdAt, q.storeId);
   for (const o of db.orders) push("order", o.id, `${o.number} ${o.title}`, [cname.get(o.customerId), o.siteAddress, o.receiptName, o.workDetails, o.fusumaPaper, siteInfoText(o.siteInfo), o.progressNotes.map((n) => n.body).join(" "), o.workerIds.map((w) => uname.get(w)).join(" ")], o.salesDate ?? o.contractDate, o.storeId);
   for (const i of db.invoices) push("invoice", i.id, `${i.number} ${i.title ?? ""}`, [cname.get(i.customerId), i.notes, i.expectedNote], i.issueDate, i.storeId);
@@ -531,7 +531,7 @@ export function getRecord(db: Database, user: User, type: string | undefined, re
       const c = db.customers.find((x) => x.id === found.id)!;
       const orders = db.orders.filter((o) => o.customerId === c.id).sort((a, b) => (b.salesDate ?? b.contractDate).localeCompare(a.salesDate ?? a.contractDate));
       const quotes = db.quotes.filter((q) => q.customerId === c.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-      const inquiries = db.inquiries.filter((i) => i.customerId === c.id).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
+      const inquiries = db.inquiries.filter((i) => i.customerId === c.id && !i.deleted).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
       const invoices = db.invoices.filter((i) => i.customerId === c.id && i.status !== "void");
       const comms = db.commLogs.filter((l) => l.customerId === c.id).sort((a, b) => b.at.localeCompare(a.at));
       const events = db.schedule.filter((e) => e.customerId === c.id).sort((a, b) => b.date.localeCompare(a.date));
