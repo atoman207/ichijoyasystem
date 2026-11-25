@@ -48,6 +48,8 @@ for (const f of [...basis, ...workbook]) {
   }
 }
 
+const xMark = (r) => (r.status === "sheet" ? "△ シートの誤り" : "✗");
+
 async function call(action, kind, files = [], query = {}) {
   const q = new URLSearchParams({ action, ...(kind ? { kind } : {}), ...query });
   const body = new FormData();
@@ -73,7 +75,6 @@ if (workbook.length) {
   if (p.problems?.length) console.log("  注意:", p.problems.join(" / "));
   if (p.warnings?.length) console.log("  確認:", p.warnings.slice(0, 10).join(" / "));
   console.log("  タブ:", p.tabs.map((t) => `${t.title}(${t.label}・${t.rows} 行)`).join(" / "));
-  const xMark = (r) => (r.status === "sheet" ? "△ シートの誤り" : "✗");
   const pick = (o, ks) => Object.fromEntries(ks.map((k) => [k, o[k]]));
   console.log("  クレーム・手直し:", JSON.stringify(pick(p.claims, ["create", "update", "unchanged", "linked", "notCounted", "review", "overlapSkipped", "emptyRows"])));
   console.log("  口コミ:", JSON.stringify(pick(p.reviews, ["create", "update", "unchanged", "startYear", "unmatched", "ignored"])));
