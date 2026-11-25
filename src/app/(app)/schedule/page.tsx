@@ -5,7 +5,7 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { defaultScheduleStore } from "@/lib/schedule-default";
 import type { ScheduleEvent, ScheduleKind, StoreId } from "@/lib/db/types";
-import { canAccessStore, canImportScheduleSheet, canViewCompanySchedule } from "@/lib/auth/permissions";
+import { canAccessStore, canImportScheduleSheet, canManageSettings, canViewCompanySchedule } from "@/lib/auth/permissions";
 import { redirect } from "next/navigation";
 import { createCaseResolver, orderEditable, type CaseRef } from "@/lib/db/schedule";
 import { isHandoverEvent } from "@/lib/db/handover-events";
@@ -26,6 +26,9 @@ import { eventLabeler } from "@/lib/schedule-label";
 import { EventQuickHost } from "@/components/schedule/EventQuick";
 import { ScheduleFinder } from "@/components/schedule/ScheduleFinder";
 import { initialsByUser } from "@/lib/schedule-sheet/initials";
+import { DaySheetView } from "@/components/schedule/DaySheet";
+import { buildStoreSheet, dayLoad, readDayLoadSettings, type DayLoad, type StoreSheet } from "@/lib/day-sheet";
+import { isClosedDay } from "@/lib/schedule-capacity";
 
 type View = "month" | "week" | "staff" | "day" | "list";
 
@@ -33,7 +36,7 @@ const VIEWS: { id: View; label: string; icon: typeof LayoutGrid; hint: string }[
   { id: "month", label: "月", icon: LayoutGrid, hint: "1 か月の予定" },
   { id: "week", label: "週", icon: Columns3, hint: "1 週間の予定" },
   { id: "staff", label: "担当者別", icon: Rows3, hint: "社員ごとの 1 週間 (人員配置)" },
-  { id: "day", label: "日", icon: ChartGantt, hint: "社員ごとの 1 日の時間割" },
+  { id: "day", label: "日", icon: ChartGantt, hint: "店舗ごとの 1 日の予定表 (スプレッドシートの形・作業量)" },
   { id: "list", label: "一覧", icon: List, hint: "2 週間分の予定一覧" },
 ];
 
@@ -55,6 +58,8 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   const userParam = sp.user === "me" ? user.id : sp.user && db.users.some((u) => u.id === sp.user) ? sp.user : "";
   const kindParam = sp.kind === "case" || sp.kind === "internal" || SCHEDULE_KINDS.includes(sp.kind as ScheduleKind) ? (sp.kind as string) : "";
   const onlyConflicts = sp.conflicts === "1";
+  // 日の表示の形: sheet = 店舗ごとの予定表 (スプレッドシートの形。既定。お客様のご要望 2026-11-25) / staff = 担当者 × 時間
+  const layout = sp.layout === "staff" ? "staff" : "sheet";
 
   // 表示期間
   let from: string;
@@ -89,8 +94,8 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   }
   const days = dateRange(from, to);
 
-  const link = (over: Partial<Record<"view" | "date" | "store" | "user" | "kind" | "conflicts", string>> = {}) => {
-    const m = { view, date: anchor, store: storeParam, user: sp.user === "me" ? "me" : userParam, kind: kindParam, conflicts: onlyConflicts ? "1" : "", ...over };
+  const link = (over: Partial<Record<"view" | "date" | "store" | "user" | "kind" | "conflicts" | "layout", string>> = {}) => {
+    const m = { view, date: anchor, store: storeParam, user: sp.user === "me" ? "me" : userParam, kind: kindParam, conflicts: onlyConflicts ? "1" : "", layout: layout === "staff" ? "staff" : "", ...over };
     const p = new URLSearchParams();
     for (const [k, v] of Object.entries(m)) if (v) p.set(k, v);
     return `/schedule?${p.toString()}`;
@@ -142,6 +147,13 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   const productionHref = (d: string) => `/schedule/production?date=${d}&days=1${storeFilter ? `&store=${storeFilter}` : ""}`;
   // 担当者の略称 (予定表のスプレッドシートと同じ 1 文字。お客様のご要望 2026-11-24「⑥」)
   const initials = initialsByUser(db.users.filter((u) => u.active));
+  // 1 日の作業量と対応可能枚数 (対象人数 × 11 枚。お客様のご要望 2026-11-25「日ごとの予定表の表示形式と作業量の集計」。src/lib/day-sheet.ts)
+  const loadSet = readDayLoadSettings(db);
+  const leaveEvents = inRange.filter((e) => e.kind === "leave");
+  const storeEventsOf = (id: StoreId) => inRange.filter((e) => e.storeId === id && !e.companyWide);
+  const loadStore = storeFilter && db.stores.find((s) => s.id === storeFilter)?.kind !== "hq" ? storeFilter : undefined;
+  const loadCache = new Map<string, DayLoad | undefined>();
+  const loadEvents = loadStore ? storeEventsOf(loadStore) : [];
   const ctx: CalendarContext = {
     today,
     nowMinutes: now.getHours() * 60 + now.getMinutes(),
@@ -168,7 +180,36 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
       if (!labelCache.has(e.id)) labelCache.set(e.id, labeler.label(e).text);
       return labelCache.get(e.id)!;
     },
+    loadOf:
+      loadStore && (view === "week" || view === "month")
+        ? (d) => {
+            if (!loadCache.has(d)) loadCache.set(d, dayLoad({ day: d, storeId: loadStore, events: loadEvents.filter((e) => occursOn(e, d)), capacityEvents: leaveEvents, work, set: loadSet, db, closed: isClosedDay(db, d) }));
+            return loadCache.get(d);
+          }
+        : undefined,
   };
+  // 日の表示 (店舗ごとの予定表): 店舗を選んでいればその店舗、全社なら 4 店舗 (本部は予定があるときだけ)
+  const sheets: StoreSheet[] =
+    view === "day" && layout === "sheet"
+      ? (storeFilter ? db.stores.filter((s) => s.id === storeFilter) : db.stores)
+          .map((s) =>
+            buildStoreSheet({
+              day: anchor,
+              storeId: s.id,
+              events: shown.filter((e) => e.storeId === s.id && !e.companyWide && occursOn(e, anchor)),
+              capacityEvents: leaveEvents,
+              work,
+              label: (e) => {
+                const l = labeler.label(e);
+                return { area: l.area, name: l.name };
+              },
+              set: loadSet,
+              db,
+              closed: isClosedDay(db, anchor),
+            }),
+          )
+          .filter((sh) => storeFilter || db.stores.find((s) => s.id === sh.storeId)?.kind !== "hq" || sh.rows.length > 0)
+      : [];
 
   const storeTabs = [
     { href: link({ store: "all" }), label: "全社", count: inRange.filter((e) => kindOk(e) && userOk(e)).length },
@@ -284,6 +325,7 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
         <form method="get" action="/schedule" className="flex flex-wrap items-center gap-2" aria-label="予定の絞り込み">
           <input type="hidden" name="view" value={view} />
           <input type="hidden" name="store" value={storeParam} />
+          {layout === "staff" && <input type="hidden" name="layout" value="staff" />}
           <input type="date" name="date" defaultValue={anchor} aria-label="表示する日付" className="field h-9 w-auto py-1" />
           <select name="user" defaultValue={sp.user === "me" ? "me" : userParam} aria-label="担当者" className="field h-9 w-auto py-1">
             <option value="">全員</option>
@@ -351,7 +393,35 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
           <ProductionLink ctx={ctx} day={anchor} variant="day" />
         </div>
       )}
-      {view === "day" && <DayView day={anchor} rows={rowUsers} events={personEvents} unassigned={shown.filter((e) => e.assigneeIds.length === 0 && occursOn(e, anchor))} ctx={ctx} />}
+      {view === "day" && (
+        <nav aria-label="日の表示の形" className="mb-2 inline-flex rounded-xl border border-line bg-subtle/80 p-1 text-sm">
+          {(
+            [
+              { id: "sheet", label: "店舗の予定表 (午前・午後 / 引取・納品)" },
+              { id: "staff", label: "担当者 × 時間" },
+            ] as const
+          ).map((l) => (
+            <Link key={l.id} href={link({ layout: l.id === "staff" ? "staff" : "" })} aria-current={layout === l.id ? "page" : undefined} className={clsx("rounded-lg px-2.5 py-1 whitespace-nowrap transition", layout === l.id ? "bg-panel font-medium text-ink shadow-xs" : "text-ink-2 hover:text-ink")}>
+              {l.label}
+            </Link>
+          ))}
+        </nav>
+      )}
+      {view === "day" && layout === "sheet" && (
+        <DaySheetView
+          sheets={sheets}
+          ctx={ctx}
+          set={loadSet}
+          companyWide={shown.filter((e) => e.companyWide && occursOn(e, anchor))}
+          addHref={(storeId) => {
+            const q = new URLSearchParams({ date: anchor >= today ? anchor : today, store: storeId, returnTo: here });
+            return `/schedule/new?${q.toString()}`;
+          }}
+          settingsHref={canManageSettings(user) ? "/schedule/capacity?tab=dayload" : undefined}
+          filtered={Boolean(userParam || kindParam || onlyConflicts)}
+        />
+      )}
+      {view === "day" && layout === "staff" && <DayView day={anchor} rows={rowUsers} events={personEvents} unassigned={shown.filter((e) => e.assigneeIds.length === 0 && occursOn(e, anchor))} ctx={ctx} />}
       {view === "list" && <ListView days={days} events={shown} ctx={ctx} />}
       </EventQuickHost>
 
@@ -380,7 +450,8 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
             <li>・日の見出しの「<span className="font-semibold">製 タ12</span>」はその日の畳製造予定 (押すとその日の製造予定。繰り越し・製造日未定・製造済みを記録できます)。</li>
             <li>・予定はすべての社員が全店舗分を閲覧できます。上のタブで店舗ごとのカレンダーに切り替えます (全社共通の予定はどの店舗にも表示)。</li>
             <li>・現地調査・採寸・引き取り・納品・施工・顧客訪問は、問い合わせ・見積・受注の画面の「この案件の予定」から登録すると案件に紐づきます。受注の施工予定は「施工」の予定と連動します。</li>
-            <li>・「担当者別」「日」は人員配置の確認用です。空いている欄の「＋」から、その社員・その日の予定を追加できます。</li>
+            <li>・「日」は店舗ごとの予定表 (スプレッドシートと同じ形: 左 = 引取・見積・現調・会議など / 右 = 納品、上 = 午前 / 下 = 午後) です。畳・襖・障子・網戸の「表」は表替え・張替え、「新」は新調。一番下にその日の枚数の合計・換算作業量 (畳 + 襖 + 障子 × 0.5 + 網戸 × 0.5)・対応可能枚数 (対象人数 × 11 枚) と、超えた枚数を出します。店舗を選んだ週・月の表示では日ごとに「作業 18/22」(超えた日は赤) を出します。</li>
+            <li>・「担当者別」と日の「担当者 × 時間」は人員配置の確認用です。空いている欄の「＋」から、その社員・その日の予定を追加できます。</li>
             <li>・<span className="font-medium text-critical-ink">重複</span> は同じ社員に時間の重なる予定があることを示します。登録時にも確認され、承知のうえで登録した場合のみ残ります。</li>
           </ul>
         </Card>

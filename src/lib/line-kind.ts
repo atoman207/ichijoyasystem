@@ -108,7 +108,9 @@ export function lineKind(name: string | undefined, spec?: string, productCategor
   if (bare && s) {
     // 品名が「襖」「畳」だけ: 仕様 (引き手・縁・仏一式・表替え さくら など) を先に見て、なければ品名の品目
     info = kindOfText(s);
-    if (!info || info.kind === "reform" || info.kind === "curtain") info = kindOfText(`${n} ${s}`);
+    // 仕様の「新調」だけで畳と決めない (品名「襖」・仕様「新調 鳥の子」は襖の新調。日ごとの予定表の 新 の欄)
+    const tatamiByNewOnly = info?.kind === "tatami" && !/畳|たたみ|タタミ/.test(n) && !TATAMI.test(s.replace(ROOM_SIZE, " "));
+    if (!info || info.kind === "reform" || info.kind === "curtain" || tatamiByNewOnly) info = kindOfText(`${n} ${s}`);
   } else {
     info = kindOfText(n) ?? (s ? kindOfText(`${n} ${s}`) : undefined);
   }

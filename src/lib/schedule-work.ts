@@ -2,7 +2,7 @@ import type { Database, JobSpec, Order, Quote, ScheduleEvent } from "@/lib/db/ty
 import { HANDOVER_ITEM, classifyLine, parseHandoverRef } from "@/lib/handover";
 import { loadMasters, type Masters } from "@/lib/scheduling/masters";
 import { specId } from "@/lib/scheduling/spec";
-import { countsFromLines, countsFromText, emptyCounts, hasWork, mergeCounts, type WorkCounts, type WorkKey, type WorkLine } from "@/lib/work-summary";
+import { NEW_WORK, countsFromLines, countsFromText, emptyCounts, hasWork, mergeCounts, type WorkCounts, type WorkKey, type WorkLine } from "@/lib/work-summary";
 
 /**
  * 予定表の予定ごとの仕事内容と数量 (お客様のご要望 2026-11-23「■2」。表示は src/lib/work-summary.ts の workTokens)
@@ -81,8 +81,10 @@ function specCounts(lk: Lookup, s: JobSpec | undefined): WorkCounts | undefined 
     const wt: { name: string; category: string } | undefined = lk.masters.workTypeById.get(it.workTypeId);
     const key = wt ? CATEGORY_KEY[wt.category] : undefined;
     if (!wt || !key) continue;
-    if (it.qty > 0) c[key] += it.qty;
-    else c.seen[key] = true;
+    if (it.qty > 0) {
+      c[key] += it.qty;
+      if (NEW_WORK.test(wt.name)) c.fresh[key] = (c.fresh[key] ?? 0) + it.qty;
+    } else c.seen[key] = true;
     if (key === "tatami" && /縁無|へり無|ヘリ無|琉球/.test(wt.name)) {
       c.herinashiSeen = true;
       c.herinashi += it.qty;

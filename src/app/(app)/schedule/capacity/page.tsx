@@ -11,6 +11,7 @@ import { addDays, toDateKey } from "@/lib/format";
 import { Button, Card, CardHeader, Field, Flash, Input, LinkTabs, Note, PageHeader } from "@/components/ui";
 import { WorkTab, ProductionTab, StaffTab, ResourcesTab, RoutingTab, WeightsTab, RulesTab, ReadyTab } from "./tabs";
 import { BacktestTab } from "./tab-backtest";
+import { DayLoadTab } from "./tab-dayload";
 
 export const metadata: Metadata = { title: "仕事量と提案の設定" };
 
@@ -31,6 +32,7 @@ function loadTone(used: number, cap: number): string {
 const TABS = [
   { id: "ready", label: "準備の状況" },
   { id: "capacity", label: "1 日の上限" },
+  { id: "dayload", label: "1 日の対応可能枚数" },
   { id: "work", label: "作業種別・標準工数" },
   { id: "production", label: "製造の工程" },
   { id: "staff", label: "社員の勤務と技能" },
@@ -58,6 +60,7 @@ export default async function ScheduleCapacityPage({ searchParams }: { searchPar
         {header}
         {tabs}
         {tab === "ready" && <ReadyTab />}
+        {tab === "dayload" && <DayLoadTab />}
         {tab === "work" && <WorkTab />}
         {tab === "production" && <ProductionTab />}
         {tab === "staff" && <StaffTab focus={sp.user} />}

@@ -13,6 +13,7 @@ import { prevDay } from "@/lib/mgmt/rules";
 import { POSTAL_FETCHED_AT, POSTAL_SOURCE, postalFromAddress } from "@/lib/postal/lookup";
 import { areaStoreOf } from "@/lib/store-area";
 import type { Database, ScheduleKind } from "@/lib/db/types";
+import { DAY_LOAD_ID, dayLoadChanges, readDayLoadSettings, writeDayLoadSettings, type DayLoadSettings } from "@/lib/day-sheet";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,6 +37,10 @@ export const maxDuration = 60;
  *     住所で決まらない (町名だけ・候補が 2 つ以上) 顧客は空のまま。入力済みの郵便番号は変えない。既定は確認だけ、apply=1 で書き込み、
  *     変更履歴はまとめて 1 件 (顧客ごとには残さない。試験期間の引き継ぎでは自動で入れた郵便番号を「変わった」に数えない = carryover.ts の DERIVED_FIELDS)。
  *     本番のデータベースに切り替えたあと (12/1) に本番でもう一度実行する
+ *   task = day-load: 1 日の対応可能枚数の設定 (src/lib/day-sheet.ts。画面は 予定表 → 仕事量と提案の設定 →「1 日の対応可能枚数」) の
+ *     店舗ごとの対象から外す社員 (お客様のご指示 2026-11-25「合志店は現段階では 2 名を対象人数から除外」)。社員の名前はコードに書かず、
+ *     本文 (JSON) = { stores: { <店舗 ID>: { excludeUserIds: [社員の ID], people?: 人数 } }, perPerson?: 枚数 } で受け取る
+ *     (書いた店舗だけ置き換え、ほかの店舗・項目は今の値)。既定は確認だけ、apply=1 で書き込み、変更履歴
  */
 export async function POST(req: Request) {
   const secret = (process.env.CRON_SECRET ?? "").trim();
@@ -49,6 +54,7 @@ export async function POST(req: Request) {
   if (task === "sales-areas") return salesAreas(url, req);
   if (task === "postal-codes") return postalCodes(url);
   if (task === "schedule-onsite" || task === "schedule-kinds") return scheduleOnsite(url);
+  if (task === "day-load") return dayLoadFix(url, req);
   if (task !== "quote-line-units") return NextResponse.json({ error: "unknown task" }, { status: 400 });
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? from;
@@ -240,4 +246,36 @@ async function scheduleOnsite(url: URL) {
     return out;
   });
   return NextResponse.json({ ok: true, applied: true, from, events: done });
+}
+
+/** 1 日の対応可能枚数の設定 (店舗ごとの対象から外す社員・人数) */
+async function dayLoadFix(url: URL, req: Request) {
+  const apply = url.searchParams.get("apply") === "1";
+  const body = (await req.json().catch(() => null)) as { stores?: Record<string, { excludeUserIds?: string[]; people?: number }>; perPerson?: number } | null;
+  if (!body?.stores || typeof body.stores !== "object") return NextResponse.json({ error: "stores を JSON で送ってください" }, { status: 400 });
+  const db0 = await syncDb();
+  const before = readDayLoadSettings(db0);
+  const next: DayLoadSettings = { ...before, stores: { ...before.stores } };
+  for (const [id, v] of Object.entries(body.stores)) {
+    const store = db0.stores.find((s) => s.id === id);
+    if (!store || store.kind === "hq") return NextResponse.json({ error: `店舗 ${id} がありません (本部は対象外)` }, { status: 400 });
+    const ex = [...new Set((v.excludeUserIds ?? []).map(String))];
+    const unknown = ex.filter((u) => !db0.users.some((x) => x.id === u && x.storeId === id));
+    if (unknown.length) return NextResponse.json({ error: `店舗 ${id} の社員ではない ID があります`, unknown }, { status: 400 });
+    const people = v.people === undefined || v.people === null ? undefined : Number(v.people);
+    if (people !== undefined && !(Number.isFinite(people) && people >= 0 && people <= 99)) return NextResponse.json({ error: "people は 0〜99" }, { status: 400 });
+    next.stores[id] = { excludeUserIds: ex, people };
+  }
+  if (body.perPerson !== undefined) {
+    const n = Number(body.perPerson);
+    if (!(Number.isFinite(n) && n >= 1 && n <= 99)) return NextResponse.json({ error: "perPerson は 1〜99" }, { status: 400 });
+    next.perPerson = n;
+  }
+  const changes = dayLoadChanges(db0, before, next);
+  if (!apply || !changes.length) return NextResponse.json({ ok: true, applied: false, changes });
+  await mutate((db) => {
+    writeDayLoadSettings(db, next, SYSTEM_USER, nowIso());
+    addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "settings", entityId: DAY_LOAD_ID, entityLabel: "1 日の対応可能枚数", summary: `1 日の対応可能枚数の設定を変更 (${changes.length} 項目。お客様のご指示)`, changes });
+  });
+  return NextResponse.json({ ok: true, applied: true, changes, at: nowIso() });
 }

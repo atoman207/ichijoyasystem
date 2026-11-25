@@ -89,6 +89,8 @@ export interface EventLabel {
   area?: string;
   /** 予定表に出す文字「（築地）村田」 */
   text: string;
+  /** 町名を除いたお客様の名前 (日ごとの予定表の「現場」の欄。仮押さえは「[仮] 」つき) */
+  name: string;
   /** 案件・予定にひも付いているお客様 (問い合わせ → 顧客にひも付けたあとは顧客) */
   customerId?: string;
 }
@@ -130,7 +132,8 @@ export function eventLabeler(db: Pick<Database, "inquiries" | "quotes" | "orders
       sheetArea ||
       eventTown({ location: e.location, siteAddress: o?.siteAddress || q?.siteAddress || inq?.siteAddress, inquiryAddress: inq?.intake?.address, inquiryArea: inq?.area, customer }) ||
       undefined;
-    return { area, text: `${hold}${area ? `（${area}）` : ""}${name || rest || e.title}`, customerId: customer?.id };
+    const who = name || rest || e.title;
+    return { area, text: `${hold}${area ? `（${area}）` : ""}${who}`, name: `${hold}${who}`, customerId: customer?.id };
   }
 
   return { label, customerOf, chain };

@@ -25,6 +25,7 @@ import { Avatar } from "@/components/ui";
 import { ConflictBadge, KindBadge, KindIcon, KindMark, WorkTokens, kindLabel, kindStyle, shortName } from "./parts";
 import { stripKindWords, type WorkToken } from "@/lib/work-summary";
 import type { DayTotal } from "@/lib/production/plan";
+import { sheetNum, type DayLoad } from "@/lib/day-sheet";
 
 /**
  * 予定表のビュー (サーバーコンポーネント)
@@ -91,6 +92,8 @@ export interface CalendarContext {
   production?: { byDay: Map<string, DayTotal>; href: (d: string) => string };
   /** 予定表に出す件名「（町名）お客様」(src/lib/schedule-label.ts)。なければ件名から種類の言葉を外したもの */
   labelOf?: (e: ScheduleEvent) => string;
+  /** 店舗を選んだときの日ごとの作業量と対応可能枚数 (src/lib/day-sheet.ts。週・月の日の見出しの「作業 18/22」) */
+  loadOf?: (d: string) => DayLoad | undefined;
 }
 
 /** 予定表に出す件名 (「引き取り」「納品」などの言葉は出さない。種類はアイコンと色で表す) */
@@ -123,6 +126,32 @@ export function ProductionLink({ ctx, day, variant }: { ctx: CalendarContext; da
       <Factory className={variant === "day" ? "h-3.5 w-3.5" : "h-3 w-3"} aria-hidden />
       {variant === "day" ? `畳製造 ${t.count} 件 タ${qty}` : `製 タ${qty}`}
       {t.herinashiSeen && <span className="text-critical-ink">縁無</span>}
+    </Link>
+  );
+}
+
+/**
+ * 日ごとの作業量 / 対応可能枚数 (お客様のご要望 2026-11-25「予定の入れすぎを防げる仕組み」)。超えた日は赤。押すとその日の予定表
+ */
+export function LoadBadge({ ctx, day, variant }: { ctx: CalendarContext; day: string; variant: "month" | "week" }) {
+  const l = ctx.loadOf?.(day);
+  if (!l || l.workload <= 0) return null;
+  const over = l.over > 0;
+  const label = `作業量 ${sheetNum(l.workload)} 枚 / 対応可能 ${sheetNum(l.capacity) || "0"} 枚${over ? ` (${sheetNum(l.over)} 枚オーバー)` : ""}`;
+  return (
+    <Link
+      href={ctx.dayHref(day)}
+      title={label}
+      aria-label={label}
+      data-testid="load-badge"
+      className={clsx(
+        "inline-flex shrink-0 items-center gap-0.5 rounded-md font-semibold whitespace-nowrap tnum",
+        over ? "bg-critical-soft text-critical-ink" : "bg-good-soft text-good-ink",
+        variant === "month" ? "px-1 py-px text-[10px]" : "px-1.5 py-0.5 text-[11px]",
+      )}
+    >
+      {over && <TriangleAlert className="h-3 w-3" aria-hidden />}
+      {variant === "month" ? `作${sheetNum(l.workload)}/${sheetNum(l.capacity) || "0"}` : `作業 ${sheetNum(l.workload)}/${sheetNum(l.capacity) || "0"}`}
     </Link>
   );
 }
@@ -315,8 +344,9 @@ export function MonthView({ days, month, events, ctx }: { days: string[]; month:
                   {Number(d.slice(8))}
                 </Link>
                 {holiday && <span className="hidden min-w-0 truncate text-[10px] text-critical-ink @3xl:inline">{holiday}</span>}
-                <span className="hidden @3xl:inline-flex">
+                <span className="hidden gap-0.5 @3xl:inline-flex">
                   <ProductionLink ctx={ctx} day={d} variant="month" />
+                  <LoadBadge ctx={ctx} day={d} variant="month" />
                 </span>
                 {ctx.addHref && (
                   <Link
@@ -387,9 +417,10 @@ export function WeekView({ days, events, ctx }: { days: string[]; events: Schedu
               {holiday && <span className="min-w-0 truncate text-[10px] text-critical-ink">{holiday}</span>}
               <span className="ml-auto text-[11px] text-ink-3 tnum">{list.length > 0 ? `${list.length} 件` : ""}</span>
             </header>
-            {ctx.production?.byDay.get(d) && (
-              <div className="mb-1.5">
+            {(ctx.production?.byDay.get(d) || (ctx.loadOf?.(d)?.workload ?? 0) > 0) && (
+              <div className="mb-1.5 flex flex-wrap gap-1">
                 <ProductionLink ctx={ctx} day={d} variant="week" />
+                <LoadBadge ctx={ctx} day={d} variant="week" />
               </div>
             )}
             {list.length === 0 && <p className="px-1 py-2 text-[11px] text-ink-3">予定なし</p>}
