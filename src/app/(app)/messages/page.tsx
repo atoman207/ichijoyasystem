@@ -36,7 +36,12 @@ export default async function MessagesPage({ searchParams }: { searchParams: Pro
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title="社内連絡・業務依頼" actions={<><LinkButton href="/messages/new?kind=request" variant="secondary">+ 業務を依頼</LinkButton><LinkButton href="/messages/new?kind=notice">+ 新しい連絡</LinkButton></>} />
+      <PageHeader
+        title="社内連絡・業務依頼"
+        description="業務依頼 (依頼 → 確認 → 報告 → 完了) と件名ごとの社内連絡。ふだんのやりとり・写真の共有はチャット (チャンネル・DM) で。自分あての依頼・メンションはチャットのアイコンの「要対応」にもまとめて出ます。"
+        back={{ href: "/chat", label: "チャット" }}
+        actions={<><LinkButton href="/chat" variant="ghost">チャットを開く</LinkButton><LinkButton href="/messages/new?kind=request" variant="secondary">+ 業務を依頼</LinkButton><LinkButton href="/messages/new?kind=notice">+ 新しい連絡</LinkButton></>}
+      />
       <LinkTabs
         current={`/messages?tab=${tab}`}
         items={[

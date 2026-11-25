@@ -14,6 +14,9 @@ import { fmtDate, fmtDateTime, toDateKey } from "@/lib/format";
 import { TASK_STATUS, THREAD_KIND_LABEL } from "@/lib/constants";
 import type { MessageEvent } from "@/lib/db/types";
 import { Avatar, Badge, Button, Card, CardHeader, Field, Flash, PageHeader, StatusBadge, StoreTag, Textarea, LinkButton } from "@/components/ui";
+import { MarkThreadRead } from "@/components/chat/MarkThreadRead";
+import { taskLink } from "@/lib/chat/repo";
+import { canView, findChannel } from "@/lib/chat/channels";
 
 const EVENT_LABEL: Record<MessageEvent, { label: string; tone: "info" | "accent" | "good" | "serious" }> = {
   ack: { label: "確認しました", tone: "info" },
@@ -45,15 +48,32 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
   const isAssignee = (t.assigneeIds ?? []).includes(user.id);
   const isRequester = canConfirmTask(user, t);
   const overdue = isTask && t.taskStatus !== "confirmed" && t.dueDate && t.dueDate < toDateKey(new Date());
+  // チャットのメッセージから作った業務依頼: 元のメッセージへのリンク (そのチャンネル・DM を見られる人だけ)
+  let chatHref: string | undefined;
+  try {
+    const link = taskLink(t.id);
+    if (link && canView(user, findChannel(db, link.channelId))) chatHref = `/chat?c=${encodeURIComponent(link.channelId)}&m=${encodeURIComponent(link.messageId)}`;
+  } catch {
+    // チャットのデータが読めないときはリンクを出さない
+  }
+  const lastAt = messages[messages.length - 1]?.at ?? t.updatedAt;
 
   return (
     <div className="max-w-3xl">
+      <MarkThreadRead threadId={t.id} at={lastAt} />
       <Flash msg={msg} err={err} />
+      {chatHref && (
+        <p className="mb-3 text-sm">
+          <Link href={chatHref} className="text-accent hover:underline">
+            チャットの元のメッセージを開く →
+          </Link>
+        </p>
+      )}
       <PageHeader
         title={t.title}
         badge={<><Badge dot={false}>{THREAD_KIND_LABEL[t.kind]}</Badge>{t.taskStatus ? <StatusBadge value={t.taskStatus} map={TASK_STATUS} /> : t.status === "done" && <Badge tone="good">完了</Badge>}{overdue && <Badge tone="critical" dot={false}>期限超過</Badge>}</>}
         description={<span className="inline-flex flex-wrap items-center gap-2">{t.storeId && <StoreTag store={db.stores.find((s) => s.id === t.storeId)} />}作成 {userName(t.createdBy)} {fmtDateTime(t.createdAt)} · 参加 {t.participants.map((p) => userName(p)).join("・")}{href && <> · 関連: <Link href={href} className="text-accent hover:underline">{t.relatedLabel ?? t.relatedType}</Link></>}</span>}
-        back={{ href: "/messages", label: "社内連絡" }}
+        back={{ href: "/chat?view=inbox", label: "チャット (要対応)" }}
         actions={
           !isTask ? (
             <form action={setThreadStatus.bind(null, t.id, t.status === "done" ? "open" : "done")}>

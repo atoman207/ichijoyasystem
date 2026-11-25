@@ -224,7 +224,7 @@ export const NAV_ITEMS: { href: string; label: string; short?: string }[] = [
   { href: "/accounting", label: "会計データの出力 (仕訳・明細)", short: "会計データ" },
   { href: "/capture", label: "書類取込 (紙→データ)", short: "書類取込" },
   { href: "/approvals", label: "承認" },
-  { href: "/messages", label: "社内連絡・業務依頼", short: "社内連絡" },
+  { href: "/chat", label: "チャット・業務依頼 (チャンネル・DM・社内連絡)", short: "チャット" },
   { href: "/fax", label: "FAX 送受信 (受信の仕分け・発注書の送信の記録)", short: "FAX" },
   { href: "/contacts", label: "連絡履歴 (お客様・協力業者)", short: "連絡履歴" },
   { href: "/ai", label: "AIアシスタント (質問・検索・文書の作成)", short: "AI" },
@@ -247,7 +247,7 @@ export const NAV_ITEMS: { href: string; label: string; short?: string }[] = [
 ];
 
 /** (app) の外の画面・メニューの画面 (画面の一覧に入らないもの) */
-const EXTRA_ROUTES = ["/", "/login", "/signup", "/help", "/review", "/profile", ...NAV_ITEMS.map((n) => n.href)];
+const EXTRA_ROUTES = ["/", "/login", "/signup", "/help", "/review", "/profile", "/messages", ...NAV_ITEMS.map((n) => n.href)];
 
 const routePatterns = (() => {
   const list = [...new Set([...CATALOG.map((c) => c.route), ...EXTRA_ROUTES])];

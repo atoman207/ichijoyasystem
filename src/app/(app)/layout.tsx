@@ -26,6 +26,9 @@ import { cronHealth } from "@/lib/knowledge-sync";
 import { docDraftAttention } from "@/lib/doc-drafts";
 import { casePostAttention } from "@/lib/case-posts";
 import { pendingReceptionCount } from "@/lib/reception";
+import { chatState } from "@/lib/chat/inbox";
+import { prefsOf } from "@/lib/chat/repo";
+import type { ChatSummary } from "@/lib/chat/types";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +45,14 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const faxFailed = faxes.filter((f) => f.direction === "outbound" && f.userId === user.id && (f.status === "failed" || f.status === "unknown") && !f.nextRetryAt).length;
   // 休暇の申請 (承認できる人: 店長は自店舗の社員、管理者は全員。src/lib/hr)
   const leavePending = (getDb().leaveRequests ?? []).filter((r) => r.status === "pending" && canApproveLeave(user, r));
+  // チャットのアイコン (要対応 = 業務依頼・未確認の重要メッセージ・未読のメンション / 未読)。チャットのデータ (SQLite) が読めなくても画面は出す
+  let chat: ChatSummary | undefined;
+  try {
+    const cs = chatState(getDb(), user, { withLists: false });
+    chat = { ...cs.counts, prefs: prefsOf(user.id) };
+  } catch (err) {
+    console.warn("[chat] summary failed:", err instanceof Error ? err.message : err);
+  }
 
   // short: ヘッダーのタブに表示する短い名前 (正式名はツールチップに表示)
   const nav: NavItem[] = [
@@ -71,7 +82,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   nav.push(
     { href: "/capture", label: "書類取込 (紙→データ)", short: "書類取込", icon: "capture", group: "業務支援" },
     { href: "/approvals", label: "承認", icon: "approvals", group: "業務支援", badge: n.pendingApprovals.length || undefined },
-    { href: "/messages", label: "社内連絡・業務依頼", short: "社内連絡", icon: "messages", group: "業務支援", badge: n.mentions.length + n.taskCount || undefined },
+    // チャット (チャンネル・DM) と業務依頼・社内連絡の通知をまとめる (お客様のご要望 2026-11-25「■6」)。数字 = 要対応
+    { href: "/chat", label: "チャット・業務依頼 (チャンネル・DM・社内連絡)", short: "チャット", icon: "chat", group: "業務支援", badge: (chat ? chat.action : n.mentions.length + n.taskCount) || undefined },
     { href: "/fax", label: "FAX 送受信 (受信の仕分け・発注書の送信の記録)", short: "FAX", icon: "fax", group: "業務支援", badge: faxReview + faxReplies + faxFailed || undefined },
     { href: "/contacts", label: "連絡履歴 (お客様・協力業者)", short: "連絡履歴", icon: "contacts", group: "業務支援" },
     { href: "/ai", label: "AIアシスタント (質問・検索・文書の作成)", short: "AI", icon: "ai", group: "業務支援" },
@@ -110,6 +122,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
   // 業務依頼・メンションは依頼の画面へ。案件の依頼は、その画面にお客様の電話・住所・内容と日程の登録が出る (お客様のご要望 2026-11-25「メンションからの日程調整・予定登録」)
   const threadLink = (threadId: string) => `/messages/${threadId}`;
+  // メンション・業務依頼はチャットのアイコンにまとめる (ベルに二重に出さない)。チャットが使えないときだけベルに出す
   const notifications: NotificationItem[] = [
     ...n.pendingApprovals.map<NotificationItem>((a) => ({
       kind: "approval",
@@ -117,15 +130,19 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       detail: a.type === "record_view" || a.type === "handover_change" || a.type === "store_change" ? a.title : `${a.title} (${yen(a.amount)})`,
       href: "/approvals?tab=mine",
     })),
-    ...n.mentions.map<NotificationItem>((m) => ({
-      kind: "mention",
-      title: `${m.from} さんからメンション`,
-      detail: m.body,
-      href: threadLink(m.threadId),
-    })),
+    ...(chat
+      ? []
+      : n.mentions.map<NotificationItem>((m) => ({
+          kind: "mention",
+          title: `${m.from} さんからメンション`,
+          detail: m.body,
+          href: threadLink(m.threadId),
+        }))),
   ];
-  for (const t of n.tasks) {
-    notifications.push({ kind: "task", title: t.title, detail: t.detail, href: threadLink(t.threadId) });
+  if (!chat) {
+    for (const t of n.tasks) {
+      notifications.push({ kind: "task", title: t.title, detail: t.detail, href: threadLink(t.threadId) });
+    }
   }
   for (const e of n.assignedEvents) {
     notifications.push({
@@ -223,6 +240,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       notifications={notifications}
       counts={{ approvals: n.pendingApprovals.length, mentions: n.mentions.length, signups: signups.length }}
       live={{ sig: liveSignature(user, n).sig }}
+      chat={chat}
       logoutAction={logout}
     >
       {children}

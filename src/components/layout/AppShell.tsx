@@ -23,10 +23,12 @@ import {
   tileIcon,
   tileLabel,
 } from "./header-parts";
-import { Award, BookOpen, Calculator, CircleHelp, ClipboardList, Coins, Printer, Landmark, ListTodo, PhoneCall, Truck, ListChecks, Bell, CalendarDays, CalendarOff, CalendarPlus, CalendarX2, ChartColumn, ChevronDown, CircleUser, ClipboardCheck, Clock, ClockFading, FileSpreadsheet, FileText, Hammer, FolderOpen, House, Inbox, LayoutGrid, LogOut, Menu, MessageSquare, Package, Plus, Receipt, ScanLine, Search, Settings, Sparkles, UserCog, UserPlus, Users, Wallet, X, type LucideIcon, MapPinned, Scale, NotebookPen, Layers, ClipboardPen, Megaphone, Database, BookOpenCheck, History } from "lucide-react";
+import { Award, BookOpen, Calculator, CircleHelp, ClipboardList, Coins, Printer, Landmark, ListTodo, PhoneCall, Truck, ListChecks, Bell, CalendarDays, CalendarOff, CalendarPlus, CalendarX2, ChartColumn, ChevronDown, CircleUser, ClipboardCheck, Clock, ClockFading, FileSpreadsheet, FileText, Hammer, FolderOpen, House, Inbox, LayoutGrid, LogOut, Menu, MessageSquare, MessagesSquare, Package, Plus, Receipt, ScanLine, Search, Settings, Sparkles, UserCog, UserPlus, Users, Wallet, X, type LucideIcon, MapPinned, Scale, NotebookPen, Layers, ClipboardPen, Megaphone, Database, BookOpenCheck, History } from "lucide-react";
 import { Avatar, Badge } from "@/components/ui";
 import { IchijoyaLogo } from "@/components/brand/Logo";
 import { ChatbotWidget } from "@/components/chatbot/ChatbotWidget";
+import { ChatBadge } from "@/components/chat/ChatBadge";
+import type { ChatSummary } from "@/lib/chat/types";
 import { ScrollTopButton } from "./ScrollTopButton";
 
 export type NavIcon =
@@ -42,6 +44,7 @@ export type NavIcon =
   | "capture"
   | "approvals"
   | "messages"
+  | "chat"
   | "reports"
   | "ai"
   | "audit"
@@ -81,6 +84,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   capture: ScanLine,
   approvals: ClipboardCheck,
   messages: MessageSquare,
+  chat: MessagesSquare,
   reports: ChartColumn,
   ai: Sparkles,
   audit: ClockFading,
@@ -165,7 +169,7 @@ const CREATE_ITEMS: { href: string; label: string; desc: string; icon: LucideIco
   { href: "/customers/new", label: "顧客を登録", desc: "新規のお客様・法人", icon: Users },
   { href: "/quotes/new", label: "見積を作成", desc: "商品マスタから単価を自動入力", icon: FileText },
   { href: "/schedule/new", label: "予定を登録", desc: "現地調査・施工・会議・社内行事など", icon: CalendarPlus },
-  { href: "/messages/new", label: "社内連絡を送る", desc: "連絡・確認・報告をシステム内で", icon: MessageSquare },
+  { href: "/chat", label: "チャットで連絡", desc: "店舗・全社のチャンネル・DM。写真・資料も送れます", icon: MessagesSquare },
   { href: "/messages/new?kind=request", label: "業務を依頼", desc: "担当者・期限つき。確認 → 報告 → 完了", icon: ListTodo },
   { href: "/contacts", label: "やりとりを記録", desc: "お客様・協力業者との電話・メール・LINE", icon: PhoneCall },
   { href: "/expenses/new", label: "経費を登録", desc: "備品・ガソリン代など (勘定科目の候補つき)", icon: Wallet },
@@ -231,6 +235,7 @@ export function AppShell({
   notifications,
   counts,
   live,
+  chat,
   logoutAction,
   children,
 }: {
@@ -241,6 +246,8 @@ export function AppShell({
   counts: { approvals: number; mentions: number; signups?: number };
   /** ヘッダーの件数の印 (src/lib/notify-live.ts)。1 分ごとに確かめ、変わったら画面を読み直す */
   live?: { sig: string };
+  /** チャットのアイコン (要対応・未読の数と通知音の設定。src/lib/chat/inbox.ts) */
+  chat?: ChatSummary;
   logoutAction: () => Promise<void>;
   children: ReactNode;
 }) {
@@ -618,6 +625,9 @@ export function AppShell({
               </Link>
             )}
 
+            {/* チャット (チャンネル・DM・業務依頼・メンション。赤 = 要対応、青 = 未読。src/components/chat/ChatBadge.tsx) */}
+            {chat && <ChatBadge initial={chat} active={isActive("/chat")} />}
+
             {/* 通知 */}
             <div className="relative">
               <button
@@ -713,7 +723,7 @@ export function AppShell({
                       { href: "/profile", label: "プロフィール", icon: CircleUser, count: 0 },
                       ...(user.canManageStaff ? [{ href: "/staff", label: "社員管理", icon: UserCog, count: counts.signups ?? 0 }] : []),
                       { href: "/approvals?tab=mine", label: "あなたの承認待ち", icon: ClipboardCheck, count: counts.approvals },
-                      { href: "/messages?tab=mine", label: "社内連絡", icon: MessageSquare, count: counts.mentions },
+                      { href: "/chat", label: "チャット・業務依頼", icon: MessagesSquare, count: chat?.action ?? counts.mentions },
                       { href: "/schedule?view=list&user=me&store=all", label: "自分の予定", icon: CalendarDays, count: 0 },
                       { href: "/settings", label: "設定", icon: Settings, count: 0 },
                     ].map((it) => (
@@ -807,8 +817,9 @@ export function AppShell({
       <main id="main-content" className={MAIN_PAD}>
         <div className={MAIN_INNER}>{children}</div>
       </main>
-      <ChatbotWidget userName={user.name} userId={user.id} avatarSrc={user.avatarSrc} />
-      <ScrollTopButton />
+      {/* チャットの画面は入力欄が画面の下にあるため、左下の「質問する」と右下の「↑」を出さない */}
+      {!isActive("/chat") && <ChatbotWidget userName={user.name} userId={user.id} avatarSrc={user.avatarSrc} />}
+      {!isActive("/chat") && <ScrollTopButton />}
     </div>
   );
 }

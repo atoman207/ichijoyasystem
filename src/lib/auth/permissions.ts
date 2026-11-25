@@ -357,6 +357,57 @@ export function canViewExpense(user: User, e: Pick<Expense, "storeId" | "submitt
   return e.submittedBy === user.id;
 }
 
+/* ---------------- チャット (チャンネル・DM。src/lib/chat。お客様のご要望 2026-11-25) ---------------- */
+
+/** 店長以上 (店長・本部・管理者): 重要メッセージ・@全員・「店長以上だけ」の資料・店長のチャンネル・チャンネルの追加 */
+export function isChatLead(user: Pick<User, "role">): boolean {
+  return user.role === "admin" || user.role === "hq_staff" || user.role === "store_manager";
+}
+
+/** 重要メッセージ (確認のお願い) を送れる・@全員 を使える: 管理者・本部・店長 (お客様の決定 2026-11-25) */
+export function canSendImportantChat(user: Pick<User, "role">): boolean {
+  return isChatLead(user);
+}
+
+/** チャンネルを追加できる (メンバーを選ぶチャンネル): 管理者・本部・店長 */
+export function canCreateChatChannel(user: Pick<User, "role">): boolean {
+  return isChatLead(user);
+}
+
+/**
+ * チャンネル・DM を見る・投稿できるか
+ * - 全社: 有効な社員全員 / 店舗: その店舗の社員と本部・管理者 / 店長: 店長以上
+ * - 追加したチャンネル・DM: メンバー (参加している本人) だけ。DM は管理者も見られない (お客様の決定 2026-11-25「■5」)
+ */
+export function canViewChatChannel(user: Pick<User, "id" | "role" | "storeId" | "active">, ch: { kind: string; storeId?: string; memberIds: string[] }): boolean {
+  if (!user.active) return false;
+  switch (ch.kind) {
+    case "all":
+      return true;
+    case "store":
+      return user.storeId === ch.storeId || user.role === "admin" || user.role === "hq_staff";
+    case "managers":
+      return isChatLead(user);
+    default:
+      return ch.memberIds.includes(user.id);
+  }
+}
+
+/** 追加したチャンネルの名前・説明・メンバーの変更とアーカイブ: 作成した人・管理者 */
+export function canManageChatChannel(user: Pick<User, "id" | "role">, ch: { kind: string; createdBy?: string }): boolean {
+  return ch.kind === "custom" && (ch.createdBy === user.id || user.role === "admin");
+}
+
+/** チャットの資料・写真を見られるか (公開範囲が「店長以上」の資料は店長以上だけ。チャンネルを見られることが前提) */
+export function canViewChatFile(user: Pick<User, "role">, access: string): boolean {
+  return access !== "managers" || isChatLead(user);
+}
+
+/** メッセージの削除: 送った本人。管理者はチャンネルの不適切な投稿も消せる (DM は本人だけ) */
+export function canDeleteChatMessage(user: Pick<User, "id" | "role">, m: { userId: string }, ch: { kind: string }): boolean {
+  return m.userId === user.id || (user.role === "admin" && ch.kind !== "dm");
+}
+
 /** 社内連絡のスレッドを閲覧・返信できるか */
 export function canViewThread(user: User, t: Pick<Thread, "storeId" | "participants" | "createdBy">): boolean {
   return canSeeAllStores(user) || t.participants.includes(user.id) || t.createdBy === user.id || !t.storeId || t.storeId === user.storeId;

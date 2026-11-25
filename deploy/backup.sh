@@ -10,6 +10,7 @@
 #      (rsync。ファイルの中身は変わらないため増えた分だけ。アプリで削除したファイルもバックアップには残す)
 #   3. チャットボットのデータベース (SQLite): VACUUM INTO → chatbot/chatbot-<日時>.sqlite
 #      データ台帳の資料庫 (SQLite。人が変えた資料の扱い・画面から追加した資料の中身): VACUUM INTO → chatbot/materials-<日時>.sqlite
+#      チャット (チャンネル・DM の SQLite): VACUUM INTO → chatbot/chat-<日時>.sqlite、プッシュ通知の鍵 → chatbot/push-vapid.json
 #   3c. 試験期間 (deploy/testweek.sh) のあいだだけ: テスト用のデータベース (期間中の操作はすべてここに入る) の控え
 #      → testweek/testweek-<日時>.tar.gz (JSON・チャットボット・期間中に増えた添付ファイル)
 #   4. 古いバックアップを削除 (自動: BACKUP_KEEP_DAYS 日・既定 14 日 / 手動: BACKUP_KEEP_MANUAL_DAYS 日・既定 30 日)
@@ -110,6 +111,27 @@ if [[ -f "$CHATBOT_DB" ]]; then
   fi
 fi
 
+# 3a. チャット (チャンネル・DM。SQLite。src/lib/chat/db.ts) とプッシュ通知の送り主の鍵 (鍵が変わると登録済みの端末に届かなくなる)
+CHAT_DB="${CHAT_DB_PATH:-$(dirname "$CHATBOT_DB")/chat.sqlite}"
+if [[ -f "$CHAT_DB" ]]; then
+  chat_file="$DEST/chatbot/chat-$STAMP.sqlite"
+  if node -e 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(process.argv[1]); db.exec("pragma busy_timeout = 10000"); db.prepare("vacuum into ?").run(process.argv[2]); db.close();' "$CHAT_DB" "$chat_file" 2>/dev/null; then
+    chmod 600 "$chat_file"
+    messages+=("チャット: $(( $(stat -c %s "$chat_file") / 1024 )) KB")
+  else
+    messages+=("チャットのデータベースのバックアップに失敗しました")
+    rm -f "$chat_file"
+  fi
+fi
+VAPID_FILE="${PUSH_VAPID_FILE:-/srv/ichijoya/data/push-vapid.json}"
+if [[ -f "$VAPID_FILE" ]]; then
+  install -m 600 "$VAPID_FILE" "$DEST/chatbot/push-vapid.json" 2>/dev/null || messages+=("プッシュ通知の鍵を控えられませんでした")
+fi
+PUSH_DB="${PUSH_DB_PATH:-$(dirname "$VAPID_FILE")/push.sqlite}"
+if [[ -f "$PUSH_DB" ]]; then
+  node -e 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(process.argv[1]); db.exec("pragma busy_timeout = 10000"); db.prepare("vacuum into ?").run(process.argv[2]); db.close();' "$PUSH_DB" "$DEST/chatbot/push-$STAMP.sqlite" 2>/dev/null && chmod 600 "$DEST/chatbot/push-$STAMP.sqlite" || messages+=("プッシュ通知の端末の登録を控えられませんでした")
+fi
+
 # 3b. データ台帳の資料庫 (クライアント資料の中身はファイルから作り直せるが、人が変えた扱いと追加した資料を残す)
 MATERIALS_DB="${ICHIJOYA_MATERIALS_DB_PATH:-/srv/ichijoya/data/database/ichijoya-materials.sqlite}"
 if [[ -f "$MATERIALS_DB" ]]; then
@@ -130,6 +152,9 @@ if [[ -f /etc/nginx/snippets/ichijoya-host-testweek.conf && -f "$TESTWEEK_DATA/t
   tw_file="$DEST/testweek/testweek-$STAMP$suffix.tar.gz"
   tw_tmp=$(mktemp -d)
   tw_since=$(cat /srv/ichijoya/testweek/started-at 2>/dev/null || echo "1970-01-01 00:00:00")
+  if [[ -f "$TESTWEEK_DATA/chat.sqlite" ]]; then
+    node -e 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(process.argv[1]); db.exec("pragma busy_timeout = 10000"); db.prepare("vacuum into ?").run(process.argv[2]); db.close();' "$TESTWEEK_DATA/chat.sqlite" "$tw_tmp/chat.sqlite" 2>/dev/null || messages+=("テスト用のチャットの写しを作れませんでした")
+  fi
   if [[ -f "$TESTWEEK_DATA/chatbot.sqlite" ]]; then
     node -e 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(process.argv[1]); db.exec("pragma busy_timeout = 10000"); db.prepare("vacuum into ?").run(process.argv[2]); db.close();' "$TESTWEEK_DATA/chatbot.sqlite" "$tw_tmp/chatbot.sqlite" 2>/dev/null || messages+=("テスト用のチャットボットの写しを作れませんでした")
   fi
@@ -152,6 +177,8 @@ find "$DEST/db" -name 'ichijoya-*-manual.dump' -mtime +"$KEEP_MANUAL" -delete
 find "$DEST/db" -name '*.part' -mmin +120 -delete
 find "$DEST/chatbot" -name 'chatbot-*.sqlite' -mtime +"$KEEP" -delete
 find "$DEST/chatbot" -name 'materials-*.sqlite' -mtime +"$KEEP" -delete
+find "$DEST/chatbot" -name 'chat-*.sqlite' -mtime +"$KEEP" -delete
+find "$DEST/chatbot" -name 'push-*.sqlite' -mtime +"$KEEP" -delete
 
 # 5. 結果
 kept=$(find "$DEST/db" -name 'ichijoya-*.dump' | wc -l)

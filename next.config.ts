@@ -9,6 +9,15 @@ const nextConfig: NextConfig = {
   // マイクは自分のサイトだけ許可する (「質問する」の音声入力)
   async headers() {
     return [
+      // プッシュ通知のサービスワーカー: 古い版を使い続けないよう毎回確かめる
+      {
+        source: "/sw.js",
+        headers: [
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+          { key: "Service-Worker-Allowed", value: "/" },
+          { key: "Content-Type", value: "application/javascript; charset=utf-8" },
+        ],
+      },
       {
         source: "/:path*",
         headers: [

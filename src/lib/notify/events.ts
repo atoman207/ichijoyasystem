@@ -69,9 +69,15 @@ export function approversFor(db: Database, a: Approval): User[] {
   );
 }
 
+/** プッシュ通知 (スマートフォン・パソコン。src/lib/notify/push.ts) も送る種類: 自分あての業務依頼とメンション (お客様のご要望 2026-11-25「■6」) */
+const PUSH_EVENTS = new Set<NotifyEvent>(["mention", "task"]);
+
 function build(db: Database, event: NotifyEvent, users: User[], subject: string, body: string, link: string, related: Pick<Outgoing, "relatedType" | "relatedId">): Outgoing[] {
   const s = notifySettings(db);
   const out: Outgoing[] = [];
+  if (PUSH_EVENTS.has(event)) {
+    for (const u of users) if (u.active) out.push({ channel: "push", to: u.id, toLabel: u.name, subject, body: body.split("\n").filter(Boolean).slice(0, 3).join(" / "), purpose: "notify", ...related, link, priority: true });
+  }
   const url = `${appBaseUrl()}${link}`;
   if (s.email[event]) {
     for (const u of users) {

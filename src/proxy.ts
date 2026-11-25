@@ -11,6 +11,7 @@ import type { NextRequest } from "next/server";
  * ホーム画面に追加するときのマニフェスト (/manifest.webmanifest。src/app/manifest.ts) とそのアイコン (public/icons/*) も、
  * ログイン前に読まれるため除外する (ログインに回すと、アプリとして追加できない)。
  * 公開ホームの店舗写真・飾り (public/brand/*) も除外する。
+ * プッシュ通知のサービスワーカー (/sw.js。public/sw.js) も除外する (ブラウザーが裏で更新を確かめるため。中身は公開してよいもの)。
  * 署名の検証とロール判定はサーバーコンポーネント側 (requireUser) で行う。
  */
 const SESSION_COOKIE = "ichijoya_session";
@@ -42,5 +43,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.png|apple-icon.png|manifest.webmanifest|icons/|brand/|api/health|api/integrations/|api/doc/|api/cron/).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.png|apple-icon.png|manifest.webmanifest|sw.js|icons/|brand/|api/health|api/integrations/|api/doc/|api/cron/).*)"],
 };
