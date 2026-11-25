@@ -124,7 +124,8 @@ create table if not exists inquiries (
   media text,
   promotion_id text,
   intake jsonb,
-  schedule_hold jsonb
+  schedule_hold jsonb,
+  site_address text
 );
 comment on table inquiries is '問い合わせ';
 
@@ -228,7 +229,8 @@ create table if not exists orders (
   closed_by text,
   receipt_name text,
   handovers jsonb,
-  tatami_rooms jsonb
+  tatami_rooms jsonb,
+  work_staff jsonb
 );
 comment on table orders is '受注・施工 (売上)';
 
@@ -1497,6 +1499,26 @@ create table if not exists condolences (
 );
 comment on table condolences is '慶弔リスト (通夜・葬儀・慶事への対応。ご家族の情報を含むため事務担当・本部・管理者だけが見る)';
 
+-- 案件の変更のお知らせ (予定・明細・金額・担当・お客様の付け替えなどの変更を、担当店舗・本部・管理者に知らせる。案件ごとの変更の履歴)
+create table if not exists change_notices (
+  id text primary key,
+  at timestamptz not null,
+  actor_id text not null,
+  store_id text not null,
+  target_type text not null,
+  target_id text not null,
+  case_ids jsonb not null default '[]',
+  number text,
+  title text not null default '',
+  customer_id text,
+  topic text not null,
+  lines jsonb not null default '[]',
+  href text not null,
+  recipients jsonb not null default '[]',
+  read_by jsonb not null default '[]'
+);
+comment on table change_notices is '案件の変更のお知らせ (予定・明細・金額・担当・お客様の付け替えなどの変更を、担当店舗・本部・管理者に知らせる。案件ごとの変更の履歴)';
+
 -- 文書の下書き (AI アシスタントで作った文面の保存・版の履歴・確認・承認・送信)
 create table if not exists doc_drafts (
   id text primary key,
@@ -1726,6 +1748,7 @@ alter table inquiries add column if not exists media text;
 alter table inquiries add column if not exists promotion_id text;
 alter table inquiries add column if not exists intake jsonb;
 alter table inquiries add column if not exists schedule_hold jsonb;
+alter table inquiries add column if not exists site_address text;
 alter table products add column if not exists category text not null;
 alter table products add column if not exists name text not null;
 alter table products add column if not exists grade text;
@@ -1812,6 +1835,7 @@ alter table orders add column if not exists closed_by text;
 alter table orders add column if not exists receipt_name text;
 alter table orders add column if not exists handovers jsonb;
 alter table orders add column if not exists tatami_rooms jsonb;
+alter table orders add column if not exists work_staff jsonb;
 alter table invoices add column if not exists number text not null unique;
 alter table invoices add column if not exists order_id text not null references orders(id);
 alter table invoices add column if not exists customer_id text not null references customers(id);
@@ -2723,6 +2747,20 @@ alter table condolences add column if not exists created_by text not null;
 alter table condolences add column if not exists created_at timestamptz not null;
 alter table condolences add column if not exists updated_by text;
 alter table condolences add column if not exists updated_at timestamptz not null;
+alter table change_notices add column if not exists at timestamptz not null;
+alter table change_notices add column if not exists actor_id text not null;
+alter table change_notices add column if not exists store_id text not null;
+alter table change_notices add column if not exists target_type text not null;
+alter table change_notices add column if not exists target_id text not null;
+alter table change_notices add column if not exists case_ids jsonb not null default '[]';
+alter table change_notices add column if not exists number text;
+alter table change_notices add column if not exists title text not null default '';
+alter table change_notices add column if not exists customer_id text;
+alter table change_notices add column if not exists topic text not null;
+alter table change_notices add column if not exists lines jsonb not null default '[]';
+alter table change_notices add column if not exists href text not null;
+alter table change_notices add column if not exists recipients jsonb not null default '[]';
+alter table change_notices add column if not exists read_by jsonb not null default '[]';
 alter table doc_drafts add column if not exists number text not null unique;
 alter table doc_drafts add column if not exists title text not null;
 alter table doc_drafts add column if not exists template text not null;
@@ -2989,6 +3027,9 @@ create index if not exists promotions_kind_idx on promotions (kind);
 create index if not exists promotions_load_order_idx on promotions (start_date, id);
 create index if not exists office_improvements_load_order_idx on office_improvements (year, date, created_at, id);
 create index if not exists condolences_load_order_idx on condolences (date, created_at, id);
+create index if not exists change_notices_store_id_at_idx on change_notices (store_id, at);
+create index if not exists change_notices_target_id_idx on change_notices (target_id);
+create index if not exists change_notices_load_order_idx on change_notices (at, id);
 create index if not exists doc_drafts_store_id_idx on doc_drafts (store_id);
 create index if not exists doc_drafts_status_idx on doc_drafts (status);
 create index if not exists doc_drafts_load_order_idx on doc_drafts (created_at, id);
@@ -3216,6 +3257,9 @@ grant select, insert, update, delete on table office_improvements to service_rol
 alter table condolences enable row level security;
 revoke all on table condolences from anon, authenticated;
 grant select, insert, update, delete on table condolences to service_role;
+alter table change_notices enable row level security;
+revoke all on table change_notices from anon, authenticated;
+grant select, insert, update, delete on table change_notices to service_role;
 alter table doc_drafts enable row level security;
 revoke all on table doc_drafts from anon, authenticated;
 grant select, insert, update, delete on table doc_drafts to service_role;

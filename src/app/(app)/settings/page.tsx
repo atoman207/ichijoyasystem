@@ -278,6 +278,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               <thead><tr className="bg-subtle text-xs text-ink-2"><th className="px-3 py-1.5 text-left font-medium">対象</th><th className="px-3 py-1.5 text-left font-medium">条件</th><th className="px-3 py-1.5 text-left font-medium">承認者</th></tr></thead>
               <tbody className="text-xs">
                 <tr className="border-t border-line"><td className="px-3 py-2">問い合わせ・現場情報・顧客のその他の項目の登録/変更</td><td className="px-3 py-2">-</td><td className="px-3 py-2">不要 (即時反映・履歴記録)</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">予定の変更・削除 (受注の引取・納品の日程を含む)</td><td className="px-3 py-2">{rules.scheduleChange ? "店舗スタッフの変更" : "-"}</td><td className="px-3 py-2">{rules.scheduleChange ? "店長" : "不要 (即時反映・担当店舗にお知らせ)"}</td></tr>
+                <tr className="border-t border-line"><td className="px-3 py-2">確定した見積・契約金額の変更 (仕様の変更・明細の追加・部分キャンセル)</td><td className="px-3 py-2">{rules.smallChangeLimit > 0 ? `差額 ${yen(rules.smallChangeLimit)} 以下 (仕様だけの変更を含む)` : "-"}</td><td className="px-3 py-2">{rules.smallChangeLimit > 0 ? "不要 (即時反映・担当店舗にお知らせ。施工完了・売上確定の案件は管理者)" : "下の基準のとおり"}</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">顧客の重要情報 (氏名・フリガナ・区分・電話・メール・住所) の変更</td><td className="px-3 py-2">{rules.customerChange ? "店舗スタッフ・本部スタッフの変更" : "承認なし (設定で変更可)"}</td><td className="px-3 py-2">{rules.customerChange ? "店長 (店長・管理者の変更は即時反映)" : "不要"}</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">見積の確定</td><td className="px-3 py-2">{yen(rules.quoteAdminThreshold)} 未満</td><td className="px-3 py-2">店長</td></tr>
                 <tr className="border-t border-line"><td className="px-3 py-2">見積の確定</td><td className="px-3 py-2">{yen(rules.quoteAdminThreshold)} 以上 / 本部案件</td><td className="px-3 py-2">管理者</td></tr>
@@ -302,6 +304,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                   <Field label="経費: 管理者の承認になる金額 (以上)"><Input name="expenseAdminThreshold" type="number" min={1000} step={1000} defaultValue={rules.expenseAdminThreshold} required /></Field>
                 </div>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="customerChange" defaultChecked={rules.customerChange} className="h-4 w-4" /> 顧客の重要情報 (氏名・フリガナ・区分・電話・メール・住所) の変更に承認を必要とする</label>
+                <Field label="承認なしで反映する工事金額の変更の差額 (以下。0 = 使わない)" hint="確定した見積・契約金額の変更で、変更前と変更後の差がこの金額以下なら、誰の承認もなしでその場で反映します (仕様だけの変更を含む)"><Input name="smallChangeLimit" type="number" min={0} step={1000} defaultValue={rules.smallChangeLimit} required /></Field>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="scheduleChange" defaultChecked={rules.scheduleChange} className="h-4 w-4" /> 予定 (受注の引取・納品の日程を含む) の変更・削除に店長の承認を必要とする (オフ = 承認なしで反映し、担当店舗にお知らせ)</label>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="noticeHq" defaultChecked={rules.noticeHq} className="h-4 w-4" /> 案件の変更のお知らせを、担当店舗に加えて本部と管理者にも届ける</label>
                 <Button type="submit" size="sm">保存</Button>
                 <p className="text-[11px] text-ink-3">変更は、これから申請するものに使われます (申請済みの承認者は変わりません)。変更は変更履歴に残ります。</p>
               </form>

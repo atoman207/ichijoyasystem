@@ -150,7 +150,7 @@ await store.mutate((x) => {
   x.inquiries.push(
     { id: "inq_free", number: "INQ-T-1", contactName: "ヤマダ", contactPhone: real.phone, channel: "phone", storeId: "koshi", category: "amido", summary: "網戸の張り替え", detail: "", status: "in_progress", receivedAt: nowIso, createdBy: staff.id, updatedAt: nowIso, intake: { name: "ヤマダ", phone: real.phone, address: "合志市福原100-1" } },
     { id: "inq_ph", number: "INQ-T-2", customerId: "c_ph", contactName: "山田", channel: "phone", storeId: "koshi", category: "tatami", summary: "畳 表替え6", detail: "", status: "in_progress", receivedAt: nowIso, createdBy: staff.id, updatedAt: nowIso, area: "福原", source: "import", sourceRef: "sheet:case:test" },
-    { id: "inq_quoted", number: "INQ-T-3", contactName: "見積済", channel: "phone", storeId: "koshi", category: "tatami", summary: "見積済み", detail: "", status: "quoted", receivedAt: nowIso, createdBy: staff.id, updatedAt: nowIso, quoteId: x.quotes.find((q) => q.storeId === "koshi").id },
+    { id: "inq_quoted", number: "INQ-T-3", contactName: "見積済", channel: "phone", storeId: "koshi", category: "tatami", summary: "見積済み", detail: "", status: "quoted", receivedAt: nowIso, createdBy: staff.id, updatedAt: nowIso, quoteId: "q_cl_quoted" },
   );
   x.schedule.push(
     { id: "ev_free", title: "ヤマダ 様 見積り (現地調査)", kind: "survey", date: d(3), slot: "am", storeId: "koshi", assigneeIds: [staff.id], inquiryId: "inq_free", location: "合志市福原100-1", source: "manual", createdBy: staff.id, createdAt: nowIso },
@@ -177,9 +177,12 @@ r = await act(staff, () => A.linkInquiryFromForm(form({ inquiryId: "inq_free", c
 eq([r.err, db().inquiries.find((i) => i.id === "inq_free").customerId, db().customers.some((c) => c.id === real.id)], [null, second.id, true], "見積の前なら別のお客様に付け替えられる (本物の顧客は消さない)");
 await store.mutate((x) => {
   x.inquiries.find((i) => i.id === "inq_quoted").customerId = second.id;
+  x.quotes.push({ id: "q_cl_quoted", number: "Q-CL-1", version: 1, customerId: second.id, inquiryId: "inq_quoted", storeId: "koshi", title: "見積済み", category: "tatami", items: [{ id: "qi_cl", name: "畳表替え", qty: 6, unit: "枚", unitPrice: 10000, amount: 60000 }], subtotal: 60000, discount: 0, tax: 5454, total: 60000, taxIncluded: true, status: "approved", validUntil: "2099-12-31", createdBy: staff.id, createdAt: nowIso, updatedAt: nowIso });
 });
+// お客様のご要望 2026-11-25「⑤」: 見積のあとの案件も、問い合わせ・見積の内容はそのままにお客様だけを付け替える (以前は断っていた)
 r = await act(staff, () => A.linkInquiryFromForm(form({ inquiryId: "inq_quoted", customerId: real.id, returnTo: "/inquiries/inq_quoted" })));
-ok(/見積を作成した案件/.test(r.err ?? ""), "見積を作った案件のお客様は付け替えない");
+eq([r.err, db().inquiries.find((i) => i.id === "inq_quoted").customerId, db().quotes.find((q) => q.id === "q_cl_quoted").customerId], [null, real.id, real.id], "見積を作った案件も、問い合わせと見積をまとめて付け替える");
+ok(/付け替えました/.test(r.msg ?? "") && db().quotes.find((q) => q.id === "q_cl_quoted").items.length === 1, "見積の内容はそのまま");
 if (other) {
   r = await act(other, () => A.linkInquiryFromForm(form({ inquiryId: "inq_free", customerId: real.id, returnTo: "/inquiries/inq_free" })));
   ok(Boolean(r.err), "ほかの店舗のスタッフは紐づけを変えられない");

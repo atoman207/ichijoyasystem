@@ -21,7 +21,7 @@ import { parseTaxMode, quoteTotals, taxFields, taxModeOf, type TaxMode } from "@
 import { siteInfoFromForm } from "@/lib/site-info";
 import { plannedFromSiteInfo } from "@/lib/case-status";
 import { syncHandoverMemo } from "@/lib/db/schedule";
-import { assertCaseStore, choice, fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
+import { assertCaseStore, choice, fail, requireActionUser, resolveStoreId, safeReturn, str, withMsg } from "./guards";
 import { propagateOrderSite } from "@/lib/maps/store";
 import { quoteCompletedLock, completedLockMessage } from "@/lib/case-access";
 import { autoUnit } from "@/lib/line-kind";
@@ -252,7 +252,9 @@ export async function createQuote(formData: FormData) {
 
 export async function updateQuote(id: string, formData: FormData) {
   const user = await requireActionUser();
-  const back = `/quotes/${id}/edit`;
+  // 予定表の小さな画面から明細を直したときは、その画面に戻る (returnTo。お客様のご要望 2026-11-25「③」)
+  const ret = safeReturn(str(formData, "returnTo"), "");
+  const back = ret || `/quotes/${id}/edit`;
   const items = parseItems(formData, back);
   const intent = str(formData, "intent");
   let message = "見積を更新しました。";
@@ -318,9 +320,12 @@ export async function updateQuote(id: string, formData: FormData) {
         return;
       }
       if (sameContent) fail(back, "変更された内容がありません。");
-      if (hasActiveInvoice(db, q.id)) fail(`/quotes/${id}`, "請求書を発行済みの案件は金額を変更できません。入金前であれば、請求書を無効化してから変更を申請してください。");
-      const reason = str(formData, "reason");
-      if (!reason) fail(back, "確定済みの見積を変更するには変更理由が必要です。");
+      if (hasActiveInvoice(db, q.id)) fail(ret || `/quotes/${id}`, "請求書を発行済みの案件は金額を変更できません。入金前であれば、請求書を無効化してから変更を申請してください。");
+      // 差額が少ない変更 (仕様・品名・数量だけで金額が同じものを含む) は承認なし・理由は省略可 (お客様のご要望 2026-11-25「⑥」。approval-decide.ts の smallAmountChange)
+      const limit = approvalSettings(db).smallChangeLimit;
+      const small = limit > 0 && Math.abs(t.total - q.total) <= limit;
+      const reason = str(formData, "reason") || (small ? (t.total === q.total ? "仕様・内容の変更" : `金額の変更 (差額 ¥${Math.abs(t.total - q.total).toLocaleString("ja-JP")})`) : "");
+      if (!reason) fail(back, `確定済みの見積の変更で、差額が${manYen(limit)}を超えるときは変更理由が必要です (承認者と変更履歴に記録されます)。`);
       if (siteChanged) applySiteFields(db, q, site!, user);
       q.pendingChange = { items, ...t, taxIncluded, taxExempt, title, workDetails, notes, reason, requestedBy: user.id, requestedAt: now };
       q.updatedAt = now;
@@ -350,7 +355,8 @@ export async function updateQuote(id: string, formData: FormData) {
   });
   await notifyNewApprovals(approvalIds, user.id);
   revalidatePath("/quotes");
-  redirect(withMsg(`/quotes/${id}`, message));
+  if (ret) revalidatePath("/schedule");
+  redirect(withMsg(ret || `/quotes/${id}`, message));
 }
 
 export async function submitQuote(id: string) {

@@ -155,6 +155,8 @@ export const TABLES: TableDef[] = [
       ["intake", "jsonb"],
       // お客様都合で日程未定 (理由・次回の連絡予定日。src/lib/inquiry-flow.ts)
       ["scheduleHold", "jsonb"],
+      // 施工現場の住所 (依頼主の住所と違うとき。お客様のご要望 2026-11-25「⑨」)
+      ["siteAddress", "text"],
     ],
     orderBy: ["received_at"],
     indexes: [["store_id"], ["status"], ["customer_id"]],
@@ -277,6 +279,8 @@ export const TABLES: TableDef[] = [
       ["handovers", "jsonb"],
       // 2026-11-23: 畳の仕様 (部屋ごと。畳表・畳縁・畳床・寸法。src/lib/tatami-spec.ts)
       ["tatamiRooms", "jsonb"],
+      // 2026-11-25: 作業の担当 (現地見積・引取・納品・施工の実績。施工完了で確かめる。src/lib/work-staff.ts)
+      ["workStaff", "jsonb"],
     ],
     orderBy: ["created_at"],
     indexes: [["store_id"], ["status"], ["customer_id"], ["sales_date"]],
@@ -1789,6 +1793,31 @@ export const TABLES: TableDef[] = [
       ["updatedAt", `${ts} not null`],
     ],
     orderBy: ["date", "created_at"],
+  },
+  /* ---------------- 案件の変更のお知らせ (types.ts の ChangeNotice。src/lib/change-notices.ts。お客様のご要望 2026-11-25「⑥」) ---------------- */
+  {
+    collection: "changeNotices",
+    table: "change_notices",
+    label: "案件の変更のお知らせ (予定・明細・金額・担当・お客様の付け替えなどの変更を、担当店舗・本部・管理者に知らせる。案件ごとの変更の履歴)",
+    columns: [
+      ["id", "text primary key"],
+      ["at", `${ts} not null`],
+      ["actorId", "text not null"],
+      ["storeId", "text not null"],
+      ["targetType", "text not null"],
+      ["targetId", "text not null"],
+      ["caseIds", "jsonb not null default '[]'"],
+      ["number", "text"],
+      ["title", "text not null default ''"],
+      ["customerId", "text"],
+      ["topic", "text not null"],
+      ["lines", "jsonb not null default '[]'"],
+      ["href", "text not null"],
+      ["recipients", "jsonb not null default '[]'"],
+      ["readBy", "jsonb not null default '[]'"],
+    ],
+    orderBy: ["at"],
+    indexes: [["store_id", "at"], ["target_id"]],
   },
   /* ---------------- 文書の下書き (types-drafts.ts。src/lib/doc-drafts.ts・/ai/drafts) ---------------- */
   {

@@ -1,7 +1,7 @@
 import "server-only";
 import type { Database } from "@/lib/db/types";
 import { CATEGORY_LABEL } from "@/lib/constants";
-import { normalizeReception, ruleReception, RECEPTION_FIELD_KEYS, RECEPTION_TYPES, type ReceptionFields } from "@/lib/reception";
+import { APPOINTMENT_KINDS, normalizeReception, ruleReception, RECEPTION_FIELD_KEYS, RECEPTION_TYPES, type ReceptionFields } from "@/lib/reception";
 import { AiError, aiEnabled, generateJson, type AiPart } from "./provider";
 
 /**
@@ -46,6 +46,23 @@ export const RECEPTION_SCHEMA = {
     companyName: s("相手が会社・業者のときの会社名"),
     memoText: s("写真のとき: メモに書かれた文字をそのまま (改行は保つ。読めない文字は 〓)。文章のときは空文字"),
     uncertainFields: { type: "array", items: { type: "string", enum: RECEPTION_FIELD_KEYS.filter((k) => k !== "uncertainFields") }, description: "読みにくい・聞き取りにくい・自信のない項目の名前" },
+    siteAddress: s("施工現場の住所 (依頼主の住所と違うときだけ。業者・不動産会社などからの依頼の現場、ご実家・別宅など。address には依頼主の住所)"),
+    appointments: {
+      type: "array",
+      description: "すでに決まっている日程 (メモ・会話に日付が書かれた訪問・見積り・現地調査・採寸・引取・納品・施工など)。お客様の『希望』だけで決まっていないものは desiredDate に書き、ここには入れない。なければ空の配列",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["kind", "date", "time", "slot", "text"],
+        properties: {
+          kind: { type: "string", enum: [...APPOINTMENT_KINDS], description: "survey = 見積り・見積もりに伺う / site_survey = 現地調査 (現調・下見) / onsite_quote = 現場見積 (現見。見積もりしてそのまま工事) / measure = 採寸 / pickup = 引取 / delivery = 納品 / install = 施工・工事 / visit = 訪問・打合せ" },
+          date: { type: "string", description: "日付 YYYY-MM-DD (年がなければ今日の日付から近い将来の年。曜日だけ・『来週』などは今日の日付から計算。分からなければ空文字)" },
+          time: { type: "string", description: "時刻 HH:mm (24 時間。『10時』= 10:00、『午後2時』= 14:00。書かれていなければ空文字)" },
+          slot: { type: "string", enum: ["am", "pm", ""], description: "時刻がなく『午前』『AM』なら am、『午後』『PM』なら pm。なければ空文字" },
+          text: { type: "string", description: "メモ・会話に書かれた日程の文字そのまま (例: 11/28(金) 午前 引取)" },
+        },
+      },
+    },
     confidence: { type: "number", description: "読み取り全体の確からしさ (0〜1)" },
     warnings: { type: "array", items: { type: "string" }, description: "確認が必要な点 (日本語で短く。例: 電話番号の 1 桁が読みにくい)" },
   },
@@ -63,6 +80,8 @@ function systemPrompt(db: Pick<Database, "stores" | "users">, kind: "image" | "t
     "- 内容の種類 (callType) は会話の目的で決めます。すでに工事・見積・引取・納品の予定がある件の日程の変更・確認・キャンセル・支払い・手直しは existing_case、仕入先・業者は supplier、当社への売り込みは sales です。",
     "- detail には、見積・施工に必要なこと (部屋・畳の枚数・襖の枚数・現場の状況・ご要望・決まったこと・次にすること) を短い文で書きます。あいさつ・相づちは書きません。",
     "- お客様の言った店舗名・地域は storeHint に。店舗: " + stores,
+    "- 依頼主 (電話・メモの相手。業者・不動産会社・ご家族など) の住所は address、実際に工事する現場の住所が別に書かれていれば siteAddress に入れます。",
+    "- 訪問・見積り・現地調査・引取・納品などの日付がすでに決まっていれば appointments に 1 件ずつ入れます (日付は今日の日付から年を補って YYYY-MM-DD)。決まっていない希望は desiredDate だけに書きます。",
     "- 文章のときは memoText を空文字にしてください。",
     "- confidence は全体の確からしさ (0〜1) です。",
   ].join("\n");

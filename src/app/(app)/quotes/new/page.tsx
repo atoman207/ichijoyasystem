@@ -132,7 +132,7 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
           </Field>
           <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
             <Field label="施工場所 (お客様の住所と違うとき)" hint="例: ご実家・お子様の家など。空欄ならお客様の住所。受注・予定表・見積書に引き継ぎます">
-              <Input name="siteAddress" defaultValue={exText("siteAddress") && exText("siteAddress") !== customer?.address ? exText("siteAddress") : undefined} placeholder={customer?.address ? `空欄 = ${customer.address}` : "熊本県…"} />
+              <Input name="siteAddress" defaultValue={exText("siteAddress") && exText("siteAddress") !== customer?.address ? exText("siteAddress") : inquiry?.siteAddress || undefined} placeholder={customer?.address ? `空欄 = ${customer.address}` : "熊本県…"} />
             </Field>
             <Field label="領収書の宛名 (お客様名と違うとき)" hint="例: 株式会社○○ (会社名義の領収書)。空欄ならお客様名。受注で変更できます">
               <Input name="receiptName" defaultValue={undefined} placeholder={customer?.name ? `空欄 = ${customer.name} 様` : "株式会社○○"} />

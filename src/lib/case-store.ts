@@ -2,6 +2,7 @@ import type { AuditChange, Database, Inquiry, Order, Quote, StoreId } from "@/li
 import { addAudit, newId, nowIso } from "@/lib/db/store";
 import { liveInvoicesOfOrder } from "@/lib/billing";
 import { closedReason } from "@/lib/mgmt/close";
+import { addChangeNotice, caseTarget } from "@/lib/change-notices";
 
 /**
  * 案件の施工店舗の変更 (お客様のご要望 2026-11-24「予定表から施工店舗の変更」「売上は原則として施工店舗に帰属」「施工店舗の変更は店長の承認」)
@@ -117,5 +118,6 @@ export function applyCaseStoreChange(db: Database, userId: string, c: CaseChain,
     events++;
     addAudit(db, { userId, action: "update", entity: "schedule", entityId: e.id, entityLabel: e.title, summary: `案件の施工店舗の変更に合わせて予定の店舗を変更 (${storeName(before)} → ${storeName(to)})`, storeId: to, changes: [{ field: "storeId", before, after: to }] });
   }
+  addChangeNotice(db, userId, caseTarget(db, c.head.id), "施工店舗の変更", [{ label: "施工店舗 (売上の店舗)", before: storeName(from), after: storeName(to) }, ...(reason ? [{ label: "理由", before: "", after: reason }] : [])], { alsoStores: [from] });
   return { records, events };
 }

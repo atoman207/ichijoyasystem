@@ -1,4 +1,5 @@
-import type { ScheduleKind, StoreId } from "@/lib/db/types";
+import type { MediaKey, QuoteItem, ScheduleKind, StoreId } from "@/lib/db/types";
+import type { TaxMode } from "@/lib/quote-calc";
 
 /** 予定表で予定を押したときの小さな画面の中身 (/api/schedule/events/[id] → EventQuickDialog) */
 export interface EventQuickData {
@@ -42,8 +43,10 @@ export interface EventQuickData {
   inquiryHref?: string;
   /** 受注と連動する予定 (種類は変えられない) */
   synced: boolean;
-  /** 受注の引取・納品の日程と連動 (日時の変更は申請) */
+  /** 受注の引取・納品の日程と連動 */
   handover: boolean;
+  /** 予定の変更・削除に承認が要る (設定 → 承認ルール。既定 = 不要) */
+  scheduleApproval: boolean;
   lockKind: boolean;
   canEdit: boolean;
   hold: boolean;
@@ -53,6 +56,52 @@ export interface EventQuickData {
   staff: QuickStaff[];
   /** 引取・現見 ⇄ 納品 の相手の予定 (お客様のご要望 2026-11-24「⑦」。src/lib/schedule-pair.ts) */
   pair?: QuickPair;
+  /** 案件の確認・変更・追加 (お客様のご要望 2026-11-25「③⑤⑨⑩」。src/lib/actions/case-quick.ts) */
+  caseEdit?: QuickCase;
+}
+
+export interface QuickCase {
+  /** 案件のいちばん進んだ記録 (なければ案件のない予定) */
+  caseId?: string;
+  caseNumber?: string;
+  /** 案件を変えられる (担当店舗のメンバー・店長以上。入金まで終わった案件は管理者) */
+  canEdit: boolean;
+  lock?: string;
+  /** 施工現場の住所 (依頼主の住所と違うとき)。依頼主 = お客様の住所 */
+  site?: { address: string; requester: string; corporate: boolean; canEdit: boolean };
+  /** 見積の明細 (仕様・枚数・単価) */
+  quote?: QuickQuote;
+  /** 見積のない受注 (移行した受注など): 金額だけ */
+  orderTotal?: number;
+  orderHref?: string;
+  /** お客様の付け替え (紐付け間違いの修正) */
+  relink?: { canRelink: boolean; blocked?: string; current?: string };
+  /** 同じお客様の新しい案件 */
+  newCase?: { customerId: string; customerName: string; corporate: boolean; media: MediaKey; storeId: StoreId; categories: { id: string; label: string }[]; kinds: { id: ScheduleKind; label: string }[] };
+  /** 作業の担当 (実績) の確認 (受注のとき。src/lib/work-staff.ts) */
+  workStaff?: { href: string; source: "saved" | "auto"; rows: { role: string; names: string }[] };
+}
+
+export interface QuickQuote {
+  id: string;
+  number: string;
+  href: string;
+  draft: boolean;
+  version: number;
+  items: QuoteItem[];
+  discount: number;
+  taxMode: TaxMode;
+  total: number;
+  /** この画面で明細を変えられる */
+  editable: boolean;
+  /** 変えられない理由 (承認待ち・請求書を発行済みなど) */
+  blocked?: string;
+  /** 承認なしで反映する差額 (円。0 = 使わない) */
+  smallLimit: number;
+  /** 確定した売上 (施工完了・請求済・入金済) の案件: 金額の変更は管理者の承認 */
+  confirmedSales: boolean;
+  /** 申請者が店長・管理者 (承認を省略できる) */
+  ownApproval: boolean;
 }
 
 export interface QuickStoreChange {
@@ -81,6 +130,8 @@ export interface QuickRemove {
   approver?: string;
   /** 受注の画面 (施工予定の変更) */
   orderHref?: string;
+  /** あわせて削除できる関連する予定 (引取 ⇄ 納品。お客様のご要望 2026-11-25「①」) */
+  pair?: { want: "delivery" | "origin"; events: { id: string; label: string }[] };
 }
 
 export interface QuickStaff {
@@ -115,6 +166,13 @@ export interface QuickPairEvent {
   period: string;
   label: string;
   assignees: string[];
+  date: string;
+  startTime?: string;
+  endTime?: string;
+  slot?: "am" | "pm";
+  assigneeIds: string[];
+  /** この画面から日時・担当を変えられる / 削除できる (受注の施工予定・完了した受注の予定は不可) */
+  canEdit: boolean;
 }
 
 export interface QuickPair {

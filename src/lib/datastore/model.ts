@@ -639,6 +639,8 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
     v("messages", `select * from main.messages where thread_id in (select id from main.threads where store_id is null or store_id = ${store} or created_by = ${me} or participants like ${sq(`%"${user.id}"%`)})`),
     // 社内資料: 見られる人の設定
     v("knowledge", `select * from main.knowledge where active = 1 and (visibility is null or visibility in ${knowledgeVis[user.role]})`),
+    // 案件の変更のお知らせ (src/lib/change-notices.ts の canViewNotice と同じ: 自分あて・自分が変更したもの)
+    v("change_notices", `select * from main.change_notices where actor_id = ${me} or recipients like ${sq(`%"${user.id}"%`)}`),
     // 文書の下書き (permissions.ts の canViewDocDraft と同じ: 所属店舗の文書と自分が作った文書)
     v("doc_drafts", `select * from main.doc_drafts where store_id = ${store} or created_by = ${me}`),
     // 施工事例の投稿 (canViewCasePost: 案件の店舗と自分が作った投稿)・整理整頓チェック (canViewTidyCheck: 店長は全店舗、店舗スタッフは自店舗)

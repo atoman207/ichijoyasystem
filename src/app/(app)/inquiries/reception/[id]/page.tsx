@@ -28,6 +28,7 @@ import {
 import { providerLabel } from "@/lib/reception-docs";
 import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { ReceptionReview, type ReviewCase, type ReviewCustomer } from "@/components/reception/ReceptionReview";
+import { MemoPhoto } from "@/components/reception/MemoPhoto";
 import { areaStoreOf } from "@/lib/store-area";
 import { isCommonStaff } from "@/lib/staff-choices";
 import { Badge, Card, CardHeader, Dl, Flash, Note, PageHeader } from "@/components/ui";
@@ -120,6 +121,7 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
         defaultAssigneeId={defaultAssigneeId}
         mediaDefault={mediaDefault}
         canCreateCustomer={userCanCreateCustomer(db, user)}
+        photo={photo?.kind === "photo" ? { src: `/api/attachments/${photo.id}`, fullSrc: `/api/attachments/${photo.id}` } : undefined}
       />
     );
   }
@@ -139,15 +141,15 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
       />
       <div className="grid grid-cols-1 gap-5 @4xl:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
         {/* スマートフォンでは確認・登録 (お客様の紐付け) を先に、元のメモを後に */}
-        <div className="order-2 space-y-4 @4xl:order-1">
+        {/* 広い画面では元のメモを欄の横に固定して、見比べながら直す (お客様のご要望 2026-11-25「⑧」) */}
+        <div className="order-2 space-y-4 @4xl:sticky @4xl:top-4 @4xl:order-1 @4xl:self-start">
           <Card>
             <CardHeader title={meta.source === "photo" ? "元のメモ" : meta.source === "audio" || meta.source === "phone_api" ? "通話の文字起こし" : "入力した内容"} />
             {photo &&
               (photo.kind === "photo" ? (
-                <a href={`/api/attachments/${photo.id}`} target="_blank" rel="noopener" className="mb-3 block overflow-hidden rounded-lg border border-line bg-subtle">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={`/api/attachments/${photo.id}${photo.thumbKey ? "?size=thumb" : ""}`} alt="受付メモの写真" className="max-h-80 w-full object-contain" />
-                </a>
+                <div className="mb-3">
+                  <MemoPhoto src={`/api/attachments/${photo.id}`} fullSrc={`/api/attachments/${photo.id}`} />
+                </div>
               ) : (
                 <a href={`/api/attachments/${photo.id}`} target="_blank" rel="noopener" className="mb-3 flex h-20 items-center justify-center rounded-lg border border-line bg-subtle text-sm text-accent hover:underline">元のメモ (PDF) を開く</a>
               ))}

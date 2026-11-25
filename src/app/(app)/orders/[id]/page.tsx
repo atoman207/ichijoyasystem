@@ -9,7 +9,13 @@ import { TatamiRoomsCard } from "@/components/schedule/TatamiRoomsCard";
 import { saveOrderTatamiRooms } from "@/lib/actions/tatami-rooms";
 import { ROOMS_SOURCE_LABEL, orderRooms, quoteRooms } from "@/lib/tatami-rooms";
 import { orderChain, userName } from "@/lib/db/queries";
-import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, requestOrderChange, resubmitOrder, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
+import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, requestOrderChange, resubmitOrder, saveWorkStaff, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
+import { WORK_ROLES, WORK_ROLE_LABEL, workStaffOf } from "@/lib/work-staff";
+import { WorkStaffFields } from "@/components/features/WorkStaffFields";
+import { CaseChangeHistory } from "@/components/features/CaseChangeHistory";
+import { CaseCustomerSearch } from "@/components/features/LinkSearch";
+import { relinkCase } from "@/lib/actions/case-quick";
+import { caseRelinkBlocker } from "@/lib/customer-link";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
 import { APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, PROGRESS_KIND_LABEL, QUOTE_STATUS } from "@/lib/constants";
 import { customerPhonesText } from "@/lib/customer-contacts";
@@ -75,6 +81,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const ownStore = canAccessStore(user, o.storeId);
   logRecordView(user, info, { entity: "order", id: o.id, label: o.number, storeId: o.storeId }, db.auditLogs);
   const lock = completedCaseLock(db, user, o);
+  const relinkBlocked = caseRelinkBlocker(db, { order: o, head: { type: "order", id: o.id, number: o.number, title: o.title, storeId: o.storeId } });
   const customer = db.customers.find((c) => c.id === o.customerId);
   // まとめ請求のお客様 (締め日ごとに 1 枚の請求書。src/lib/billing.ts)
   const bTerms = batchTerms(customer);
@@ -121,6 +128,10 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   // 施工場所 (なければお客様の住所) の担当エリアの店舗 (お客様のご要望 2026-11-24「③」。担当店舗の変更の目安)
   const orderArea = areaStoreOf(db, o.siteAddress || customer?.address);
   const staffChoices = staffForStore(db, o.storeId, o.workerIds).sort((a, b) => Number(o.workerIds.includes(b.id)) - Number(o.workerIds.includes(a.id)));
+  // 作業の担当 (実績。src/lib/work-staff.ts): 保存した値、なければ予定表の予定の担当者から
+  const workStaff = workStaffOf(db, o);
+  const wsIds = WORK_ROLES.flatMap((r) => workStaff[r]);
+  const workStaffChoices = staffForStore(db, o.storeId, wsIds).map((u) => ({ id: u.id, label: u.name }));
   const AMOUNT_LABEL: [keyof NonNullable<typeof o.amounts>, string][] = [["tatami", "畳"], ["fusuma", "襖"], ["shoji", "障子"], ["amido", "網戸"], ["curtain", "カーテン"], ["cloth", "クロス・工事"], ["own", "自社商品"], ["misc", "諸経費"], ["discount", "値引"]];
 
   // 案件ごとの請求書の発行 (まとめ請求のお客様は折りたたんで出す)
@@ -320,6 +331,23 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               />
             </Card>
           )}
+
+          <Card id="work-staff">
+            <CardHeader
+              title="作業の担当 (実績)"
+              description={workStaff.source === "saved" ? `${workStaff.confirmedAt ? `施工完了で確定 (${fmtDateTime(workStaff.confirmedAt)}・${userName(workStaff.confirmedBy)})` : `保存済み (${fmtDateTime(workStaff.updatedAt ?? "")}・${userName(workStaff.updatedBy)})`}。この担当をインセンティブ (アンケートの担当) と経営の集計に使います` : "予定表の予定の担当者から自動で出しています。施工完了のときに確かめて確定します (この画面でいつでも直せます)"}
+            />
+            <Dl columns={2} items={WORK_ROLES.map((r) => [WORK_ROLE_LABEL[r], workStaff[r].map((id) => userName(id)).join("・") || "-"] as [string, string])} />
+            {!viewOnly && !lock.locked && o.status !== "cancelled" && (
+              <details className="mt-3">
+                <summary className="cursor-pointer text-sm font-medium text-accent">担当を変更する</summary>
+                <form action={saveWorkStaff.bind(null, o.id)} className="mt-2 space-y-3">
+                  <WorkStaffFields staff={workStaffChoices} value={workStaff} />
+                  <Button type="submit" size="sm">作業の担当を保存</Button>
+                </form>
+              </details>
+            )}
+          </Card>
 
           <CasePlanCard recordType="order" recordId={o.id} user={user} />
           <CaseScheduleCard
@@ -571,10 +599,18 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           {active && (
             <Card id="complete">
               <CardHeader title="施工完了 → 売上計上" description={`完了を登録すると、施工完了日を売上計上日として売上に計上します (経営ダッシュボード・会計データとも)。${batchBilling ? "このお客様はまとめ請求のため、請求書は締め日にまとめて発行します" : "続けて請求書を発行できます (請求書の発行日は別に持ちます)"}`} />
-              <form action={completeOrder.bind(null, o.id)} className="flex flex-wrap items-end gap-2">
-                <Field label="施工完了日 (= 売上計上日)"><Input type="date" name="completedAt" defaultValue={toDateKey(new Date())} /></Field>
-                <Field label="メモ" className="w-full @xl:w-72"><Input name="body" placeholder="施工完了。お客様確認済み。" /></Field>
-                <Button type="submit">施工完了を登録</Button>
+              <form action={completeOrder.bind(null, o.id)} className="space-y-3">
+                {/* 作業の担当を確かめてから完了にする (インセンティブの集計の起点。お客様のご要望 2026-11-25「④」) */}
+                <div className="rounded-xl border border-accent/30 bg-accent-soft/20 p-3">
+                  <div className="mb-1 text-sm font-semibold text-ink">作業の担当を確かめてください</div>
+                  <p className="mb-2 text-[11px] text-ink-3">{workStaff.source === "saved" ? "保存した担当です。" : "予定表の予定の担当者から入れています。"}実際に作業した人に直してください (複数名可)。完了の登録と一緒に確定し、インセンティブ (アンケートの担当) と経営の集計に使います。</p>
+                  <WorkStaffFields staff={workStaffChoices} value={workStaff} />
+                </div>
+                <div className="flex flex-wrap items-end gap-2">
+                  <Field label="施工完了日 (= 売上計上日)"><Input type="date" name="completedAt" defaultValue={toDateKey(new Date())} /></Field>
+                  <Field label="メモ" className="w-full @xl:w-72"><Input name="body" placeholder="施工完了。お客様確認済み。" /></Field>
+                  <Button type="submit">施工完了を登録</Button>
+                </div>
               </form>
               {isManagerOrAbove(user) && (
                 <form action={cancelOrder.bind(null, o.id)} className="mt-4 flex flex-wrap items-end gap-2 border-t border-line pt-3">
@@ -637,6 +673,18 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             <CardHeader title="お客様" />
             {customer && <Dl columns={1} items={[["氏名", <Link key="n" href={`/customers/${customer.id}`} className="text-accent hover:underline">{customer.name}</Link>], ["電話", customerPhonesText(customer) || "-"], ["住所", customer.address || "-"], ["施工場所", o.siteAddress && o.siteAddress !== customer.address ? o.siteAddress : "お客様の住所と同じ"], ["領収書の宛名", o.receiptName || `${customer.name} (顧客名)`], ["希望連絡手段", CHANNEL_LABEL[customer.preferredChannel]]]} />}
             {customer?.tradeStopped && <p className="mt-2 rounded-lg bg-critical-soft px-2.5 py-1.5 text-xs text-critical-ink">取引停止のお客様です{customer.tradeStopNote ? ` (${customer.tradeStopNote})` : ""}。</p>}
+            {/* 紐付け間違いの修正: 案件の内容はそのままに、お客様だけを付け替える (お客様のご要望 2026-11-25「⑤」) */}
+            {!viewOnly && !lock.locked && o.status !== "cancelled" && (
+              <details className="mt-3 border-t border-line pt-2" id="relink">
+                <summary className="cursor-pointer text-xs font-medium text-accent">紐付け先のお客様を直す</summary>
+                {relinkBlocked ? <p className="mt-1 text-xs text-ink-3">{relinkBlocked}</p> : (
+                  <div className="mt-2">
+                    <p className="mb-2 text-[11px] text-ink-3">正しいお客様を検索して「付け替える」を押すと、問い合わせ・見積・受注・予定などの内容はそのままで、紐付け先だけが変わります。</p>
+                    <CaseCustomerSearch action={relinkCase.bind(null, o.id)} returnTo={`/orders/${o.id}`} />
+                  </div>
+                )}
+              </details>
+            )}
           </Card>
           <Card>
             <CardHeader title="関連情報" />
@@ -671,6 +719,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           <AiSummary kind="order" id={o.id} />
           <RecordDocDrafts db={db} user={user} type="order" id={o.id} number={o.number} />
           <RecordStamp db={db} targets={[{ entity: "order", id: o.id }]} created={{ by: o.createdBy, at: o.createdAt }} approved={o.approvedBy ? [{ by: o.approvedBy }] : []} />
+          <CaseChangeHistory db={db} ids={[o.id, chain.quote?.id, chain.quote?.inquiryId]} />
           <HistoryCard
             db={db}
             user={user}

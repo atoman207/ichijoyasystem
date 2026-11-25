@@ -4,10 +4,13 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { BACKEND, addAudit, getDb, mutate, newId, nextCustomerCode, nextNumber, nowIso } from "@/lib/db/store";
 import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
-import type { Attachment, CapturedDocument, CommLog, Customer, Database, Inquiry, InquiryIntake, Thread, User } from "@/lib/db/types";
+import type { Attachment, CapturedDocument, CommLog, Customer, Database, Inquiry, InquiryIntake, ScheduleEvent, ScheduleKind, Thread, User } from "@/lib/db/types";
 import { attachmentsOf, detectType, discardStored, relinkDocumentAttachments, storeFile } from "@/lib/attachments";
 import { readObject } from "@/lib/storage";
-import { CHANNEL_LABEL } from "@/lib/constants";
+import { CHANNEL_LABEL, SCHEDULE_KIND } from "@/lib/constants";
+import { findConflicts, isDateKey, periodLabel } from "@/lib/calendar";
+import { mapTablesReady, saveEventLocationMode } from "@/lib/maps/store";
+import { addChangeNotice, caseTarget } from "@/lib/change-notices";
 import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { createInquiryRequest } from "@/lib/inquiry-requests";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
@@ -36,6 +39,7 @@ import {
   receptionHref,
   receptionMetaOf,
   type ReceptionAction,
+  type ReceptionAppointment,
   type ReceptionFields,
   type ReceptionMeta,
   type ReceptionSource,
@@ -266,6 +270,50 @@ function decision(doc: CapturedDocument, d: ReceptionMeta["decision"]) {
 /**
  * 受付を保存・登録する。intent = save (直した内容を保存) / inquiry / case / record / dismiss
  */
+/**
+ * 受付で読み取った日程 (確認の画面で直したもの) のうち「予定表に登録」を選んだものを、問い合わせの予定として登録する (mutate の中)。
+ * 担当者は行ごとに選んだ人 (なければ問い合わせの担当)。重複していても登録し、注意を返す (登録したあとに予定表で直せる)
+ */
+function registerAppointments(d: Database, user: User, inq: Inquiry, list: ReceptionAppointment[], opts: { assigneeId: string; customerId?: string }): string[] {
+  const out: string[] = [];
+  const now = nowIso();
+  const active = new Set(d.users.filter((u) => u.active).map((u) => u.id));
+  for (const a of list) {
+    if (!a.register || !isDateKey(a.date)) continue;
+    const kind = a.kind as ScheduleKind;
+    const assignee = a.assigneeId && active.has(a.assigneeId) ? a.assigneeId : opts.assigneeId;
+    const ev: ScheduleEvent = {
+      id: newId("ev"),
+      title: `${inq.contactName} ${SCHEDULE_KIND[kind].short ?? SCHEDULE_KIND[kind].label}`.trim(),
+      kind,
+      date: a.date,
+      startTime: a.time || undefined,
+      slot: a.time ? undefined : a.slot || undefined,
+      storeId: inq.storeId,
+      assigneeIds: [assignee],
+      customerId: opts.customerId,
+      inquiryId: inq.id,
+      location: inq.siteAddress,
+      memo: a.text ? `メモの日程: ${a.text}` : undefined,
+      source: "manual",
+      createdBy: user.id,
+      createdAt: now,
+      updatedBy: user.id,
+      updatedAt: now,
+    };
+    const hits = findConflicts({ date: ev.date, startTime: ev.startTime, slot: ev.slot, assigneeIds: ev.assigneeIds }, d.schedule);
+    d.schedule.push(ev);
+    if (mapTablesReady() && (ev.customerId || ev.inquiryId)) saveEventLocationMode(d, user, ev, inq.siteAddress ? "custom" : "follow");
+    addAudit(d, { userId: user.id, action: "create", entity: "schedule", entityId: ev.id, entityLabel: ev.title, summary: `受付のメモの日程から予定を登録 (${periodLabel(ev)} ${SCHEDULE_KIND[kind].label} / 案件 ${inq.number}${hits.length ? " / 担当者の予定と重複" : ""})`, storeId: ev.storeId });
+    out.push(`${SCHEDULE_KIND[kind].label} ${periodLabel(ev)}${hits.length ? " (担当者の予定と重なっています。予定表で確かめてください)" : ""}`);
+  }
+  if (out.length) {
+    if (inq.status === "new") inq.status = "in_progress";
+    addChangeNotice(d, user.id, caseTarget(d, inq.id), "予定の追加", out.map((t) => ({ label: "予定", before: "(なし)", after: t })));
+  }
+  return out;
+}
+
 export async function registerReception(formData: FormData) {
   const user = await requireActionUser();
   const id = str(formData, "id");
@@ -335,6 +383,7 @@ export async function registerReception(formData: FormData) {
     const customerId = quickCustomer ?? (newCustomer ? "" : str(formData, "customerId"));
     const canCreate = newCustomer && userCanCreateCustomer(db0, user);
     let createdCustomer = "";
+    let appointmentNote = "";
     const addedPhones: string[] = [];
     const assigneeId = str(formData, "assignedUserId") || user.id;
     const handoff = formData.get("handoff") === "on";
@@ -348,7 +397,7 @@ export async function registerReception(formData: FormData) {
       // 紐付けられるお客様 = 顧客の一覧で見られるお客様 (ほかの店舗・本部で登録したお客様も。src/lib/customer-link.ts)
       if (customer && !canLinkToCustomer(d, user, customer)) fail(back, "このお客様は閲覧の範囲の外のため紐付けられません。店舗または本部に依頼してください。");
       // 担当店舗: 選んだ店舗 (自店舗・住所の担当エリアの店舗。全店舗のロールはすべて) > 住所の担当エリア > お客様の店舗 > 受付の店舗 (お客様のご要望 2026-11-24「③」)
-      const storeId = newCaseStore(d, user, { requested: str(formData, "storeId") || (customer?.storeId ?? doc.storeId), address: f.address, customer }).storeId;
+      const storeId = newCaseStore(d, user, { requested: str(formData, "storeId") || (customer?.storeId ?? doc.storeId), address: f.siteAddress || f.address, customer }).storeId;
       // 新しいお客様として登録 (顧客も同時に登録。二重登録を防ぐため、同じお客様の候補があれば「別のお客様」の確認が要る)
       if (newCustomer && canCreate) {
         const name = f.customerName || f.companyName;
@@ -394,6 +443,8 @@ export async function registerReception(formData: FormData) {
       const detail = [
         f.detail,
         f.desiredDate ? `希望の日時: ${f.desiredDate}` : "",
+        ...f.appointments.filter((a) => !a.register || !isDateKey(a.date)).map((a) => `メモの日程 (予定は未登録): ${a.text || `${a.date} ${a.time || (a.slot === "am" ? "午前" : a.slot === "pm" ? "午後" : "")}`.trim()}`),
+        f.siteAddress && f.siteAddress !== (customer?.address ?? f.address) ? `施工現場: ${f.siteAddress}` : "",
         !customer && (f.postalCode || f.address) ? `住所: ${f.postalCode ? `〒${f.postalCode} ` : ""}${f.address}` : "",
         f.otherPhone ? `ほかの電話番号: ${f.otherPhone}` : "",
         f.mediaText ? `当社を知ったきっかけ (聞いた言葉): ${f.mediaText}` : "",
@@ -424,6 +475,8 @@ export async function registerReception(formData: FormData) {
         media,
         source: "app",
         sourceRef: `reception:${doc.id}`,
+        // 施工現場の住所 (依頼主の住所と違うとき。お客様のご要望 2026-11-25「⑨」)
+        siteAddress: f.siteAddress && f.siteAddress !== (customer?.address ?? f.address) ? f.siteAddress : undefined,
       };
       const cleanIntake = Object.fromEntries(Object.entries(intake).filter(([, v]) => v !== undefined && v !== "")) as InquiryIntake;
       if (Object.keys(cleanIntake).length) inq.intake = cleanIntake;
@@ -439,6 +492,9 @@ export async function registerReception(formData: FormData) {
         if (added) addedPhones.push(added);
       }
       relinkDocumentAttachments(d, doc.id, { type: "inquiry", id: inqId, customerId: customer?.id, storeId });
+      // メモで決まっている日程を予定表に登録する (お客様のご要望 2026-11-25「⑦」: 読み取った日程を初期値に、確認の画面で直してから)
+      const planned = registerAppointments(d, user, inq, f.appointments, { assigneeId: assignee.id, customerId: customer?.id });
+      appointmentNote = planned.length ? ` 予定表に ${planned.join("・")} を登録しました。` : "";
       doc.status = "confirmed";
       doc.linkedType = "inquiry";
       doc.linkedId = inqId;
@@ -453,7 +509,7 @@ export async function registerReception(formData: FormData) {
         notifyThreadId = t.id;
       }
       href = `/inquiries/${inqId}`;
-      message = `問い合わせ ${inq.number} を登録しました${createdCustomer ? `。新しいお客様 (${createdCustomer}) も登録しました` : customer ? ` (${customer.name} 様に紐付け${addedPhones.length ? `。電話番号 ${addedPhones.join("・")} をお客様の「ほかの電話番号」に追加` : ""})` : ""}${notifyThreadId ? ` (${assignee.name} さんに引き継ぎました)` : ""}。${customer ? "" : newCustomer ? "顧客の新規登録は事務担当が行います (問い合わせの画面の「顧客として登録する」)。" : "お客様が未登録のため、画面の「顧客として登録する」で登録できます。"}`;
+      message = `問い合わせ ${inq.number} を登録しました${createdCustomer ? `。新しいお客様 (${createdCustomer}) も登録しました` : customer ? ` (${customer.name} 様に紐付け${addedPhones.length ? `。電話番号 ${addedPhones.join("・")} をお客様の「ほかの電話番号」に追加` : ""})` : ""}${notifyThreadId ? ` (${assignee.name} さんに引き継ぎました)` : ""}。${customer ? "" : newCustomer ? "顧客の新規登録は事務担当が行います (問い合わせの画面の「顧客として登録する」)。" : "お客様が未登録のため、画面の「顧客として登録する」で登録できます。"}${appointmentNote}`;
     });
   } else if (intent === "case") {
     const key = quickCase ?? str(formData, "caseKey");

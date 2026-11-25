@@ -128,7 +128,7 @@ export function eventLabeler(db: Pick<Database, "inquiries" | "quotes" | "orders
     const name = withCustomerName(rest, customer?.name, [inq?.contactName, inq?.intake?.name, stale?.name]);
     const area =
       sheetArea ||
-      eventTown({ location: e.location, siteAddress: o?.siteAddress || q?.siteAddress, inquiryAddress: inq?.intake?.address, inquiryArea: inq?.area, customer }) ||
+      eventTown({ location: e.location, siteAddress: o?.siteAddress || q?.siteAddress || inq?.siteAddress, inquiryAddress: inq?.intake?.address, inquiryArea: inq?.area, customer }) ||
       undefined;
     return { area, text: `${hold}${area ? `（${area}）` : ""}${name || rest || e.title}`, customerId: customer?.id };
   }

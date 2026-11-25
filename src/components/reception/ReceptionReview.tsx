@@ -5,7 +5,10 @@ import type { Channel, MediaKey, StoreId } from "@/lib/db/types";
 import { CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
 import { MediaSelect } from "@/components/ops-reports/MediaFields";
 import { ReceptionCustomerSearch } from "@/components/features/LinkSearch";
+import { MemoPhoto } from "./MemoPhoto";
 import {
+  APPOINTMENT_KINDS,
+  type ReceptionAppointment,
   RECEPTION_ACTION_LABEL,
   RECEPTION_CHANNELS,
   RECEPTION_FIELD_LABEL,
@@ -74,6 +77,7 @@ export function ReceptionReview({
   defaultAssigneeId,
   mediaDefault,
   canCreateCustomer = false,
+  photo,
 }: {
   action: (formData: FormData) => Promise<void>;
   id: string;
@@ -96,6 +100,8 @@ export function ReceptionReview({
   mediaDefault?: MediaKey;
   /** 顧客の新規登録ができる (「新しいお客様として登録」で顧客も登録する) */
   canCreateCustomer?: boolean;
+  /** 受付メモの写真 (狭い画面では欄の上に出し、見比べながら直す。お客様のご要望 2026-11-25「⑧」) */
+  photo?: { src: string; fullSrc: string };
 }) {
   const [act, setAct] = useState<ReceptionAction>(suggestion.action);
   const [customerId, setCustomerId] = useState(suggestion.customerId ?? "");
@@ -124,6 +130,14 @@ export function ReceptionReview({
   return (
     <form action={action} className="space-y-5">
       <input type="hidden" name="id" value={id} />
+      {photo && (
+        <details open className="rounded-xl border border-line bg-panel p-2 @4xl:hidden" data-testid="reception-photo-inline">
+          <summary className="cursor-pointer text-xs font-semibold text-ink">メモの写真を見ながら直す</summary>
+          <div className="mt-2">
+            <MemoPhoto src={photo.src} fullSrc={photo.fullSrc} compact />
+          </div>
+        </details>
+      )}
       <MatchPanel customers={customers} cases={cases} canCreateCustomer={canCreateCustomer} mediaDefault={mediaDefault} fields={fields} />
       <section className="space-y-3">
         <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
@@ -146,6 +160,7 @@ export function ReceptionReview({
           {field("otherPhone")}
           {field("postalCode")}
           {field("address")}
+          {field("siteAddress", { placeholder: "依頼主の住所と違うとき (業者の現場・ご実家など)" })}
           {field("email")}
           <label className="block">
             <span className="label">{RECEPTION_FIELD_LABEL.category}</span>
@@ -156,7 +171,8 @@ export function ReceptionReview({
           </label>
           {field("summary", { wide: true, placeholder: "例: 和室6畳の表替えの見積依頼" })}
           {field("detail", { wide: true, textarea: true })}
-          {field("desiredDate", { placeholder: "例: 来週土曜の午前" })}
+          <AppointmentsEditor initial={fields.appointments} users={users} defaultAssigneeId={defaultAssigneeId} uncertain={uncertain.has("appointments")} />
+          {field("desiredDate", { placeholder: "例: 来週土曜の午前 (まだ決まっていない希望)" })}
           <label className="block">
             <span className="label">{RECEPTION_FIELD_LABEL.urgency}</span>
             <select name="urgency" defaultValue={fields.urgency} className="field">
@@ -441,5 +457,76 @@ function MatchPanel({ customers, cases, canCreateCustomer, mediaDefault, fields 
         )}
       </div>
     </section>
+  );
+}
+
+const APPT_LABEL: Record<(typeof APPOINTMENT_KINDS)[number], string> = { survey: "見積り", site_survey: "現地調査 (現調)", onsite_quote: "現場見積 (現見)", measure: "採寸", pickup: "引取", delivery: "納品", install: "施工", visit: "訪問・打合せ" };
+
+/**
+ * メモ・会話で決まっている日程 (訪問・引取など) を、予定の登録の初期値として直す (お客様のご要望 2026-11-25「⑦」)。
+ * 「予定表に登録」にチェックした行は、問い合わせとして登録するときに予定表にも登録する。登録したあとも予定表で変えられる
+ */
+function AppointmentsEditor({ initial, users, defaultAssigneeId, uncertain }: { initial: ReceptionAppointment[]; users: { id: string; label: string }[]; defaultAssigneeId: string; uncertain: boolean }) {
+  const [rows, setRows] = useState<ReceptionAppointment[]>(() => initial.map((a) => ({ ...a, register: a.register ?? Boolean(a.date) })));
+  const set = (k: number, patch: Partial<ReceptionAppointment>) => setRows((rs) => rs.map((r, i) => (i === k ? { ...r, ...patch } : r)));
+  const mode = (r: ReceptionAppointment) => (r.time ? "time" : r.slot || "allday");
+  return (
+    <div className={`@xl:col-span-2 rounded-xl border p-3 ${uncertain ? "border-warn bg-warn-soft/30" : "border-line bg-subtle/40"}`} data-testid="reception-appointments">
+      <input type="hidden" name="appointments" value={JSON.stringify(rows)} />
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-semibold text-ink">決まっている日程 (予定表に登録)</span>
+        {uncertain && <span className="rounded bg-warn-soft px-1 text-[10px] text-warn-ink">要確認</span>}
+        <span className="text-[11px] text-ink-3">メモの日付を AI が読み取りました。違っていれば直してください。問い合わせとして登録するときに予定表にも入ります (あとからでも変えられます)</span>
+      </div>
+      {rows.length === 0 && <p className="mt-1 text-xs text-ink-3">メモに決まった日程は見つかりませんでした。決まっていれば「日程を追加」で入れられます。</p>}
+      <ul className="mt-2 space-y-2">
+        {rows.map((r, k) => (
+          <li key={k} className="rounded-lg border border-line bg-panel p-2">
+            {r.text && <p className="mb-1 text-[11px] text-ink-3">メモの文字: 「{r.text}」</p>}
+            <div className="grid grid-cols-1 gap-2 @xl:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+              <label className="flex items-center gap-1.5 text-xs font-medium text-ink">
+                <input type="checkbox" checked={Boolean(r.register)} onChange={(e) => set(k, { register: e.target.checked })} className="h-4 w-4" />
+                予定表に登録
+              </label>
+              <select value={r.kind} onChange={(e) => set(k, { kind: e.target.value as ReceptionAppointment["kind"] })} className="field" aria-label="予定の種類">
+                {APPOINTMENT_KINDS.map((kk) => (
+                  <option key={kk} value={kk}>
+                    {APPT_LABEL[kk]}
+                  </option>
+                ))}
+              </select>
+              <input type="date" value={r.date} onChange={(e) => set(k, { date: e.target.value })} className="field" aria-label="日付" />
+              <div className="flex gap-1">
+                <select value={mode(r)} onChange={(e) => set(k, e.target.value === "time" ? { time: r.time || "10:00", slot: "" } : { time: "", slot: e.target.value === "allday" ? "" : (e.target.value as "am" | "pm") })} className="field" aria-label="時間">
+                  <option value="allday">終日</option>
+                  <option value="am">午前</option>
+                  <option value="pm">午後</option>
+                  <option value="time">時刻</option>
+                </select>
+                {r.time && <input type="time" value={r.time} onChange={(e) => set(k, { time: e.target.value })} className="field w-28" aria-label="時刻" />}
+              </div>
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <select value={r.assigneeId ?? defaultAssigneeId} onChange={(e) => set(k, { assigneeId: e.target.value })} className="field w-auto" aria-label="予定の担当者">
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    担当: {u.label}
+                  </option>
+                ))}
+              </select>
+              {r.register && !r.date && <span className="text-[11px] text-critical-ink">日付を入れてください (日付がないと登録しません)</span>}
+              <button type="button" onClick={() => setRows((rs) => rs.filter((_, i) => i !== k))} className="ml-auto text-[11px] text-ink-2 hover:underline">
+                この日程を消す
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {rows.length < 6 && (
+        <button type="button" onClick={() => setRows((rs) => [...rs, { kind: "survey", date: "", time: "", slot: "", text: "", register: true }])} className="mt-2 rounded-lg border border-line bg-panel px-3 py-1.5 text-xs text-ink-2 hover:border-accent/50">
+          + 日程を追加
+        </button>
+      )}
+    </div>
   );
 }

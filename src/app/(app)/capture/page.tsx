@@ -1,3 +1,4 @@
+import { deliveryStaffOf } from "@/lib/work-staff";
 import Link from "@/components/ui/Link";
 import { redirect } from "next/navigation";
 import { receptionHref } from "@/lib/reception";
@@ -132,8 +133,9 @@ export default async function CapturePage({ searchParams }: { searchParams: Prom
         .filter((u) => u.active)
         .sort((a, b) => (a.storeId === storeId ? -1 : 0) - (b.storeId === storeId ? -1 : 0) || compareStoreIds(a.storeId, b.storeId) || a.kana.localeCompare(b.kana, "ja"))
         .map((u) => ({ id: u.id, label: `${u.name} (${storeShort(u.storeId)})` })),
-      salesUserId: sales[0] ?? "",
-      deliveryUserIds: delivery.length ? delivery : (order?.workerIds ?? []),
+      salesUserId: order?.workStaff?.survey[0] ?? sales[0] ?? "",
+      // 作業の担当 (施工完了で確定した実績) があればそれ。なければ手書きの名前 → 受注の施工担当
+      deliveryUserIds: order?.workStaff ? deliveryStaffOf(order.workStaff) : delivery.length ? delivery : (order?.workerIds ?? []),
       clerkUserId: kpiSettings(db).clerkByStore[storeId] ?? "",
       duplicate: dup ? `はがき No.${dup.postcardNo} (同じ店舗・1 年以内) のアンケートはすでに登録されています (二重に集計しないよう、登録できません)。` : undefined,
     };

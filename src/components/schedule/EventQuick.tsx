@@ -6,7 +6,11 @@ import { usePathname, useSearchParams } from "next/navigation";
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
 import { CalendarPlus, ClipboardList, ExternalLink, FileText, FileUp, Link2, MapPin, Navigation, Pencil, Phone, Store, Trash2, TriangleAlert, Truck, UserRound, Users, X } from "lucide-react";
-import type { ScheduleKind } from "@/lib/db/types";
+import type { QuoteItem, ScheduleKind } from "@/lib/db/types";
+import { quoteTotals } from "@/lib/quote-calc";
+import { quickAmendLines, quickNewCase, relinkCase, setCaseSite } from "@/lib/actions/case-quick";
+import { CaseCustomerSearch } from "@/components/features/LinkSearch";
+import { MediaSelect } from "@/components/ops-reports/MediaFields";
 import { QUICK_MAX_ASSIGNEES, SCHEDULE_KIND } from "@/lib/constants";
 import type { ConflictQuery, ConflictReport } from "@/lib/calendar";
 import { addPairedDelivery, changeEventStore, checkScheduleConflicts, deleteScheduleEvent, quickUpdateScheduleEvent, updateEventWork } from "@/lib/actions/schedule";
@@ -574,7 +578,7 @@ function CustomerBlock({ data }: { data: EventQuickData }) {
           </span>
         </div>
       )}
-      {c?.corporate && !data.area && <p className="text-xs text-warn-ink">業者の案件です。現場の住所が未登録のため町名を出せません (見積・受注の「施工場所」に入れてください)。</p>}
+      {c?.corporate && !data.area && <p className="text-xs text-warn-ink">業者の案件です。現場の住所が未登録のため町名を出せません (下の「施工現場」に現場の住所を入れてください)。</p>}
       {data.case && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <Link2 className="h-3.5 w-3.5 text-ink-3" aria-hidden />
@@ -628,6 +632,7 @@ function QuickBody({ data, returnTo, onOpenEvent, onReload }: { data: EventQuick
       </div>
 
       <CustomerBlock data={data} />
+      <CaseEditSection data={data} returnTo={returnTo} />
 
       {!data.canEdit ? (
         <p className="rounded-lg bg-subtle px-3 py-2 text-xs text-ink-2">この予定は変更できません (登録者・担当者・店舗のメンバーが変更できます{data.synced ? "。完了した受注の予定は変えられません" : ""})。</p>
@@ -697,7 +702,15 @@ function QuickBody({ data, returnTo, onOpenEvent, onReload }: { data: EventQuick
             <textarea name="memo" defaultValue={data.memo} rows={3} maxLength={2000} className="field" />
           </label>
 
-          {data.handover && moved && <p className="rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn-ink">受注の引取・納品の日程と連動する予定です。日時の変更は受注の日程の変更の申請になり、承認のあとに予定表に反映されます (管理者は申請を省略してすぐ反映)。</p>}
+          {data.handover && moved && (
+            <p className="rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn-ink">
+              {data.scheduleApproval
+                ? "受注の引取・納品の日程と連動する予定です。日時の変更は受注の日程の変更の申請になり、承認のあとに予定表に反映されます。"
+                : "受注の引取・納品の日程と連動する予定です。保存すると受注の日程も同じ日時に変わります (承認はいりません。担当店舗に変更をお知らせします)。"}
+            </p>
+          )}
+
+          {moved && <PairMoveFields data={data} date={date} />}
 
           <ConflictNote report={report} />
           {(report?.impacts?.length ?? 0) > 0 && moved && (
@@ -823,10 +836,15 @@ function StoreRow({ data, returnTo }: { data: EventQuickData; returnTo: string }
   );
 }
 
-/** 予定の削除: いちばん下のボタン → 「本当に削除しますか？」の確認 → 削除 (予定だけ。案件の情報は残す) */
+/**
+ * 予定の削除: いちばん下のボタン → 「本当に削除しますか？」の確認 → 削除 (予定だけ。案件の情報は残す)。
+ * 引取 ⇄ 納品 の関連する予定があれば「関連する納品予定も削除しますか？」で、両方か、この予定だけかを選ぶ (お客様のご要望 2026-11-25「①」)
+ */
 function DeleteSection({ data, returnTo }: { data: EventQuickData; returnTo: string }) {
   const [confirm, setConfirm] = useState(false);
   const rm = data.remove;
+  const pair = rm?.pair;
+  const [picked, setPicked] = useState<string[]>(() => pair?.events.map((x) => x.id) ?? []);
   if (!rm) return null;
   if (rm.mode === "order") {
     return (
@@ -836,6 +854,8 @@ function DeleteSection({ data, returnTo }: { data: EventQuickData; returnTo: str
     );
   }
   if (!rm.canDelete) return null;
+  const self = SCHEDULE_KIND[data.kind].label;
+  const pairWord = pair?.want === "delivery" ? "納品予定" : "引取・現見の予定";
   return (
     <div className="mt-4 border-t border-line pt-3" data-testid="event-quick-delete">
       {!confirm ? (
@@ -855,18 +875,487 @@ function DeleteSection({ data, returnTo }: { data: EventQuickData; returnTo: str
                 ? ` 受注の引取・納品の日程と連動しているため、受注の日程からこの日時を外す申請になります (${rm.approver ?? "店長"}の承認のあとに消えます)。`
                 : " 受注の引取・納品の日程と連動しているため、受注の日程からもこの日時を外します (品目は残ります)。")}
           </p>
-          <form action={deleteScheduleEvent.bind(null, data.id)} className="flex flex-wrap items-center gap-2">
+          <form action={deleteScheduleEvent.bind(null, data.id)} className="space-y-2">
             <input type="hidden" name="returnTo" value={returnTo} />
             <input type="hidden" name="scope" value="one" />
-            <Button type="submit" variant="danger" size="sm" data-testid="delete-submit">
-              {rm.mode === "handover" && rm.needsApproval ? "削除を申請する" : "削除する"}
-            </Button>
-            <button type="button" onClick={() => setConfirm(false)} className={buttonClass("secondary", "sm")} autoFocus>
-              やめる
-            </button>
+            {pair && (
+              <div className="rounded-lg border border-critical/30 bg-panel px-3 py-2" data-testid="delete-pair">
+                <p className="text-sm font-semibold text-ink">関連する{pairWord}も削除しますか？</p>
+                {pair.events.length === 1 ? (
+                  <>
+                    <p className="mt-0.5 text-xs text-ink-2">{pair.events[0].label}</p>
+                    <input type="hidden" name="pairIds" value={pair.events[0].id} />
+                  </>
+                ) : (
+                  <ul className="mt-1 space-y-1">
+                    {pair.events.map((x) => (
+                      <li key={x.id}>
+                        <label className="flex items-center gap-2 text-xs text-ink">
+                          <input type="checkbox" name="pairIds" value={x.id} checked={picked.includes(x.id)} onChange={() => setPicked((p) => (p.includes(x.id) ? p.filter((y) => y !== x.id) : [...p, x.id]))} className="h-4 w-4" />
+                          {x.label}
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {pair ? (
+                <>
+                  <Button type="submit" name="withPair" value="1" variant="danger" size="sm" disabled={pair.events.length > 1 && picked.length === 0} data-testid="delete-both">
+                    {rm.mode === "handover" && rm.needsApproval ? "両方の削除を申請する" : `両方削除する (${self}と${pairWord})`}
+                  </Button>
+                  <Button type="submit" variant="secondary" size="sm" data-testid="delete-submit">
+                    {self}の予定のみ削除する
+                  </Button>
+                </>
+              ) : (
+                <Button type="submit" variant="danger" size="sm" data-testid="delete-submit">
+                  {rm.mode === "handover" && rm.needsApproval ? "削除を申請する" : "削除する"}
+                </Button>
+              )}
+              <button type="button" onClick={() => setConfirm(false)} className={buttonClass("secondary", "sm")} autoFocus>
+                やめる
+              </button>
+            </div>
           </form>
         </div>
       )}
     </div>
+  );
+}
+
+const shiftDays = (d: string, from: string, to: string) => {
+  const ms = Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`);
+  return plusDays(d, Math.round(ms / 86400000));
+};
+
+/**
+ * 引取・現見の日時を変えたときの「関連する納品予定も変更しますか？」(納品から引取を変えるときも同じ。お客様のご要望 2026-11-25「②」)。
+ * 変更するなら、この画面で納品 (引取) の日付・時間・担当者も変え、保存で両方の予定に反映する (同じ受注の日程は 1 回の保存)
+ */
+function PairMoveFields({ data, date }: { data: EventQuickData; date: string }) {
+  const cand = (data.pair?.events ?? []).filter((x) => x.canEdit);
+  const [on, setOn] = useState(false);
+  const [pid, setPid] = useState(cand[0]?.id ?? "");
+  const pe = cand.find((x) => x.id === pid) ?? cand[0];
+  const [pdate, setPdate] = useState("");
+  const [mode, setMode] = useState<TimeMode>("allday");
+  const [start, setStart] = useState("09:00");
+  const [end, setEnd] = useState("");
+  const [sel, setSel] = useState<string[]>([]);
+  const report = useConflicts(on && pe && pdate ? { eventId: pe.id, date: pdate, startTime: mode === "time" ? start : undefined, endTime: mode === "time" ? end || undefined : undefined, slot: mode === "am" || mode === "pm" ? mode : undefined, assigneeIds: sel, caseRef: data.caseRef, kind: pe.kind, storeId: data.storeId } : null);
+  if (!pe || !data.pair) return null;
+  const word = data.pair.want === "delivery" ? "納品予定" : "引取・現見の予定";
+  const choose = (x: typeof pe) => {
+    setPid(x.id);
+    // 初期値: 今の日時を、この予定を動かした日数だけずらす (納品は引取の日より前にしない)
+    let d = shiftDays(x.date, data.date, date);
+    if (data.pair!.want === "delivery" && d < date) d = date;
+    if (data.pair!.want === "origin" && d > date) d = date;
+    setPdate(d);
+    setMode(x.startTime ? "time" : (x.slot ?? "allday"));
+    setStart(x.startTime ?? "09:00");
+    setEnd(x.endTime ?? "");
+    setSel(x.assigneeIds.slice(0, QUICK_MAX_ASSIGNEES));
+  };
+  return (
+    <div className="space-y-2 rounded-xl border border-accent/40 bg-accent-soft/30 p-3" data-testid="pair-move">
+      <p className="text-sm font-semibold text-ink">関連する{word}も変更しますか？</p>
+      <ul className="space-y-0.5 text-xs text-ink-2">
+        {cand.map((x) => (
+          <li key={x.id}>
+            {cand.length > 1 ? (
+              <label className="flex items-center gap-1.5">
+                <input type="radio" checked={pid === x.id} onChange={() => (on ? choose(x) : setPid(x.id))} className="h-3.5 w-3.5" />
+                {SCHEDULE_KIND[x.kind].label} {x.period} ({x.assignees.join("・") || "担当未定"})
+              </label>
+            ) : (
+              <>いまの{SCHEDULE_KIND[x.kind].label}: {x.period} ({x.assignees.join("・") || "担当未定"})</>
+            )}
+          </li>
+        ))}
+      </ul>
+      <div className="flex flex-wrap gap-1.5">
+        <button type="button" onClick={() => setOn(false)} aria-pressed={!on} className={clsx("rounded-lg border px-3 py-1.5 text-xs", !on ? "border-accent bg-panel font-medium text-ink" : "border-line bg-panel text-ink-2")} data-testid="pair-move-no">
+          この予定だけ変更する
+        </button>
+        <button type="button" onClick={() => { setOn(true); choose(pe); }} aria-pressed={on} className={clsx("rounded-lg border px-3 py-1.5 text-xs", on ? "border-accent bg-accent-soft font-medium text-accent-ink" : "border-line bg-panel text-ink-2")} data-testid="pair-move-yes">
+          {word}も変更する
+        </button>
+      </div>
+      {on && (
+        <div className="space-y-2" data-testid="pair-move-fields">
+          <input type="hidden" name="pairId" value={pe.id} />
+          <input type="hidden" name="pairTimeMode" value={mode} />
+          <input type="hidden" name="pairAssigneesSent" value="1" />
+          {sel.map((id) => (
+            <input key={id} type="hidden" name="pairAssigneeIds" value={id} />
+          ))}
+          <label className="block">
+            <span className="label">{SCHEDULE_KIND[pe.kind].label}の日付</span>
+            <input type="date" name="pairDate" value={pdate} min={data.pair.want === "delivery" ? date : undefined} max={data.pair.want === "origin" ? date : undefined} onChange={(e) => setPdate(e.target.value)} required className="field w-auto" />
+          </label>
+          <TimeModeButtons mode={mode} setMode={setMode} />
+          {mode === "time" && (
+            <div className="flex items-center gap-2">
+              <input type="time" name="pairStartTime" value={start} onChange={(e) => setStart(e.target.value)} required className="field w-auto" aria-label="関連する予定の開始時刻" />
+              <span className="text-ink-3">〜</span>
+              <input type="time" name="pairEndTime" value={end} min={start} onChange={(e) => setEnd(e.target.value)} className="field w-auto" aria-label="関連する予定の終了時刻" />
+            </div>
+          )}
+          <div>
+            <span className="label">{SCHEDULE_KIND[pe.kind].label}の担当者 ({sel.length} 人)</span>
+            <StaffPicker staff={data.staff} selected={sel} onChange={setSel} storeName={data.storeName} busy={report?.busy} />
+          </div>
+          <ConflictNote report={report} label="重複を承知で保存する" />
+          <p className="text-[11px] text-ink-3">「保存する」で、この予定と{SCHEDULE_KIND[pe.kind].label}の予定の両方に反映します。</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 案件の確認・変更・追加 (お客様のご要望 2026-11-25「予定表を起点に、案件の確認・変更・追加をその画面で」③④⑤⑨⑩) */
+/* ------------------------------------------------------------------ */
+
+const yen = (n: number) => `¥${Math.round(n).toLocaleString("ja-JP")}`;
+
+function Disclosure({ title, icon, children, testId, defaultOpen = false, badge }: { title: string; icon: ReactNode; children: ReactNode; testId?: string; defaultOpen?: boolean; badge?: ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-t border-line first:border-t-0" data-testid={testId}>
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-ink hover:bg-subtle/60">
+        {icon}
+        <span className="min-w-0 flex-1">{title}</span>
+        {badge}
+        <span className="text-[11px] font-normal text-accent">{open ? "閉じる" : "開く"}</span>
+      </button>
+      {open && <div className="px-3 pb-3">{children}</div>}
+    </div>
+  );
+}
+
+function CaseEditSection({ data, returnTo }: { data: EventQuickData; returnTo: string }) {
+  const ce = data.caseEdit;
+  if (!ce) return null;
+  return (
+    <div className="mb-3 overflow-hidden rounded-xl border border-line bg-panel" data-testid="event-quick-case">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line bg-subtle/60 px-3 py-1.5">
+        <span className="text-xs font-semibold text-ink">案件の確認・変更</span>
+        {ce.caseNumber && <span className="text-[11px] text-ink-3">{ce.caseNumber}</span>}
+        {ce.lock && <span className="text-[11px] text-warn-ink">{ce.lock}</span>}
+      </div>
+      {ce.site && <SiteRow data={data} returnTo={returnTo} />}
+      {ce.quote && <LinesBlock data={data} returnTo={returnTo} />}
+      {!ce.quote && ce.orderTotal !== undefined && (
+        <div className="border-t border-line px-3 py-2 text-xs text-ink-2">
+          受注金額 {yen(ce.orderTotal)} (見積のない受注)。{ce.orderHref && <Link href={ce.orderHref} className="text-accent hover:underline">受注の画面</Link>}の「契約内容の変更」で直せます。
+        </div>
+      )}
+      {ce.workStaff && (
+        <Disclosure title="作業の担当 (実績・インセンティブの起点)" icon={<Users className="h-3.5 w-3.5 text-ink-3" aria-hidden />} testId="case-work-staff" badge={<span className={clsx("rounded px-1 text-[10px]", ce.workStaff.source === "saved" ? "bg-good-soft text-good-ink" : "bg-subtle text-ink-3")}>{ce.workStaff.source === "saved" ? "確定済み" : "予定表から自動"}</span>}>
+          <dl className="grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-0.5 text-xs">
+            {ce.workStaff.rows.map((r) => (
+              <div key={r.role} className="contents">
+                <dt className="text-ink-3">{r.role}</dt>
+                <dd className="text-ink">{r.names}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="mt-1 text-[11px] text-ink-3">予定の担当者を直すと自動で変わります。施工完了のときに確かめて確定します (複数名も可)。</p>
+          <Link href={ce.workStaff.href} className="mt-1 inline-flex text-xs text-accent hover:underline">
+            作業の担当を確認・変更する
+          </Link>
+        </Disclosure>
+      )}
+      {ce.relink && (ce.relink.canRelink || ce.relink.blocked) && (
+        <Disclosure title="お客様の付け替え (紐付け間違いの修正)" icon={<Link2 className="h-3.5 w-3.5 text-ink-3" aria-hidden />} testId="case-relink">
+          {ce.relink.blocked ? (
+            <p className="text-xs text-ink-3">{ce.relink.blocked}</p>
+          ) : (
+            <>
+              <p className="mb-2 text-[11px] leading-relaxed text-ink-2">
+                いまのお客様: {ce.relink.current ?? "(未登録)"}。正しいお客様を検索して「付け替える」を押すと、問い合わせ・見積・受注・予定などの内容はそのままで、紐付け先だけが変わります。
+              </p>
+              <CaseCustomerSearch action={relinkCase.bind(null, ce.caseId!)} returnTo={returnTo} />
+            </>
+          )}
+        </Disclosure>
+      )}
+      {ce.newCase && <NewCaseBlock data={data} returnTo={returnTo} />}
+    </div>
+  );
+}
+
+/** 施工現場の住所 (依頼主の住所と別)。予定表の町名・地図はこの住所 (お客様のご要望 2026-11-25「⑨」) */
+function SiteRow({ data, returnTo }: { data: EventQuickData; returnTo: string }) {
+  const ce = data.caseEdit!;
+  const site = ce.site!;
+  const [open, setOpen] = useState(false);
+  const missing = site.corporate && !site.address;
+  return (
+    <div className="px-3 py-2" data-testid="case-site">
+      <div className="flex flex-wrap items-start gap-x-2 gap-y-1 text-xs">
+        <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <div>
+            <span className="font-semibold text-ink">施工現場: </span>
+            {site.address ? <span className="text-ink">{site.address}</span> : missing ? <span className="text-warn-ink">未登録 (業者の所在地とは別の現場の住所を入れてください)</span> : <span className="text-ink-2">依頼主の住所と同じ</span>}
+          </div>
+          {site.requester && (site.address || site.corporate) && <div className="text-[11px] text-ink-3">依頼主{site.corporate ? " (業者)" : ""}の住所: {site.requester}</div>}
+        </div>
+        {site.canEdit && (
+          <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className={buttonClass(open ? "soft" : missing ? "primary" : "ghost", "sm")} data-testid="site-toggle">
+            {open ? "閉じる" : site.address ? "変更" : "現場の住所を入れる"}
+          </button>
+        )}
+      </div>
+      {open && (
+        <form action={setCaseSite.bind(null, ce.caseId!)} className="mt-2 space-y-1.5" data-testid="site-form">
+          <input type="hidden" name="returnTo" value={returnTo} />
+          <input name="siteAddress" defaultValue={site.address} maxLength={200} placeholder="例: 熊本県合志市須屋 123-4 (現場)" className="field" aria-label="施工現場の住所" />
+          <p className="text-[11px] leading-relaxed text-ink-3">予定表の町名と地図 (Google マップ・住宅地図) はこの住所になります。依頼主 (お客様) の住所は顧客の情報のままです。空にすると依頼主の住所と同じになります。</p>
+          <Button type="submit" size="sm">
+            施工現場の住所を保存
+          </Button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+type EditLine = QuoteItem & { removed?: boolean; added?: boolean };
+
+/** 送る明細 (画面だけの印を外す。追加した行の仮の ID はサーバーで付け直す) */
+const plainLine = (l: EditLine): QuoteItem => ({ id: l.id, productId: l.productId, name: l.name, spec: l.spec, qty: l.qty, unit: l.unit, unitPrice: l.unitPrice, amount: l.amount, itemCategory: l.itemCategory, dokoMaterialId: l.dokoMaterialId });
+
+/** 明細 (仕様・枚数・単価) の修正・追加・部分キャンセル (お客様のご要望 2026-11-25「③」) */
+function LinesBlock({ data, returnTo }: { data: EventQuickData; returnTo: string }) {
+  const q = data.caseEdit!.quote!;
+  const [editing, setEditing] = useState(false);
+  const [lines, setLines] = useState<EditLine[]>(() => q.items.map((i) => ({ ...i })));
+  const [draftNew, setDraftNew] = useState({ name: "", spec: "", qty: "1", unit: "", unitPrice: "" });
+  const live = lines.filter((l) => !l.removed).map((l) => ({ ...l, amount: Math.round(l.qty * l.unitPrice) }));
+  const totals = quoteTotals(live, q.discount, q.taxMode);
+  const diff = totals.total - q.total;
+  const small = q.smallLimit > 0 && Math.abs(diff) <= q.smallLimit;
+  const touched = editing && JSON.stringify(live.map((l) => [l.name, l.spec ?? "", l.qty, l.unit, l.unitPrice])) !== JSON.stringify(q.items.map((l) => [l.name, l.spec ?? "", l.qty, l.unit, l.unitPrice]));
+  const needsReason = !q.draft && !small;
+  const rule = q.draft
+    ? "下書きの見積です。保存すると内容が変わります (確定はしません)。"
+    : q.confirmedSales && !q.ownApproval
+      ? "施工完了・売上確定の案件のため、変更は管理者の承認のあとに反映されます (版の履歴に残ります)。"
+      : q.ownApproval
+        ? `承認を省略して第${q.version + 1}版として反映します (変更前の版は履歴に残ります)。`
+        : small
+          ? `差額 ${yen(Math.abs(diff))} (${yen(q.smallLimit)} 以下) のため承認なしで第${q.version + 1}版として反映します。`
+          : `差額が ${yen(q.smallLimit)} を超えるため、店長 (金額により管理者) の承認のあとに反映されます。`;
+  const set = (k: number, patch: Partial<EditLine>) => setLines((ls) => ls.map((l, i) => (i === k ? { ...l, ...patch } : l)));
+  const addLine = () => {
+    const qty = Number(draftNew.qty);
+    const unitPrice = Number(draftNew.unitPrice);
+    if (!draftNew.name.trim() || !(qty > 0) || !Number.isFinite(unitPrice)) return;
+    setLines((ls) => [...ls, { id: `new_${ls.length}`, name: draftNew.name.trim(), spec: draftNew.spec.trim() || undefined, qty, unit: draftNew.unit.trim(), unitPrice, amount: Math.round(qty * unitPrice), added: true }]);
+    setDraftNew({ name: "", spec: "", qty: "1", unit: "", unitPrice: "" });
+  };
+  return (
+    <div className="border-t border-line px-3 py-2" data-testid="case-lines">
+      <div className="flex flex-wrap items-center gap-2">
+        <FileText className="h-3.5 w-3.5 text-ink-3" aria-hidden />
+        <span className="text-xs font-semibold text-ink">明細・金額</span>
+        <Link href={q.href} className="text-[11px] text-ink-3 hover:underline">
+          見積 {q.number} 第{q.version}版{q.draft ? " (下書き)" : ""}
+        </Link>
+        <span className="ml-auto text-xs font-semibold text-ink tnum">合計 {yen(q.total)}</span>
+      </div>
+      {!editing ? (
+        <>
+          <ul className="mt-1 space-y-0.5 text-xs text-ink-2">
+            {q.items.slice(0, 8).map((i) => (
+              <li key={i.id} className="flex gap-2">
+                <span className="min-w-0 flex-1 truncate">
+                  {i.name}
+                  {i.spec ? ` (${i.spec})` : ""}
+                </span>
+                <span className="shrink-0 tnum">
+                  {i.qty}
+                  {i.unit} × {yen(i.unitPrice)}
+                </span>
+              </li>
+            ))}
+            {q.items.length > 8 && <li className="text-ink-3">ほか {q.items.length - 8} 行</li>}
+          </ul>
+          {q.editable ? (
+            <button type="button" onClick={() => setEditing(true)} className={clsx(buttonClass("soft", "sm"), "mt-1.5")} data-testid="lines-edit">
+              <Pencil />
+              仕様・枚数・単価を変更 / 追加 / 部分キャンセル
+            </button>
+          ) : (
+            q.blocked && <p className="mt-1 text-[11px] text-ink-3">{q.blocked}</p>
+          )}
+        </>
+      ) : (
+        <form action={quickAmendLines.bind(null, q.id)} className="mt-2 space-y-2" data-testid="lines-form">
+          <input type="hidden" name="returnTo" value={returnTo} />
+          <input type="hidden" name="items" value={JSON.stringify(live.map(plainLine))} />
+          <ul className="space-y-1.5">
+            {lines.map((l, k) => (
+              <li key={l.id} className={clsx("rounded-lg border px-2 py-1.5", l.removed ? "border-critical/30 bg-critical-soft/40" : l.added ? "border-good/40 bg-good-soft/40" : "border-line bg-panel")}>
+                <div className="flex items-center gap-2">
+                  <span className={clsx("min-w-0 flex-1 truncate text-xs font-medium", l.removed ? "text-ink-3 line-through" : "text-ink")}>
+                    {l.name}
+                    {l.added && <span className="ml-1 rounded bg-good-soft px-1 text-[10px] text-good-ink">追加</span>}
+                  </span>
+                  <button type="button" onClick={() => set(k, { removed: !l.removed })} className={clsx("shrink-0 rounded px-1.5 py-0.5 text-[11px]", l.removed ? "text-accent hover:underline" : "text-critical-ink hover:bg-critical-soft")}>
+                    {l.removed ? "元に戻す" : "取り消す (部分キャンセル)"}
+                  </button>
+                </div>
+                {!l.removed && (
+                  <div className="mt-1 grid grid-cols-1 gap-1.5 @xl:grid-cols-[minmax(0,1fr)_5rem_3.5rem_6.5rem]">
+                    <input value={l.spec ?? ""} onChange={(e) => set(k, { spec: e.target.value || undefined })} placeholder="仕様 (例: さくら・縁 浮14)" className="field" aria-label={`${l.name} の仕様`} />
+                    <input type="number" inputMode="decimal" min="0" step="any" value={l.qty} onChange={(e) => set(k, { qty: Number(e.target.value) })} className="field" aria-label={`${l.name} の数量`} />
+                    <input value={l.unit} onChange={(e) => set(k, { unit: e.target.value })} maxLength={10} className="field" aria-label={`${l.name} の単位`} />
+                    <input type="number" inputMode="numeric" step="any" value={l.unitPrice} onChange={(e) => set(k, { unitPrice: Number(e.target.value) })} className="field" aria-label={`${l.name} の単価`} />
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+          <div className="rounded-lg border border-dashed border-line-strong p-2">
+            <div className="mb-1 text-[11px] font-semibold text-ink-2">明細を追加</div>
+            <div className="grid grid-cols-1 gap-1.5 @xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_4.5rem_3.5rem_6rem]">
+              <input value={draftNew.name} onChange={(e) => setDraftNew({ ...draftNew, name: e.target.value })} placeholder="品名 (例: 網戸 張替え)" className="field" aria-label="追加する品名" />
+              <input value={draftNew.spec} onChange={(e) => setDraftNew({ ...draftNew, spec: e.target.value })} placeholder="仕様" className="field" aria-label="追加する仕様" />
+              <input type="number" inputMode="decimal" min="0" step="any" value={draftNew.qty} onChange={(e) => setDraftNew({ ...draftNew, qty: e.target.value })} className="field" aria-label="追加する数量" />
+              <input value={draftNew.unit} onChange={(e) => setDraftNew({ ...draftNew, unit: e.target.value })} placeholder="枚" maxLength={10} className="field" aria-label="追加する単位" />
+              <input type="number" inputMode="numeric" step="any" value={draftNew.unitPrice} onChange={(e) => setDraftNew({ ...draftNew, unitPrice: e.target.value })} placeholder="単価" className="field" aria-label="追加する単価" />
+            </div>
+            <button type="button" onClick={addLine} disabled={!draftNew.name.trim() || !(Number(draftNew.qty) > 0) || draftNew.unitPrice === ""} className={clsx(buttonClass("secondary", "sm"), "mt-1.5")}>
+              <CalendarPlus />
+              この行を追加
+            </button>
+          </div>
+          <div className="rounded-lg bg-subtle px-3 py-2 text-xs">
+            <div className="flex flex-wrap justify-between gap-2 tnum">
+              <span>変更前 {yen(q.total)}</span>
+              <span className="font-semibold text-ink">変更後 {yen(totals.total)}</span>
+              <span className={clsx(diff > 0 ? "text-accent-ink" : diff < 0 ? "text-critical-ink" : "text-ink-3")}>差額 {diff >= 0 ? "+" : "−"}{yen(Math.abs(diff))}</span>
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-ink-2">{rule} 担当店舗・本部・管理者に変更をお知らせします。</p>
+          </div>
+          {!q.draft && (
+            <label className="block">
+              <span className="label">変更の理由{needsReason ? " (必須)" : " (任意)"}</span>
+              <input name="reason" required={needsReason} maxLength={300} placeholder="例: お客様より網戸2枚の追加依頼 / 6畳のうち2畳をキャンセル" className="field" />
+            </label>
+          )}
+          {live.length === 0 && <p className="text-[11px] text-critical-ink">明細をすべて取り消すことはできません (案件をやめるときは見積・受注の画面で失注・キャンセルにしてください)。</p>}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="submit" size="sm" disabled={!touched || live.length === 0 || totals.total <= 0} data-testid="lines-submit">
+              {q.draft ? "明細を保存" : q.ownApproval || (small && !q.confirmedSales) ? "変更を反映する" : "変更を申請する"}
+            </Button>
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(false);
+                setLines(q.items.map((i) => ({ ...i })));
+              }}
+              className="text-xs text-ink-2 hover:underline"
+            >
+              やめる
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
+/** 同じお客様 (取引先) の新しい案件を追加 (お客様のご要望 2026-11-25「⑩」) */
+function NewCaseBlock({ data, returnTo }: { data: EventQuickData; returnTo: string }) {
+  const nc = data.caseEdit!.newCase!;
+  const [date, setDate] = useState("");
+  const [mode, setMode] = useState<TimeMode>("allday");
+  const [start, setStart] = useState("09:00");
+  const [sel, setSel] = useState<string[]>(data.assigneeIds.slice(0, QUICK_MAX_ASSIGNEES));
+  const report = useConflicts(date && sel.length ? { date, startTime: mode === "time" ? start : undefined, slot: mode === "am" || mode === "pm" ? mode : undefined, assigneeIds: sel, kind: "survey", storeId: nc.storeId } : null);
+  return (
+    <Disclosure title={`${nc.customerName} 様の新しい案件を追加${nc.corporate ? " (別の現場)" : ""}`} icon={<CalendarPlus className="h-3.5 w-3.5 text-ink-3" aria-hidden />} testId="case-new">
+      <form action={quickNewCase} className="space-y-2" data-testid="new-case-form">
+        <input type="hidden" name="returnTo" value={returnTo} />
+        <input type="hidden" name="customerId" value={nc.customerId} />
+        <input type="hidden" name="timeMode" value={mode} />
+        {date && sel.map((id) => <input key={id} type="hidden" name="assigneeIds" value={id} />)}
+        <label className="block">
+          <span className="label">内容 (要件) *</span>
+          <input name="summary" required maxLength={200} placeholder={nc.corporate ? "例: ○○様邸 和室6畳 表替え" : "例: 2階の襖4枚 張替え"} className="field" />
+        </label>
+        <label className="block">
+          <span className="label">施工現場の住所{nc.corporate ? " (業者の所在地と別の現場)" : " (依頼主の住所と違うとき)"}</span>
+          <input name="siteAddress" maxLength={200} placeholder="例: 熊本県合志市須屋 123-4" className="field" />
+        </label>
+        <div className="grid grid-cols-1 gap-2 @xl:grid-cols-2">
+          <label className="block">
+            <span className="label">種別</span>
+            <select name="category" defaultValue="tatami" className="field">
+              {nc.categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="label">媒体 (当社を知ったきっかけ) *</span>
+            <MediaSelect name="media" defaultValue={nc.media} required />
+          </label>
+        </div>
+        <label className="block">
+          <span className="label">詳細 (任意)</span>
+          <textarea name="detail" rows={2} maxLength={4000} className="field" />
+        </label>
+        <fieldset className="space-y-1.5 rounded-lg border border-line p-2">
+          <legend className="px-1 text-[11px] font-semibold text-ink-2">最初の予定 (日付を入れたときだけ登録)</legend>
+          <div className="grid grid-cols-1 gap-2 @xl:grid-cols-2">
+            <label className="block">
+              <span className="label">種類</span>
+              <select name="kind" defaultValue="survey" className="field">
+                {nc.kinds.map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="label">日付</span>
+              <input type="date" name="date" value={date} onChange={(e) => setDate(e.target.value)} className="field" />
+            </label>
+          </div>
+          {date && (
+            <>
+              <TimeModeButtons mode={mode} setMode={setMode} />
+              {mode === "time" && (
+                <div className="flex items-center gap-2">
+                  <input type="time" name="startTime" value={start} onChange={(e) => setStart(e.target.value)} required className="field w-auto" aria-label="開始時刻" />
+                  <span className="text-ink-3">〜</span>
+                  <input type="time" name="endTime" className="field w-auto" aria-label="終了時刻" />
+                </div>
+              )}
+              <StaffPicker staff={data.staff} selected={sel} onChange={setSel} storeName={data.storeName} busy={report?.busy} />
+              <ConflictNote report={report} label="重複を承知で登録する" />
+            </>
+          )}
+        </fieldset>
+        <p className="text-[11px] leading-relaxed text-ink-3">問い合わせとして登録し、担当店舗・本部・管理者に知らせます。見積・受注はこの案件の画面から作れます。</p>
+        <Button type="submit" size="sm" disabled={Boolean(date) && sel.length === 0} data-testid="new-case-submit">
+          <CalendarPlus />
+          新しい案件を登録
+        </Button>
+      </form>
+    </Disclosure>
   );
 }

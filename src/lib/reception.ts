@@ -96,6 +96,51 @@ export interface ReceptionFields {
   /** メモに書かれた文字そのまま (写真のとき) */
   memoText: string;
   uncertainFields: string[];
+  /** 施工現場の住所 (依頼主の住所と違うとき。業者の現場・ご実家など。お客様のご要望 2026-11-25「⑨」) */
+  siteAddress: string;
+  /** メモ・会話で決まっている日程 (訪問・引取など)。予定の登録の初期値にする (お客様のご要望 2026-11-25「⑦」) */
+  appointments: ReceptionAppointment[];
+}
+
+/** 受付で読み取った日程の種類 (予定表の種類と同じ名前) */
+export const APPOINTMENT_KINDS = ["survey", "site_survey", "onsite_quote", "measure", "pickup", "delivery", "install", "visit"] as const;
+export type AppointmentKind = (typeof APPOINTMENT_KINDS)[number];
+
+/** 受付で読み取った日程 (AI はメモの文字 text を残し、日付・時刻を YYYY-MM-DD・HH:mm にする。register = 予定表に登録する) */
+export interface ReceptionAppointment {
+  kind: AppointmentKind;
+  date: string;
+  time: string;
+  slot: "am" | "pm" | "";
+  text: string;
+  register?: boolean;
+  assigneeId?: string;
+}
+
+/** 日程の値をそろえる (AI の値・画面の JSON)。日付のないもの・読めないものは除く。最大 6 件 */
+export function normalizeAppointments(raw: unknown): ReceptionAppointment[] {
+  let v = raw;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v || "[]");
+    } catch {
+      v = [];
+    }
+  }
+  if (!Array.isArray(v)) return [];
+  const out: ReceptionAppointment[] = [];
+  for (const r of v as Record<string, unknown>[]) {
+    if (!r || typeof r !== "object") continue;
+    const kind = (APPOINTMENT_KINDS as readonly string[]).includes(String(r.kind)) ? (String(r.kind) as AppointmentKind) : "survey";
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(r.date ?? "")) ? String(r.date) : "";
+    const tm = String(r.time ?? "").match(/^(\d{1,2}):(\d{2})$/);
+    const time = tm && Number(tm[1]) < 24 && Number(tm[2]) < 60 ? `${tm[1].padStart(2, "0")}:${tm[2]}` : "";
+    const slot = r.slot === "am" || r.slot === "pm" ? r.slot : "";
+    const text = String(r.text ?? "").trim().slice(0, 100);
+    if (!date && !text) continue;
+    out.push({ kind, date, time, slot: time ? "" : slot, text, ...(typeof r.register === "boolean" ? { register: r.register } : {}), ...(typeof r.assigneeId === "string" && r.assigneeId ? { assigneeId: r.assigneeId } : {}) });
+  }
+  return out.slice(0, 6);
 }
 
 export const RECEPTION_FIELD_KEYS: (keyof ReceptionFields)[] = [
@@ -122,6 +167,8 @@ export const RECEPTION_FIELD_KEYS: (keyof ReceptionFields)[] = [
   "companyName",
   "memoText",
   "uncertainFields",
+  "siteAddress",
+  "appointments",
 ];
 
 export const RECEPTION_FIELD_LABEL: Record<keyof ReceptionFields, string> = {
@@ -148,6 +195,8 @@ export const RECEPTION_FIELD_LABEL: Record<keyof ReceptionFields, string> = {
   companyName: "会社名",
   memoText: "メモの文字",
   uncertainFields: "要確認の項目",
+  siteAddress: "施工現場の住所",
+  appointments: "決まっている日程",
 };
 
 const str = (v: unknown, max = 2000): string => (typeof v === "string" ? v.trim().slice(0, max) : typeof v === "number" ? String(v) : "");
@@ -184,6 +233,8 @@ export function normalizeReception(raw: Record<string, unknown>): ReceptionField
     companyName: str(raw.companyName, 80),
     memoText: str(raw.memoText, 4000),
     uncertainFields: Array.isArray(raw.uncertainFields) ? (raw.uncertainFields as unknown[]).map((x) => str(x, 40)).filter((x) => RECEPTION_FIELD_KEYS.includes(x as keyof ReceptionFields)).slice(0, 20) : [],
+    siteAddress: str(raw.siteAddress, 200),
+    appointments: normalizeAppointments(raw.appointments),
   };
 }
 

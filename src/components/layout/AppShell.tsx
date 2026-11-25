@@ -23,62 +23,7 @@ import {
   tileIcon,
   tileLabel,
 } from "./header-parts";
-import {
-  Award,
-  BookOpen,
-  Calculator,
-  CircleHelp,
-  ClipboardList,
-  Coins,
-  Printer,
-  Landmark,
-  ListTodo,
-  PhoneCall,
-  Truck,
-  ListChecks,
-  Bell,
-  CalendarDays,
-  CalendarOff,
-  CalendarPlus,
-  CalendarX2,
-  ChartColumn,
-  ChevronDown,
-  CircleUser,
-  ClipboardCheck,
-  Clock,
-  ClockFading,
-  FileSpreadsheet,
-  FileText,
-  Hammer,
-  FolderOpen,
-  House,
-  Inbox,
-  LayoutGrid,
-  LogOut,
-  Menu,
-  MessageSquare,
-  Package,
-  Plus,
-  Receipt,
-  ScanLine,
-  Search,
-  Settings,
-  Sparkles,
-  UserCog,
-  UserPlus,
-  Users,
-  Wallet,
-  X,
-  type LucideIcon,
-  MapPinned,
-  Scale,
-  NotebookPen,
-  Layers,
-  ClipboardPen,
-  Megaphone,
-  Database,
-  BookOpenCheck,
-} from "lucide-react";
+import { Award, BookOpen, Calculator, CircleHelp, ClipboardList, Coins, Printer, Landmark, ListTodo, PhoneCall, Truck, ListChecks, Bell, CalendarDays, CalendarOff, CalendarPlus, CalendarX2, ChartColumn, ChevronDown, CircleUser, ClipboardCheck, Clock, ClockFading, FileSpreadsheet, FileText, Hammer, FolderOpen, House, Inbox, LayoutGrid, LogOut, Menu, MessageSquare, Package, Plus, Receipt, ScanLine, Search, Settings, Sparkles, UserCog, UserPlus, Users, Wallet, X, type LucideIcon, MapPinned, Scale, NotebookPen, Layers, ClipboardPen, Megaphone, Database, BookOpenCheck, History } from "lucide-react";
 import { Avatar, Badge } from "@/components/ui";
 import { IchijoyaLogo } from "@/components/brand/Logo";
 import { ChatbotWidget } from "@/components/chatbot/ChatbotWidget";
@@ -194,7 +139,7 @@ export interface ShellUser {
 }
 
 export interface NotificationItem {
-  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict" | "task" | "signup" | "fax" | "knowledge";
+  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict" | "task" | "signup" | "fax" | "knowledge" | "change";
   title: string;
   detail?: string;
   href: string;
@@ -212,6 +157,7 @@ const NOTIFICATION_STYLE: Record<NotificationItem["kind"], { icon: LucideIcon; c
   signup: { icon: UserPlus, cls: "bg-accent-soft text-accent-ink" },
   fax: { icon: Printer, cls: "bg-warn-soft text-warn-ink" },
   knowledge: { icon: BookOpenCheck, cls: "bg-warn-soft text-warn-ink" },
+  change: { icon: History, cls: "bg-accent-soft text-accent-ink" },
 };
 
 const CREATE_ITEMS: { href: string; label: string; desc: string; icon: LucideIcon }[] = [

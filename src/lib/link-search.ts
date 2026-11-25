@@ -2,7 +2,7 @@ import type { Customer, Database, Inquiry, User } from "@/lib/db/types";
 import { canEditCaseStore } from "@/lib/auth/permissions";
 import { customerPhoneDigits, customerPhoneIncludes, phoneDigits } from "@/lib/customer-contacts";
 import { normName } from "@/lib/duplicates";
-import { canLinkToCustomer, isPlaceholderCustomer, relinkBlocker } from "@/lib/customer-link";
+import { canLinkToCustomer, isPlaceholderCustomer } from "@/lib/customer-link";
 import { addressMatch } from "@/lib/customer-match";
 import { INQUIRY_STATUS } from "@/lib/constants";
 
@@ -123,7 +123,7 @@ export function linkableInquiries(db: Pick<Database, "inquiries" | "customers" |
     const cur = inq.customerId ? customers.get(inq.customerId) : undefined;
     // お客様が未登録か、予定表の取込で仮に作った顧客の問い合わせだけ (ほかのお客様の案件は付け替えない)。見積の後の案件は除く
     if (cur && !isPlaceholderCustomer(cur)) continue;
-    if (relinkBlocker(db, inq)) continue;
+    if (inq.quoteId && db.quotes.some((q) => q.id === inq.quoteId)) continue;
     const phones = [inq.contactPhone, inq.intake?.phone, inq.intake?.callbackPhone].map(phoneDigits).filter((d) => d.length >= 9);
     const addr = compact(inq.intake?.address);
     const area = compact(inq.area) || compact(cur?.area);

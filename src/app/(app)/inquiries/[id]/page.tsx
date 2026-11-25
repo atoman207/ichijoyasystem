@@ -1,3 +1,4 @@
+import { CaseChangeHistory } from "@/components/features/CaseChangeHistory";
 import type { ReactNode } from "react";
 import { CaseViewBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
 import { inquiryAccessInfo, deniedHref } from "@/lib/case-access";
@@ -293,7 +294,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             <CardHeader title="問い合わせ内容" />
             <p className="whitespace-pre-wrap text-sm text-ink">{inq.detail || "(詳細なし)"}</p>
             <div className="mt-4">
-              <Dl columns={3} items={[["お客様", customer && customer.name !== inq.contactName ? `${customer.name} 様 (受付時のお名前: ${inq.contactName})` : inq.contactName], ["電話", contact.phone || "-"], ["住所", contact.address || "-"], ["担当", userName(inq.assignedUserId)], ["登録者", userName(inq.createdBy)], ["次のアクション", inq.nextAction ?? "-"], ["期限", inq.nextActionDue ? fmtDate(inq.nextActionDue) : "-"], ["媒体 (きっかけ)", <MediaTag key="m" {...media} />], ["きっかけの販促", promotion ? `${promotion.title} (${promotion.number})` : "-"]]} />
+              <Dl columns={3} items={[["お客様", customer && customer.name !== inq.contactName ? `${customer.name} 様 (受付時のお名前: ${inq.contactName})` : inq.contactName], ["電話", contact.phone || "-"], [customer?.type === "corporate" ? "依頼主 (業者) の住所" : inq.siteAddress ? "依頼主の住所" : "住所", contact.address || "-"], ...(inq.siteAddress ? ([["施工現場の住所", inq.siteAddress]] as [string, string][]) : []), ["担当", userName(inq.assignedUserId)], ["登録者", userName(inq.createdBy)], ["次のアクション", inq.nextAction ?? "-"], ["期限", inq.nextActionDue ? fmtDate(inq.nextActionDue) : "-"], ["媒体 (きっかけ)", <MediaTag key="m" {...media} />], ["きっかけの販促", promotion ? `${promotion.title} (${promotion.number})` : "-"]]} />
             </div>
           </Card>
 
@@ -369,6 +370,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                 <Field label="次のアクション"><Input name="nextAction" defaultValue={inq.nextAction} /></Field>
                 <Field label="期限"><Input name="nextActionDue" type="date" defaultValue={inq.nextActionDue} /></Field>
               </div>
+              <Field label="施工現場の住所 (依頼主の住所と違うとき)" hint="業者からの依頼の現場・ご実家など。予定表の町名と地図はこの住所。空欄なら依頼主の住所" className="@xl:col-span-2"><Input name="siteAddress" defaultValue={inq.siteAddress} placeholder={contact.address ? `空欄 = ${contact.address}` : "熊本県…"} /></Field>
               <Field label="詳細" className="@xl:col-span-2"><Textarea name="detail" defaultValue={inq.detail} /></Field>
               <div className="flex flex-wrap gap-2 @xl:col-span-2">
                 <Button type="submit" size="sm">更新する</Button>
@@ -481,6 +483,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
               </div>
             )}
           </Card>
+          <CaseChangeHistory db={db} ids={[inq.id, inq.quoteId, db.orders.find((x) => x.quoteId && x.quoteId === inq.quoteId)?.id]} />
           <Card>
             <CardHeader title="変更履歴" />
             <ul className="space-y-2 text-xs">

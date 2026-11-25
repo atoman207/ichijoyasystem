@@ -57,6 +57,14 @@ function SearchBox({ value, onChange, placeholder, busy, label }: { value: strin
   );
 }
 
+/**
+ * 案件 (問い合わせ・見積・受注) のお客様の付け替え (紐付け間違いの修正。お客様のご要望 2026-11-25「⑤」)。
+ * action は案件の ID を bind したもの (src/lib/actions/case-quick.ts の relinkCase)。customerId・returnTo を送る
+ */
+export function CaseCustomerSearch({ action, returnTo, initialQuery = "" }: { action: (fd: FormData) => Promise<void>; returnTo: string; initialQuery?: string }) {
+  return <CustomerLinkSearch action={action} inquiryId="" returnTo={returnTo} initialQuery={initialQuery} relink />;
+}
+
 /** 問い合わせの画面: 既存の顧客を探して紐づける (付け替える) */
 export function CustomerLinkSearch({ action, inquiryId, returnTo, initialQuery = "", relink = false }: { action: (fd: FormData) => Promise<void>; inquiryId: string; returnTo: string; initialQuery?: string; relink?: boolean }) {
   const s = useSearch<CustomerHit>("/api/customers/search", [], initialQuery);
@@ -67,7 +75,7 @@ export function CustomerLinkSearch({ action, inquiryId, returnTo, initialQuery =
       {s.q.trim() && !s.busy && s.items.length === 0 && !s.error && <p className="text-xs text-ink-3">「{s.q.trim()}」に当たるお客様はいません (顧客の一覧で見られるお客様から探しています)。</p>}
       {s.items.length > 0 && (
         <form action={action}>
-          <input type="hidden" name="inquiryId" value={inquiryId} />
+          {inquiryId && <input type="hidden" name="inquiryId" value={inquiryId} />}
           <input type="hidden" name="returnTo" value={returnTo} />
           <ul className="max-h-80 divide-y divide-line overflow-y-auto rounded-lg border border-line bg-panel">
             {s.items.map((c) => (

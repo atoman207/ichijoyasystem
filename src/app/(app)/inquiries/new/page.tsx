@@ -73,6 +73,10 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
             </Field>
             {/* 住所から担当店舗 (施工・売上計上の店舗) を自動で選ぶ (お客様のご要望 2026-11-24「③」)。手で変えられる */}
             <AreaStoreFields stores={db.stores.map((s) => ({ id: s.id, name: s.name }))} defaultStoreId={user.storeId} canChooseAny={allStores} hint="町名まで入れると担当店舗が決まります (番地はあとからでも可)" />
+            {/* 依頼主の住所と施工現場の住所を分ける (お客様のご要望 2026-11-25「⑨」: 業者・ご実家などの依頼。予定表の町名・地図は現場の住所) */}
+            <Field label="施工現場の住所 (依頼主の住所と違うとき)" hint="業者からの依頼の現場・ご実家など。予定表の町名と地図 (Google マップ・住宅地図) はこの住所になります。空欄なら依頼主の住所">
+              <Input name="siteAddress" placeholder="例: 熊本県合志市須屋 123-4 (現場)" />
+            </Field>
             <Field label="担当者">
               <Select name="assignedUserId" defaultValue={user.id}>
                 {users.map((u) => <option key={u.id} value={u.id}>{u.name} ({u.title})</option>)}

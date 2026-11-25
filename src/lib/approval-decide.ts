@@ -11,6 +11,8 @@ import { fail } from "@/lib/actions/guards";
 import { propagateCustomerAddress } from "@/lib/maps/store";
 import { closedReason } from "@/lib/mgmt/close";
 import { applyCaseStoreChange, caseChainOf, storeChangeBlocker } from "@/lib/case-store";
+import { approvalSettings, manYen } from "@/lib/approval-rules";
+import { addChangeNotice, caseTarget, noticeLines, quoteItemLines } from "@/lib/change-notices";
 
 /**
  * 承認の反映 (承認・差戻し・却下で申請の対象を変える処理)
@@ -119,6 +121,16 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
         }
         const changes: AuditChange[] = [{ field: "total", before, after: q.total }];
         if (q.title !== beforeTitle) changes.push({ field: "title", before: beforeTitle, after: q.title });
+        // 担当店舗・本部・管理者へのお知らせ (明細の追加・削除・数量・単価と合計。変更した人 = 申請者)
+        const beforeItems = q.revisions[q.revisions.length - 1]?.items ?? [];
+        addChangeNotice(db, a.requestedBy, caseTarget(db, q.id), q.total !== before ? "明細・金額の変更" : "明細・仕様の変更", [
+          ...quoteItemLines(beforeItems, q.items),
+          ...(q.total !== before ? [{ label: "合計 (税込)", before: `¥${before.toLocaleString("ja-JP")}`, after: `¥${q.total.toLocaleString("ja-JP")}` }] : []),
+          ...(q.title !== beforeTitle ? [{ label: "件名", before: beforeTitle, after: q.title }] : []),
+          ...((q.workDetails ?? "") !== beforeWork ? [{ label: "施工内容", before: beforeWork || "(なし)", after: q.workDetails || "(なし)" }] : []),
+          { label: "理由", before: "", after: pc.reason },
+          ...(userId !== a.requestedBy ? [{ label: "承認", before: "", after: db.users.find((u) => u.id === userId)?.name ?? "-" }] : []),
+        ], { href: `/quotes/${q.id}` });
         addAudit(db, { userId, action: "approve", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `見積の変更を承認 (第${q.version}版。理由: ${pc.reason})`, storeId: q.storeId, changes });
       } else {
         addAudit(db, { userId, action: "reject", entity: "quote", entityId: q.id, entityLabel: q.number, summary: `見積の変更を${word}${note}`, storeId: q.storeId });
@@ -198,6 +210,7 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
         applyChanges(o as unknown as Record<string, unknown>, a.changes ?? []);
         o.updatedAt = now;
         o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `契約内容の変更が承認されました: ${describe("order", a.changes ?? [])}` });
+        addChangeNotice(db, a.requestedBy, caseTarget(db, o.id), "契約内容の変更", [...noticeLines(db, "order", a.changes), ...(a.requestComment ? [{ label: "理由", before: "", after: a.requestComment }] : []), ...(userId !== a.requestedBy ? [{ label: "承認", before: "", after: db.users.find((u) => u.id === userId)?.name ?? "-" }] : [])]);
         addAudit(db, { userId, action: "approve", entity: "order", entityId: o.id, entityLabel: o.number, summary: `契約内容の変更を承認 (${(a.changes ?? []).map((c) => fieldLabel("order", c.field)).join("・")})`, storeId: o.storeId, changes: a.changes });
       } else {
         addAudit(db, { userId, action: "reject", entity: "order", entityId: o.id, entityLabel: o.number, summary: `契約内容の変更を${word}${note}`, storeId: o.storeId });
@@ -218,6 +231,7 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
         const follow = followMovedEvents(db, db.users.find((u) => u.id === userId), moved);
         o.updatedAt = now;
         o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `引取・納品日の変更が承認されました: ${lines.join(" / ")}${follow.length ? ` (${follow.join(" ")})` : ""}` });
+        addChangeNotice(db, a.requestedBy, caseTarget(db, o.id), "引取・納品の日程の変更", lines.map((t) => ({ label: "日程", before: "", after: t })));
         addAudit(db, { userId, action: "approve", entity: "order", entityId: o.id, entityLabel: o.number, summary: `引取・納品日の変更を承認 (${lines.join(" / ").slice(0, 150)})`, storeId: o.storeId, changes: a.changes });
       } else {
         o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `引取・納品日の変更が${word}されました${note}: ${lines.join(" / ")} (予定表は前の日程のままです)` });
@@ -319,15 +333,41 @@ export function touchesConfirmedSales(db: Database, a: Pick<Approval, "type" | "
 }
 
 /**
+ * 承認なしで反映する工事金額の変更か (お客様のご要望 2026-11-25「⑥ 1万円以下の工事金額変更は承認なし」。設定 → 承認ルールの smallChangeLimit)。
+ * 確定した見積の変更 (quote_amend: 明細・仕様・金額) と受注の契約金額の変更 (order_change で金額だけ) で、変更前と変更後の差がその金額以下。
+ * 仕様・品名・数量だけの変更 (差 0 円) も含む。施工完了・請求済・入金済の受注は対象外 (touchesConfirmedSales で管理者の承認)
+ */
+export function smallAmountChange(db: Database, a: Pick<Approval, "type" | "targetId" | "changes">): boolean {
+  const limit = approvalSettings(db).smallChangeLimit;
+  if (!(limit > 0)) return false;
+  if (touchesConfirmedSales(db, a)) return false;
+  if (a.type === "quote_amend") {
+    const q = db.quotes.find((x) => x.id === a.targetId);
+    if (!q?.pendingChange) return false;
+    return Math.abs(q.pendingChange.total - q.total) <= limit;
+  }
+  if (a.type === "order_change") {
+    const ch = a.changes ?? [];
+    if (!ch.length || ch.some((c) => c.field !== "total")) return false;
+    const c = ch[0];
+    return typeof c.before === "number" && typeof c.after === "number" && Math.abs(c.after - c.before) <= limit;
+  }
+  return false;
+}
+
+/**
  * 管理者 (社長) の申請は承認を省略する (permissions.ts の skipsApproval)。
  * 申請を作った直後 (同じ mutate の中) に呼ぶ。申請の記録は残し、申請者本人が承認したものとして、その場で内容を反映する。
  * 省略したら true (呼び出し側は「承認を申請しました」ではなく「反映しました」と伝える)。管理者でなければ何もしない (false)
  */
 export function settleOwnApproval(db: Database, a: Approval, user: Pick<User, "id" | "role">, back: string): boolean {
-  if (!skipsApproval(user, a.type) || a.requestedBy !== user.id || a.status !== "pending") return false;
+  if (a.requestedBy !== user.id || a.status !== "pending") return false;
+  const own = skipsApproval(user, a.type);
+  const small = !own && smallAmountChange(db, a);
+  if (!own && !small) return false;
   // 店長の申請でも、確定した売上・入金に関わる変更は管理者の承認を待つ
   if (user.role !== "admin" && touchesConfirmedSales(db, a)) return false;
-  const note = `${user.role === "admin" ? "管理者" : "店長"}の申請のため承認を省略`;
+  const note = small ? `差額が${manYen(approvalSettings(db).smallChangeLimit)}以下の変更のため承認を省略` : `${user.role === "admin" ? "管理者" : "店長"}の申請のため承認を省略`;
   if (a.type === "quote_amend" && quoteInvoiced(db, a.targetId)) fail(back, "請求書を発行済みの案件のため、金額変更を反映できません。入金前であれば請求書を無効化してから変更してください。");
   a.status = "approved";
   a.decidedBy = user.id;

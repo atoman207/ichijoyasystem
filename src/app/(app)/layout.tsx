@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { requireUser } from "@/lib/auth/session";
-import { notificationsFor, storeById, storeName } from "@/lib/db/queries";
+import { notificationsFor, storeById, storeName, userName } from "@/lib/db/queries";
+import { lineText, noticeTime, unreadNotices } from "@/lib/change-notices";
 import { canApproveSignup, canExportAccounting, canExportData, canManageMaps, canManageSettings, canManageUsers, canRegisterPurchase, canSeeAllStores, canTriageFax, canViewFax, canViewRegistry, canViewReports, canViewSuppliers } from "@/lib/auth/permissions";
 import { getDb } from "@/lib/db/store";
 import { avatarUrl } from "@/lib/account-rules";
@@ -188,6 +189,14 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       const cron = cronHealth(kdb);
       if (sources.length && !cron.ok && BACKEND === "supabase") notifications.push({ kind: "knowledge", title: "社内資料の定期の同期が止まっています", detail: cron.detail, href: "/knowledge" });
     }
+  }
+  // 案件の変更のお知らせ (予定・明細・金額・担当・お客様の付け替えなど。担当店舗・本部・管理者。src/lib/change-notices.ts)
+  {
+    const changes = unreadNotices(getDb(), user);
+    for (const c of changes.slice(0, 4)) {
+      notifications.push({ kind: "change", title: `${c.topic}: ${[c.number, c.title].filter(Boolean).join(" ")}`.slice(0, 80), detail: `${c.lines.slice(0, 2).map(lineText).join(" / ")} · ${userName(c.actorId)} ${noticeTime(c.at)}`, href: `/notices/${c.id}/open` });
+    }
+    if (changes.length > 4) notifications.push({ kind: "change", title: `ほかの変更のお知らせ ${changes.length - 4} 件`, detail: "変更のお知らせの一覧で確かめてください", href: "/notices" });
   }
   if (signups.length > 0) {
     notifications.push({ kind: "signup", title: `新規登録の申請 ${signups.length} 件`, detail: `${signups.slice(0, 3).map((u) => `${u.name} (${ROLE_LABEL[u.role]})`).join("・")}${signups.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/staff#signups" });

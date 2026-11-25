@@ -12,7 +12,10 @@ import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib
 import { linkInquiryLogs } from "@/lib/ai-intake";
 import { DUE_CHOICES, REQUEST_PURPOSE, dueAtFrom, dueLabel, type DueChoice } from "@/lib/inquiry-flow";
 import { closeScheduleRequests, createInquiryRequest } from "@/lib/inquiry-requests";
-import { addInquiryPhone, canLinkToCustomer, moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
+import { addInquiryPhone, canLinkToCustomer, moveCaseToCustomer, moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
+import { caseChainOf } from "@/lib/case-store";
+import { addChangeNotice, caseTarget, noticeLines } from "@/lib/change-notices";
+import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
 import { storeInquiryNotices, storeRequestNotices } from "@/lib/notify/store-line";
@@ -63,7 +66,9 @@ export async function createInquiry(formData: FormData) {
     if (customer) assertCaseStore(user, customer.storeId, back);
     // 担当店舗: 手で選んだ店舗 > 住所 (入力した住所 → お客様の住所) の担当エリア > お客様の店舗 > 自店舗 (お客様のご要望 2026-11-24「③」。src/lib/store-area.ts)
     const address = str(formData, "address").slice(0, 200);
-    const pick = newCaseStore(db, user, { requested: str(formData, "storeId"), auto: str(formData, "storeAuto") === "1", address, customer });
+    // 施工現場の住所 (依頼主の住所と違うとき)。担当店舗の担当エリアは現場の住所で決める
+    const siteAddress = str(formData, "siteAddress").replace(/\s+/g, " ").trim().slice(0, 200);
+    const pick = newCaseStore(db, user, { requested: str(formData, "storeId"), auto: str(formData, "storeAuto") === "1", address: siteAddress || address, customer });
     const storeId = pick.storeId;
     if (pick.byArea && pick.area && storeId !== user.storeId) areaNote = ` 住所の担当エリアのため${pick.area.storeName}の担当にしました (${pick.area.storeName}に知らせます)。`;
     const contactName = customer?.name ?? str(formData, "contactName");
@@ -90,6 +95,7 @@ export async function createInquiry(formData: FormData) {
       media,
       // 新規のお客様の住所 (問い合わせ一覧の住所・「顧客として登録する」に使う)
       intake: address && !customer ? { address } : undefined,
+      siteAddress: siteAddress && siteAddress !== (customer?.address ?? address) ? siteAddress : undefined,
     };
     if (promotionId) {
       const promo = (db.promotions ?? []).find((p) => p.id === promotionId);
@@ -127,6 +133,7 @@ export async function updateInquiry(id: string, formData: FormData) {
     inq.nextAction = str(formData, "nextAction") || undefined;
     inq.nextActionDue = str(formData, "nextActionDue") || undefined;
     if (formData.has("detail")) inq.detail = str(formData, "detail");
+    if (formData.has("siteAddress")) inq.siteAddress = str(formData, "siteAddress").replace(/\s+/g, " ").trim().slice(0, 200) || undefined;
     // 媒体は必須 (更新の画面に欄がある。わからなければ「不明」)
     if (formData.has("media")) inq.media = readMedia(formData, back);
     if (formData.has("promotionId")) {
@@ -148,7 +155,10 @@ export async function updateInquiry(id: string, formData: FormData) {
       moved = !canEditCaseStore(user, inq.storeId);
     }
     inq.updatedAt = nowIso();
-    const changes = diffChanges(before, inq, ["status", "assignedUserId", "category", "nextAction", "nextActionDue", "detail", "storeId", "media", "promotionId"]);
+    const changes = diffChanges(before, inq, ["status", "assignedUserId", "category", "nextAction", "nextActionDue", "detail", "storeId", "media", "promotionId", "siteAddress"]);
+    // 内容・施工現場の住所の変更は担当店舗・本部・管理者に知らせる (お客様のご要望 2026-11-25「⑥」)
+    const noticeFields = changes.filter((c) => ["detail", "category", "siteAddress", "storeId"].includes(c.field));
+    if (noticeFields.length) addChangeNotice(db, user.id, caseTarget(db, inq.id), "問い合わせの内容の変更", noticeLines(db, "inquiry", noticeFields), { alsoStores: changes.some((c) => c.field === "storeId") ? [before.storeId] : [] });
     storeName = db.stores.find((s) => s.id === inq.storeId)?.name ?? "";
     const storeMoved = changes.some((c) => c.field === "storeId");
     if (storeMoved) storeMovedTo = inq.storeId;
@@ -255,9 +265,24 @@ export async function linkInquiryToCustomer(id: string, customerId: string, retu
       const blocker = relinkBlocker(db, inq);
       if (blocker) fail(back, blocker);
     }
+    // 見積・受注のあとの案件: 見積・受注・予定もまとめて付け替える (お客様のご要望 2026-11-25「⑤」)
+    const chain = inq.quoteId ? caseChainOf(db, inq.id) : undefined;
+    if (chain && (chain.quote || chain.order)) {
+      if (chain.order) {
+        const lock = completedCaseLock(db, user, chain.order);
+        if (lock.locked) fail(back, completedLockMessage(lock.reason));
+      }
+      const fromC = db.customers.find((x) => x.id === inq.customerId);
+      const rc = moveCaseToCustomer(db, chain, c, user.id);
+      addChangeNotice(db, user.id, caseTarget(db, inq.id), "お客様の付け替え", [{ label: "お客様", before: fromC ? `${fromC.name} 様 (${fromC.code})` : "(未登録)", after: `${c.name} 様 (${c.code})` }]);
+      message = `案件 ${chain.head.number} (問い合わせ・見積・受注) を ${c.name} 様に付け替えました。${rc.events ? `予定 ${rc.events} 件も移しました。` : ""}${rc.removed ? `仮の顧客 (${rc.removed.code}) は記録がなくなったため削除しました。` : ""}`;
+      return;
+    }
     const before = inq.customerId ?? null;
+    const fromBefore = before ? db.customers.find((x) => x.id === before) : undefined;
     const r = moveInquiryToCustomer(db, inq, c, user.id);
     c.updatedAt = nowIso();
+    if (before) addChangeNotice(db, user.id, caseTarget(db, inq.id), "お客様の付け替え", [{ label: "お客様", before: fromBefore ? `${fromBefore.name} 様 (${fromBefore.code})` : "(仮の顧客)", after: `${c.name} 様 (${c.code})` }]);
     addAudit(db, {
       userId: user.id,
       action: "update",

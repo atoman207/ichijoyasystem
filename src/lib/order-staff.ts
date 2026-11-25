@@ -1,4 +1,5 @@
 import type { Database, Order, StoreId, User } from "@/lib/db/types";
+import { deliveryStaffOf } from "@/lib/work-staff";
 
 /**
  * 受注の担当 (営業担当) と施工担当
@@ -6,6 +7,7 @@ import type { Database, Order, StoreId, User } from "@/lib/db/types";
  * 経営ダッシュボード (management.ts) と AI アシスタントの売上の分析 (assistant/facts.ts) が同じ判定を使う。
  *
  * - システムで登録した受注: 担当 = 見積の担当者 (estimatorId) → 見積の作成者 → 受注の作成者。施工担当 = 受注の施工担当 (workerIds)
+ * - 作業の担当 (Order.workStaff。施工完了・売上確定で確かめた実績。src/lib/work-staff.ts) があれば、担当 = 現地見積の人、施工担当 = 引取・納品・施工の人
  * - 販売管理ソフトから移行した受注 (経過メモに「担当者欄: 5 山田太郎、12 …、51 …」がある): 販売管理ソフトの見出しのない列で、
  *   1 番目 = 担当、2 番目 = 施工担当、3 番目 = 伝票の入力者 (事務)。入力者は担当にも施工担当にも数えない。
  *   取込のとき空の列は省かれるため、名前が 2 つなら 1 番目 = 担当・2 番目 = 入力者、1 つなら担当とみなす。
@@ -118,6 +120,12 @@ function build(db: Pick<Database, "orders" | "quotes" | "users">): StaffIndex {
       const q = o.quoteId ? quoteById.get(o.quoteId) : undefined;
       const who = q?.estimatorId ?? q?.createdBy ?? o.createdBy;
       sales = who ? [who] : [];
+    }
+    // 施工完了・売上確定で確かめた作業の担当 (src/lib/work-staff.ts) があればそれを正しいデータとして使う: 担当 = 現地見積、施工担当 = 引取・納品・施工
+    if (o.workStaff) {
+      if (o.workStaff.survey.length) sales = [...o.workStaff.survey];
+      const done = deliveryStaffOf(o.workStaff);
+      if (done.length) workers = done;
     }
     for (const k of new Set([...sales, ...workers])) countUnlinked(k, o.storeId);
     byOrder.set(o.id, { sales, workers });

@@ -1,3 +1,4 @@
+import { deliveryStaffOf, workStaffOf } from "@/lib/work-staff";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canAccessStore } from "@/lib/auth/permissions";
@@ -12,6 +13,8 @@ export default async function NewSurveyPage({ searchParams }: { searchParams: Pr
   const user = await requireUser();
   const db = getDb();
   const order = sp.orderId ? db.orders.find((o) => o.id === sp.orderId && canAccessStore(user, o.storeId)) : undefined;
+  // 作業の担当 (施工完了で確定した実績。src/lib/work-staff.ts) をはがきの ②③ の担当の初期値にする
+  const ws = order ? workStaffOf(db, order) : undefined;
   const storeId = order?.storeId ?? user.storeId;
   return (
     <div className="max-w-5xl">
@@ -25,7 +28,7 @@ export default async function NewSurveyPage({ searchParams }: { searchParams: Pr
           orderOptions={recentOrderOptions(db, user)}
           users={staffOptions(db, storeId)}
           stores={db.stores.filter((s) => canAccessStore(user, s.id))}
-          defaults={{ storeId, clerkUserId: kpiSettings(db).clerkByStore[storeId], salesUserId: order?.createdBy, deliveryUserIds: order?.workerIds }}
+          defaults={{ storeId, clerkUserId: kpiSettings(db).clerkByStore[storeId], salesUserId: ws?.survey[0] ?? order?.createdBy, deliveryUserIds: ws ? deliveryStaffOf(ws) : order?.workerIds }}
           cancelHref={order ? `/orders/${order.id}` : "/kpi/surveys"}
           submitLabel="登録する"
         />

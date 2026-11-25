@@ -7,10 +7,9 @@ import { caseValue, createCaseResolver, orderEditable } from "@/lib/db/schedule"
 import { parseHandoverRef } from "@/lib/handover";
 import { periodLabel } from "@/lib/calendar";
 import { eventLabeler } from "@/lib/schedule-label";
-import { isPlaceholderCustomer } from "@/lib/customer-link";
 import { scheduleWork } from "@/lib/schedule-work";
 import { workDescription, workText } from "@/lib/work-summary";
-import type { EventQuickData, QuickMap, QuickPair, QuickRemove, QuickStaff, QuickStoreChange } from "@/components/schedule/quick-types";
+import type { EventQuickData, QuickCase, QuickMap, QuickPair, QuickRemove, QuickStaff, QuickStoreChange } from "@/components/schedule/quick-types";
 import { approverRole, skipsApproval } from "@/lib/auth/permissions";
 import { caseChainOf, pendingStoreChange, storeChangeBlocker } from "@/lib/case-store";
 import { touchesConfirmedSales } from "@/lib/approval-decide";
@@ -23,6 +22,14 @@ import { isCommonStaff } from "@/lib/staff-choices";
 import { initialsByUser } from "@/lib/schedule-sheet/initials";
 import { eventPair } from "@/lib/schedule-pair";
 import { handoverLabel } from "@/lib/handover";
+import { approvalSettings } from "@/lib/approval-rules";
+import { CATEGORY_LABEL, SCHEDULE_KIND } from "@/lib/constants";
+import type { ScheduleKind } from "@/lib/db/types";
+import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
+import { canLinkToCustomer, caseRelinkBlocker, isPlaceholderCustomer } from "@/lib/customer-link";
+import { liveInvoicesOfOrder } from "@/lib/billing";
+import { taxModeOf } from "@/lib/quote-calc";
+import { WORK_ROLES, WORK_ROLE_LABEL, workStaffOf } from "@/lib/work-staff";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -78,7 +85,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     workText: workText(workCounts) || undefined,
     workManual: e.work?.trim() || undefined,
     storeChange: quickStoreChange(db, user, e, canEdit, resolver),
-    remove: quickRemove(db, user, e, canEdit, order),
+    remove: quickRemove(db, user, e, canEdit, order, resolver),
     caseRef: ref ? caseValue(ref) : undefined,
     case: ref ? { label: `${ref.stage} ${ref.number}`, title: ref.title, href: ref.href, canOpen: canAccessStore(user, ref.storeId) || canEditCaseStore(user, ref.storeId) } : undefined,
     customer: customer
@@ -96,12 +103,14 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     inquiryHref: inq && !customer ? `/inquiries/${inq.id}#link-customer` : isPlaceholderCustomer(customer) && inq ? `/inquiries/${inq.id}#link-customer` : undefined,
     synced,
     handover,
+    scheduleApproval: approvalSettings(db).scheduleChange && !skipsApproval(user, "handover_change"),
     lockKind: synced,
     canEdit,
     hold: false,
     map: quickMap(db, user, e),
     staff: quickStaff(db, e.storeId),
-    pair: quickPair(db, e, canEdit, labeler, users, resolver),
+    pair: quickPair(db, user, e, canEdit, labeler, users, resolver),
+    caseEdit: quickCase(db, user, e, resolver),
   };
   return NextResponse.json(data, { headers: NO_STORE });
 }
@@ -136,11 +145,24 @@ function quickStoreChange(db: Database, user: User, e: ScheduleEvent, canEdit: b
 }
 
 /** 予定の削除 (小さな画面のいちばん下) */
-function quickRemove(db: Database, user: User, e: ScheduleEvent, canEdit: boolean, order: Order | undefined): QuickRemove {
-  if (e.source !== "order") return { mode: "event", canDelete: canEditEvent(user, e), needsApproval: false };
+function quickRemove(db: Database, user: User, e: ScheduleEvent, canEdit: boolean, order: Order | undefined, resolver: ReturnType<typeof createCaseResolver>): QuickRemove {
+  // あわせて削除できる関連する予定 (引取 ⇄ 納品)
+  const info = eventPair(db, e, resolver);
+  const events = (info?.events ?? []).filter((x) => pairEditable(db, user, x)).map((x) => ({ id: x.id, label: `${SCHEDULE_KIND[x.kind].label} ${periodLabel(x)}${x.assigneeIds.length ? ` (${x.assigneeIds.map((a) => db.users.find((u) => u.id === a)?.name.split(/[\s　]/)[0] ?? "-").join("・")})` : ""}` }));
+  const pair = info && events.length ? { want: info.want, events } : undefined;
+  if (e.source !== "order") return { mode: "event", canDelete: canEditEvent(user, e), needsApproval: false, pair };
   if (!parseHandoverRef(e.sourceRef)) return { mode: "order", canDelete: false, needsApproval: false, orderHref: order ? `/orders/${order.id}` : undefined };
-  const needsApproval = !skipsApproval(user, "handover_change");
-  return { mode: "handover", canDelete: canEdit, needsApproval, approver: order && needsApproval ? (approverRole(db.users, order.storeId, false, user.id) === "admin" ? "管理者" : `${db.stores.find((s) => s.id === order.storeId)?.name ?? ""}の店長`) : undefined, orderHref: order ? `/orders/${order.id}` : undefined };
+  const needsApproval = approvalSettings(db).scheduleChange && !skipsApproval(user, "handover_change");
+  return { mode: "handover", canDelete: canEdit, needsApproval, approver: order && needsApproval ? (approverRole(db.users, order.storeId, false, user.id) === "admin" ? "管理者" : `${db.stores.find((s) => s.id === order.storeId)?.name ?? ""}の店長`) : undefined, orderHref: order ? `/orders/${order.id}` : undefined, pair };
+}
+
+/** 関連する予定をこの画面から動かせる・消せるか (受注の施工予定・完了した受注の予定は不可) */
+function pairEditable(db: Database, user: User, x: ScheduleEvent): boolean {
+  if (!canEditEvent(user, x)) return false;
+  if (x.source !== "order") return true;
+  if (!parseHandoverRef(x.sourceRef)) return false;
+  const o = db.orders.find((y) => y.id === x.orderId);
+  return Boolean(o && orderEditable(o));
 }
 
 /** 地図: Google マップ・経路案内・登録済みの住宅地図 (MapInfoCard と同じ場所の決め方。src/lib/maps/resolve.ts) */
@@ -176,7 +198,7 @@ function quickStaff(db: Database, storeId: StoreId): QuickStaff[] {
 }
 
 /** 引取・現見 ⇄ 納品 の相手 (src/lib/schedule-pair.ts) */
-function quickPair(db: Database, e: ScheduleEvent, canEdit: boolean, labeler: ReturnType<typeof eventLabeler>, users: Map<string, string>, resolver: ReturnType<typeof createCaseResolver>): QuickPair | undefined {
+function quickPair(db: Database, user: User, e: ScheduleEvent, canEdit: boolean, labeler: ReturnType<typeof eventLabeler>, users: Map<string, string>, resolver: ReturnType<typeof createCaseResolver>): QuickPair | undefined {
   const info = eventPair(db, e, resolver);
   if (!info) return undefined;
   const orderOk = info.order ? orderEditable(info.order) : false;
@@ -187,9 +209,76 @@ function quickPair(db: Database, e: ScheduleEvent, canEdit: boolean, labeler: Re
   const canAdd = canEdit && info.want === "delivery" && (addMode === "order" ? true : info.events.length === 0) && !(info.order && !orderOk);
   return {
     want: info.want,
-    events: info.events.map((x) => ({ id: x.id, kind: x.kind, period: periodLabel(x), label: labeler.label(x).text, assignees: x.assigneeIds.map((a) => users.get(a) ?? "-") })),
+    events: info.events.map((x) => ({ id: x.id, kind: x.kind, period: periodLabel(x), label: labeler.label(x).text, assignees: x.assigneeIds.map((a) => users.get(a) ?? "-"), date: x.date, startTime: x.startTime, endTime: x.endTime, slot: x.slot, assigneeIds: x.assigneeIds, canEdit: canEdit && pairEditable(db, user, x) })),
     canAdd,
     addMode,
     undated,
   };
+}
+
+/** 案件の確認・変更・追加 (明細・現場の住所・お客様の付け替え・新しい案件・作業の担当)。お客様のご要望 2026-11-25「③⑤⑨⑩④」 */
+function quickCase(db: Database, user: User, e: ScheduleEvent, resolver: ReturnType<typeof createCaseResolver>): QuickCase | undefined {
+  const ref = resolver.ofEvent(e);
+  const chain = ref ? caseChainOf(db, ref.id) : undefined;
+  const customerId = chain ? (chain.order?.customerId ?? chain.quote?.customerId ?? chain.inquiry?.customerId) : e.customerId;
+  const customer = customerId ? db.customers.find((c) => c.id === customerId) : undefined;
+  if (!chain && !customer) return undefined;
+  const lock = chain?.order ? completedCaseLock(db, user, chain.order) : undefined;
+  const canEdit = Boolean(chain) && canEditCaseStore(user, chain!.head.storeId) && !lock?.locked;
+  const out: QuickCase = { caseId: chain?.head.id, caseNumber: chain?.head.number, canEdit, lock: lock?.locked ? completedLockMessage(lock.reason) : undefined };
+  if (chain) {
+    const site = chain.order ? (chain.order.siteAddress && chain.order.siteAddress !== customer?.address ? chain.order.siteAddress : "") : chain.quote?.siteAddress || chain.inquiry?.siteAddress || "";
+    out.site = { address: site, requester: customer?.address ?? chain.inquiry?.intake?.address ?? "", corporate: customer?.type === "corporate", canEdit };
+    const q = chain.quote;
+    if (q) {
+      const o = chain.order;
+      const done = (st?: string) => st === "completed" || st === "invoiced" || st === "paid";
+      const invoiced = Boolean(o && liveInvoicesOfOrder(db.invoices, o).length);
+      const blocked = q.pendingChange
+        ? "承認待ちの変更があります。承認・差戻しのあとに変更できます。"
+        : invoiced
+          ? "請求書を発行済みのため、明細・金額は変えられません (入金前なら本部・管理者が請求書を無効にしてから)。"
+          : !["draft", "approved", "sent", "accepted"].includes(q.status)
+            ? "この状態の見積は変更できません (承認待ち・失注など)。見積の画面で確かめてください。"
+            : undefined;
+      out.quote = {
+        id: q.id,
+        number: q.number,
+        href: `/quotes/${q.id}`,
+        draft: q.status === "draft",
+        version: q.version,
+        items: q.items,
+        discount: q.discount,
+        taxMode: taxModeOf(q),
+        total: q.total,
+        editable: canEdit && !blocked,
+        blocked,
+        smallLimit: approvalSettings(db).smallChangeLimit,
+        confirmedSales: done(o?.status),
+        ownApproval: skipsApproval(user, "quote_amend") && (user.role === "admin" || !done(o?.status)),
+      };
+    } else if (chain.order) {
+      out.orderTotal = chain.order.total;
+      out.orderHref = `/orders/${chain.order.id}`;
+    }
+    const blocker = caseRelinkBlocker(db, chain);
+    out.relink = { canRelink: canEdit && !blocker, blocked: canEdit ? blocker : undefined, current: customer ? `${customer.name} 様 (${customer.code})` : undefined };
+    if (chain.order) {
+      const ws = workStaffOf(db, chain.order);
+      const names = (ids: string[]) => ids.map((id) => db.users.find((u) => u.id === id)?.name ?? "-").join("・") || "未登録";
+      out.workStaff = { href: `/orders/${chain.order.id}#work-staff`, source: ws.source, rows: WORK_ROLES.map((r) => ({ role: WORK_ROLE_LABEL[r], names: names(ws[r]) })) };
+    }
+  }
+  if (customer && canLinkToCustomer(db, user, customer)) {
+    out.newCase = {
+      customerId: customer.id,
+      customerName: customer.name,
+      corporate: customer.type === "corporate",
+      media: customer.type === "corporate" ? "business" : "repeat",
+      storeId: chain?.head.storeId ?? e.storeId,
+      categories: Object.entries(CATEGORY_LABEL).map(([id, label]) => ({ id, label })),
+      kinds: (["survey", "site_survey", "onsite_quote", "measure", "pickup", "delivery", "install", "visit", "site"] as ScheduleKind[]).map((k) => ({ id: k, label: SCHEDULE_KIND[k].label })),
+    };
+  }
+  return out;
 }

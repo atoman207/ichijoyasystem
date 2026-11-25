@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db/store";
 import { notificationsFor, type NotificationSummary } from "@/lib/db/queries";
 import { pendingReceptionCount } from "@/lib/reception";
 import { canApproveLeave } from "@/lib/auth/permissions";
+import { unreadNotices } from "@/lib/change-notices";
 
 /**
  * ヘッダーの件数 (承認・問い合わせ・通知のベル) の印。画面を開いたままでも、新しい承認の申請・問い合わせが届いたら
@@ -22,6 +23,8 @@ export function liveSignature(user: User, summary?: NotificationSummary): { sig:
     String(n.taskCount),
     leave.sort().join(","),
     String(n.overdueInvoices),
+    // 案件の変更のお知らせ (未読)
+    unreadNotices(db, user).slice(0, 20).map((c) => `${c.id}@${c.at}`).join(","),
   ];
   return { sig: createHash("sha1").update(parts.join("|")).digest("hex").slice(0, 16), approvals: n.pendingApprovals.length };
 }

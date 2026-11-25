@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nowIso } from "@/lib/db/store";
-import type { Approval, Database, ScheduleEvent, ScheduleKind, StoreId, User } from "@/lib/db/types";
+import type { Approval, ChangeNoticeLine, Database, ScheduleEvent, ScheduleKind, StoreId, User } from "@/lib/db/types";
 import { QUICK_MAX_ASSIGNEES, SCHEDULE_KIND, SCHEDULE_KINDS, SCHEDULE_REPEAT, type ScheduleRepeat } from "@/lib/constants";
 import { approverRole, canAccessStore, canEditCaseStore, canEditEvent, canManageCompanyEvents, canManageSettings } from "@/lib/auth/permissions";
 import {
@@ -48,6 +48,7 @@ import { taskNotices } from "@/lib/notify/events";
 import { PAIR_PREFIX, eventPair } from "@/lib/schedule-pair";
 import { countsFromText, hasWork, stripKindWords } from "@/lib/work-summary";
 import { sendAndRecord } from "@/lib/notify/send";
+import { addChangeNotice, eventTarget } from "@/lib/change-notices";
 import { fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
 
 /**
@@ -305,6 +306,9 @@ export async function createScheduleEvent(formData: FormData) {
       summary: `予定を登録 (${periodLabel(p.fields)} ${kindLabel}${p.dates.length > 1 ? ` / ${SCHEDULE_REPEAT[p.repeat]} ${p.dates.length} 回` : ""}${p.caseRef ? ` / 案件 ${p.caseRef.number}` : ""}${hits.length ? " / 重複を承知で登録" : ""})`,
       storeId: p.fields.storeId,
     });
+    // 案件・お客様の予定の追加は担当店舗・本部・管理者に知らせる (お客様のご要望 2026-11-25「⑥」)
+    const first = db.schedule.find((x) => x.id === firstId);
+    if (first) addChangeNotice(db, user.id, eventTarget(db, first), "予定の追加", [{ label: `${kindLabel}の予定`, before: "(なし)", after: `${periodLabel(first)}${p.dates.length > 1 ? ` ほか ${p.dates.length - 1} 回` : ""} (担当: ${names(db, first.assigneeIds)})` }]);
   });
   revalidateSchedule(p.fields);
   if (closedRequests.length) {
@@ -360,6 +364,84 @@ function applyToOrder(db: Database, ev: ScheduleEvent, user: User) {
   });
 }
 
+/** 予定の変更のお知らせの行 (日時はまとめて 1 行。担当者は名前、種類・店舗は名前) */
+function eventNoticeLines(db: Database, before: ScheduleEvent, after: ScheduleEvent, changes: { field: string; before: unknown; after: unknown }[], prefix = ""): ChangeNoticeLine[] {
+  const out: ChangeNoticeLine[] = [];
+  const what = `${prefix}${SCHEDULE_KIND[after.kind].label}`;
+  if (changes.some((c) => ["date", "endDate", "startTime", "endTime", "slot"].includes(c.field))) out.push({ label: `${what}の日時`, before: periodLabel(before), after: periodLabel(after) });
+  const storeName = (sid: unknown) => db.stores.find((x) => x.id === sid)?.name ?? String(sid ?? "");
+  for (const c of changes) {
+    if (c.field === "assigneeIds") out.push({ label: `${what}の担当`, before: names(db, (c.before as string[]) ?? []), after: names(db, (c.after as string[]) ?? []) });
+    else if (c.field === "kind") out.push({ label: `${prefix}予定の種類`, before: SCHEDULE_KIND[c.before as ScheduleKind]?.label ?? String(c.before ?? ""), after: SCHEDULE_KIND[c.after as ScheduleKind]?.label ?? String(c.after ?? "") });
+    else if (c.field === "title") out.push({ label: `${what}の件名`, before: String(c.before ?? ""), after: String(c.after ?? "") });
+    else if (c.field === "memo") out.push({ label: `${what}のメモ`, before: String(c.before ?? "").slice(0, 120) || "(なし)", after: String(c.after ?? "").slice(0, 120) || "(なし)" });
+    else if (c.field === "location") out.push({ label: `${what}の場所`, before: String(c.before ?? "") || "(案件・お客様の場所)", after: String(c.after ?? "") || "(案件・お客様の場所)" });
+    else if (c.field === "storeId") out.push({ label: `${what}の店舗`, before: storeName(c.before), after: storeName(c.after) });
+  }
+  return out;
+}
+
+type HvRef = NonNullable<ReturnType<typeof parseHandoverRef>>;
+
+function pairMsg(pair: PairMove, applied: boolean, approvalId?: string): string {
+  const what = `関連する${SCHEDULE_KIND[pair.ev.kind].label}の予定`;
+  const when = periodLabel({ date: pair.when.date, startTime: pair.when.start, endTime: pair.when.end, slot: pair.when.slot });
+  if (approvalId) return ` ${what}の変更 (${when}) は店長へ申請しました。`;
+  return applied ? ` ${what}も ${when} に変更しました。` : ` ${what}は変わりませんでした。`;
+}
+
+/** 引取 ⇄ 納品 の関連する予定もあわせて動かす (お客様のご要望 2026-11-25「② 引取・納品予定の変更」) */
+interface PairMove {
+  ev: ScheduleEvent;
+  hv?: HvRef;
+  when: { date: string; start?: string; end?: string; slot?: "am" | "pm" };
+  assigneeIds?: string[];
+}
+
+/** フォームの関連する予定の日時 (pairId・pairDate・pairTimeMode・pairStartTime・pairEndTime・pairAssigneeIds)。なければ undefined */
+function parsePairMove(db: Database, user: User, current: ScheduleEvent, fd: FormData, back: string): PairMove | undefined {
+  const pid = str(fd, "pairId");
+  if (!pid) return undefined;
+  const ev = eventPair(db, current)?.events.find((x) => x.id === pid);
+  if (!ev) fail(back, "関連する予定が見つかりません (ほかの人が変更・削除した可能性があります)。画面を読み込み直してください。");
+  if (!canEditEvent(user, ev)) fail(back, `関連する予定「${ev.title}」を変更する権限がありません。`);
+  const hv = ev.source === "order" ? parseHandoverRef(ev.sourceRef) : undefined;
+  if (ev.source === "order" && !hv) fail(back, "関連する予定は受注の施工予定と連動しています。受注の画面の「施工予定・担当」で変更してください。");
+  if (hv) {
+    const o = db.orders.find((x) => x.id === ev.orderId);
+    if (!o || !orderEditable(o)) fail(back, "施工完了・キャンセル済みの受注の予定は変更できません。");
+  }
+  const date = str(fd, "pairDate");
+  if (!isDateKey(date)) fail(back, "関連する予定 (納品・引取) の日付を入れてください。");
+  const mode = str(fd, "pairTimeMode");
+  const start = mode === "time" ? normTime(str(fd, "pairStartTime")) : undefined;
+  if (mode === "time" && !start) fail(back, "関連する予定の時刻を正しく入れてください。");
+  const end = start ? normTime(str(fd, "pairEndTime")) : undefined;
+  if (start && end && toMinutes(end) <= toMinutes(start)) fail(back, "関連する予定の終了時刻は開始時刻より後にしてください。");
+  const slot: "am" | "pm" | undefined = !start && (mode === "am" || mode === "pm") ? mode : undefined;
+  let assigneeIds: string[] | undefined;
+  if (str(fd, "pairAssigneesSent") === "1") {
+    const active = new Set(db.users.filter((u) => u.active).map((u) => u.id));
+    assigneeIds = [...new Set(fd.getAll("pairAssigneeIds").map(String))].filter((a) => active.has(a)).slice(0, QUICK_MAX_ASSIGNEES);
+    if (!assigneeIds.length) fail(back, "関連する予定 (納品・引取) の担当者を 1 人以上選んでください。");
+  }
+  return { ev, hv, when: { date, start, end, slot }, assigneeIds };
+}
+
+/** 受注の日程から作り直した予定の担当者を、選んだ人にする (引取・納品の行の役割と行 ID で探す) */
+function setHandoverAssignees(db: Database, user: User, orderId: string, ref: HvRef, assigneeIds: string[]) {
+  for (const ev of db.schedule) {
+    const r = parseHandoverRef(ev.sourceRef);
+    if (ev.orderId !== orderId || r?.role !== ref.role || !r.rowIds.some((x) => ref.rowIds.includes(x))) continue;
+    const before = [...ev.assigneeIds];
+    if (before.join() === assigneeIds.join()) continue;
+    ev.assigneeIds = [...assigneeIds];
+    ev.updatedBy = user.id;
+    ev.updatedAt = nowIso();
+    addAudit(db, { userId: user.id, action: "update", entity: "schedule", entityId: ev.id, entityLabel: ev.title, summary: "関連する予定 (引取・納品) とあわせて担当者を変更", storeId: ev.storeId, changes: [{ field: "assigneeIds", before, after: ev.assigneeIds }] });
+  }
+}
+
 export async function updateScheduleEvent(id: string, formData: FormData) {
   const user = await requireActionUser();
   const back = safePath(str(formData, "back")) ?? `/schedule/${id}/edit`;
@@ -374,7 +456,13 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
     if (!o || !orderEditable(o)) fail(`/schedule/${id}`, "施工完了・キャンセル済みの受注の施工予定は変更できません。");
   }
   const p = parseEventForm(db, user, formData, back, { allowRepeat: false, current });
-  // 受注の引取・納品の日程と連動する予定: 日時の変更は受注の日程の変更の申請 (承認のあとに予定表へ反映)。担当・メモなどはそのまま保存
+  // 関連する予定 (引取 ⇄ 納品) もあわせて動かす (予定表の小さな画面の「関連する納品予定も変更しますか？」)
+  const pair = parsePairMove(db, user, current, formData, back);
+  if (pair?.hv) {
+    const po = db.orders.find((x) => x.id === pair.ev.orderId);
+    if (po && pendingHandoverChange(db, po.id)) fail(back, "関連する予定の案件に承認待ちの引取・納品日の変更があります。承認・差戻しのあとに変更してください。");
+  }
+  // 受注の引取・納品の日程と連動する予定: 日時の変更は受注の日程の変更 (既定は承認なしで反映。設定で承認を必要にしたときは申請)。担当・メモなどはそのまま保存
   const hvRef = synced ? parseHandoverRef(current.sourceRef) : undefined;
   if (hvRef) {
     if (hvRef.role !== "install") p.fields.endDate = undefined;
@@ -388,13 +476,22 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
   if (hits.length > 0 && !p.allowOverlap) {
     fail(back, `担当者の予定が重複しています: ${describeConflicts(db, hits)}。日時・担当者を見直すか、「重複を承知で保存する」にチェックしてください。`);
   }
+  const pairHits = pair
+    ? findConflicts({ id: pair.ev.id, date: pair.when.date, startTime: pair.when.start, endTime: pair.when.end, slot: pair.when.slot, assigneeIds: pair.assigneeIds ?? pair.ev.assigneeIds, orderId: pair.ev.orderId, quoteId: pair.ev.quoteId, inquiryId: pair.ev.inquiryId }, db.schedule.filter((x) => x.id !== id))
+    : [];
+  if (pairHits.length && !p.allowOverlap) fail(back, `関連する予定 (${SCHEDULE_KIND[pair!.ev.kind].label}) の担当者の予定が重複しています: ${describeConflicts(db, pairHits)}。日時・担当者を見直すか、「重複を承知で保存する」にチェックしてください。`);
   let changed = 0;
   const followUps: string[] = [];
+  let pairDone = false;
+  let pairApplied = false;
+  let pairApproval: string | undefined;
+  let pairLines: ChangeNoticeLine[] = [];
   let hvRequest: { approvalId?: string; auto: boolean; role?: string; applied: boolean } | undefined;
   const impacts = changeImpacts(db, { id, kind: p.fields.kind, date: p.fields.date, endDate: p.fields.endDate, storeId: p.fields.storeId, assigneeIds: p.fields.assigneeIds, orderId: p.fields.orderId, quoteId: p.fields.quoteId, inquiryId: p.fields.inquiryId }).filter((x) => !/予約 .* も .* に移します|保存すると製造の予定を作り直します/.test(x));
   await mutate((db) => {
-    const ev = db.schedule.find((e) => e.id === id);
-    if (!ev) return;
+    const found = db.schedule.find((e) => e.id === id);
+    if (!found) return;
+    let ev: ScheduleEvent = found;
     const before = { ...ev, assigneeIds: [...ev.assigneeIds] };
     if (hvRef) {
       const when = { date: p.fields.date, endDate: p.fields.endDate, start: p.fields.startTime, end: p.fields.startTime ? p.fields.endTime : undefined, slot: p.fields.startTime ? undefined : p.fields.slot };
@@ -404,9 +501,24 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
       if (moved) {
         const o = db.orders.find((x) => x.id === ev.orderId);
         if (o) {
-          const r = savePlan(db, user, o, applyEventMove(o.handovers, hvRef, when), { back, reason: `予定表で「${ev.title}」の日時を変更`, via: "schedule" });
+          let rows = applyEventMove(o.handovers, hvRef, when);
+          // 関連する予定が同じ受注の引取・納品の日程なら、1 回の保存でまとめて動かす
+          const same = Boolean(pair?.hv && pair.ev.orderId === o.id);
+          if (same) rows = applyEventMove(rows, pair!.hv!, pair!.when);
+          const r = savePlan(db, user, o, rows, { back, reason: `予定表で「${ev.title}」${same ? "と関連する予定" : ""}の日時を変更`, via: "schedule", noticeTopic: "予定の変更" });
           hvRequest = { approvalId: r.approval?.id, auto: r.auto, role: r.approval?.requiredRole, applied: r.applied };
           followUps.push(...r.followUps);
+          if (same) {
+            pairDone = true;
+            pairApplied = r.applied || r.auto;
+            if (pair!.assigneeIds && (r.applied || r.auto)) setHandoverAssignees(db, user, o.id, pair!.hv!, pair!.assigneeIds);
+          }
+          // 受注の日程から予定を作り直したあとの日時を使う (承認なし・承認の省略で日程が変わったとき、前の日時で上書きしない)
+          const fresh = db.schedule.find((e) => e.id === id);
+          if (fresh) {
+            ev = fresh;
+            Object.assign(p.fields, { date: fresh.date, endDate: fresh.endDate, startTime: fresh.startTime, endTime: fresh.endTime, slot: fresh.slot });
+          }
         }
       }
     }
@@ -416,7 +528,10 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
     ev.updatedBy = user.id;
     ev.updatedAt = now;
     const changes = diffChanges(before, ev, ["title", "kind", "date", "endDate", "startTime", "endTime", "slot", "storeId", "companyWide", "assigneeIds", "customerId", "orderId", "inquiryId", "location", "memo"]);
-    changed = changes.length;
+    // 受注の日程と連動する予定の日時は受注の日程 (savePlan) が変え、そちらのお知らせに書く。ここでは担当・メモなどの変更だけを数える
+    const DATE_FIELDS = ["date", "endDate", "startTime", "endTime", "slot"];
+    const ownChanges = hvRef ? changes.filter((c) => !DATE_FIELDS.includes(c.field)) : changes;
+    changed = ownChanges.length;
     if (planTablesReady() && changes.some((c) => ["date", "endDate", "startTime", "endTime", "slot"].includes(c.field))) {
       if (moveBookingsWithEvent(db, ev)) followUps.push("車両・設備の予約も移しました。");
       if (ev.kind === "pickup") followUps.push(...replanProductionForPickup(db, user, ev));
@@ -443,7 +558,51 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
       storeId: ev.storeId,
       changes,
     });
+    // 関連する予定 (引取 ⇄ 納品) もあわせて動かす (同じ受注の日程は上でまとめて保存済み)
+    if (pair && !pairDone) {
+      const pe = db.schedule.find((x) => x.id === pair.ev.id);
+      if (pe && pair.hv) {
+        const o = db.orders.find((x) => x.id === pe.orderId);
+        if (o) {
+          const r = savePlan(db, user, o, applyEventMove(o.handovers, pair.hv, pair.when), { back, reason: `予定表で「${ev.title}」とあわせて「${pe.title}」の日時を変更`, via: "schedule", noticeTopic: "予定の変更" });
+          followUps.push(...r.followUps);
+          pairApplied = r.applied || r.auto;
+          if (r.approval && !r.auto) pairApproval = r.approval.id;
+          if (pair.assigneeIds && pairApplied) setHandoverAssignees(db, user, o.id, pair.hv, pair.assigneeIds);
+        }
+      } else if (pe) {
+        const pb = { ...pe, assigneeIds: [...pe.assigneeIds] };
+        pe.date = pair.when.date;
+        pe.endDate = undefined;
+        pe.startTime = pair.when.start;
+        pe.endTime = pair.when.start ? pair.when.end : undefined;
+        pe.slot = pair.when.start ? undefined : pair.when.slot;
+        if (pair.assigneeIds) pe.assigneeIds = [...pair.assigneeIds];
+        const pc = diffChanges(pb, pe, ["date", "endDate", "startTime", "endTime", "slot", "assigneeIds"]);
+        if (pc.length) {
+          pe.updatedBy = user.id;
+          pe.updatedAt = now;
+          pairApplied = true;
+          if (planTablesReady() && pc.some((c) => c.field !== "assigneeIds")) {
+            if (moveBookingsWithEvent(db, pe)) followUps.push("関連する予定の車両・設備の予約も移しました。");
+            if (pe.kind === "pickup") followUps.push(...replanProductionForPickup(db, user, pe));
+          }
+          if (pe.orderId) {
+            const o = db.orders.find((x) => x.id === pe.orderId);
+            if (o) {
+              o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "change", body: `予定を変更: ${periodLabel(pe)} ${SCHEDULE_KIND[pe.kind].label} (担当: ${names(db, pe.assigneeIds)}・${SCHEDULE_KIND[ev.kind].label}とあわせて)` });
+              o.updatedAt = now;
+            }
+          }
+          addAudit(db, { userId: user.id, action: "update", entity: "schedule", entityId: pe.id, entityLabel: pe.title, summary: `関連する予定 (${SCHEDULE_KIND[ev.kind].label} ${shortDate(ev.date)}) とあわせて変更 (${[...new Set(pc.map((c) => FIELD_LABEL[c.field] ?? c.field))].join("・")})`, storeId: pe.storeId, changes: pc });
+          pairLines = eventNoticeLines(db, pb, pe, pc, "関連する");
+        }
+      }
+    }
+    // 担当店舗・本部・管理者へのお知らせ (引取・納品の日程の変更は savePlan が同じ「予定の変更」のお知らせに書く)
+    addChangeNotice(db, user.id, eventTarget(db, ev), "予定の変更", [...eventNoticeLines(db, before, ev, ownChanges), ...pairLines]);
   });
+  if (pairApproval) await notifyNewApprovals([pairApproval], user.id);
   if (hvRequest?.approvalId && !hvRequest.auto) await notifyNewApprovals([hvRequest.approvalId], user.id);
   revalidateSchedule(current);
   revalidateSchedule(p.fields);
@@ -455,10 +614,10 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
       : hvRequest.applied
         ? "受注の引取・納品の日程に反映しました。"
         : "日時は変わりませんでした (受注の日程にこの予定の品目が見つかりません。受注の画面の「引取・納品の日程」で確かめてください)。";
-    redirect(withMsg(returnTo ?? `/schedule/${id}`, `${hvMsg}${changed ? " 担当・メモなどの変更は保存しました。" : ""}${followUps.join("")}`));
+    redirect(withMsg(returnTo ?? `/schedule/${id}`, `${hvMsg}${changed ? " 担当・メモなどの変更は保存しました。" : ""}${pair ? pairMsg(pair, pairApplied, pairApproval) : ""}${followUps.join("")}`));
   }
   const freed = changed && p.fields.date > current.date && SUGGEST_KINDS.includes(current.kind) ? ` 空いた ${shortDate(current.date)} に入れられる予定は 予定表 →「計画」で確かめられます。` : "";
-  const msg = `${changed ? "予定を更新しました。" : "変更はありませんでした。"}${synced && changed ? "受注の施工予定にも反映しました。" : ""}${hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : ""}${followUps.join("")}${changed && impacts.length ? ` 注意: ${impacts.join(" / ")}。` : ""}${freed}`;
+  const msg = `${changed ? "予定を更新しました。" : pairApplied ? "" : "変更はありませんでした。"}${pair ? pairMsg(pair, pairApplied, pairApproval) : ""}${synced && changed ? "受注の施工予定にも反映しました。" : ""}${hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : ""}${followUps.join("")}${changed && impacts.length ? ` 注意: ${impacts.join(" / ")}。` : ""}${freed}`;
   redirect(withMsg(returnTo ?? `/schedule/${id}`, msg));
 }
 
@@ -501,6 +660,11 @@ export async function quickUpdateScheduleEvent(id: string, formData: FormData) {
   fd.set("location", e.location ?? "");
   fd.set("memo", pick("memo", e.memo));
   if (str(formData, "allowOverlap") === "1") fd.set("allowOverlap", "1");
+  // 関連する予定 (引取 ⇄ 納品) もあわせて変える (お客様のご要望 2026-11-25「②」)
+  if (str(formData, "pairId")) {
+    for (const k of ["pairId", "pairDate", "pairTimeMode", "pairStartTime", "pairEndTime", "pairAssigneesSent"]) if (formData.has(k)) fd.set(k, str(formData, k));
+    for (const a of formData.getAll("pairAssigneeIds")) fd.append("pairAssigneeIds", String(a));
+  }
   fd.set("back", returnTo);
   fd.set("returnTo", returnTo);
   return updateScheduleEvent(id, fd);
@@ -605,11 +769,23 @@ export async function addPairedDelivery(id: string, formData: FormData) {
       }
     }
     addAudit(db, { userId: user.id, action: "create", entity: "schedule", entityId: newEventId, entityLabel: ev.title, summary: `予定表から納品予定を追加 (${periodLabel(ev)} / ${SCHEDULE_KIND[origin.kind].label} ${shortDate(origin.date)} の納品${p.caseRef ? ` / 案件 ${p.caseRef.number}` : ""}${hits.length ? " / 重複を承知で登録" : ""})`, storeId: ev.storeId });
+    addChangeNotice(db, user.id, eventTarget(db, ev), "予定の追加", [{ label: "納品の予定", before: "(なし)", after: `${periodLabel(ev)} (担当: ${names(db, ev.assigneeIds)})` }]);
   });
   revalidateSchedule(p.fields);
   redirect(withMsg(returnTo, `納品の予定 (${when}) を登録しました (担当: ${names(getDb(), assigneeIds)})。${hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : ""}`));
 }
 
+/** 予定の削除のお知らせの行 (種類・日時・担当) */
+function removedLine(db: Database, e: ScheduleEvent) {
+  return { label: `${SCHEDULE_KIND[e.kind].label}の予定`, before: `${periodLabel(e)} (担当: ${names(db, e.assigneeIds)})`, after: "(削除)" };
+}
+
+/**
+ * 予定の削除 (予定の画面・予定表の小さな画面)。予定だけを消し、お客様・問い合わせ・見積・受注などの案件の情報は残す。
+ * - 受注の引取・納品の日程と連動する予定: 受注の日程からその品目の日時を外す (品目と案件は残す。src/lib/handover.ts の applyEventRemoval)
+ * - withPair = 1 と pairIds: 関連する予定 (引取 ⇄ 納品。src/lib/schedule-pair.ts) もあわせて削除する (お客様のご要望 2026-11-25「① 引取・納品予定の削除」)
+ * 予定の変更・削除は承認なし (設定 → 承認ルールで承認を必要にしたときだけ、連動する予定の削除は店長の承認のあとに消える)。担当店舗・本部・管理者に知らせる
+ */
 export async function deleteScheduleEvent(id: string, formData: FormData) {
   const user = await requireActionUser();
   const returnTo = safePath(str(formData, "returnTo"));
@@ -619,22 +795,66 @@ export async function deleteScheduleEvent(id: string, formData: FormData) {
   const e = db.schedule.find((x) => x.id === id);
   if (!e) fail("/schedule", "予定が見つかりません。");
   if (!canEditEvent(user, e)) fail(back, "この予定を削除する権限がありません (登録者・担当者・店舗のメンバーが削除できます)。");
-  // 受注の引取・納品の日程と連動する予定: 受注の日程からこの日時を外す (品目・案件は残す)。登録済みの日程の変更なので、店舗スタッフは店長の承認のあとに消える
-  const hvRef = e.source === "order" ? parseHandoverRef(e.sourceRef) : undefined;
-  if (hvRef) return deleteHandoverEvent(user, e, hvRef, returnTo ?? `/schedule?date=${e.date}`);
-  if (e.source === "order") fail(returnTo ?? back, "受注の施工予定と連動している予定です。受注の画面の「施工予定・担当」で施工予定を変更してください。");
+  const done = returnTo ?? `/schedule?date=${e.date}`;
+  // 関連する予定 (引取 ⇄ 納品) もあわせて削除
+  const pairIds = str(formData, "withPair") === "1" ? [...new Set(formData.getAll("pairIds").map(String))].filter((x) => x && x !== id) : [];
+  const info = pairIds.length ? eventPair(db, e) : undefined;
+  const pairs = pairIds.map((pid) => info?.events.find((x) => x.id === pid)).filter((x): x is ScheduleEvent => Boolean(x));
+  if (pairs.length !== pairIds.length) fail(returnTo ?? back, "関連する予定が見つかりません (ほかの人が変更・削除した可能性があります)。画面を読み込み直してから、もう一度削除してください。");
+  for (const p of pairs) if (!canEditEvent(user, p)) fail(returnTo ?? back, `関連する予定「${p.title}」(${periodLabel(p)}) を削除する権限がありません。この予定だけを削除するか、店舗のメンバーに依頼してください。`);
+  const targets = [e, ...pairs];
+  // 連動する予定の確かめ (受注の施工予定は受注の画面で。施工完了の受注・承認待ちの日程の変更がある受注は消さない)
+  for (const t of targets) {
+    if (t.source !== "order") continue;
+    const ref = parseHandoverRef(t.sourceRef);
+    if (!ref) fail(returnTo ?? back, `「${t.title}」は受注の施工予定と連動している予定です。受注の画面の「施工予定・担当」で施工予定を変更してください。`);
+    const o = db.orders.find((x) => x.id === t.orderId);
+    if (!o || !orderEditable(o)) fail(returnTo ?? back, "施工完了・キャンセル済みの受注の予定は削除できません。");
+    if (pendingHandoverChange(db, o.id)) fail(returnTo ?? back, "この案件には承認待ちの引取・納品日の変更があります。承認・差戻しのあとに削除してください (急ぐときは受注の画面で申請を取り下げてから)。");
+  }
   let removed = 0;
+  const plans: { r: ReturnType<typeof savePlan>; title: string }[] = [];
   await mutate((db) => {
-    const targets = scope === "series" && e.seriesId ? db.schedule.filter((x) => x.seriesId === e.seriesId && x.date >= e.date && canEditEvent(user, x)) : [e];
-    const ids = new Set(targets.map((t) => t.id));
+    const now = nowIso();
+    // 受注の引取・納品の日程と連動する予定: 受注ごとにまとめて日程から外す (引取と納品を一緒に消すときも 1 回の保存)
+    const byOrder = new Map<string, { refs: NonNullable<ReturnType<typeof parseHandoverRef>>[]; events: ScheduleEvent[] }>();
+    const plain: ScheduleEvent[] = [];
+    for (const t0 of targets) {
+      const t = db.schedule.find((x) => x.id === t0.id);
+      if (!t) continue;
+      const ref = t.source === "order" ? parseHandoverRef(t.sourceRef) : undefined;
+      if (ref && t.orderId) {
+        const g = byOrder.get(t.orderId) ?? { refs: [], events: [] };
+        g.refs.push(ref);
+        g.events.push(t);
+        byOrder.set(t.orderId, g);
+      } else plain.push(t);
+    }
+    for (const [orderId, g] of byOrder) {
+      const o = db.orders.find((x) => x.id === orderId);
+      if (!o) continue;
+      let rows = o.handovers;
+      for (const ref of g.refs) rows = applyEventRemoval(rows, ref);
+      const r = savePlan(db, user, o, rows ?? [], { back: done, reason: `予定表で${g.events.map((t) => `「${t.title}」(${periodLabel(t)})`).join("・")}を削除`, via: "schedule", noticeTopic: "予定の削除" });
+      plans.push({ r, title: g.events.map((t) => SCHEDULE_KIND[t.kind].label).join("・") });
+    }
+    // 連動していない予定 (繰り返しは、いま開いている予定だけ以降を消せる)
+    const ids = new Set<string>();
+    for (const t of plain) {
+      const list = t.id === id && scope === "series" && t.seriesId ? db.schedule.filter((x) => x.seriesId === t.seriesId && x.date >= t.date && canEditEvent(user, x)) : [t];
+      for (const x of list) ids.add(x.id);
+    }
+    if (!ids.size) return;
+    const gone = db.schedule.filter((x) => ids.has(x.id));
     db.schedule = db.schedule.filter((x) => !ids.has(x.id));
     removed = ids.size;
-    const now = nowIso();
-    if (e.orderId) {
-      const o = db.orders.find((x) => x.id === e.orderId);
-      if (o) {
-        o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "change", body: `予定を削除: ${periodLabel(e)} ${SCHEDULE_KIND[e.kind].label}` });
-        o.updatedAt = now;
+    for (const t of plain) {
+      if (t.orderId) {
+        const o = db.orders.find((x) => x.id === t.orderId);
+        if (o) {
+          o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "change", body: `予定を削除: ${periodLabel(t)} ${SCHEDULE_KIND[t.kind].label}` });
+          o.updatedAt = now;
+        }
       }
     }
     if (planTablesReady()) {
@@ -642,47 +862,50 @@ export async function deleteScheduleEvent(id: string, formData: FormData) {
       db.resourceBookings = (db.resourceBookings ?? []).filter((b) => !b.eventId || !ids.has(b.eventId));
       for (const j of db.productionJobs ?? []) if (j.pickupEventId && ids.has(j.pickupEventId) && j.status === "planned") Object.assign(j, { status: "cancelled", updatedBy: user.id, updatedAt: now, note: [j.note, "引き取りの予定の削除により取りやめ"].filter(Boolean).join(" / ") });
     }
-    addAudit(db, {
-      userId: user.id,
-      action: "delete",
-      entity: "schedule",
-      entityId: id,
-      entityLabel: e.title,
-      summary: `予定を削除 (${periodLabel(e)} ${SCHEDULE_KIND[e.kind].label}${removed > 1 ? ` / 以降の繰り返し ${removed - 1} 件を含む` : ""})`,
-      storeId: e.storeId,
-      // 空いた枠の提案 (src/lib/scheduling/replan.ts) に使う
-      changes: [
-        { field: "date", before: e.date, after: null },
-        { field: "kind", before: e.kind, after: null },
-        { field: "assigneeIds", before: e.assigneeIds, after: null },
-      ],
-    });
+    for (const t of plain) {
+      const series = t.id === id ? gone.filter((x) => x.seriesId && x.seriesId === t.seriesId && x.id !== t.id).length : 0;
+      addAudit(db, {
+        userId: user.id,
+        action: "delete",
+        entity: "schedule",
+        entityId: t.id,
+        entityLabel: t.title,
+        summary: `予定を削除 (${periodLabel(t)} ${SCHEDULE_KIND[t.kind].label}${series ? ` / 以降の繰り返し ${series} 件を含む` : ""}${t.id !== id ? " / 関連する予定としてあわせて削除" : ""})`,
+        storeId: t.storeId,
+        // 空いた枠の提案 (src/lib/scheduling/replan.ts) に使う
+        changes: [
+          { field: "date", before: t.date, after: null },
+          { field: "kind", before: t.kind, after: null },
+          { field: "assigneeIds", before: t.assigneeIds, after: null },
+        ],
+      });
+    }
+    // お知らせ (案件ごとに 1 件)
+    const byTarget = new Map<string, { target: ReturnType<typeof eventTarget>; lines: ReturnType<typeof removedLine>[] }>();
+    for (const t of plain) {
+      const target = eventTarget(db, t);
+      if (!target) continue;
+      const g = byTarget.get(target.targetId) ?? { target, lines: [] };
+      g.lines.push(removedLine(db, t));
+      byTarget.set(target.targetId, g);
+    }
+    for (const g of byTarget.values()) addChangeNotice(db, user.id, g.target, "予定の削除", g.lines, { href: g.target!.href });
   });
-  revalidateSchedule(e);
-  const freed = SUGGEST_KINDS.includes(e.kind) && e.date >= new Date().toISOString().slice(0, 10) ? ` 空いた枠 (${shortDate(e.date)}) に入れられる予定・案件は 予定表 →「計画」の「空いた枠」で確かめられます。` : "";
-  redirect(withMsg(returnTo ?? `/schedule?date=${e.date}`, `${removed > 1 ? `予定を ${removed} 件削除しました。` : "予定を削除しました。"}${freed}`));
-}
-
-/** 引取・納品の日程と連動する予定の削除 (deleteScheduleEvent から): 受注の日程のその品目の日時を外す申請 (src/lib/handover.ts の applyEventRemoval) */
-async function deleteHandoverEvent(user: User, e: ScheduleEvent, ref: NonNullable<ReturnType<typeof parseHandoverRef>>, back: string): Promise<never> {
-  const o0 = getDb().orders.find((x) => x.id === e.orderId);
-  if (!o0 || !orderEditable(o0)) fail(back, "施工完了・キャンセル済みの受注の予定は削除できません。");
-  if (pendingHandoverChange(getDb(), o0.id)) fail(back, "この案件には承認待ちの引取・納品日の変更があります。承認・差戻しのあとに削除してください (急ぐときは受注の画面で申請を取り下げてから)。");
-  let r: ReturnType<typeof savePlan> | undefined;
-  await mutate((db) => {
-    const o = db.orders.find((x) => x.id === e.orderId);
-    if (!o) return;
-    r = savePlan(db, user, o, applyEventRemoval(o.handovers, ref), { back, reason: `予定表で「${e.title}」(${periodLabel(e)}) を削除`, via: "schedule" });
-  });
-  if (r?.approval?.id && !r.auto) await notifyNewApprovals([r.approval.id], user.id);
-  revalidateSchedule(e);
-  const role = r?.approval?.requiredRole === "admin" ? "管理者" : "店長";
-  const msg = r?.approval && !r.auto
-    ? `受注の引取・納品の日程と連動する予定のため、削除を${role}へ申請しました。承認されると予定表から消えます (案件の情報は残ります)。`
-    : r?.applied || r?.auto
-      ? `${r.auto ? `${AUTO_APPROVAL_NOTE}し、` : ""}受注の引取・納品の日程からこの日時を外し、予定を削除しました (案件の情報は残っています)。`
-      : "削除できませんでした (受注の日程にこの予定の品目が見つかりません。受注の画面の「引取・納品の日程」で確かめてください)。";
-  redirect(withMsg(back, msg));
+  for (const p of plans) if (p.r.approval?.id && !p.r.auto) await notifyNewApprovals([p.r.approval.id], user.id);
+  for (const t of targets) revalidateSchedule(t);
+  const parts: string[] = [];
+  const requested = plans.filter((p) => p.r.approval && !p.r.auto);
+  const appliedPlans = plans.filter((p) => !p.r.approval || p.r.auto);
+  if (removed) parts.push(removed > 1 ? `予定を ${removed} 件削除しました。` : "予定を削除しました。");
+  for (const p of appliedPlans) {
+    if (p.r.applied || p.r.auto) parts.push(`${p.r.auto ? `${AUTO_APPROVAL_NOTE}し、` : ""}受注の引取・納品の日程から${p.title}の日時を外し、予定を削除しました。`);
+    else parts.push(`${p.title}の予定は削除できませんでした (受注の日程にこの予定の品目が見つかりません。受注の画面の「引取・納品の日程」で確かめてください)。`);
+  }
+  for (const p of requested) parts.push(`受注の引取・納品の日程と連動する${p.title}の予定は、削除を${p.r.approval?.requiredRole === "admin" ? "管理者" : "店長"}へ申請しました。承認されると予定表から消えます。`);
+  parts.push("案件の情報は残っています。");
+  if (plans.some((p) => p.r.applied || p.r.auto) || removed) parts.push("担当店舗に変更をお知らせしました。");
+  const freed = targets.some((t) => SUGGEST_KINDS.includes(t.kind) && t.date >= new Date().toISOString().slice(0, 10)) && removed ? ` 空いた枠 (${shortDate(e.date)}) に入れられる予定・案件は 予定表 →「計画」の「空いた枠」で確かめられます。` : "";
+  redirect(withMsg(done, `${parts.join("")}${freed}`));
 }
 
 /**
@@ -711,6 +934,7 @@ export async function updateEventWork(id: string, formData: FormData) {
     ev.updatedAt = nowIso();
     changed = true;
     addAudit(db, { userId: user.id, action: "update", entity: "schedule", entityId: id, entityLabel: ev.title, summary: after ? `仕事内容を「${after}」に変更` : "仕事内容を自動 (見積の明細・件名・メモから) に戻す", storeId: ev.storeId, changes: [{ field: "work", before: before ?? null, after: after ?? null }] });
+    addChangeNotice(db, user.id, eventTarget(db, ev), "仕事内容の変更", [{ label: `${SCHEDULE_KIND[ev.kind].label} ${shortDate(ev.date)} の仕事内容`, before: before ?? "(自動)", after: after ?? "(自動)" }]);
   });
   revalidateSchedule(e);
   redirect(withMsg(returnTo, changed ? (text ? `仕事内容を「${text}」にしました。` : "仕事内容を自動に戻しました。") : "変更はありませんでした。"));
@@ -744,6 +968,7 @@ export async function changeEventStore(id: string, formData: FormData) {
       ev.updatedBy = user.id;
       ev.updatedAt = nowIso();
       addAudit(db, { userId: user.id, action: "update", entity: "schedule", entityId: id, entityLabel: ev.title, summary: `予定の店舗を変更 (${storeName(before)} → ${storeName(to)})`, storeId: to, changes: [{ field: "storeId", before, after: to }] });
+      addChangeNotice(db, user.id, eventTarget(db, ev), "予定の店舗の変更", [{ label: `${SCHEDULE_KIND[ev.kind].label} ${shortDate(ev.date)} の店舗`, before: storeName(before), after: storeName(to) }], { alsoStores: [before] });
     });
     revalidateSchedule(e);
     redirect(withMsg(returnTo, `予定の店舗を${storeName(to)}にしました。`));

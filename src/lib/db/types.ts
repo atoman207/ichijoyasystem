@@ -176,6 +176,23 @@ export type InquiryStatus =
   | "lost"
   | "closed";
 
+/** 作業の担当 (実績。お客様のご要望 2026-11-25「④」。src/lib/work-staff.ts) */
+export interface OrderWorkStaff {
+  /** 現地見積 (見積り・現地調査・現場見積・採寸) */
+  survey: string[];
+  /** 引取 */
+  pickup: string[];
+  /** 納品 */
+  delivery: string[];
+  /** 施工 (リフォーム・取付など) */
+  install: string[];
+  /** 施工完了・売上確定のときに確かめた日時・人 */
+  confirmedAt?: string;
+  confirmedBy?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
 export interface Inquiry {
   id: string;
   number: string;
@@ -212,6 +229,11 @@ export interface Inquiry {
   intake?: InquiryIntake;
   /** お客様都合で日程未定 (お客様のご要望 2026-11-24「⑤」。次回の連絡予定日。予定を登録すると外す。src/lib/inquiry-flow.ts) */
   scheduleHold?: InquiryScheduleHold;
+  /**
+   * 施工現場の住所 (依頼主 = お客様の住所と違うとき。業者からの依頼の現場・ご実家など)。空 = お客様の住所。
+   * 見積・受注の施工場所に引き継ぎ、予定表の町名・地図 (Google マップ・住宅地図) はこの住所を使う (お客様のご要望 2026-11-25「⑨」)
+   */
+  siteAddress?: string;
 }
 
 export interface InquiryScheduleHold {
@@ -519,6 +541,11 @@ export interface Order {
   siteInfo?: SiteInfo;
   /** 畳の製造の仕様 (部屋ごと。src/lib/tatami-spec.ts)。空なら見積の明細から自動で作る */
   tatamiRooms?: TatamiRoom[];
+  /**
+   * 作業の担当 (実績。現地見積・引取・納品・施工をした社員。複数可)。空のあいだは予定表の予定の担当者から自動 (src/lib/work-staff.ts)。
+   * 施工完了・売上確定のときに確かめて保存し、この値をインセンティブ (アンケートの ②③ の担当) と経営ダッシュボードの担当に使う (お客様のご要望 2026-11-25「④」)
+   */
+  workStaff?: OrderWorkStaff;
   /** 仕様: pending = 一部の仕様が未確定 */
   specStatus?: "pending" | "fixed";
   specNote?: string;
@@ -953,6 +980,46 @@ export interface Thread {
   reportedAt?: string;
   confirmedAt?: string;
   confirmedBy?: string;
+}
+
+/**
+ * 案件の変更のお知らせ (お客様のご要望 2026-11-25「⑥ 変更時の通知・履歴」。src/lib/change-notices.ts)
+ * 予定の変更・削除、明細・仕様・金額、作業の担当、お客様の付け替え、施工店舗・現場の住所などを変えたときに、
+ * 担当店舗のメンバー (と設定により本部・管理者) に届ける。どの案件の・何を (変更前 → 変更後)・いつ・誰が。案件ごとの履歴にもなる
+ */
+export interface ChangeNotice {
+  id: string;
+  at: string;
+  /** 変更した人 */
+  actorId: string;
+  /** 案件の担当店舗 (知らせる店舗) */
+  storeId: StoreId;
+  /** 案件のいちばん進んだ記録 (受注 → 見積 → 問い合わせ)。案件のない予定は schedule、お客様だけのときは customer */
+  targetType: "order" | "quote" | "inquiry" | "schedule" | "customer";
+  targetId: string;
+  /** 案件の記録の ID (問い合わせ・見積・受注。案件ごとの履歴を引く) */
+  caseIds: string[];
+  /** 案件番号 (O-2026-0012 など) */
+  number?: string;
+  /** お客様と件名 (例: 山田 花子 様 · 和室6畳 表替え) */
+  title: string;
+  customerId?: string;
+  /** 何の変更か (例: 予定の変更 / 予定の削除 / 明細・金額の変更 / 作業の担当の変更) */
+  topic: string;
+  /** 変更の内容 (項目・変更前・変更後) */
+  lines: ChangeNoticeLine[];
+  /** 開く画面 */
+  href: string;
+  /** 知らせる人 (変更した人を除く) */
+  recipients: string[];
+  /** 読んだ人 */
+  readBy: string[];
+}
+
+export interface ChangeNoticeLine {
+  label: string;
+  before?: string;
+  after?: string;
 }
 
 /** 業務依頼の操作を記録した投稿 (ack = 確認・受付 / report = 報告 / confirm = 依頼者の確認 / reopen = 差し戻し) */
@@ -1732,6 +1799,8 @@ export interface Database {
   commLogs: CommLog[];
   threads: Thread[];
   messages: Message[];
+  /** 案件の変更のお知らせ (src/lib/change-notices.ts) */
+  changeNotices: ChangeNotice[];
   schedule: ScheduleEvent[];
   documents: CapturedDocument[];
   holidays: CompanyHoliday[];

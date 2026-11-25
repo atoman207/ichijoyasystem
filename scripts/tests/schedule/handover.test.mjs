@@ -242,6 +242,12 @@ const admin = db().users.find((u) => u.active && u.role === "admin");
 const manager = db().users.find((u) => u.active && u.role === "store_manager" && u.storeId === "koshi");
 const staff = db().users.find((u) => u.active && u.role === "store_staff" && u.storeId === "koshi");
 ok(admin && manager && staff, "サンプルの社員 (管理者・合志店の店長・スタッフ)");
+// この節は「予定の変更に承認を必要とする」設定 (設定 → 承認ルール) の動きを確かめる。既定 (承認なし) は event-ops.test.mjs・case-change.test.mjs
+await store.mutate((d) => {
+  const row = d.settings.find((x) => x.id === "approval");
+  if (row) row.value = { ...row.value, scheduleChange: true };
+  else d.settings.push({ id: "approval", value: { scheduleChange: true }, updatedAt: new Date().toISOString() });
+});
 
 async function act(user, fn) {
   globalThis.__testUser = user;

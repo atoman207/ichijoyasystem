@@ -1,3 +1,8 @@
+import { CaseChangeHistory } from "@/components/features/CaseChangeHistory";
+import { CaseCustomerSearch } from "@/components/features/LinkSearch";
+import { relinkCase } from "@/lib/actions/case-quick";
+import { caseRelinkBlocker } from "@/lib/customer-link";
+import { caseChainOf } from "@/lib/case-store";
 import Link from "@/components/ui/Link";
 import { CaseViewBanner, CompletedLockBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
 import { quoteAccessInfo, quoteCompletedLock, deniedHref } from "@/lib/case-access";
@@ -53,6 +58,8 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
   const viewOnly = info.access === "view";
   logRecordView(user, info, { entity: "quote", id: q.id, label: q.number, storeId: q.storeId }, db.auditLogs);
   const lock = quoteCompletedLock(db, user, q);
+  const relinkChain = caseChainOf(db, q.id);
+  const relinkBlocked = relinkChain ? caseRelinkBlocker(db, relinkChain) : undefined;
   const customer = db.customers.find((c) => c.id === q.customerId);
   const store = db.stores.find((s) => s.id === q.storeId);
   const chain = quoteChain(db, q);
@@ -321,6 +328,18 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
               {customer.tradeStopped && <p className="mt-2 rounded-lg bg-critical-soft px-2.5 py-1.5 text-xs text-critical-ink">取引停止のお客様です{customer.tradeStopNote ? ` (${customer.tradeStopNote})` : ""}。受注の前に店長・管理者に確認してください。</p>}
               </>
             )}
+            {/* 紐付け間違いの修正 (お客様のご要望 2026-11-25「⑤」): 見積・受注・予定の内容はそのままに、お客様だけを付け替える */}
+            {!viewOnly && !lock.locked && (
+              <details className="mt-3 border-t border-line pt-2" id="relink">
+                <summary className="cursor-pointer text-xs font-medium text-accent">紐付け先のお客様を直す</summary>
+                {relinkBlocked ? <p className="mt-1 text-xs text-ink-3">{relinkBlocked}</p> : (
+                  <div className="mt-2">
+                    <p className="mb-2 text-[11px] text-ink-3">正しいお客様を検索して「付け替える」を押すと、問い合わせ・見積・受注・予定などの内容はそのままで、紐付け先だけが変わります。</p>
+                    <CaseCustomerSearch action={relinkCase.bind(null, q.id)} returnTo={`/quotes/${q.id}`} />
+                  </div>
+                )}
+              </details>
+            )}
           </Card>
           <Card>
             <CardHeader title="関連情報" description="問い合わせ → 見積 → 受注 → 請求 → 入金" />
@@ -336,6 +355,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
           <RecordDocDrafts db={db} user={user} type="quote" id={q.id} number={q.number} />
           <RecordStamp db={db} targets={[{ entity: "quote", id: q.id }]} created={{ by: q.createdBy, at: q.createdAt }} approved={q.approvedBy ? [{ by: q.approvedBy, at: q.approvedAt }] : []} />
           <ApprovalHistoryCard approvals={chain.approvals.filter((a) => a.targetId === q.id)} />
+          <CaseChangeHistory db={db} ids={[q.id, q.orderId ?? db.orders.find((x) => x.quoteId === q.id)?.id, q.inquiryId]} />
           <HistoryCard db={db} user={user} targets={[{ entity: "quote", id: q.id }]} />
         </div>
       </div>

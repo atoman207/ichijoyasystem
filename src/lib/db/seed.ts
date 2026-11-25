@@ -191,6 +191,7 @@ export function createSeed(now = new Date()): Database {
     tatamiProduction: [],
     promotions: [],
     docDrafts: [],
+    changeNotices: [],
     casePosts: [],
     tidyChecks: [],
     surveyHistory: [],

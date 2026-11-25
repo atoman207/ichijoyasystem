@@ -18,6 +18,80 @@ import { propagateOrderSite } from "@/lib/maps/store";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
 import { closedReason } from "@/lib/mgmt/close";
 import { usesBatchBilling } from "@/lib/billing";
+import type { Database, Order, OrderWorkStaff, User } from "@/lib/db/types";
+import { WORK_ROLES, WORK_ROLE_LABEL, deliveryStaffOf, sameWorkStaff, workStaffFromForm, workStaffOf } from "@/lib/work-staff";
+import { addChangeNotice, caseTarget } from "@/lib/change-notices";
+import { safeReturn } from "./guards";
+
+/**
+ * 作業の担当 (実績) を受注に保存する (mutate の中)。施工完了・売上確定の後なら確かめた日時を残す (confirmed)。
+ * 案件にひも付いたアンケート (はがき) の ②③ の担当もこの値にそろえる (移行したはがきは変えない)。変わった役割の数を返す
+ */
+function applyWorkStaff(db: Database, user: User, o: Order, next: Omit<OrderWorkStaff, "confirmedAt" | "confirmedBy" | "updatedAt" | "updatedBy">, opts: { confirm: boolean; note?: string }): number {
+  const now = nowIso();
+  const before = workStaffOf(db, o);
+  const names = (ids: string[]) => ids.map((id) => db.users.find((u) => u.id === id)?.name ?? "-").join("・") || "(なし)";
+  const changedRoles = WORK_ROLES.filter((r) => [...before[r]].sort().join() !== [...next[r]].sort().join());
+  const firstSave = !o.workStaff;
+  o.workStaff = { ...next, confirmedAt: opts.confirm ? now : o.workStaff?.confirmedAt, confirmedBy: opts.confirm ? user.id : o.workStaff?.confirmedBy, updatedAt: now, updatedBy: user.id };
+  o.updatedAt = now;
+  if (changedRoles.length || firstSave) {
+    addAudit(db, {
+      userId: user.id,
+      action: "update",
+      entity: "order",
+      entityId: o.id,
+      entityLabel: o.number,
+      summary: `作業の担当を${opts.confirm ? "確定" : "変更"} (${WORK_ROLES.map((r) => `${WORK_ROLE_LABEL[r]}: ${names(next[r])}`).join(" / ")})${opts.note ? ` ${opts.note}` : ""}`,
+      storeId: o.storeId,
+      changes: WORK_ROLES.filter((r) => changedRoles.includes(r) || firstSave).map((r) => ({ field: `workStaff.${r}`, before: before[r], after: next[r] })),
+    });
+    if (changedRoles.length) {
+      o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "change", body: `作業の担当を${opts.confirm ? "確定" : "変更"}: ${changedRoles.map((r) => `${WORK_ROLE_LABEL[r]} ${names(before[r])} → ${names(next[r])}`).join(" / ")}` });
+      addChangeNotice(db, user.id, caseTarget(db, o.id), "作業の担当の変更", changedRoles.map((r) => ({ label: `${WORK_ROLE_LABEL[r]}の担当`, before: names(before[r]), after: names(next[r]) })));
+    }
+  }
+  // アンケートの ②③ の担当 (インセンティブの集計の起点。お客様のご要望 2026-11-25「④」)
+  const delivery = deliveryStaffOf(next);
+  for (const sv of db.surveys) {
+    if (sv.orderId !== o.id || sv.source === "import") continue;
+    const b = { salesUserId: sv.salesUserId, deliveryUserIds: [...(sv.deliveryUserIds ?? [])] };
+    if (next.survey.length) sv.salesUserId = next.survey[0];
+    if (delivery.length) {
+      sv.deliveryUserIds = delivery;
+      sv.craftsmanUserId = delivery[0];
+    }
+    const ch = diffChanges(b, { salesUserId: sv.salesUserId, deliveryUserIds: sv.deliveryUserIds ?? [] }, ["salesUserId", "deliveryUserIds"]);
+    if (!ch.length) continue;
+    sv.updatedAt = now;
+    addAudit(db, { userId: user.id, action: "update", entity: "survey", entityId: sv.id, entityLabel: `はがき No.${sv.postcardNo ?? "-"}`, summary: `受注 ${o.number} の作業の担当に合わせてアンケートの担当を変更`, storeId: sv.storeId, changes: ch });
+  }
+  return changedRoles.length;
+}
+
+/** 作業の担当 (現地見積・引取・納品・施工。複数可) を変える (受注の画面の「作業の担当」。お客様のご要望 2026-11-25「④」) */
+export async function saveWorkStaff(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const ret = safeReturn(str(formData, "returnTo"), `/orders/${id}#work-staff`);
+  let changed = 0;
+  let confirm = false;
+  await mutate((db) => {
+    const o = db.orders.find((x) => x.id === id);
+    if (!o) fail("/orders", "受注が見つかりません。");
+    assertCaseStore(user, o.storeId, ret);
+    if (o.status === "cancelled") fail(ret, "キャンセルした受注の担当は変えられません。");
+    const lock = completedCaseLock(db, user, o);
+    if (lock.locked) fail(ret, completedLockMessage(lock.reason));
+    const active = new Set(db.users.filter((u) => u.active).map((u) => u.id));
+    const next = workStaffFromForm(formData, active);
+    if (o.workStaff && sameWorkStaff(o.workStaff, next)) fail(ret, "変更はありませんでした。");
+    confirm = ["completed", "invoiced", "paid"].includes(o.status);
+    changed = applyWorkStaff(db, user, o, next, { confirm });
+  });
+  revalidatePath(`/orders/${id}`);
+  revalidatePath("/kpi");
+  redirect(withMsg(ret, `作業の担当を${confirm ? "確定" : "保存"}しました${changed ? ` (${changed} 件の作業の担当を変更)` : ""}。${confirm ? "この担当をインセンティブ (アンケートの担当) と経営の集計に使います。" : "施工完了のときにもう一度確かめられます。"}`));
+}
 
 /** 施工予定 (施工期間・時間帯・施工担当・現場住所) を設定し、予定表の「施工」の予定と連動させる */
 export async function updateOrderSchedule(id: string, formData: FormData) {
@@ -118,6 +192,11 @@ export async function completeOrder(id: string, formData: FormData) {
     o.completedAt = date;
     o.salesDate = date;
     o.updatedAt = nowIso();
+    // 作業の担当 (現地見積・引取・納品・施工) を確かめて残す (お客様のご要望 2026-11-25「④ 施工完了・売上確定時の担当者を正しいデータとして」)
+    if (str(formData, "workStaffSent") === "1") {
+      const active = new Set(db.users.filter((u) => u.active).map((u) => u.id));
+      applyWorkStaff(db, user, o, workStaffFromForm(formData, active), { confirm: true, note: "(施工完了の登録)" });
+    }
     o.progressNotes.push({ id: newId("pn"), at: nowIso(), userId: user.id, kind: "complete", body: str(formData, "body") || "施工完了。お客様確認済み。" });
     addAudit(db, { userId: user.id, action: "status", entity: "order", entityId: id, entityLabel: o.number, summary: `施工完了を登録 (売上計上日 ${date} / ¥${o.total.toLocaleString("ja-JP")})`, storeId: o.storeId });
   });

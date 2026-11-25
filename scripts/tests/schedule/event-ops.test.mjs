@@ -127,7 +127,7 @@ section("施工店舗の変更 (店舗スタッフ → 店長の承認)");
 const evSt = db().schedule.find((x) => x.orderId === oSt.id && x.source !== "order") ?? null;
 let evStId = evSt?.id;
 if (!evStId) {
-  r = await act(manager, () => SA.createScheduleEvent(form({ title: "店舗変更テスト", kind: "visit", date: future(5), allDay: "1", caseRef: `order:${oSt.id}`, assigneeIds: [staffUser.id], locationMode: "case", returnTo: ret })));
+  r = await act(manager, () => SA.createScheduleEvent(form({ title: "店舗変更テスト", kind: "visit", date: future(5), allDay: "1", caseRef: `order:${oSt.id}`, assigneeIds: [staffUser.id], locationMode: "case", allowOverlap: "1", returnTo: ret })));
   evStId = db().schedule.find((x) => x.orderId === oSt.id && x.title === "店舗変更テスト")?.id;
 }
 ok(Boolean(evStId), "受注にひも付く予定がある");
@@ -203,13 +203,13 @@ r = await act(manager, () => HA.saveOrderHandovers(oHv.id, form({ handovers: JSO
 const pickupEv = () => db().schedule.find((x) => x.orderId === oHv.id && /^handover:pickup:/.test(x.sourceRef ?? ""));
 ok(Boolean(pickupEv()), `引取の予定ができる (${r.msg ?? r.err})`);
 const pid = pickupEv().id;
+// 予定の変更・削除は誰の承認もいらない (お客様のご要望 2026-11-25「⑥」。設定で承認を必要にしたときの動きは handover.test.mjs)
+const apCount = db().approvals.length;
 r = await act(staffUser, () => SA.deleteScheduleEvent(pid, form({ scope: "one", returnTo: ret })));
-ap = lastApproval();
-eq([ap.type, ap.status, Boolean(db().schedule.find((x) => x.id === pid))], ["handover_change", "pending", true], `店舗スタッフ: 削除は受注の日程の変更の申請 (承認までは残る) (${r.msg ?? r.err})`);
-ok(/申請しました/.test(r.msg ?? ""), "画面に「申請しました」");
-r = await decide(manager, ap.id);
 const oHvAfter = db().orders.find((o) => o.id === oHv.id);
-eq([db().schedule.some((x) => x.id === pid), oHvAfter.handovers?.[0]?.pickupDate, oHvAfter.handovers?.[0]?.deliveryDate, oHvAfter.status !== "cancelled"], [false, undefined, future(9), true], "店長が承認 → 引取の予定が消え、品目と納品日・受注は残る");
+eq([db().approvals.length, db().schedule.some((x) => x.id === pid), oHvAfter.handovers?.[0]?.pickupDate, oHvAfter.handovers?.[0]?.deliveryDate, oHvAfter.status !== "cancelled"], [apCount, false, undefined, future(9), true], `店舗スタッフ: 承認なしで引取の予定が消え、品目と納品日・受注は残る (${r.msg ?? r.err})`);
+ok(/予定を削除しました/.test(r.msg ?? "") && /お知らせ/.test(r.msg ?? ""), "画面に「削除しました」「お知らせしました」");
+ok((db().changeNotices ?? []).some((n) => n.targetId === oHv.id && n.topic === "予定の削除" && n.actorId === staffUser.id), "担当店舗・本部・管理者に「予定の削除」のお知らせ");
 const delivEv = db().schedule.find((x) => x.orderId === oHv.id && /^handover:delivery:/.test(x.sourceRef ?? ""));
 r = await act(manager, () => SA.deleteScheduleEvent(delivEv.id, form({ scope: "one", returnTo: ret })));
 eq([db().schedule.some((x) => x.id === delivEv.id), db().orders.find((o) => o.id === oHv.id).handovers?.[0]?.item, /予定を削除しました/.test(r.msg ?? "")], [false, "tatami_omote", true], `店長: その場で削除 (品目は残る) (${r.msg ?? r.err})`);
@@ -233,7 +233,7 @@ d = await getData(manager, evStId);
 eq([d.storeChange?.needsApproval, d.remove?.mode, d.remove?.canDelete], [false, "event", true], "店長: 承認なし・削除できる");
 const sHv = (await act(manager, () => HA.saveOrderHandovers(oHv.id, form({ handovers: JSON.stringify([{ id: "hv_del2", item: "fusuma", pickupDate: future(11) }]), allowOverlap: "1" })))) && db().schedule.find((x) => x.orderId === oHv.id && /^handover:pickup:/.test(x.sourceRef ?? ""));
 d = await getData(staffUser, sHv.id);
-eq([d.remove?.mode, d.remove?.needsApproval], ["handover", true], "連動する予定: 店舗スタッフの削除は申請");
+eq([d.remove?.mode, d.remove?.needsApproval, d.scheduleApproval], ["handover", false, false], "連動する予定: 店舗スタッフの削除も承認なし");
 d = await getData(staffUser, ev0.id);
 ok(d.workText === undefined || typeof d.workText === "string", "仕事内容の省略表記を返す");
 
