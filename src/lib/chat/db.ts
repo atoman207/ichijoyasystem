@@ -36,12 +36,23 @@ export interface SqliteDb {
 }
 type SqliteModule = { DatabaseSync: new (file: string) => SqliteDb };
 
+/**
+ * 本番サーバーのデータのフォルダー (/srv/ichijoya/data)。画面のサーバー (next start = production / next dev = development) のときだけ。
+ * テスト・道具のスクリプト (NODE_ENV なし) は本番のフォルダーを使わない (本物の端末に通知を送ったり、本番のチャットに書いたりしないように)
+ */
+export function serverDataDir(): string | null {
+  const mode = process.env.NODE_ENV;
+  if (mode !== "production" && mode !== "development") return null;
+  return fs.existsSync("/srv/ichijoya/data") ? "/srv/ichijoya/data" : null;
+}
+
 export function chatDbPath(): string {
   const env = process.env.CHAT_DB_PATH?.trim();
   if (env) return env;
   const bot = process.env.CHATBOT_DB_PATH?.trim();
   if (bot) return path.join(path.dirname(bot), "chat.sqlite");
-  if (fs.existsSync("/srv/ichijoya")) return "/srv/ichijoya/data/chat.sqlite";
+  const dir = serverDataDir();
+  if (dir) return path.join(dir, "chat.sqlite");
   return path.join(process.cwd(), "data", "chat.sqlite");
 }
 

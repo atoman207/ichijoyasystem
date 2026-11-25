@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { after } from "next/server";
-import { str, type SqliteDb } from "@/lib/chat/db";
+import { serverDataDir, str, type SqliteDb } from "@/lib/chat/db";
 import { prefsOf } from "@/lib/chat/repo";
 import { appBaseUrl } from "./config";
 import { encryptPayload, generateVapidKeys, validVapid, vapidAuthorization, type VapidKeys } from "./push-crypto";
@@ -33,10 +33,18 @@ export interface PushPayload {
   priority?: boolean;
 }
 
+/**
+ * 送り主の鍵のファイル (端末の登録 push.sqlite も同じフォルダー)。
+ * PUSH_VAPID_FILE → 試しのサーバー・テスト (CHATBOT_DB_PATH が /srv/ichijoya の外) はそのフォルダー →
+ * 本番・3001 番・試験期間のテスト用のサーバーは /srv/ichijoya/data (同じ鍵と端末の登録を使う) → 手元は data/
+ */
 function vapidFile(): string {
   const env = process.env.PUSH_VAPID_FILE?.trim();
   if (env) return env;
-  if (fs.existsSync("/srv/ichijoya/data")) return "/srv/ichijoya/data/push-vapid.json";
+  const bot = process.env.CHATBOT_DB_PATH?.trim();
+  if (bot && !path.resolve(bot).startsWith("/srv/ichijoya/")) return path.join(path.dirname(path.resolve(bot)), "push-vapid.json");
+  const dir = serverDataDir();
+  if (dir) return path.join(dir, "push-vapid.json");
   return path.join(process.cwd(), "data", "push-vapid.json");
 }
 
