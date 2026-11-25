@@ -15,6 +15,8 @@ import { areaStoreOf } from "@/lib/store-area";
 import type { Database, ScheduleKind } from "@/lib/db/types";
 import { DAY_LOAD_ID, dayLoadChanges, readDayLoadSettings, writeDayLoadSettings, type DayLoadSettings } from "@/lib/day-sheet";
 import { DOCUMENT_SETTINGS_ID, documentSettings } from "@/lib/doc-settings";
+import { ADOPTED_KIND, adoptionAudit, isAdoptedVisit, sameDayVisit } from "@/lib/visit-adopt";
+import { parseHandoverRef } from "@/lib/handover";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,6 +48,9 @@ export const maxDuration = 60;
  *   task = doc-bank: 請求書に印字する振込先 (設定 → 帳票。お客様のご指示 2026-11-25「⑨」)。口座はコードに書かず、
  *     本文 (JSON) = { accounts: [{ bank, branch, type, number, holder, holderKana }] } で受け取り、振込先をこの内容に置き換える
  *     (帳票のほかの項目は今の値)。既定は確認だけ、apply=1 で書き込み、変更履歴
+ *   task = visit-merge: 見積の訪問がその場で現見になったのに、受注の登録で同じ日に作業の予定がもう 1 件できた案件 (お客様のご連絡 2026-11-25。
+ *     この日より前の版の受注の登録) を 1 件にまとめる: 訪問の予定を受注の「現見」の予定に切り替え (時間・担当者・メモは訪問のまま)、受注の作業の予定を消す
+ *     (src/lib/visit-adopt.ts と同じ判定)。from = この日以降に登録した受注 (既定 2026-11-23)。既定は確認だけ、apply=1 で書き込み、予定ごとに変更履歴
  */
 export async function POST(req: Request) {
   const secret = (process.env.CRON_SECRET ?? "").trim();
@@ -61,6 +66,7 @@ export async function POST(req: Request) {
   if (task === "schedule-onsite" || task === "schedule-kinds") return scheduleOnsite(url);
   if (task === "day-load") return dayLoadFix(url, req);
   if (task === "doc-bank") return docBankFix(url, req);
+  if (task === "visit-merge") return visitMerge(url);
   if (task !== "quote-line-units") return NextResponse.json({ error: "unknown task" }, { status: 400 });
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? from;
@@ -317,4 +323,76 @@ async function docBankFix(url: URL, req: Request) {
     addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "settings", entityId: DOCUMENT_SETTINGS_ID, entityLabel: "帳票の会社情報", summary: `請求書の振込先を登録 (${accounts.length} 件。お客様のご指示)` });
   });
   return NextResponse.json({ ok: true, applied: true, accounts: accounts.length, at: nowIso() });
+}
+
+/** 受注の登録で同じ日にできた作業の予定を、訪問の予定 (見積・現調・現見) にまとめる */
+async function visitMerge(url: URL) {
+  const apply = url.searchParams.get("apply") === "1";
+  const from = url.searchParams.get("from") ?? "2026-11-23";
+  if (!isDateKey(from)) return NextResponse.json({ error: "from (YYYY-MM-DD) が正しくありません" }, { status: 400 });
+  type Pair = { orderId: string; order: string; date: string; visitId: string; visitKind: string; visitTime?: string; dupId: string; dupKind: string; dupTime?: string };
+  const plan = (db: Database): Pair[] => {
+    const out: Pair[] = [];
+    const used = new Set<string>();
+    for (const o of db.orders) {
+      if (o.source === "import" || o.status === "cancelled" || o.createdAt.slice(0, 10) < from) continue;
+      const quote = db.quotes.find((q) => q.id === o.quoteId);
+      const keys = { orderId: o.id, quoteId: o.quoteId, inquiryId: quote?.inquiryId, customerId: o.customerId };
+      for (const ev of db.schedule.filter((e) => e.orderId === o.id && e.source === "order" && (e.kind === "pickup" || e.kind === "install") && !isAdoptedVisit(e) && (!e.endDate || e.endDate === e.date))) {
+        const v = sameDayVisit(db, keys, ev.date, used);
+        if (!v) continue;
+        used.add(v.id);
+        out.push({ orderId: o.id, order: o.number, date: ev.date, visitId: v.id, visitKind: v.kind, visitTime: v.startTime ?? v.slot, dupId: ev.id, dupKind: ev.kind, dupTime: ev.startTime ?? ev.slot });
+      }
+    }
+    return out;
+  };
+  const db0 = await syncDb();
+  const pairs = plan(db0);
+  if (!apply || !pairs.length) return NextResponse.json({ ok: true, applied: false, from, pairs });
+  const done = await mutate((db) => {
+    const out: Pair[] = [];
+    for (const p of plan(db)) {
+      const v = db.schedule.find((e) => e.id === p.visitId);
+      const dup = db.schedule.find((e) => e.id === p.dupId);
+      const o = db.orders.find((x) => x.id === p.orderId);
+      if (!v || !dup || !o) continue;
+      const beforeKind = v.kind;
+      const customer = db.customers.find((c) => c.id === o.customerId);
+      const keepTime = Boolean(v.startTime || v.slot);
+      Object.assign(v, {
+        kind: ADOPTED_KIND,
+        source: "order" as const,
+        sourceRef: dup.sourceRef,
+        orderId: o.id,
+        quoteId: dup.quoteId ?? v.quoteId,
+        inquiryId: dup.inquiryId ?? v.inquiryId,
+        customerId: o.customerId,
+        storeId: dup.storeId,
+        location: dup.location ?? v.location,
+        title: `${customer ? `${customer.name} 様 ` : ""}現見 (${o.title})`,
+        ...(keepTime ? {} : { startTime: dup.startTime, endTime: dup.endTime, slot: dup.slot }),
+        updatedBy: SYSTEM_USER,
+        updatedAt: nowIso(),
+      });
+      if (!v.assigneeIds.length) v.assigneeIds = [...dup.assigneeIds];
+      if (!v.memo && dup.memo) v.memo = dup.memo;
+      // 品目ごとの日程の予定なら、受注の日程の時間を訪問の時間にそろえる (次の保存で時間が消えないように)
+      const ref = parseHandoverRef(dup.sourceRef);
+      if (ref && keepTime) {
+        for (const r of o.handovers ?? []) {
+          if (!ref.rowIds.includes(r.id)) continue;
+          r.pickupStart = v.startTime;
+          r.pickupEnd = v.startTime ? v.endTime : undefined;
+          r.pickupSlot = v.startTime ? undefined : v.slot;
+        }
+      }
+      db.schedule = db.schedule.filter((e) => e.id !== dup.id);
+      addAudit(db, adoptionAudit(v, beforeKind, o, SYSTEM_USER));
+      addAudit(db, { userId: SYSTEM_USER, action: "delete", entity: "schedule", entityId: dup.id, entityLabel: dup.title, summary: `同じ日の訪問の予定 (${p.date}) にまとめたため、受注 ${o.number} の作業の予定を削除 (お客様のご連絡 2026-11-25)`, storeId: dup.storeId });
+      out.push(p);
+    }
+    return out;
+  });
+  return NextResponse.json({ ok: true, applied: true, from, pairs: done });
 }

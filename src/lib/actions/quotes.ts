@@ -21,6 +21,7 @@ import { parseTaxMode, quoteTotals, taxFields, taxModeOf, type TaxMode } from "@
 import { siteInfoFromForm } from "@/lib/site-info";
 import { plannedFromSiteInfo } from "@/lib/case-status";
 import { syncHandoverMemo } from "@/lib/db/schedule";
+import { isAdoptedVisit } from "@/lib/visit-adopt";
 import { assertCaseStore, choice, fail, requireActionUser, resolveStoreId, safeReturn, str, withMsg } from "./guards";
 import { propagateOrderSite } from "@/lib/maps/store";
 import { quoteCompletedLock, completedLockMessage } from "@/lib/case-access";
@@ -420,6 +421,7 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
   let auto = false;
   let approvalId = "";
   let quoteNote = "";
+  let visitNote = "";
   const approvalIds: string[] = [];
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
@@ -494,6 +496,9 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
     }
     if (created.scheduledStart) syncOrderEvent(db, created, user.id);
     syncHandoverMemo(db, created);
+    // 同じ日の訪問 (見積・現調・現見) の予定は、新しい予定を足さずに「現見」に切り替えた (src/lib/visit-adopt.ts)
+    const switched = db.schedule.filter((e) => e.orderId === orderId && isAdoptedVisit(e));
+    if (switched.length) visitNote = ` ${switched.map((e) => `${Number(e.date.slice(5, 7))}/${Number(e.date.slice(8, 10))}`).join("・")} の訪問の予定を「現見」に切り替えました (新しい予定は足していません)。`;
     const r = requiredRole(db, q.storeId, q.total, user.id);
     role = r;
     approvalId = newId("ap");
@@ -505,7 +510,7 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
   await notifyNewApprovals([...approvalIds, approvalId], user.id);
   revalidatePath("/orders");
   revalidatePath("/schedule");
-  const msg = (auto ? `受注を登録しました。${AUTO_APPROVAL_NOTE}し、契約を確定しました。施工手配へ進めます。` : `受注を登録しました。${role === "admin" ? "管理者" : "店長"}の契約承認後に施工手配へ進めます。`) + quoteNote;
+  const msg = (auto ? `受注を登録しました。${AUTO_APPROVAL_NOTE}し、契約を確定しました。施工手配へ進めます。` : `受注を登録しました。${role === "admin" ? "管理者" : "店長"}の契約承認後に施工手配へ進めます。`) + quoteNote + visitNote;
   redirect(withMsg(ret || `/orders/${orderId}`, msg));
 }
 

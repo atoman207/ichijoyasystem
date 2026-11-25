@@ -151,6 +151,7 @@ export function HandoverEditor({
   submitLabel,
   hidden,
   extra,
+  planNote,
 }: {
   action: (formData: FormData) => void | Promise<void>;
   initial: HandoverFormRow[];
@@ -176,6 +177,8 @@ export function HandoverEditor({
   hidden?: Record<string, string>;
   /** 日程の欄の上に出す欄 (受注登録のメモなど) */
   extra?: ReactNode;
+  /** 予定表に載る予定の下に出す説明 (受注登録: 訪問の予定が「現見」に切り替わるか) */
+  planNote?: (rows: OrderHandover[]) => ReactNode;
 }) {
   const [rows, setRows] = useState<Row[]>(() => {
     const base: Row[] = initial.map((r) => ({
@@ -517,6 +520,7 @@ export function HandoverEditor({
           <p className="mt-1 text-xs text-ink-3">日付を入れると、ここに予定表に載る予定 (引き取り・納品の日だけ) が出ます。</p>
         )}
         {check.error && <p className="mt-1 text-xs text-critical-ink">{check.error}</p>}
+        {!check.error && planNote?.(check.rows)}
       </div>
 
       {diff.needsApproval && (

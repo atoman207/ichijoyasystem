@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { isAdoptedVisit } from "@/lib/visit-adopt";
 import { revalidatePath } from "next/cache";
 import { getDb, mutate } from "@/lib/db/store";
 import { orderEditable } from "@/lib/db/schedule";
@@ -48,6 +49,7 @@ export async function saveOrderHandovers(id: string, formData: FormData) {
 
   let result: ReturnType<typeof savePlan> | undefined;
   let siteChanged = false;
+  let switched: string[] = [];
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
@@ -57,7 +59,9 @@ export async function saveOrderHandovers(id: string, formData: FormData) {
       propagateOrderSite(db, user, o, before);
       siteChanged = true;
     }
+    const adoptedBefore = new Set(db.schedule.filter((e) => e.orderId === o.id && isAdoptedVisit(e)).map((e) => e.id));
     result = savePlan(db, user, o, parsed.rows, { back, reason, workerIds: validWorkers, via: "order" });
+    switched = db.schedule.filter((e) => e.orderId === o.id && isAdoptedVisit(e) && !adoptedBefore.has(e.id)).map((e) => `${Number(e.date.slice(5, 7))}/${Number(e.date.slice(8, 10))}`);
   });
   const r = result!;
   if (r.approval && !r.auto) await notifyNewApprovals([r.approval.id], user.id);
@@ -68,6 +72,7 @@ export async function saveOrderHandovers(id: string, formData: FormData) {
   const msg = [
     r.registered.length ? "引取・納品の日程を保存し、予定表に反映しました。" : r.applied || siteChanged ? "保存しました。" : "",
     r.approval ? (r.auto ? `${AUTO_APPROVAL_NOTE}し、日程の変更を予定表に反映しました。` : `日程の変更を${who}へ申請しました。承認されると予定表に反映されます (それまでは前の日程のままです)。`) : "",
+    switched.length ? `${switched.join("・")} の訪問 (見積・現調) の予定を「現見」に切り替えました (同じ日の作業のため、新しい予定は足していません)。` : "",
     ...r.followUps,
   ]
     .filter(Boolean)

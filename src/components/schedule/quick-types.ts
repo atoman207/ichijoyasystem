@@ -230,6 +230,8 @@ export interface QuickWork {
     users: FormUser[];
     stores: FormStore[];
     currentUserId: string;
+    /** 同じ案件の訪問 (見積・現調・現見) の予定。作業 (引取・施工) がその日なら新しい予定を足さずに「現見」に切り替わる */
+    visits: { date: string; label: string; time: string }[];
   };
   /** 受注にできない理由 (承認待ちの変更など) */
   orderBlocked?: string;

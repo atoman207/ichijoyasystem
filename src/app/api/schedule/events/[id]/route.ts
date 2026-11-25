@@ -42,6 +42,7 @@ import { quoteHandoverLines } from "@/lib/handover-save";
 import { formStores, formUsers } from "@/components/schedule/form-data";
 import { QUOTE_STATUS, ORDER_STATUS } from "@/lib/constants";
 import { toDateKey } from "@/lib/format";
+import { VISIT_KINDS, caseVisits } from "@/lib/visit-adopt";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -309,9 +310,13 @@ function quickWork(db: Database, user: User, e: ScheduleEvent): QuickWork | unde
     else if (["draft", "pending_approval", "approved", "sent"].includes(q.status)) {
       const onsite = q.status === "draft" || q.status === "pending_approval";
       const own = skipsApproval(user, "order");
-      let rows = suggestHandovers({ lines: quoteHandoverLines(db, q.items), category: q.category, pickupText: q.siteInfo?.pickupAt, deliveryText: q.siteInfo?.deliveryAt, fallbackPickup: e.date >= today ? e.date : today, ref: today });
+      // 手書きの見積書に引取日がなければ、訪問 (見積・現調・現見) の日 = その場で作業 (現見) を初期値にする
+      const fallback = VISIT_KINDS.includes(e.kind) || e.date >= today ? e.date : today;
+      let rows = suggestHandovers({ lines: quoteHandoverLines(db, q.items), category: q.category, pickupText: q.siteInfo?.pickupAt, deliveryText: q.siteInfo?.deliveryAt, fallbackPickup: fallback, ref: today });
       // 畳・襖・障子・網戸のない見積 (リフォームなど) は施工日の行
-      if (!rows.length) rows = [{ id: `hv_${Date.now().toString(36)}`, item: "reform", label: HANDOVER_ITEM.reform.label, pickupDate: e.date >= today ? e.date : today }];
+      if (!rows.length) rows = [{ id: `hv_${Date.now().toString(36)}`, item: "reform", label: HANDOVER_ITEM.reform.label, pickupDate: fallback }];
+      // 同じ案件の訪問の予定 (作業がその日なら「現見」に切り替わる。src/lib/visit-adopt.ts)
+      const visits = caseVisits(db, { quoteId: q.id, inquiryId: q.inquiryId ?? chain?.inquiry?.id, customerId: q.customerId }).map((v) => ({ date: v.date, label: SCHEDULE_KIND[v.kind].label, time: v.startTime ?? (v.slot === "am" ? "午前" : v.slot === "pm" ? "午後" : "") }));
       const sourceText = [q.siteInfo?.pickupAt && `引取: ${q.siteInfo.pickupAt}`, q.siteInfo?.deliveryAt && `納品: ${q.siteInfo.deliveryAt}`].filter(Boolean).join(" / ") || undefined;
       out.toOrder = {
         quoteId: q.id,
@@ -332,6 +337,7 @@ function quickWork(db: Database, user: User, e: ScheduleEvent): QuickWork | unde
         users: formUsers(db),
         stores: formStores(db),
         currentUserId: user.id,
+        visits,
       };
     } else out.orderBlocked = "この状態の見積は受注にできません。";
   }

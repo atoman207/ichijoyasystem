@@ -1,12 +1,13 @@
 import "server-only";
 import type { Database, Order, ScheduleEvent, User } from "./types";
-import { newId, nowIso } from "./store";
+import { addAudit, newId, nowIso } from "./store";
 import { HANDOVER_MARK, handoverMemo } from "@/lib/site-info";
 import { HANDOVER_REF_PREFIX, HANDOVER_ROLE_LABEL, handoverGroups, handoverRef, handoverSpan, parseHandoverRef, type HandoverGroup } from "@/lib/handover";
 import { moveBookingsWithEvent } from "@/lib/scheduling/impact";
 import { replanProductionForPickup } from "@/lib/scheduling/production";
 import { planTablesReady } from "@/lib/scheduling/tables";
 import { toDateKey } from "@/lib/format";
+import { ADOPTED_KIND, adoptionAudit, isAdoptedVisit, restoreVisit, sameDayVisit } from "@/lib/visit-adopt";
 
 /**
  * 受注の品目ごとの引取・納品の日程 (Order.handovers) → 予定表の予定 (src/lib/handover.ts)
@@ -17,6 +18,8 @@ import { toDateKey } from "@/lib/format";
  * - 以前の形 (施工期間の「施工」の予定 1 件) の予定は、日程を保存したときに置き換える
  * - 予定表 (スプレッドシート) から移行した、同じ案件 (この受注・見積・問い合わせ) の今日以降の引き取り・納品の予定は、
  *   新しく作る代わりに使い回す (同じ予定を二重にしない。src/lib/schedule-sheet/plan.ts)
+ * - 作業 (引き取り・1 日の施工) の日に同じ案件の訪問 (見積・現調・現見) の予定があれば、新しい予定を足さずにその予定を「現見」に切り替える
+ *   (見積の訪問がその場で現見になったとき。src/lib/visit-adopt.ts)。作業を別の日に動かす・使わなくなったときは訪問の予定に戻す (消さない)
  * - 受注の scheduledStart / scheduledEnd は日程の最初の日・最後の日 (経営ダッシュボード・案件の状態・予定の提案が使う)
  */
 
@@ -24,9 +27,10 @@ export const isHandoverEvent = (e: Pick<ScheduleEvent, "source" | "sourceRef">):
 
 const KIND = { pickup: "pickup", delivery: "delivery", install: "install" } as const;
 
-function titleOf(customerName: string | undefined, g: HandoverGroup): string {
+function titleOf(customerName: string | undefined, g: HandoverGroup, visit = false): string {
   const who = customerName ? `${customerName} 様 ` : "";
   const what = g.labels.join("・");
+  if (visit) return `${who}現見 (${what})`;
   return g.role === "install" ? `${who}${what} 施工` : `${who}${HANDOVER_ROLE_LABEL[g.role]} (${what})`;
 }
 
@@ -62,8 +66,11 @@ export function syncHandoverEvents(db: Database, o: Order, actorId: string, opts
       (e.orderId === o.id || (o.quoteId && e.quoteId === o.quoteId) || (inquiryId && e.inquiryId === inquiryId)),
   );
 
+  const keys = { orderId: o.id, quoteId: o.quoteId, inquiryId, customerId: o.customerId };
+  // 切り替えた訪問の予定で、作業が別の日に動いたもの (訪問の予定に戻す)
+  const restore: ScheduleEvent[] = [];
   for (const g of groups) {
-    const cand =
+    let cand: ScheduleEvent | undefined =
       existing
         .filter((e) => !used.has(e.id))
         .map((e) => ({ e, ref: parseHandoverRef(e.sourceRef) }))
@@ -78,9 +85,38 @@ export function syncHandoverEvents(db: Database, o: Order, actorId: string, opts
         : adoptable
             .filter((e) => !used.has(e.id) && e.kind === g.role)
             .sort((a, b) => Number(b.date === g.date) - Number(a.date === g.date) || Math.abs(Date.parse(a.date) - Date.parse(g.date)) - Math.abs(Date.parse(b.date) - Date.parse(g.date)))[0]);
+    if (cand && isAdoptedVisit(cand) && cand.date !== g.date) {
+      // 訪問から切り替えた予定の作業が別の日に動いた: その日の訪問の記録は残し、作業の予定は新しく作る
+      used.add(cand.id);
+      restore.push(cand);
+      cand = undefined;
+    }
+    // 作業の日に同じ案件の訪問 (見積・現調・現見) があれば、その予定を切り替える (新しい予定を足さない)
+    const canVisit = g.role === "pickup" || (g.role === "install" && !g.endDate);
+    let adopting = false;
+    let beforeKind: ScheduleEvent["kind"] | undefined;
+    if (!cand && canVisit) {
+      cand = sameDayVisit(db, keys, g.date, used);
+      adopting = Boolean(cand);
+      beforeKind = cand?.kind;
+    }
+    // 種類は「現見」のまま (訪問から切り替えた予定が同じ日のあいだ)
+    const visit = canVisit && Boolean(cand) && cand!.date === g.date && (adopting || isAdoptedVisit(cand!));
+    // 日程に時間を入れていなければ、訪問の予定の時間を残す (受注の日程にも書いて、次の保存で消えないように)
+    if (adopting && cand && !g.start && !g.slot && (cand.startTime || cand.slot)) {
+      g.start = cand.startTime;
+      g.end = cand.startTime ? cand.endTime : undefined;
+      g.slot = cand.startTime ? undefined : cand.slot;
+      for (const r of o.handovers ?? []) {
+        if (!g.rowIds.includes(r.id)) continue;
+        r.pickupStart = g.start;
+        r.pickupEnd = g.end;
+        r.pickupSlot = g.slot;
+      }
+    }
     const fields = {
-      title: titleOf(customer?.name, g),
-      kind: KIND[g.role],
+      title: titleOf(customer?.name, g, visit),
+      kind: visit ? ADOPTED_KIND : KIND[g.role],
       date: g.date,
       endDate: g.endDate,
       startTime: g.start,
@@ -108,14 +144,20 @@ export function syncHandoverEvents(db: Database, o: Order, actorId: string, opts
         cand.updatedAt = now;
       }
       if (timeKey(cand) !== beforeTime) moved.push(cand);
+      if (adopting && beforeKind) addAudit(db, adoptionAudit(cand, beforeKind, o, actorId));
       continue;
     }
     const ev: ScheduleEvent = { id: newId("ev"), ...fields, assigneeIds: [...o.workerIds], memo, createdBy: actorId, createdAt: now, updatedBy: actorId, updatedAt: now };
     db.schedule.push(ev);
     used.add(ev.id);
   }
-  // 使わなくなった予定 (品目の削除・まとめ方の変更) と、置き換えた以前の「施工」の予定を外す
-  const drop = new Set(mine.filter((e) => !used.has(e.id)).map((e) => e.id));
+  // 使わなくなった予定 (品目の削除・まとめ方の変更) と、置き換えた以前の「施工」の予定を外す。訪問から切り替えた予定は訪問の予定に戻す
+  for (const e of mine) if (!used.has(e.id) && isAdoptedVisit(e)) restore.push(e);
+  for (const e of restore) {
+    restoreVisit(e, actorId, now);
+    e.kind = "survey";
+  }
+  const drop = new Set(mine.filter((e) => !used.has(e.id) && !isAdoptedVisit(e) && !restore.includes(e)).map((e) => e.id));
   if (drop.size) db.schedule = db.schedule.filter((e) => !drop.has(e.id));
 
   const span = handoverSpan(o.handovers);

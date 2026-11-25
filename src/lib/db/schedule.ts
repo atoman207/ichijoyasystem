@@ -1,10 +1,11 @@
 import "server-only";
 import type { Database, Inquiry, Order, Quote, ScheduleEvent, StoreId, User } from "./types";
-import { newId, nowIso } from "./store";
+import { addAudit, newId, nowIso } from "./store";
 import { scopeByStore } from "@/lib/auth/permissions";
 import { addDays, toDateKey } from "@/lib/format";
 import { HANDOVER_MARK, handoverMemo } from "@/lib/site-info";
 import { syncHandoverEvents } from "./handover-events";
+import { ADOPTED_KIND, adoptionAudit, isAdoptedVisit, restoreVisit, sameDayVisit } from "@/lib/visit-adopt";
 
 /**
  * 予定表と案件 (問い合わせ → 見積 → 受注) をつなぐサーバー側の処理
@@ -175,10 +176,21 @@ export function syncOrderEvent(db: Database, o: Order, actorId: string, times?: 
     return db.schedule.find((e) => e.orderId === o.id && e.source === "order");
   }
   const idx = db.schedule.findIndex((e) => e.orderId === o.id && e.source === "order");
-  const main = idx >= 0 ? db.schedule[idx] : undefined;
+  let main = idx >= 0 ? db.schedule[idx] : undefined;
+  const now0 = nowIso();
   if (!o.scheduledStart || o.status === "cancelled") {
-    if (main) db.schedule.splice(idx, 1);
+    // 訪問から切り替えた予定 (現見) は消さずに訪問の予定に戻す (src/lib/visit-adopt.ts)
+    if (main && isAdoptedVisit(main)) {
+      restoreVisit(main, actorId, now0);
+      main.kind = "survey";
+    } else if (main) db.schedule.splice(idx, 1);
     return undefined;
+  }
+  // 訪問から切り替えた予定の施工の日が変わった: 訪問の記録は残し、施工の予定は新しく作る
+  if (main && isAdoptedVisit(main) && main.date !== o.scheduledStart) {
+    restoreVisit(main, actorId, now0);
+    main.kind = "survey";
+    main = undefined;
   }
   const quote = db.quotes.find((q) => q.id === o.quoteId);
   const customer = db.customers.find((c) => c.id === o.customerId);
@@ -203,6 +215,25 @@ export function syncOrderEvent(db: Database, o: Order, actorId: string, times?: 
     main.updatedBy = actorId;
     main.updatedAt = now;
     return main;
+  }
+  // 施工の日に同じ案件の訪問 (見積・現調・現見) の予定があれば、新しい予定を足さずに「現見」に切り替える (1 日の施工だけ。お客様のご要望 2026-11-25)
+  const single = !fields.endDate;
+  const visit = single ? sameDayVisit(db, { orderId: o.id, quoteId: o.quoteId, inquiryId: quote?.inquiryId, customerId: o.customerId }, o.scheduledStart) : undefined;
+  if (visit) {
+    // 担当者は訪問した人のまま (いなければ受注の施工担当)
+    const beforeKind = visit.kind;
+    const { assigneeIds, ...rest } = fields;
+    Object.assign(visit, rest, { kind: ADOPTED_KIND, source: "order" as const, sourceRef: undefined, title: `${customer ? `${customer.name} 様 ` : ""}現見 (${o.title})` });
+    if (!visit.assigneeIds.length) visit.assigneeIds = assigneeIds;
+    if (times) {
+      visit.startTime = times.startTime;
+      visit.endTime = times.startTime ? times.endTime : undefined;
+    }
+    if (!visit.memo || visit.memo.startsWith(HANDOVER_MARK)) visit.memo = handoverMemo(o.siteInfo, o.workDetails);
+    visit.updatedBy = actorId;
+    visit.updatedAt = now;
+    addAudit(db, adoptionAudit(visit, beforeKind, o, actorId));
+    return visit;
   }
   const ev: ScheduleEvent = {
     id: newId("ev"),
@@ -235,6 +266,13 @@ export function syncHandoverMemo(db: Database, o: Order): void {
 export function removeUpcomingOrderEvents(db: Database, orderId: string): number {
   const today = toDateKey(new Date());
   const before = db.schedule.length;
+  // 訪問から切り替えた予定 (現見) は消さずに訪問の予定に戻す (src/lib/visit-adopt.ts)
+  for (const e of db.schedule) {
+    if (e.orderId === orderId && e.date >= today && isAdoptedVisit(e)) {
+      restoreVisit(e, e.updatedBy ?? e.createdBy ?? "system", nowIso());
+      e.kind = "survey";
+    }
+  }
   db.schedule = db.schedule.filter((e) => e.orderId !== orderId || e.date < today);
   return before - db.schedule.length;
 }
