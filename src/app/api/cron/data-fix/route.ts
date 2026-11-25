@@ -300,7 +300,9 @@ async function docBankFix(url: URL, req: Request) {
   const body = (await req.json().catch(() => null)) as { accounts?: Record<string, unknown>[] } | null;
   if (!Array.isArray(body?.accounts) || !body.accounts.length || body.accounts.length > 3) return NextResponse.json({ error: "accounts (1〜3 件) を JSON で送ってください" }, { status: 400 });
   const txt = (v: unknown, max: number) => (typeof v === "string" ? v.normalize("NFKC").trim().slice(0, max) : "");
-  const accounts = body.accounts.map((a) => ({ bank: txt(a.bank, 60), branch: txt(a.branch, 60), type: txt(a.type, 10) || "普通", number: txt(a.number, 20), holder: txt(a.holder, 80), ...(txt(a.holderKana, 80) ? { holderKana: txt(a.holderKana, 80) } : {}) }));
+  // 口座名義のカナはお客様の書いたとおり (「カ）」の全角の括弧を半角にしない)
+  const raw = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+  const accounts = body.accounts.map((a) => ({ bank: txt(a.bank, 60), branch: txt(a.branch, 60), type: txt(a.type, 10) || "普通", number: txt(a.number, 20), holder: txt(a.holder, 80), ...(raw(a.holderKana, 80) ? { holderKana: raw(a.holderKana, 80) } : {}) }));
   if (accounts.some((a) => !a.bank || !a.number || !a.holder)) return NextResponse.json({ error: "銀行名・口座番号・口座名義は必須です" }, { status: 400 });
   const db0 = await syncDb();
   const before = documentSettings(db0).bankAccounts;
