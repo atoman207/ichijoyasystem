@@ -32,6 +32,7 @@ Object.assign(process.env, {
   CHATBOT_DB_PATH: path.join(work, "chatbot.sqlite"),
   ROUTING_DB_PATH: path.join(work, "routing.sqlite"),
   SESSION_SECRET: "test-secret-for-receipts",
+  CRON_SECRET: "test-cron-receipts",
   TZ: "Asia/Tokyo",
 });
 for (const k of Object.keys(process.env)) if (/^(SMTP_|RESEND_|SENDGRID_|LINE_|CHATWORK_|OPENAI_|ANTHROPIC_|GOOGLE_MAPS_|NEXT_PUBLIC_SUPABASE_|SUPABASE_)/.test(k)) delete process.env[k];
@@ -330,6 +331,63 @@ section("6. 顧客の画面の案件の一覧・分けて納品");
     { id: "c", item: "tatami_omote", pickupDate: "2026-12-05", deliveryDate: "2026-12-05" },
   ]);
   eq(g.map((x) => `${x.role}:${x.date}:${x.labels.join("+")}`), ["pickup:2026-12-05:襖 4枚+襖 2枚 (2回目)+畳 表替え", "delivery:2026-12-05:畳 表替え", "delivery:2026-12-09:襖 4枚", "delivery:2026-12-12:襖 2枚 (2回目)"], "引取は同じ日にまとめ、畳は当日・襖は 2 日に分けて納品");
+}
+
+
+/* ================================================================== */
+section("7. 請求書・領収書の表示 (入金済みを載せない・お名前のスペース・登録番号)");
+{
+  const PN = await imp("lib/person-name.ts");
+  const idx = PN.nameIndex(["滝下 敬子", "田中 伸幸", "佐々木 一郎", "森 和也", "森田 誠", "原田 誠", "大河原 太郎", "山田 はな", "鈴木 智", "高橋 智"]);
+  eq(PN.spacedPersonName("滝下伸幸", idx), "滝下 伸幸", "スペースのないお名前: 登録されている名字 (滝下) と名前 (伸幸) で分ける");
+  eq(PN.spacedPersonName("滝下　敬子", idx), "滝下 敬子", "全角のスペースは半角 1 つに");
+  eq([PN.spacedPersonName("森和也", idx), PN.spacedPersonName("森田誠", idx)], ["森 和也", "森田 誠"], "名字はいちばん長く一致するもの (森 / 森田)");
+  eq(PN.spacedPersonName("大河原", idx), "大河原", "名字だけのお名前 (登録されている名字そのもの) は分けない");
+  eq([PN.spacedPersonName("中村だんご", idx), PN.spacedPersonName("塚本商店", idx), PN.spacedPersonName("社長自宅", idx)], ["中村だんご", "塚本商店", "社長自宅"], "お店・会社・メモのようなお名前は分けない");
+  eq(PN.spacedPersonName("山田はな", idx), "山田 はな", "漢字の名字 + ひらがなの名前 (どちらも一覧にあるとき)");
+  eq([PN.spacedPersonName("佐々木一郎"), PN.spacedPersonName("一ノ瀬誠")], ["佐々木 一郎", "一ノ瀬 誠"], "一覧がなくても 3 文字の名字 (佐々木・一ノ瀬) は分ける");
+  eq(PN.spacedPersonName("未知名前"), "未知名前", "確かでないお名前は分けない (顧客の情報にスペースを入れれば、そのとおりに印字)");
+  eq(PN.addresseeName("架空商事株式会社", "御中", idx), "架空商事株式会社", "法人・施設 (御中) はそのまま");
+
+  // 登録番号の設定 (data-fix の doc-bank) と PDF
+  const DF = await imp("app/api/cron/data-fix/route.ts");
+  const post = async (q, body) => (await DF.POST(new Request(`http://test.local/api/cron/data-fix?task=doc-bank&${q}`, { method: "POST", headers: { authorization: "Bearer test-cron-receipts", "content-type": "application/json" }, body: JSON.stringify(body) }))).json();
+  const bad = await post("apply=1", { registrationNumber: "T123" });
+  ok(Boolean(bad.error), "登録番号の形 (T + 13 桁) を確かめる");
+  await post("apply=1", { registrationNumber: "T1234567890123" });
+  const DS = await imp("lib/doc-settings.ts");
+  eq([DS.documentSettings(db()).registrationNumber, DS.documentSettings(db()).bankAccounts.length], ["T1234567890123", 0], "登録番号だけを設定 (振込先などほかの項目はそのまま)");
+  await store.mutate((x) => {
+    x.customers.push({ id: "c_rc_nm", code: "C-99977", name: "架空伸幸", kana: "", phone: "", postalCode: "", address: "", storeId: S, type: "individual", preferredChannel: "phone", firstContactChannel: "phone", tags: [], notes: "", createdAt: now, updatedAt: now });
+    x.customers.push({ id: "c_rc_nm2", code: "C-99978", name: "架空 敬子", kana: "", phone: "", postalCode: "", address: "", storeId: S, type: "individual", preferredChannel: "phone", firstContactChannel: "phone", tags: [], notes: "", createdAt: now, updatedAt: now });
+    x.customers.push({ id: "c_rc_nm3", code: "C-99979", name: "試験 伸幸", kana: "", phone: "", postalCode: "", address: "", storeId: S, type: "individual", preferredChannel: "phone", firstContactChannel: "phone", tags: [], notes: "", createdAt: now, updatedAt: now });
+  });
+  const D = await imp("lib/pdf/data.ts");
+  const RN = await imp("lib/pdf/render.ts");
+  const paidInv = { ...db().invoices.find((i) => i.orderId === "o_rc1"), customerId: "c_rc_nm" };
+  const data = D.invoicePdfData(db(), paidInv);
+  eq([data.customerName, data.company.registrationNumber], ["架空 伸幸", "T1234567890123"], "請求書: お名前の名字と名前の間にスペース・登録番号");
+  const rcp = db().receipts.find((r) => r.invoiceId === paidInv.id && r.status === "issued");
+  const rd = D.receiptRecordPdfData(db(), { ...rcp, addressee: "架空伸幸", honorific: "様" }, 0);
+  eq([rd.customerName, rd.company.registrationNumber], ["架空 伸幸", "T1234567890123"], "領収書: お名前のスペース・登録番号");
+  const { execFileSync } = await import("node:child_process");
+  let pdftotext = true;
+  try {
+    execFileSync("pdftotext", ["-v"], { stdio: "ignore" });
+  } catch {
+    pdftotext = false;
+  }
+  if (pdftotext) {
+    const f = path.join(work, "inv.pdf");
+    fs.writeFileSync(f, await RN.renderInvoicePdf(data));
+    const text = execFileSync("pdftotext", ["-layout", f, "-"]).toString();
+    ok(paidInv.paidAmount > 0 && !/入金済み/.test(text) && !/差引ご請求額/.test(text), "請求書の PDF: 入金済みの請求書でも「入金済み」「差引ご請求額」を載せない");
+    ok(/T1234567890123/.test(text) && /架空 伸幸/.test(text), "請求書の PDF: 登録番号とスペースつきのお名前");
+    const g = path.join(work, "rc.pdf");
+    fs.writeFileSync(g, await RN.renderReceiptPdf(rd));
+    const t2 = execFileSync("pdftotext", ["-layout", g, "-"]).toString();
+    ok(/T1234567890123/.test(t2) && /架空 伸幸/.test(t2), "領収書の PDF: 登録番号とスペースつきのお名前");
+  } else console.log("  (pdftotext がないため PDF の文字の確かめは省略)");
 }
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

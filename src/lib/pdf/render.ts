@@ -578,15 +578,7 @@ export async function renderInvoicePdf(data: InvoicePdfData): Promise<Uint8Array
   }
 
   const total = num(data.total);
-  const paid = num(data.paidAmount);
-  const balance = total - paid;
-  const paidRows: AmountRow[] =
-    paid > 0
-      ? [
-          { label: "入金済み", value: fmtYen(paid) },
-          { label: "差引ご請求額", value: amountText(balance), strong: true },
-        ]
-      : [];
+  // 入金済み・差引ご請求額は載せない (お客様にまぎらわしいため。入金の状況はシステムの中で管理する。お客様のご要望 2026-11-25「①」)
 
   s.y =
     firstPage(s, {
@@ -604,7 +596,6 @@ export async function renderInvoicePdf(data: InvoicePdfData): Promise<Uint8Array
       ],
       amountLabel: "ご請求金額",
       amount: total,
-      amountRows: paidRows,
       company: data.company,
     }) + 18;
 

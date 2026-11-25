@@ -9,6 +9,8 @@ import { fmtDate, yen } from "@/lib/format";
 import { PrintToolbar } from "@/components/features/PrintToolbar";
 import { IchijoyaLogo } from "@/components/brand/Logo";
 import { documentSettings } from "@/lib/doc-settings";
+import { addresseeName } from "@/lib/person-name";
+import { customerNameIndex } from "@/lib/pdf/data";
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +57,7 @@ export default async function InvoicePrintPage({ params }: { params: Promise<{ i
           </div>
         </div>
         <div className="mt-8 flex items-end justify-between border-b-2 border-ink pb-2">
-          <div className="text-lg">{customer?.name} <span className="text-sm">{customer?.type === "corporate" ? "御中" : "様"}</span></div>
+          <div className="text-lg">{customer ? (customer.type === "corporate" ? customer.name : addresseeName(customer.name, "様", customerNameIndex(db))) : ""} <span className="text-sm">{customer?.type === "corporate" ? "御中" : "様"}</span></div>
           <div className="text-right text-[11px] text-ink-2">
             <div>{customer?.address}</div>
             {!batchItems?.length && order?.siteAddress && order.siteAddress !== customer?.address && <div>施工場所: {order.siteAddress}</div>}

@@ -1,6 +1,22 @@
 import "server-only";
 import type { Customer, Database, Invoice, Quote, QuoteItem, Receipt, StoreId } from "@/lib/db/types";
 import { partLabel } from "@/lib/receipts";
+import { addresseeName, nameIndex, type NameIndex } from "@/lib/person-name";
+
+/**
+ * お名前の名字と名前の一覧 (スペースつきで登録されたお客様のお名前から。src/lib/person-name.ts)。
+ * 帳票のたびに作り直さないよう、顧客の件数が変わるまで使い回す
+ */
+let nameCache: { list: unknown; size: number; index: NameIndex } | undefined;
+export function customerNameIndex(db: Pick<Database, "customers">): NameIndex {
+  if (nameCache && nameCache.list === db.customers && nameCache.size === db.customers.length) return nameCache.index;
+  const index = nameIndex(db.customers.filter((c) => c.type !== "corporate").map((c) => c.name));
+  nameCache = { list: db.customers, size: db.customers.length, index };
+  return index;
+}
+
+/** 帳票の宛名 (個人は名字と名前の間にスペース。お客様のご要望 2026-11-25「②」) */
+const docName = (db: Pick<Database, "customers">, name: string, h: "様" | "御中") => addresseeName(name, h, customerNameIndex(db));
 import { documentSettings } from "@/lib/doc-settings";
 import { PAYMENT_METHOD_LABEL } from "@/lib/constants";
 import type { InvoicePdfData, PdfCompany, PdfLine, QuotePdfData, ReceiptPdfData } from "./types";
@@ -51,7 +67,7 @@ export function quotePdfData(db: Database, q: Quote, version?: number): QuotePdf
   const staff = db.users.find((u) => u.id === (q.estimatorId ?? q.createdBy))?.name;
   const base = {
     number: q.number,
-    customerName: customer?.name ?? "お客様",
+    customerName: docName(db, customer?.name ?? "お客様", honorific(customer)),
     honorific: honorific(customer),
     customerAddress: customer?.address || undefined,
     // 施工場所: 見積に書いた施工場所 → 受注の現場住所 (お客様の住所と同じときは載せない)
@@ -130,7 +146,7 @@ export function invoicePdfData(db: Database, inv: Invoice): InvoicePdfData {
     // 取引年月日 = 売上計上日 (施工完了日)。まとめ請求は締めの期間 (案件ごとの施工完了日は明細に)
     transactionDate: batch ? undefined : order?.salesDate ?? day(order?.completedAt),
     transactionPeriod: batch && inv.periodTo ? { from: inv.periodFrom, to: inv.periodTo } : undefined,
-    customerName: customer?.name ?? "お客様",
+    customerName: docName(db, customer?.name ?? "お客様", honorific(customer)),
     honorific: honorific(customer),
     customerAddress: customer?.address || undefined,
     siteAddress: !batch && order?.siteAddress && order.siteAddress !== customer?.address ? order.siteAddress : undefined,
@@ -166,7 +182,7 @@ export function receiptPdfData(db: Database, inv: Invoice): ReceiptPdfData | nul
     issuedOn: payments.at(-1)?.date ?? inv.issueDate,
     // 領収書の宛名は案件ごとに変えられる (個人のお客様の依頼で会社名義の領収書など)
     // まとめ請求は案件ごとの宛名ではなく、お客様名
-    ...(({ name, honorific: h }) => ({ customerName: name, honorific: h }))(receiptAddressee(customer, inv.orderLines?.length ? undefined : order?.receiptName)),
+    ...(({ name, honorific: h }) => ({ customerName: docName(db, name, h), honorific: h }))(receiptAddressee(customer, inv.orderLines?.length ? undefined : order?.receiptName)),
     amount: inv.paidAmount,
     taxable: inv.paidAmount - tax,
     tax,
@@ -187,7 +203,7 @@ export function receiptRecordPdfData(db: Database, r: Receipt, reissueNo: number
   return {
     number: r.number,
     issuedOn: r.issueDate,
-    customerName: r.addressee,
+    customerName: docName(db, r.addressee, r.honorific),
     honorific: r.honorific,
     amount: r.amount,
     taxable: r.amount - r.tax,

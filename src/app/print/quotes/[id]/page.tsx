@@ -7,6 +7,8 @@ import { quoteAccessInfo } from "@/lib/case-access";
 import { recordOutputs } from "@/lib/doc-print";
 import { fmtDate, yen } from "@/lib/format";
 import { PrintToolbar } from "@/components/features/PrintToolbar";
+import { addresseeName } from "@/lib/person-name";
+import { customerNameIndex } from "@/lib/pdf/data";
 import { IchijoyaLogo } from "@/components/brand/Logo";
 
 export const dynamic = "force-dynamic";
@@ -50,7 +52,7 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
 
         <div className="mt-8 flex items-end justify-between border-b-2 border-ink pb-2">
           <div className="text-lg">
-            {customer?.name} <span className="text-sm">{customer?.type === "corporate" ? "御中" : "様"}</span>
+            {customer ? (customer.type === "corporate" ? customer.name : addresseeName(customer.name, "様", customerNameIndex(db))) : ""} <span className="text-sm">{customer?.type === "corporate" ? "御中" : "様"}</span>
           </div>
           <div className="text-right text-[11px] text-ink-2">
             <div>{customer?.address}</div>

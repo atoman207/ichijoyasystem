@@ -14,7 +14,7 @@ import { POSTAL_FETCHED_AT, POSTAL_SOURCE, postalFromAddress } from "@/lib/posta
 import { areaStoreOf } from "@/lib/store-area";
 import type { Database, ScheduleKind } from "@/lib/db/types";
 import { DAY_LOAD_ID, dayLoadChanges, readDayLoadSettings, writeDayLoadSettings, type DayLoadSettings } from "@/lib/day-sheet";
-import { DOCUMENT_SETTINGS_ID, documentSettings } from "@/lib/doc-settings";
+import { DOCUMENT_SETTINGS_ID, documentSettings, validRegistrationNumber } from "@/lib/doc-settings";
 import { ADOPTED_KIND, adoptionAudit, isAdoptedVisit, sameDayVisit } from "@/lib/visit-adopt";
 import { parseHandoverRef } from "@/lib/handover";
 
@@ -45,9 +45,9 @@ export const maxDuration = 60;
  *     店舗ごとの対象から外す社員 (お客様のご指示 2026-11-25「合志店は現段階では 2 名を対象人数から除外」)。社員の名前はコードに書かず、
  *     本文 (JSON) = { stores: { <店舗 ID>: { excludeUserIds: [社員の ID], people?: 人数 } }, perPerson?: 枚数 } で受け取る
  *     (書いた店舗だけ置き換え、ほかの店舗・項目は今の値)。既定は確認だけ、apply=1 で書き込み、変更履歴
- *   task = doc-bank: 請求書に印字する振込先 (設定 → 帳票。お客様のご指示 2026-11-25「⑨」)。口座はコードに書かず、
- *     本文 (JSON) = { accounts: [{ bank, branch, type, number, holder, holderKana }] } で受け取り、振込先をこの内容に置き換える
- *     (帳票のほかの項目は今の値)。既定は確認だけ、apply=1 で書き込み、変更履歴
+ *   task = doc-bank: 請求書に印字する振込先・適格請求書発行事業者の登録番号 (設定 → 帳票。お客様のご指示 2026-11-25「⑨」・登録番号の「③」)。
+ *     値はコードに書かず、本文 (JSON) = { accounts?: [{ bank, branch, type, number, holder, holderKana }], registrationNumber?: "T + 13 桁" } で受け取り、
+ *     書いた項目だけ置き換える (帳票のほかの項目は今の値)。既定は確認だけ、apply=1 で書き込み、変更履歴
  *   task = visit-merge: 見積の訪問がその場で現見になったのに、受注の登録で同じ日に作業の予定がもう 1 件できた案件 (お客様のご連絡 2026-11-25。
  *     この日より前の版の受注の登録) を 1 件にまとめる: 訪問の予定を受注の「現見」の予定に切り替え (時間・担当者・メモは訪問のまま)、受注の作業の予定を消す
  *     (src/lib/visit-adopt.ts と同じ判定)。from = この日以降に登録した受注 (既定 2026-11-23)。既定は確認だけ、apply=1 で書き込み、予定ごとに変更履歴
@@ -300,29 +300,33 @@ async function dayLoadFix(url: URL, req: Request) {
   return NextResponse.json({ ok: true, applied: true, changes, at: nowIso() });
 }
 
-/** 請求書の振込先 (設定 → 帳票の bankAccounts) を本文の内容に置き換える */
+/** 請求書の振込先 (設定 → 帳票の bankAccounts)・登録番号 (registrationNumber) を本文の内容に置き換える */
 async function docBankFix(url: URL, req: Request) {
   const apply = url.searchParams.get("apply") === "1";
-  const body = (await req.json().catch(() => null)) as { accounts?: Record<string, unknown>[] } | null;
-  if (!Array.isArray(body?.accounts) || !body.accounts.length || body.accounts.length > 3) return NextResponse.json({ error: "accounts (1〜3 件) を JSON で送ってください" }, { status: 400 });
+  const body = (await req.json().catch(() => null)) as { accounts?: Record<string, unknown>[]; registrationNumber?: string } | null;
+  const hasAccounts = Array.isArray(body?.accounts);
+  const reg = typeof body?.registrationNumber === "string" ? body.registrationNumber.normalize("NFKC").replace(/[\s-]/g, "").toUpperCase() : undefined;
+  if (!hasAccounts && reg === undefined) return NextResponse.json({ error: "accounts か registrationNumber を JSON で送ってください" }, { status: 400 });
+  if (hasAccounts && (!body!.accounts!.length || body!.accounts!.length > 3)) return NextResponse.json({ error: "accounts は 1〜3 件" }, { status: 400 });
+  if (reg !== undefined && !validRegistrationNumber(reg)) return NextResponse.json({ error: "登録番号は T と 13 桁の数字" }, { status: 400 });
   const txt = (v: unknown, max: number) => (typeof v === "string" ? v.normalize("NFKC").trim().slice(0, max) : "");
   // 口座名義のカナはお客様の書いたとおり (「カ）」の全角の括弧を半角にしない)
   const raw = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
-  const accounts = body.accounts.map((a) => ({ bank: txt(a.bank, 60), branch: txt(a.branch, 60), type: txt(a.type, 10) || "普通", number: txt(a.number, 20), holder: txt(a.holder, 80), ...(raw(a.holderKana, 80) ? { holderKana: raw(a.holderKana, 80) } : {}) }));
-  if (accounts.some((a) => !a.bank || !a.number || !a.holder)) return NextResponse.json({ error: "銀行名・口座番号・口座名義は必須です" }, { status: 400 });
+  const accounts = hasAccounts ? body!.accounts!.map((a) => ({ bank: txt(a.bank, 60), branch: txt(a.branch, 60), type: txt(a.type, 10) || "普通", number: txt(a.number, 20), holder: txt(a.holder, 80), ...(raw(a.holderKana, 80) ? { holderKana: raw(a.holderKana, 80) } : {}) })) : undefined;
+  if (accounts?.some((a) => !a.bank || !a.number || !a.holder)) return NextResponse.json({ error: "銀行名・口座番号・口座名義は必須です" }, { status: 400 });
   const db0 = await syncDb();
-  const before = documentSettings(db0).bankAccounts;
-  const changed = JSON.stringify(before) !== JSON.stringify(accounts);
-  if (!apply || !changed) return NextResponse.json({ ok: true, applied: false, changed, before: before.length, after: accounts.length });
+  const before = documentSettings(db0);
+  const changed = (accounts !== undefined && JSON.stringify(before.bankAccounts) !== JSON.stringify(accounts)) || (reg !== undefined && before.registrationNumber !== reg);
+  if (!apply || !changed) return NextResponse.json({ ok: true, applied: false, changed, accounts: accounts?.length, registrationNumber: reg !== undefined ? { before: before.registrationNumber || "(未設定)", after: reg } : undefined });
   await mutate((db) => {
     const now = nowIso();
+    const patch = { ...(accounts ? { bankAccounts: accounts } : {}), ...(reg !== undefined ? { registrationNumber: reg } : {}) };
     const row = db.settings.find((s) => s.id === DOCUMENT_SETTINGS_ID);
-    if (row) row.value = { ...(row.value ?? {}), bankAccounts: accounts };
-    else db.settings.push({ id: DOCUMENT_SETTINGS_ID, value: { ...documentSettings(db), bankAccounts: accounts }, updatedBy: SYSTEM_USER, updatedAt: now });
-    if (row) Object.assign(row, { updatedBy: SYSTEM_USER, updatedAt: now });
-    addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "settings", entityId: DOCUMENT_SETTINGS_ID, entityLabel: "帳票の会社情報", summary: `請求書の振込先を登録 (${accounts.length} 件。お客様のご指示)` });
+    if (row) Object.assign(row, { value: { ...(row.value ?? {}), ...patch }, updatedBy: SYSTEM_USER, updatedAt: now });
+    else db.settings.push({ id: DOCUMENT_SETTINGS_ID, value: { ...documentSettings(db), ...patch }, updatedBy: SYSTEM_USER, updatedAt: now });
+    addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "settings", entityId: DOCUMENT_SETTINGS_ID, entityLabel: "帳票の会社情報", summary: `${[accounts ? `請求書の振込先 (${accounts.length} 件)` : "", reg !== undefined ? `登録番号 (${reg})` : ""].filter(Boolean).join("・")}を登録 (お客様のご指示)` });
   });
-  return NextResponse.json({ ok: true, applied: true, accounts: accounts.length, at: nowIso() });
+  return NextResponse.json({ ok: true, applied: true, at: nowIso() });
 }
 
 /** 受注の登録で同じ日にできた作業の予定を、訪問の予定 (見積・現調・現見) にまとめる */
