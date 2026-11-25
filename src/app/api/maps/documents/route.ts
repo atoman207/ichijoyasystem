@@ -4,7 +4,7 @@ import { getSessionUser } from "@/lib/auth/session";
 import { syncDb } from "@/lib/db/store";
 import { UserError } from "@/lib/attachments";
 import type { MapRefType } from "@/lib/db/types";
-import { canEditRecordMap, canViewLocation } from "@/lib/maps/access";
+import { canEditLocation, canEditRecordMap } from "@/lib/maps/access";
 import { registerMapDocument, type DocTarget } from "@/lib/maps/documents";
 import { mapTablesMissing } from "@/lib/maps/store";
 import { isMapUsePurpose } from "@/lib/maps/purpose";
@@ -42,7 +42,8 @@ export async function POST(req: Request) {
   if (type === "location") {
     const loc = db.mapLocations.find((l) => l.id === targetId && l.status === "active");
     if (!loc) return json(404, "場所が見つかりません。");
-    if (!canViewLocation(user, db, loc)) return json(403, "この場所に住宅地図を登録する権限がありません。");
+    // 見られる場所でも、変更できる人だけが登録・差し替えできる (閲覧の範囲の設定は見る範囲だけを広げる)
+    if (!canEditLocation(user, db, loc)) return json(403, "この場所に住宅地図を登録する権限がありません。");
   } else if (!canEditRecordMap(user, db, type as MapRefType, targetId)) {
     const exists = type === "customer" ? db.customers.some((x) => x.id === targetId) : type === "quote" ? db.quotes.some((x) => x.id === targetId) : type === "order" ? db.orders.some((x) => x.id === targetId) : db.schedule.some((x) => x.id === targetId);
     return exists ? json(403, "この記録に住宅地図を登録する権限がありません。") : json(404, "登録先の記録が見つかりません。");

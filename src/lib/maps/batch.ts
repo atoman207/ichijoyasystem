@@ -316,7 +316,7 @@ export async function startBatch(user: User, opts: { kind: BatchKind; dryRun: bo
   let total = 0;
   if (opts.kind === "normalize") total = normalizeRecords(db, Boolean(opts.includeOrders)).length;
   else {
-    if (!opts.dryRun && !opts.licenseConfirmed) throw new Error("取り込む PDF の利用許諾 (社内サーバーへの保存・社内の複数人での閲覧) を確認してください。");
+    if (!opts.dryRun && !opts.licenseConfirmed) throw new Error("取り込む地図の利用許諾 (当社の契約の範囲で、社内で保存・閲覧すること) を確認してください。");
     const files = await folderFiles(opts.folder ?? "");
     if (!files.length) throw new Error("フォルダーに PDF がありません。");
     total = files.length;

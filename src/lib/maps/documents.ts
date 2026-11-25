@@ -52,7 +52,7 @@ export interface RegisterResult {
 }
 
 export function validateMeta(meta: DocMeta): string | null {
-  if (!meta.licenseConfirmed) return "住宅地図の利用許諾 (契約で社内サーバーへの保存と社内の複数人での閲覧が認められていること) を確認してから登録してください。";
+  if (!meta.licenseConfirmed) return "住宅地図の利用許諾 (当社が契約しているゼンリン GIS などから当社の担当者が出力し、契約の範囲で社内で保存・閲覧すること) を確認してから登録してください。";
   const copyright = (meta.copyrightNotice?.trim() || DEFAULT_COPYRIGHT[meta.provider]).trim();
   if (meta.provider === "zenrin" && !copyright) return "ゼンリンの地図には著作権表示 (例: © ZENRIN CO., LTD.) を入力してください。";
   if (meta.usePurpose !== undefined && !isMapUsePurpose(meta.usePurpose)) return "地図の用途が正しくありません。";

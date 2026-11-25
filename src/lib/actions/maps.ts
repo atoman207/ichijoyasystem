@@ -8,7 +8,7 @@ import { canManageMaps, canRemoveMapDocument } from "@/lib/auth/permissions";
 import { removeObjects } from "@/lib/storage";
 import { purgeMapRender } from "@/lib/maps/render";
 import { syncOrderEvent } from "@/lib/db/schedule";
-import { canEditRecordMap, canViewLocation, canViewMapDocument } from "@/lib/maps/access";
+import { canEditLocation, canEditMapDocument, canEditRecordMap, canViewLocation, canViewMapDocument } from "@/lib/maps/access";
 import { fmtCoord, inJapan, parseCoordinates, validPlaceId } from "@/lib/maps/google";
 import { geocode, requestResidentialMap } from "@/lib/maps/providers";
 import { basePlaceOfEvent, mapIndex, placeOf, touchMapIndex } from "@/lib/maps/resolve";
@@ -60,7 +60,7 @@ export async function updateLocationPosition(id: string, formData: FormData) {
   const user = await requireActionUser();
   const back = `/maps/locations/${id}`;
   const loc0 = locationOrFail(id, back);
-  if (!canViewLocation(user, getDb(), loc0)) fail(back, "この場所を変更する権限がありません。");
+  if (!canEditLocation(user, getDb(), loc0)) fail(back, "この場所を変更する権限がありません (見るだけの記録の場所は変えられません)。");
   await guardTables(back);
   const clear = str(formData, "clearCoords") === "1";
   const raw = str(formData, "coords");
@@ -123,7 +123,7 @@ export async function geocodeLocation(id: string) {
   const user = await requireActionUser();
   const back = `/maps/locations/${id}`;
   const loc0 = locationOrFail(id, back);
-  if (!canViewLocation(user, getDb(), loc0)) fail(back, "この場所を変更する権限がありません。");
+  if (!canEditLocation(user, getDb(), loc0)) fail(back, "この場所を変更する権限がありません (見るだけの記録の場所は変えられません)。");
   await guardTables(back);
   if (loc0.coordStatus === "verified") fail(back, "位置は確認済みです。変えるときは位置を手で入力してください。");
   const r = await geocode(loc0.address);
@@ -152,7 +152,7 @@ export async function unlinkMapDocument(documentId: string, locationId: string, 
   const back = safeReturn(str(formData, "returnTo"), `/maps/locations/${locationId}`);
   const db0 = getDb();
   const loc0 = locationOrFail(locationId, back);
-  if (!canViewLocation(user, db0, loc0)) fail(back, "この場所を変更する権限がありません。");
+  if (!canEditLocation(user, db0, loc0)) fail(back, "この場所を変更する権限がありません (見るだけの記録の場所は変えられません)。");
   await guardTables(back);
   let label = "";
   await mutate((db) => {
@@ -214,7 +214,7 @@ export async function linkSharedMapDocument(locationId: string, formData: FormDa
   const user = await requireActionUser();
   const back = safeReturn(str(formData, "returnTo"), `/maps/locations/${locationId}`);
   const loc0 = locationOrFail(locationId, back);
-  if (!canViewLocation(user, getDb(), loc0)) fail(back, "この場所を変更する権限がありません。");
+  if (!canEditLocation(user, getDb(), loc0)) fail(back, "この場所を変更する権限がありません (見るだけの記録の場所は変えられません)。");
   await guardTables(back);
   const documentId = str(formData, "documentId");
   let label = "";
@@ -240,7 +240,7 @@ export async function updateMapDocumentInfo(documentId: string, formData: FormDa
   await mutate((db) => {
     const doc = db.mapDocuments.find((d) => d.id === documentId);
     if (!doc) fail(back, "住宅地図が見つかりません。");
-    if (!canViewMapDocument(user, db, doc)) fail(back, "この住宅地図を扱う権限がありません。");
+    if (!canEditMapDocument(user, db, doc)) fail(back, "この住宅地図の情報を変更する権限がありません (見るだけの記録の地図は変えられません)。");
     const before = { title: doc.title, edition: doc.edition, copyrightNotice: doc.copyrightNotice, licenseRef: doc.licenseRef, licenseNote: doc.licenseNote, shareable: doc.shareable, usePurpose: doc.usePurpose, nameplate: doc.nameplate };
     const shareable = str(formData, "shareable") === "1" || undefined;
     if (!shareable && (mapIndex(db).locationsByDoc.get(doc.id) ?? []).length > 1) fail(back, "この住宅地図は複数の場所で使われているため「共用しない」にできません。先にほかの場所から外してください。");
@@ -373,7 +373,7 @@ export async function requestProviderMap(locationId: string) {
   const user = await requireActionUser();
   const back = `/maps/locations/${locationId}`;
   const loc = locationOrFail(locationId, back);
-  if (!canViewLocation(user, getDb(), loc)) fail(back, "この場所を扱う権限がありません。");
+  if (!canEditLocation(user, getDb(), loc)) fail(back, "この場所を扱う権限がありません。");
   const r = await requestResidentialMap(loc);
   if (!r.ok) fail(back, r.error);
   // 公式のアダプターができたら、ここで registerMapDocument (source: "provider_api") を呼ぶ

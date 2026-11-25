@@ -5,8 +5,8 @@ import { notFound, redirect } from "next/navigation";
 import { ExternalLink, FileText, MapPin, Navigation } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canManageMaps, canRemoveMapDocument } from "@/lib/auth/permissions";
-import { canViewLocation, canViewMapDocument } from "@/lib/maps/access";
+import { canManageMaps, canRemoveMapDocument } from "@/lib/auth/permissions";
+import { canEditLocation, canEditMapDocument, canViewLocation, canViewMapDocument, canViewRecordMap } from "@/lib/maps/access";
 import { BASIS_LABEL, fmtCoord, mapLinkBasis, mapsDirectionsUrl, mapsSearchUrl } from "@/lib/maps/google";
 import { PRECISION_LABEL } from "@/lib/maps/address";
 import { locationReferences, mapIndex } from "@/lib/maps/resolve";
@@ -39,7 +39,9 @@ export default async function LocationPage({ params, searchParams }: { params: P
   const selfBack = back ? `${self}?returnTo=${encodeURIComponent(back)}` : self;
   const verified = loc.coordStatus === "verified";
   const target = { address: loc.address, lat: loc.lat, lng: loc.lng, coordsVerified: verified, placeId: loc.placeId };
-  const refs = locationReferences(db, loc, { today: toDateKey(new Date()) }, idx).filter((r) => canAccessStore(user, r.storeId) || r.assigneeIds?.includes(user.id));
+  // 変更できるのは場所を参照する記録の地図を変更できる人だけ (閲覧の範囲の設定で見られるだけの人は見るだけ)
+  const canEdit = canEditLocation(user, db, loc) && loc.status === "active";
+  const refs = locationReferences(db, loc, { today: toDateKey(new Date()) }, idx).filter((r) => canViewRecordMap(user, db, r.type, r.id));
   const linkedDocIds = new Set(db.mapDocumentLinks.filter((l) => l.locationId === loc.id).map((l) => l.documentId));
   const docs = db.mapDocuments.filter((d) => linkedDocIds.has(d.id)).sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
   const active = docs.filter((d) => d.status === "active");
@@ -91,7 +93,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
             <dd className="break-all text-ink">{loc.placeId ?? "-"}</dd>
             {loc.geocodeNote && (<><dt className="text-ink-3">自動の結果</dt><dd className="text-ink-2">{loc.geocodeNote}</dd></>)}
           </dl>
-          {loc.status === "active" && (
+          {canEdit && (
             <form action={updateLocationPosition.bind(null, loc.id)} className="mt-4 space-y-2 border-t border-line pt-3">
               <Field label="位置 (緯度, 経度 または Google マップの URL)" hint="Google マップで正しい建物を長押し (パソコンは右クリック) して出る数字か、その場所を開いたときの URL を貼り付けます。住所が完全でも位置がずれることがあるので、地図で確かめてください">
                 <Input name="coords" placeholder="32.8031, 130.7079" defaultValue={loc.lat != null && loc.lng != null ? `${fmtCoord(loc.lat)}, ${fmtCoord(loc.lng)}` : ""} />
@@ -105,7 +107,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
               </div>
             </form>
           )}
-          {loc.status === "active" && !verified && (
+          {canEdit && !verified && (
             geocodingEnabled() ? (
               <form action={geocodeLocation.bind(null, loc.id)} className="mt-3"><Button type="submit" variant="secondary" size="sm">住所から位置を求める (Google)</Button></form>
             ) : (
@@ -117,9 +119,12 @@ export default async function LocationPage({ params, searchParams }: { params: P
         <Card>
           <CardHeader title="住宅地図 (PDF)" icon={<FileText />} description={active.length ? `使用中 ${active.length} 件` : "未登録"} />
           {active.length === 0 && <Badge tone="warn">住宅地図 未登録</Badge>}
+          {!canEdit && loc.status === "active" && <p className="mb-2 text-[11px] text-ink-3">見るだけの権限です。住宅地図の登録・差し替えと位置の修正は、この場所の記録を変更できる人 (その店舗の社員・店長・本部・管理者) が行います。</p>}
           <div className="space-y-3">
             {active.map((d) => {
               const shared = (idx.locationsByDoc.get(d.id) ?? []).length - 1;
+              const editDoc = canEditMapDocument(user, db, d);
+              const removable = shared === 0 && canRemoveMapDocument(user, d);
               return (
                 <div key={d.id} className="space-y-2 rounded-xl border border-line p-3 text-xs">
                   <div className="font-medium text-ink">{d.title}</div>
@@ -131,13 +136,15 @@ export default async function LocationPage({ params, searchParams }: { params: P
                     <Link href={mapViewHref(d.id, selfBack)} className={buttonClass("primary", "sm")}>地図を開く</Link>
                     <a href={`/api/maps/documents/${d.id}?download=1`} className={buttonClass("ghost", "sm")}>ダウンロード</a>
                     <MapPreview src={`/api/maps/documents/${d.id}/page?p=1&size=preview`} href={mapViewHref(d.id, selfBack)} title={d.title} />
-                    <MapDocUploader targetType="location" targetId={loc.id} replaceId={d.id} replaceLabel={d.title} defaultShareable={d.shareable} compact />
-                    {shared > 0 && (
+                    {canEdit && <MapDocUploader targetType="location" targetId={loc.id} replaceId={d.id} replaceLabel={d.title} defaultShareable={d.shareable} compact />}
+                    {canEdit && shared > 0 && (
                       <form action={unlinkMapDocument.bind(null, d.id, loc.id)}><input type="hidden" name="returnTo" value={self} /><Button type="submit" variant="ghost" size="sm">この場所から外す</Button></form>
                     )}
                   </div>
+                  {(editDoc || removable) && (
                   <details>
-                    <summary className="cursor-pointer text-accent">情報の修正・取り消し</summary>
+                    <summary className="cursor-pointer text-accent">{editDoc ? "情報の修正・取り消し" : "取り消し"}</summary>
+                    {editDoc && (
                     <form action={updateMapDocumentInfo.bind(null, d.id)} className="mt-2 grid grid-cols-1 gap-2 @xl:grid-cols-2">
                       <input type="hidden" name="returnTo" value={self} />
                       <Field label="表示名"><Input name="title" defaultValue={d.title} maxLength={120} /></Field>
@@ -155,7 +162,8 @@ export default async function LocationPage({ params, searchParams }: { params: P
                       <label className="flex items-center gap-2 @xl:col-span-2"><input type="checkbox" name="shareable" value="1" defaultChecked={d.shareable} /> 複数の場所で共用してよい</label>
                       <div><Button type="submit" size="sm" variant="secondary">修正する</Button></div>
                     </form>
-                    {shared === 0 && canRemoveMapDocument(user, d) && (
+                    )}
+                    {removable && (
                       <form action={removeMapDocument.bind(null, d.id)} className="mt-3 flex flex-wrap items-end gap-2 border-t border-line pt-2">
                         <input type="hidden" name="returnTo" value={self} />
                         <Field label="取り消しの理由"><Input name="reason" required maxLength={200} placeholder="例: 契約の期限切れ" /></Field>
@@ -163,11 +171,12 @@ export default async function LocationPage({ params, searchParams }: { params: P
                       </form>
                     )}
                   </details>
+                  )}
                 </div>
               );
             })}
-            {loc.status === "active" && active.length === 0 && <MapDocUploader targetType="location" targetId={loc.id} />}
-            {loc.status === "active" && shareCandidates.length > 0 && (
+            {canEdit && active.length === 0 && <MapDocUploader targetType="location" targetId={loc.id} />}
+            {canEdit && shareCandidates.length > 0 && (
               <form action={linkSharedMapDocument.bind(null, loc.id)} className="flex flex-wrap items-end gap-2 border-t border-line pt-3">
                 <input type="hidden" name="returnTo" value={self} />
                 <Field label="近くの場所の住宅地図を使う (共用してよい PDF)">
@@ -180,7 +189,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
             )}
             <form action={requestProviderMap.bind(null, loc.id)} className="border-t border-line pt-3 text-[11px] text-ink-3">
               <p>ゼンリンからの自動取得: {zenrin.enabled ? "使えます" : `使えません — ${zenrin.reasons.join(" / ")}`}</p>
-              {zenrin.enabled && <Button type="submit" variant="secondary" size="sm" className="mt-1">ゼンリンから取得する</Button>}
+              {zenrin.enabled && canEdit && <Button type="submit" variant="secondary" size="sm" className="mt-1">ゼンリンから取得する</Button>}
             </form>
           </div>
           {docs.some((d) => d.status !== "active") && (

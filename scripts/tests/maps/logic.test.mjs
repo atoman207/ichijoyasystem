@@ -171,7 +171,17 @@ ok(AC.canViewRecordMap(chuoStaff, db, "customer", C1.id) && AC.canViewRecordMap(
 ok(!AC.canEditRecordMap(chuoStaff, db, "customer", C1.id) && !AC.canEditRecordMap(chuoStaff, db, "order", "ord_same"), "other-store staff cannot register / replace maps (view only)");
 ok(AC.canEditRecordMap(koshiStaff, db, "order", "ord_same"), "own-store staff can still register maps");
 const nishiStaff = db.users.find((u) => u.role === "store_staff" && u.storeId === "nishi" && u.active);
-ok(!AC.canViewMapDocument(nishiStaff, db, db.mapDocuments.find((d) => d.id === r2.document.id)), "other-store staff (no assignment) cannot open customer PDF by id");
+const doc2 = () => db.mapDocuments.find((d) => d.id === r2.document.id);
+// 進行中の案件のお客様: 記録の画面で地図の欄が出る人は、その地図 (PDF・場所の画面) も開ける (欄に出した地図を開けないことがないように)
+ok(AC.canViewRecordMap(nishiStaff, db, "customer", C1.id) && AC.canViewMapDocument(nishiStaff, db, doc2()), "policy open: other-store staff who can see the open case's customer can also open its PDF");
+ok(AC.canViewLocation(nishiStaff, db, R.placeOf(db, "customer", C1.id).location) && !AC.canEditLocation(nishiStaff, db, R.placeOf(db, "customer", C1.id).location), "…can open the location page but cannot change it (view only)");
+// 完了した案件だけのお客様: 進行中の案件の公開の対象外 → 記録も地図も見られない
+const C3 = { ...C1, id: "cust_t3", code: "C-90003", name: "地図 三郎", address: "熊本県合志市幾久富1700-10", storeId: "koshi" };
+await store.mutate((d) => { d.customers.push(C3); d.orders.push({ ...mkOrder("ord_c3", "O-2099-0008", C3.id, C3.address, "paid"), closedAt: now }); }); // 全処理完了 = 進行中の案件ではない
+const r3 = await D.registerMapDocument({ user: koshiStaff, target: { type: "customer", id: C3.id }, file: { name: "幾久富.pdf", bytes: await makePdf("kikutomi map") }, meta: { provider: "zenrin", kind: "residential", licenseConfirmed: true }, source: "upload" });
+db = store.getDb();
+ok(!AC.canViewRecordMap(nishiStaff, db, "customer", C3.id) && !AC.canViewMapDocument(nishiStaff, db, r3.document), "policy open: other-store staff cannot open the PDF of a customer with only finished cases");
+ok(AC.canViewMapDocument(koshiStaff, db, r3.document) && AC.canEditMapDocument(koshiStaff, db, r3.document), "own-store staff can open and edit that PDF");
 ok(AC.canViewRecordMap(chuoStaff, db, "event", "ev_chuo"), "assigned staff of another store can view the event map");
 ok(AC.canViewMapDocument(chuoStaff, db, db.mapDocuments.find((d) => d.id === r2.document.id)), "…and open that PDF while assigned to an upcoming event there");
 const unassigned = db.users.find((u) => u.role === "store_staff" && u.storeId === "nishi" && u.active);
@@ -182,15 +192,32 @@ ok(!perms.canRemoveMapDocument(chuoStaff, r6.document), "other-store staff canno
 ok(!perms.canManageMaps(koshiStaff) && perms.canManageMaps(admin), "batch tools only for HQ/admin");
 
 // access through an assignment expires when the appointment is in the past
-await store.mutate((d) => { d.schedule.find((e) => e.id === "ev_chuo").date = past; });
+// (C1 は進行中の案件があるので「進行中の案件だけ」の設定でも見られる。完了した案件だけの C3 で、予定の担当だけで見られる場合を確かめる)
+await store.mutate((d) => { d.schedule.push(mkEvent("ev_c3", { storeId: "chuo", assigneeIds: [chuoStaff.id], customerId: C3.id, location: C3.address })); });
 db = store.getDb();
-ok(!AC.canViewMapDocument(chuoStaff, db, db.mapDocuments.find((d) => d.id === r2.document.id)), "assignment-based access ends after the appointment date");
-await store.mutate((d) => { d.schedule.find((e) => e.id === "ev_chuo").date = future; });
+ok(AC.canViewMapDocument(chuoStaff, db, r3.document) && AC.canEditLocation(chuoStaff, db, R.placeOf(db, "customer", C3.id).location), "assigned to an upcoming appointment at a finished customer's house → can open and update that map");
+await store.mutate((d) => { d.schedule.find((e) => e.id === "ev_c3").date = past; });
+db = store.getDb();
+ok(!AC.canViewMapDocument(chuoStaff, db, r3.document) && !AC.canEditLocation(chuoStaff, db, R.placeOf(db, "customer", C3.id).location), "assignment-based access ends after the appointment date");
+await store.mutate((d) => { d.schedule = d.schedule.filter((e) => e.id !== "ev_c3"); });
 db = store.getDb();
 // 閲覧の範囲 = 全社員 (初期設定): 全店舗の地図を閲覧のみで見られる
 await setPolicy(null);
 ok(AC.canViewMapDocument(nishiStaff, db, db.mapDocuments.find((d) => d.id === r2.document.id)), "policy all (default): other-store staff can open the customer PDF (view only)");
 ok(!AC.canEditRecordMap(nishiStaff, db, "customer", C1.id), "policy all: still cannot register / replace maps of another store");
+// 閲覧の範囲の設定は見る範囲だけを広げる: 場所の画面の変更 (位置・メモ・登録・差し替え・共用・PDF の情報) はできない
+const loc1 = R.placeOf(db, "customer", C1.id).location;
+ok(AC.canViewLocation(nishiStaff, db, loc1) && !AC.canEditLocation(nishiStaff, db, loc1), "policy all: other-store staff can view the location but cannot change it");
+ok(!AC.canEditMapDocument(nishiStaff, db, doc2()) && !AC.canEditMapDocument(nishiStaff, db, r3.document), "policy all: other-store staff cannot edit PDF info (title, license, sharing)");
+ok(AC.canEditLocation(koshiStaff, db, loc1) && AC.canEditMapDocument(koshiStaff, db, doc2()), "own-store staff can change the location and PDF info");
+ok(AC.canEditLocation(chuoStaff, db, loc1), "assignee of an upcoming appointment there can change the location (as before)");
+ok(AC.canEditLocation(admin, db, loc1) && AC.canEditMapDocument(admin, db, doc2()), "admin can change everything");
+// 店長は全店舗の顧客・見積・受注を変更できる (お客様の決定 2026-11-23) → その地図も登録・差し替えできる
+const chuoManager = db.users.find((u) => u.role === "store_manager" && u.storeId === "chuo" && u.active);
+ok(AC.canEditRecordMap(chuoManager, db, "customer", C1.id) && AC.canEditRecordMap(chuoManager, db, "order", "ord_diff"), "manager of another store can register maps on customers / orders (same as editing the record)");
+ok(AC.canEditLocation(chuoManager, db, loc1), "…and change that location");
+const inactive = { ...koshiStaff, active: false };
+ok(!AC.canEditRecordMap(inactive, db, "customer", C1.id) && !AC.canEditLocation(inactive, db, loc1), "inactive account cannot change maps");
 
 section("8. Linked location updated → all non-overridden views reflect it");
 await store.mutate((d) => { const l = d.mapLocations.find((x) => x.id === pc.location.id); Object.assign(l, { lat: 32.8899, lng: 130.7461, coordStatus: "verified", coordSource: "manual" }); R.touchMapIndex(); });

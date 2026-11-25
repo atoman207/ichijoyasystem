@@ -21,8 +21,8 @@ const check = (c, m) => { if (c) { pass++; console.log("  ✓", m); } else { fai
 const section = (t) => console.log("\n■ " + t);
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/usr/bin/google-chrome-stable", headless: true });
 const pageErrors = [];
-async function session(email, viewport = { width: 1440, height: 1000 }) {
-  const ctx = await browser.newContext({ viewport, locale: "ja-JP", timezoneId: "Asia/Tokyo" });
+async function session(email, viewport = { width: 1440, height: 1000 }, extra = {}) {
+  const ctx = await browser.newContext({ viewport, locale: "ja-JP", timezoneId: "Asia/Tokyo", ...extra });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => pageErrors.push(`${email}: ${e.message}`));
   await page.goto(BASE + "/login");
@@ -42,7 +42,7 @@ const docIdOf = async (page) => {
 };
 async function upload(page, file, { replace = false } = {}) {
   const card = mapCard(page);
-  const opener = card.getByRole("button", { name: replace ? "差し替える" : "住宅地図の PDF を登録" }).first();
+  const opener = card.getByRole("button", { name: replace ? "差し替える" : "住宅地図を登録 (PDF・画像)" }).first();
   if (await opener.count()) await opener.click();
   const form = card.locator("form:has(input[name=licenseConfirmed])").first();
   await form.locator("input[name=file]").setInputFiles(file);
@@ -56,6 +56,15 @@ async function upload(page, file, { replace = false } = {}) {
   return body;
 }
 const future = new Date(Date.now() + 6 * 86400000).toISOString().slice(0, 10);
+const future2 = new Date(Date.now() + 8 * 86400000).toISOString().slice(0, 10);
+/** 予定の入力を登録する。担当者の重複の確認が出たら (テストの予定どうしが同じ日になる)「重複を承知で登録する」にチェックしてから */
+async function submitEventForm(p, form) {
+  await p.waitForTimeout(1500);
+  const ack = form.getByText(/重複を承知で登録する/);
+  if (await ack.count()) await ack.first().click();
+  await form.getByRole("button", { name: /登録|保存/ }).last().click();
+  await p.waitForURL(/\/schedule\/ev_/, { timeout: 30000 });
+}
 
 const { page } = await session("yamada@ichijoya.example");
 
@@ -99,7 +108,9 @@ await page.screenshot({ path: SHOT + "e2e-02-customer-pdf.png", fullPage: true }
 // 地図の画面で見て、「元の画面に戻る」で顧客の画面に戻る (お客様のご要望 2026-11-24「①」)
 await mapCard(page).getByRole("link", { name: "地図を開く" }).click();
 await page.waitForURL(/\/maps\/documents\/mdoc_/);
-const big = page.getByTestId("map-page").locator("img");
+// cust-map.pdf は 2 ページ (ページごとに 1 枚の画像)。1 ページ目で確かめる
+check((await page.getByTestId("map-page").count()) === 2, "viewer shows every page of the PDF (2 pages)");
+const big = page.getByTestId("map-page").first().locator("img");
 await big.waitFor();
 await page.waitForFunction(() => { const i = document.querySelector('[data-testid="map-page"] img'); return i && i.complete && i.naturalWidth > 0; });
 check(await big.evaluate((img) => img.naturalWidth === 2000), "viewer shows the map as an image inside the system");
@@ -257,10 +268,14 @@ check(r.status() === 307 && (r.headers()["location"] ?? "").includes("/login") &
 r = await anon.request.get(BASE + `/api/maps/documents/${custDocId}?download=1`);
 check(r.headers()["content-type"] !== "application/pdf", "anonymous download never returns the PDF");
 const { page: kp } = await session("kato@ichijoya.example"); // 中央店 staff
+// 閲覧の範囲 = 全社員 (初期設定。2026-11-22〜): ほかの店舗の社員も地図を見られる (閲覧のみ。登録・変更はできない)
 r = await kp.request.get(BASE + `/api/maps/documents/${custDocId}`);
-check(r.status() === 403, "other-store staff direct PDF URL → 403");
+check(r.status() === 200, "viewing range = all employees (default): other-store staff can open the PDF (view only)");
 await kp.goto(BASE + `/maps/locations/${loc1}`);
-check(!kp.url().includes("/maps/locations/"), "other-store staff cannot open the location page");
+check(kp.url().includes("/maps/locations/") && await kp.getByText("見るだけの権限です").isVisible(), "other-store staff can open the location page, marked view-only");
+check(!(await kp.getByRole("button", { name: "保存する" }).count()) && !(await kp.getByRole("button", { name: /住宅地図を登録|差し替える/ }).count()) && !(await kp.getByText("情報の修正・取り消し").count()), "…without position / upload / replace / info-edit forms");
+r = await kp.request.post(BASE + "/api/maps/documents", { multipart: { targetType: "location", targetId: loc1, licenseConfirmed: "1", file: { name: "a.pdf", mimeType: "application/pdf", buffer: fs.readFileSync(SHOT + "site-map-v2.pdf") } }, headers: { origin: BASE } });
+check(r.status() === 403, "other-store staff upload to the location (view only) → 403");
 await kp.goto(BASE + "/maps");
 check(!new URL(kp.url()).pathname.startsWith("/maps"), "store staff cannot open map admin page");
 r = await kp.request.post(BASE + "/api/maps/documents", { multipart: { targetType: "customer", targetId: custId, licenseConfirmed: "1", file: { name: "a.pdf", mimeType: "application/pdf", buffer: fs.readFileSync(SHOT + "site-map-v2.pdf") } }, headers: { origin: BASE } });
@@ -354,6 +369,138 @@ await page.goto(BASE + `/customers/${custId}`);
 check(await mapCard(page).getByText(/ほか 1 か所で共用/).isVisible(), "customer now shows the shared PDF (one file, two places)");
 await page.goto(BASE + `/maps/locations/${loc1}`);
 check(await page.getByText("2025年版").first().isVisible(), "document info edit saved");
+
+section("12b. Viewing range 'open cases only' (map shown ⇒ map opens)");
+// 閲覧の範囲 = 進行中の案件だけ: 進行中の案件のお客様の画面で地図の欄が出るなら、その地図も開ける (欄に出した地図を開けないことがない)
+const setCustomersPolicy = async (value) => {
+  await page.goto(BASE + "/settings?tab=users");
+  await page.locator(`input[name=customers][value=${value}]`).check();
+  await page.getByRole("button", { name: "閲覧の範囲を保存" }).click();
+  await page.waitForURL((u) => u.searchParams.has("msg"), { timeout: 20000 });
+};
+await setCustomersPolicy("open");
+await kp.goto(BASE + `/customers/${custId}`);
+const kpOpen = await hrefOf(mapCard(kp).getByRole("link", { name: "地図を開く" }));
+r = await kp.request.get(BASE + `/api/maps/documents/${custDocId}`);
+check(Boolean(kpOpen) && r.status() === 200, "policy 'open cases only': other-store staff sees the map on an open case's customer AND can open it");
+if (kpOpen) { await kp.goto(BASE + kpOpen); check(await kp.getByTestId("map-page").first().isVisible(), "…the in-app map viewer opens for them"); }
+await setCustomersPolicy("all");
+
+section("② ZENRIN GIS export → registration (copy address, paste image, drop file, schedule dialog)");
+// お客様の決定 (2026-11-25): API を契約せず、いまのゼンリン GIS のアカウントで出力した PDF・画像を登録する
+const { page: zp } = await session("yamada@ichijoya.example", undefined, { permissions: ["clipboard-read", "clipboard-write"] });
+const zAddr = "熊本県菊池郡菊陽町光の森3-10-5";
+await zp.goto(BASE + "/customers/new");
+const zf = zp.locator("form:has(input[name=address])").first();
+await zf.locator("input[name=name]").fill("E2E ゼンリン 次郎");
+await zf.locator("input[name=kana]").fill("イーツーイー ゼンリン ジロウ");
+await zf.locator("input[name=phone]").fill("090-9999-0002");
+await zf.locator("input[name=address]").fill(zAddr);
+await zf.locator("select[name=storeId]").selectOption("koshi");
+await zp.waitForTimeout(1200);
+if (await zp.getByText("確認したうえで新規に登録する").count()) await zp.getByText("確認したうえで新規に登録する").click();
+await zf.getByRole("button", { name: "登録する" }).click();
+await zp.waitForURL((u) => /^\/customers\/(?!new)[^/]+$/.test(u.pathname), { timeout: 30000 });
+const zCust = new URL(zp.url()).pathname.split("/")[2];
+const zCard = mapCard(zp);
+const gis = zCard.getByRole("link", { name: /ゼンリン GIS で探す/ });
+check((await gis.getAttribute("href")) === "https://app.zip-site.com/bufc/app/" && (await gis.getAttribute("target")) === "_blank", "「ゼンリン GIS で探す」 opens ZENRIN GIS in a new tab (no ID/password in the link)");
+await zCard.getByRole("button", { name: "住宅地図を登録 (PDF・画像)" }).click();
+check(await zCard.getByText(/当社が契約しているゼンリン GIS から当社の担当者が出力したもの/).isVisible(), "license confirmation wording matches the one-account method");
+await zCard.getByRole("button", { name: "住所をコピー" }).click();
+check((await zp.evaluate(() => navigator.clipboard.readText())) === zAddr, "「住所をコピー」 puts the address on the clipboard (for ZENRIN GIS's address search)");
+check(await zp.evaluate(() => !document.activeElement?.closest("[data-map-uploader]")), "focus is outside the upload form (as after coming back from ZENRIN GIS)");
+// ゼンリン GIS の「画像出力」→「画像をコピー」の代わりに、地図らしい PNG をクリップボードに入れて Ctrl+V
+const mapImage = async (type) => zp.evaluate(async (type) => {
+  const c = document.createElement("canvas"); c.width = 1600; c.height = 1100;
+  const g = c.getContext("2d"); g.fillStyle = "#fffdf5"; g.fillRect(0, 0, c.width, c.height); g.strokeStyle = "#555"; g.lineWidth = 2;
+  for (let i = 0; i < 60; i++) g.strokeRect(40 + (i % 10) * 150, 40 + Math.floor(i / 10) * 170, 120, 140);
+  g.fillStyle = "#222"; g.font = "28px sans-serif"; g.fillText(`E2E ZENRIN GIS export (${type})`, 60, 1080);
+  const blob = await new Promise((r) => c.toBlob(r, type, 0.9));
+  if (type === "image/png") await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+  return Array.from(new Uint8Array(await blob.arrayBuffer()));
+}, type);
+await mapImage("image/png");
+await zp.keyboard.press("Control+V");
+const pickedPaste = zCard.getByText(/選んだファイル: 住宅地図_\d{12}\.png \(貼り付けた画像/);
+check(await pickedPaste.waitFor({ timeout: 5000 }).then(() => true, () => false), "Ctrl+V with the focus outside the form still puts the copied map image into the form");
+const zForm = zCard.locator("form[data-map-uploader]").first();
+await zForm.locator("select[name=usePurpose]").selectOption("contractor");
+await zForm.locator("input[name=nameplate]").check();
+await zForm.locator("input[name=licenseConfirmed]").check();
+const [zResp] = await Promise.all([zp.waitForResponse((res) => res.url().endsWith("/api/maps/documents") && res.request().method() === "POST"), zForm.locator("button[type=submit]").click()]);
+const zBody = await zResp.json();
+check(zBody.ok && /画像を PDF にして保存/.test(zBody.message ?? ""), `pasted image registered as a PDF (${zBody.message ?? zBody.error})`);
+await zp.waitForURL((u) => u.searchParams.has("msg"), { timeout: 20000 });
+await zp.reload();
+check(await zCard.getByText("登録済み").first().isVisible() && await zCard.getByText(/1 ページ/).first().isVisible(), "customer card shows the registered map (1 page)");
+check(await zCard.getByText(/用途: 工事関係者への配布 · 表札の情報あり/).isVisible(), "use purpose and nameplate flag shown with the map");
+const zDoc = await docIdOf(zp);
+r = await zp.request.get(BASE + `/api/maps/documents/${zDoc}?download=1`);
+check(r.status() === 200 && r.headers()["content-type"] === "application/pdf" && (await r.body()).subarray(0, 5).toString() === "%PDF-", "download returns the stored PDF");
+await zCard.getByRole("link", { name: "地図を開く" }).click();
+await zp.waitForFunction(() => { const i = document.querySelector('[data-testid="map-page"] img'); return i && i.complete && i.naturalWidth > 0; }, null, { timeout: 30000 });
+check((await zp.getByTestId("map-page").count()) === 1, "viewer shows the converted image map (1 page)");
+await zp.getByTestId("map-back").first().click();
+await zp.waitForURL(new RegExp(`/customers/${zCust}`));
+// 同じ番地の予定 (お客様の住所に合わせる) には、登録しなくても同じ地図が出る
+await zp.goto(BASE + `/schedule/new?customerId=${zCust}&kind=survey`);
+const zef = zp.locator("form:has(input[name=date])").first();
+await zef.locator("input[name=title]").fill("E2E 光の森 見積り");
+await zef.locator("input[name=date]").fill(future2);
+if (await zef.getByText("担当者を 1 人以上選んでください").count()) await zef.locator("input[name=assigneeIds]").first().check();
+await submitEventForm(zp, zef);
+check((await docIdOf(zp)) === zDoc, "appointment at the same house shows the same map without registering again");
+// 予定表の小さな画面 (現場の住所が別の予定): JPEG のファイルを欄に落として登録 → 画面を移らずに地図が出る
+await zp.goto(BASE + `/schedule/new?customerId=${zCust}&kind=delivery`);
+const zef2 = zp.locator("form:has(input[name=date])").first();
+await zef2.locator("input[name=title]").fill("E2E 実家に納品");
+await zef2.locator("input[name=date]").fill(future2);
+await zef2.getByText("この予定だけ別の場所").click();
+await zef2.locator("input[name=location]").fill("熊本県合志市幾久富1700-10");
+if (await zef2.getByText("担当者を 1 人以上選んでください").count()) await zef2.locator("input[name=assigneeIds]").first().check();
+await submitEventForm(zp, zef2);
+const zEv = new URL(zp.url()).pathname.split("/")[2];
+await zp.goto(BASE + `/schedule?date=${future2}&qe=${zEv}`);
+const dlg = zp.getByRole("dialog");
+await dlg.getByRole("button", { name: "住宅地図を登録" }).click();
+const jpg = await mapImage("image/jpeg");
+await zp.evaluate((bytes) => {
+  const dt = new DataTransfer();
+  dt.items.add(new File([new Uint8Array(bytes)], "zenrin-export.jpg", { type: "image/jpeg" }));
+  const form = document.querySelector('[role=dialog] [data-map-uploader]');
+  form.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  form.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+}, jpg);
+check(await dlg.getByText(/選んだファイル: zenrin-export\.jpg \(落としたファイル/).isVisible(), "a JPEG dropped on the form is picked up");
+await dlg.locator("input[name=licenseConfirmed]").check();
+await dlg.locator("form[data-map-uploader] button[type=submit]").click();
+check(await dlg.getByText(/を登録しました/).waitFor({ timeout: 20000 }).then(() => true, () => false), "schedule dialog: registered without leaving the schedule");
+check(await dlg.getByRole("link", { name: "住宅地図" }).waitFor({ timeout: 10000 }).then(() => true, () => false), "schedule dialog shows the new map button right away");
+check(await dlg.isVisible(), "opening the schedule with ?qe=<event> shows that event's dialog (schedule search results, back from the map)");
+// 住宅地図を開いて「元の画面に戻る」→ 同じ予定の小さな画面に戻る (お客様のご要望 2026-11-24「①」)
+await dlg.getByRole("link", { name: "住宅地図" }).click();
+await zp.waitForURL(/\/maps\/documents\//);
+await zp.waitForFunction(() => { const i = document.querySelector('[data-testid="map-page"] img'); return i && i.complete && i.naturalWidth > 0; }, null, { timeout: 30000 });
+await zp.getByTestId("map-back").first().click();
+await zp.waitForURL(/\/schedule\?/);
+const reopened = await zp.getByRole("dialog").waitFor({ timeout: 10000 }).then(() => true, () => false);
+const qeDropped = await zp.waitForFunction(() => !new URLSearchParams(location.search).has("qe"), null, { timeout: 5000 }).then(() => true, () => false);
+check(reopened && qeDropped && (await zp.getByRole("dialog").count()) === 1, "「元の画面に戻る」 from the map reopens the same schedule dialog once (and drops ?qe from the URL)");
+await zp.goto(BASE + `/schedule/${zEv}`);
+check(await mapCard(zp).getByText("熊本県合志市幾久富1700-10").first().isVisible() && await mapCard(zp).getByText("登録済み").first().isVisible(), "the appointment's own place keeps its own map");
+await zp.goto(BASE + `/customers/${zCust}`);
+check((await docIdOf(zp)) === zDoc, "the customer's map is unchanged (the other place's map is not mixed in)");
+// 携帯: 地図を開いて「元の画面に戻る」
+const { page: zm } = await session("nakamura@ichijoya.example", { width: 390, height: 844 }, { isMobile: true, hasTouch: true });
+await zm.goto(BASE + `/customers/${zCust}`);
+await mapCard(zm).getByRole("link", { name: "地図を開く" }).click();
+await zm.waitForFunction(() => { const i = document.querySelector('[data-testid="map-page"] img'); return i && i.complete && i.naturalWidth > 0; }, null, { timeout: 30000 });
+check((await zm.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 1, "phone: the map viewer has no horizontal scroll");
+await zm.getByTestId("map-back").first().click();
+await zm.waitForURL(new RegExp(`/customers/${zCust}`));
+check(true, "phone: 「元の画面に戻る」 returns to the customer screen");
+await zm.screenshot({ path: SHOT + "e2e-zenrin-phone.png", fullPage: false });
 
 section("17. Existing screens still work");
 for (const p of ["/", "/customers", "/orders", "/quotes", "/schedule", "/schedule?view=week", "/cases", "/invoices", "/settings", "/audit", "/help", `/customers/${custId}`, `/quotes/${quote2}`]) {

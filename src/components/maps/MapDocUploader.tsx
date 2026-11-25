@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type ClipboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import { CircleAlert, CircleCheck, FileUp, LoaderCircle } from "lucide-react";
 import { buttonClass } from "@/components/ui";
@@ -9,9 +9,31 @@ import type { MapUsePurpose } from "@/lib/db/types";
 
 /**
  * 住宅地図の登録・差し替え (1 ファイルずつ)。利用許諾の確認のチェックがないと送れない。
- * PDF (ゼンリン GIS の「印刷」) か画像 (「画像出力」の PNG・JPEG。この欄で Ctrl+V で貼り付けもできる)。画像はサーバーで PDF にして保存する。
+ * PDF (ゼンリン GIS の「印刷」) か画像 (「画像出力」の PNG・JPEG)。画像はサーバーで PDF にして保存する。
+ * - 貼り付け (Ctrl+V): 文字の入力欄の外なら、画面のどこにカーソルがあっても開いている欄が受け取る
+ *   (「住所をコピー」「ゼンリン GIS で探す」を押したあと、ゼンリン GIS から戻ってそのまま貼り付けられるように)。
+ *   欄が 2 つ以上開いているときは、最後に開いた・触れた欄
+ * - ファイルを欄に落とす (ドラッグ) こともできる
  * 送信先は /api/maps/documents (権限・中身の確認はサーバーで行う)
  */
+
+/** 開いている登録の欄 (先頭 = 最後に開いた・触れた欄) */
+const openForms: HTMLFormElement[] = [];
+function bringToFront(form: HTMLFormElement) {
+  const i = openForms.indexOf(form);
+  if (i >= 0) openForms.splice(i, 1);
+  openForms.unshift(form);
+}
+
+const MAP_FILE_TYPES = /^(application\/pdf|image\/png|image\/jpeg)$/;
+const MAP_FILE_NAMES = /\.(pdf|png|jpe?g)$/i;
+
+/** 文字を入力する欄か (貼り付けをその欄に任せる) */
+function isTextEntry(el: Element | null): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  if (el.isContentEditable || el.tagName === "TEXTAREA") return true;
+  return el.tagName === "INPUT" && !["file", "checkbox", "radio", "button", "submit", "reset"].includes((el as HTMLInputElement).type);
+}
 export function MapDocUploader({
   targetType,
   targetId,
@@ -33,6 +55,8 @@ export function MapDocUploader({
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const openedByClick = useRef(false);
   const [open, setOpen] = useState(!compact);
   const [provider, setProvider] = useState<"zenrin" | "other">("zenrin");
   const [copyright, setCopyright] = useState("© ZENRIN CO., LTD.");
@@ -40,21 +64,58 @@ export function MapDocUploader({
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [purpose, setPurpose] = useState<MapUsePurpose>("internal");
   const [picked, setPicked] = useState("");
+  const [dragging, setDragging] = useState(false);
 
-  /** ゼンリン GIS の画像出力で「画像をコピー」した地図を貼り付ける (Ctrl+V) */
-  function onPaste(e: ClipboardEvent<HTMLFormElement>) {
-    const item = [...e.clipboardData.items].find((i) => i.kind === "file" && /^image\/(png|jpeg)$/.test(i.type));
-    const f = item?.getAsFile();
-    if (!f || !fileRef.current) return;
-    e.preventDefault();
-    const ext = f.type === "image/jpeg" ? "jpg" : "png";
-    const stamp = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Tokyo" }).replace(/[-: ]/g, "").slice(0, 12);
-    const file = new File([f], `住宅地図_${stamp}.${ext}`, { type: f.type });
+  /** 選んだファイルを欄に入れる (貼り付け・ドラッグ) */
+  const takeFile = useCallback((file: File, note: string) => {
+    if (!fileRef.current) return;
     const dt = new DataTransfer();
     dt.items.add(file);
     fileRef.current.files = dt.files;
-    setPicked(`${file.name} (貼り付けた画像・${Math.max(1, Math.round(file.size / 1024))} KB)`);
+    setPicked(`${file.name} (${note}・${Math.max(1, Math.round(file.size / 1024))} KB)`);
     setResult(null);
+  }, []);
+
+  // ゼンリン GIS の画像出力で「画像をコピー」した地図を貼り付ける (Ctrl+V)。開いているあいだ、画面全体の貼り付けを受け取る
+  useEffect(() => {
+    const form = formRef.current;
+    if (!open || !form) return;
+    bringToFront(form);
+    if (openedByClick.current) form.focus({ preventScroll: true });
+    const onPaste = (e: ClipboardEvent) => {
+      const target = e.target instanceof Element ? e.target : null;
+      const inForm = Boolean(target && form.contains(target));
+      // ほかの文字の入力欄への貼り付けはそのまま。ほかの登録の欄が先 (最後に開いた・触れた欄) なら、その欄が受け取る
+      if (!inForm && (isTextEntry(target) || openForms[0] !== form)) return;
+      const item = [...(e.clipboardData?.items ?? [])].find((i) => i.kind === "file" && /^image\/(png|jpeg)$/.test(i.type));
+      const f = item?.getAsFile();
+      if (!f) return;
+      e.preventDefault();
+      const ext = f.type === "image/jpeg" ? "jpg" : "png";
+      const stamp = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Tokyo" }).replace(/[-: ]/g, "").slice(0, 12);
+      takeFile(new File([f], `住宅地図_${stamp}.${ext}`, { type: f.type }), "貼り付けた画像");
+      bringToFront(form);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => {
+      document.removeEventListener("paste", onPaste);
+      const i = openForms.indexOf(form);
+      if (i >= 0) openForms.splice(i, 1);
+    };
+  }, [open, takeFile]);
+
+  /** PDF・画像のファイルを欄に落とす (ドラッグ) */
+  function onDrop(e: DragEvent<HTMLFormElement>) {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    setDragging(false);
+    if (e.currentTarget) bringToFront(e.currentTarget);
+    const f = [...e.dataTransfer.files].find((x) => MAP_FILE_TYPES.test(x.type) || MAP_FILE_NAMES.test(x.name));
+    if (!f) {
+      setResult({ ok: false, text: "PDF か画像 (PNG・JPEG) のファイルを落としてください。" });
+      return;
+    }
+    takeFile(f, "落としたファイル");
   }
 
   async function submit(form: HTMLFormElement) {
@@ -105,7 +166,14 @@ export function MapDocUploader({
 
   if (!open) {
     return (
-      <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className={buttonClass("secondary", "sm")}
+        onClick={() => {
+          openedByClick.current = true;
+          setOpen(true);
+        }}
+      >
         <FileUp />
         {replaceId ? "差し替える" : "住宅地図を登録 (PDF・画像)"}
       </button>
@@ -114,12 +182,25 @@ export function MapDocUploader({
 
   return (
     <form
-      className="space-y-2.5 rounded-xl border border-line bg-subtle/50 p-3 text-xs"
+      ref={formRef}
+      tabIndex={-1}
+      data-map-uploader=""
+      className={`space-y-2.5 rounded-xl border bg-subtle/50 p-3 text-xs outline-none ${dragging ? "border-accent ring-2 ring-accent/30" : "border-line"}`}
       onSubmit={(e) => {
         e.preventDefault();
         void submit(e.currentTarget);
       }}
-      onPaste={onPaste}
+      onPointerDown={(e) => bringToFront(e.currentTarget)}
+      onFocus={(e) => bringToFront(e.currentTarget)}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={onDrop}
     >
       <div className="font-semibold text-ink">{replaceId ? `「${replaceLabel ?? "住宅地図"}」を差し替える` : "住宅地図を登録"}</div>
       <label className="block">
@@ -127,7 +208,7 @@ export function MapDocUploader({
         <input ref={fileRef} type="file" name="file" accept="application/pdf,.pdf,image/png,image/jpeg,.png,.jpg,.jpeg" required onChange={(e) => setPicked(e.target.files?.[0]?.name ?? "")} className="mt-1 block w-full text-xs file:mr-2 file:rounded-lg file:border file:border-line file:bg-panel file:px-3 file:py-1.5" />
       </label>
       <p className="text-[11px] leading-relaxed text-ink-3">
-        ゼンリン GIS の「印刷」で出力した PDF、または「画像出力」の地図を右クリック →「画像をコピー」して、この欄で Ctrl+V (Mac は ⌘+V) で貼り付けられます。画像は PDF にして保存します。
+        ゼンリン GIS の「印刷」で出力した PDF、または「画像出力」の地図を右クリック →「画像をコピー」して、この画面に戻って Ctrl+V (Mac は ⌘+V) で貼り付けられます。ファイルをこの枠に落としても登録できます。画像は PDF にして保存します。
         {picked && <span className="mt-0.5 block font-medium text-ink-2">選んだファイル: {picked}</span>}
       </p>
       <div className="grid grid-cols-1 gap-2 @xl:grid-cols-2">
@@ -186,7 +267,7 @@ export function MapDocUploader({
       </label>
       <label className="flex items-start gap-2 rounded-lg border border-warn/40 bg-warn-soft/60 p-2 text-warn-ink">
         <input type="checkbox" name="licenseConfirmed" value="1" required className="mt-0.5" />
-        <span>この地図は、契約で「社内サーバーへの保存」と「社内の複数人での閲覧」が認められています (ログイン画面の自動操作・アカウントの使い回しで取得したものではありません)。</span>
+        <span>この地図は、当社が契約しているゼンリン GIS から当社の担当者が出力したもので、契約の範囲 (社内での保存・閲覧) で使います (ログイン画面の自動操作や社外の人による出力ではありません)。</span>
       </label>
       <div className="flex flex-wrap items-center gap-2">
         <button type="submit" disabled={busy} className={buttonClass("primary", "sm")}>

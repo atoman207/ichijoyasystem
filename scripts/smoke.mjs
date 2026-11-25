@@ -304,10 +304,10 @@ await expectText(/このアカウントでできること/, "page: /profile (ユ
 await shot("56-admin-profile");
 // ヘッダー: 新規作成メニュー (Esc で閉じる)
 await page.getByRole("button", { name: "新規作成" }).click();
-await page.getByRole("menuitem", { name: /問い合わせを登録/ }).waitFor({ timeout: 10000 });
+await page.getByRole("menuitem", { name: /問合せ登録/ }).waitFor({ timeout: 10000 });
 await page.keyboard.press("Escape");
 await page.waitForTimeout(150);
-const createStillOpen = await page.getByRole("menuitem", { name: /問い合わせを登録/ }).isVisible().catch(() => false);
+const createStillOpen = await page.getByRole("menuitem", { name: /問合せ登録/ }).isVisible().catch(() => false);
 results.push({ url: "header: 新規作成メニュー (Esc で閉じる)", status: createStillOpen ? "still open" : "ok", ok: !createStillOpen });
 // ヘッダー: 通知
 await page.getByRole("button", { name: "通知" }).click();

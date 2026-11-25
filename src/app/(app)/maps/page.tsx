@@ -58,7 +58,7 @@ export default async function MapsPage({ searchParams }: { searchParams: Promise
             <li>
               <div className="flex items-center gap-2"><span className="font-medium text-ink">ゼンリン 住宅地図 (自動取得)</span><Badge tone={zenrin.enabled ? "good" : "warn"}>{zenrin.enabled ? "接続済み" : "使えません"}</Badge></div>
               {!zenrin.enabled && <ul className="mt-1 list-disc pl-5 text-ink-3">{zenrin.reasons.map((r) => <li key={r}>{r}</li>)}</ul>}
-              <p className="mt-1 text-ink-3">ログイン画面の自動操作・ダウンロードの自動化・アカウントの使い回しは行いません。許諾を確認した PDF を画面または一括取込で登録してください。</p>
+              <p className="mt-1 text-ink-3">システムはゼンリン GIS の ID・パスワードを持たず、ログイン画面の自動操作・ダウンロードの自動化は行いません。担当者がゼンリン GIS で出力した地図 (PDF・画像) を、顧客・見積・受注・予定の地図の欄か一括取込で登録してください。</p>
             </li>
             <li className="flex items-center gap-2"><span className="font-medium text-ink">Google マップのリンク</span><Badge tone="good">使えます (API キー不要)</Badge></li>
             <li className="flex items-center gap-2"><span className="font-medium text-ink">住所から位置を求める (Google Geocoding)</span><Badge tone={geocodingEnabled() ? "good" : "neutral"}>{geocodingEnabled() ? "設定済み" : "未設定 (GOOGLE_MAPS_API_KEY)"}</Badge></li>

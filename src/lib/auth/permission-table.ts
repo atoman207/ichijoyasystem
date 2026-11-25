@@ -24,7 +24,7 @@ export interface PermissionRow {
   key?: PolicyRowKey;
 }
 
-type PolicyRowKey = "customers" | "openCases" | "closedCases" | "viewApprove" | "viewLog" | "reports" | "mgmt" | "kpi" | "surveyCompare" | "promo";
+type PolicyRowKey = "customers" | "maps" | "openCases" | "closedCases" | "viewApprove" | "viewLog" | "reports" | "mgmt" | "kpi" | "surveyCompare" | "promo";
 
 const r = (group: string, action: string, admin: Cell, hq: Cell, manager: Cell, staff: Cell, added = false, key?: PolicyRowKey): PermissionRow => ({ group, action, admin, hq, manager, staff, added, ...(key ? { key } : {}) });
 
@@ -41,6 +41,11 @@ function policyRow(row: PermissionRow, p: Pick<AccessPolicy, "figures" | "custom
         : cust === "approval"
           ? set("顧客・問い合わせ・見積・受注・請求書の閲覧 (店長はほかの店舗も見られる。顧客・問い合わせ・見積・受注は変更もできる)", "○", "自店")
           : set("顧客・問い合わせ・見積・受注・請求書の閲覧 (店長は顧客・問い合わせ・見積・受注を全店舗。請求書は自店舗)", "○", "自店");
+    // 地図・住宅地図の表示は記録の閲覧と同じ (src/lib/maps/access.ts。登録・差し替え・位置の修正は記録を変更できる人だけ)
+    case "maps":
+      return cust === "all"
+        ? set("Google マップのリンク・住宅地図 (PDF) の表示 (顧客・案件を見られる人と予定の担当者。ほかの店舗の記録は閲覧のみ。閲覧は変更履歴に記録)", "○", "○")
+        : set("Google マップのリンク・住宅地図 (PDF) の表示 (顧客・案件を見られる人と予定の担当者。店舗スタッフは自店と、記録を見られるほかの店舗の案件 (閲覧のみ)。閲覧は変更履歴に記録)", "○", "自店");
     case "openCases":
       return set(row.action, "○", cust === "all" ? "○" : "閲覧");
     case "closedCases":
@@ -131,8 +136,8 @@ const BASE_TABLE: PermissionRow[] = [
   r("資料・写真", "写真・資料の表示 (顧客・問い合わせ・見積・受注。経費は経費の閲覧、仕入請求書は仕入の権限に従う)", "○", "○", "○", "自店", true),
   r("資料・写真", "写真・資料の登録 (スマートフォン・タブレットのカメラ、アルバム、PDF など。店長はほかの店舗の顧客・問い合わせ・見積・受注にも)", "○", "○", "○", "自店", true),
   r("資料・写真", "写真・資料の削除 (変更履歴に記録)", "○", "本人", "自店", "本人", true),
-  r("地図・住宅地図", "Google マップのリンク・住宅地図 (PDF) の表示 (場所を参照する顧客・案件を見られる人と、予定の担当者。閲覧は変更履歴に記録)", "○", "○", "自店", "自店", true),
-  r("地図・住宅地図", "住宅地図 (PDF) の登録・差し替え・この場所から外す、位置 (緯度経度・場所 ID) の修正 (許諾の確認が必要。変更履歴に記録)", "○", "○", "自店", "自店", true),
+  r("地図・住宅地図", "Google マップのリンク・住宅地図 (PDF) の表示 (場所を参照する顧客・案件を見られる人と、予定の担当者。閲覧は変更履歴に記録)", "○", "○", "○", "自店", true, "maps"),
+  r("地図・住宅地図", "住宅地図 (PDF・画像) の登録・差し替え・この場所から外す、位置 (緯度経度・場所 ID) の修正 (記録を変更できる人。店長は全店舗の顧客・見積・受注。予定の担当者はその予定の場所。見るだけの記録の地図は変えられない。許諾の確認が必要。変更履歴に記録)", "○", "○", "○", "自店", true),
   r("地図・住宅地図", "住宅地図 (PDF) の取り消し (台帳は残し本体を消す。ほかの場所でも使っている PDF は取り消せない)", "○", "本人", "自店", "本人", true),
   r("地図・住宅地図", "顧客の住所の一括正規化・住宅地図の一括取込・重複した場所のまとめ", "○", "○", "−", "−", true),
   r("請求・入金", "入金の登録、請求書の送付・督促の記録", "○", "○", "自店", "自店"),

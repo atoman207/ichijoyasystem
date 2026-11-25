@@ -210,7 +210,7 @@ export function BatchRunner({ current, folders, labels }: { current?: Job; folde
         </label>
         <label className="flex items-start gap-2 rounded-lg border border-warn/40 bg-warn-soft/60 p-2 text-warn-ink">
           <input type="checkbox" name="licenseConfirmed" value="1" className="mt-0.5" />
-          <span>これらの PDF は、契約で「社内サーバーへの保存」と「社内の複数人での閲覧」が認められています (実行するときに必要)。</span>
+          <span>これらの地図は、当社が契約しているゼンリン GIS などから当社の担当者が出力したもので、契約の範囲 (社内での保存・閲覧) で使います (実行するときに必要)。</span>
         </label>
         <div className="flex flex-wrap gap-3">
           <label className="flex items-center gap-1.5">

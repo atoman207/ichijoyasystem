@@ -32,28 +32,42 @@ import type { EventQuickData, QuickMap, QuickStaff } from "./quick-types";
 
 type Open = { id: string; search: string; returnTo: string };
 
-export function EventQuickHost({ children }: { children: ReactNode }) {
+/** 検索の文字から qe (開く予定の印) を外す */
+function withoutQe(search: string): string {
+  const sp = new URLSearchParams(search);
+  sp.delete("qe");
+  return sp.toString();
+}
+
+/**
+ * fromUrl: URL の ?qe=<予定の ID> で小さな画面を開く部品 (画面に 1 つだけ。予定表の本体)。
+ * 重複の一覧など、ほかの場所を包む部品は false (押したときだけ開く。2 つ開かないように)
+ */
+export function EventQuickHost({ children, fromUrl = true }: { children: ReactNode; fromUrl?: boolean }) {
   const params = useSearchParams();
   const pathname = usePathname();
-  const search = params.toString();
-  const qe = params.get("qe");
-  // 住宅地図の画面から戻ったとき (?qe=<予定の ID>): その予定の小さな画面を開いた状態にする
+  const qe = fromUrl ? params.get("qe") : null;
+  // 予定表の表示 (日付・店舗・表示) の印。qe は比べない: 開いたあとの表示が変わったら (別の日・店舗へ移ったら) 小さな画面を閉じる
+  // (以前は qe を含めて比べ、URL から qe を外したあとに出していた。読み込んだ直後の URL の書き換えが Next.js の
+  //  useSearchParams に届かず、住宅地図の「元の画面に戻る」・予定表の検索の結果から開いても小さな画面が出なかった。2026-11-25 に修正)
+  const search = withoutQe(params.toString());
+  // 住宅地図の画面から戻ったとき・予定表の検索の結果 (?qe=<予定の ID>): その予定の小さな画面を開いた状態にする
   const [open, setOpen] = useState<Open | null>(() => {
     if (!qe || qe.startsWith("hold:")) return null;
-    const rest = new URLSearchParams(search);
-    rest.delete("qe");
-    const back = new URLSearchParams(rest);
+    const back = new URLSearchParams(search);
     for (const k of ["msg", "err", "_r"]) back.delete(k);
     back.set("_r", Math.random().toString(36).slice(2, 8));
-    return { id: qe, search: rest.toString(), returnTo: `${pathname}?${back.toString()}` };
+    return { id: qe, search, returnTo: `${pathname}?${back.toString()}` };
   });
-  // 印 (qe) は URL から外す (読み込み直しで開き直さない)。外すと search が open.search と同じになり、小さな画面が出る
+  // 印 (qe) は URL から外す (読み込み直しで開き直さない)。Next.js が履歴の書き換えを受け取る仕組みは画面の一番上の部品の
+  // useEffect で用意されるため (子の useEffect が先に動く)、そのあとで書き換える。状態は null (Next.js の内部の状態 __NA を渡すと内部の書き換えとみなされる)
   useEffect(() => {
     if (!qe) return;
-    const sp = new URLSearchParams(window.location.search);
-    sp.delete("qe");
-    const q = sp.toString();
-    window.history.replaceState(window.history.state, "", `${window.location.pathname}${q ? `?${q}` : ""}${window.location.hash}`);
+    const t = window.setTimeout(() => {
+      const q = withoutQe(window.location.search.replace(/^\?/, ""));
+      window.history.replaceState(null, "", `${window.location.pathname}${q ? `?${q}` : ""}${window.location.hash}`);
+    }, 0);
+    return () => window.clearTimeout(t);
   }, [qe]);
   const onClickCapture = (ev: React.MouseEvent<HTMLDivElement>) => {
     if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
@@ -64,7 +78,7 @@ export function EventQuickHost({ children }: { children: ReactNode }) {
     ev.stopPropagation();
     // 保存したら同じ予定表 (日付・店舗・表示はそのまま) に戻る。_r は保存のたびに変わる印 (戻ったら小さな画面を閉じる)
     const sp = new URLSearchParams(window.location.search);
-    for (const k of ["msg", "err", "_r"]) sp.delete(k);
+    for (const k of ["msg", "err", "_r", "qe"]) sp.delete(k);
     sp.set("_r", Math.random().toString(36).slice(2, 8));
     setOpen({ id, search, returnTo: `${window.location.pathname}?${sp.toString()}` });
   };

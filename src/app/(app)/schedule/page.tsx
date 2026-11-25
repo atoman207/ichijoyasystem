@@ -364,7 +364,7 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
               icon={<TriangleAlert />}
               action={relevantPairs.length > 0 && !onlyConflicts ? <Link href={link({ conflicts: "1", view: "list" })} className="text-xs font-medium text-accent hover:underline">重複のみ表示</Link> : undefined}
             />
-            <EventQuickHost key={sp.qe ?? "_"}>
+            <EventQuickHost key={sp.qe ?? "_"} fromUrl={false}>
               <ConflictList pairs={relevantPairs} ctx={ctx} moreHref={link({ conflicts: "1", view: "list" })} />
             </EventQuickHost>
           </Card>
