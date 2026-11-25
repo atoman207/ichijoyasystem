@@ -78,7 +78,7 @@ export function EventQuickHost({ children }: { children: ReactNode }) {
   );
 }
 
-type TimeMode = "allday" | "am" | "pm" | "time";
+export type TimeMode = "allday" | "am" | "pm" | "time";
 
 function EventQuickDialog({ id, returnTo, onClose, onOpenEvent }: { id: string; returnTo: string; onClose: () => void; onOpenEvent: (id: string) => void }) {
   const [data, setData] = useState<EventQuickData | null>(null);
@@ -255,7 +255,7 @@ function StaffDot({ s, size = "sm" }: { s: Pick<QuickStaff, "initial" | "color">
 const GROUP_LABEL = (storeName: string) => ({ store: `${storeName} (この予定の店舗)`, common: "本部 (全店舗共通)", other: "ほかの店舗 (配送・施工の応援)" });
 
 /** 担当者を選ぶ (予定の店舗の社員を先に、本部・ほかの店舗の社員も選べる。最大 4 名) */
-function StaffPicker({ staff, selected, onChange, storeName, busy }: { staff: QuickStaff[]; selected: string[]; onChange: (ids: string[]) => void; storeName: string; busy?: ConflictReport["busy"] }) {
+export function StaffPicker({ staff, selected, onChange, storeName, busy }: { staff: QuickStaff[]; selected: string[]; onChange: (ids: string[]) => void; storeName: string; busy?: ConflictReport["busy"] }) {
   const full = selected.length >= QUICK_MAX_ASSIGNEES;
   const labels = GROUP_LABEL(storeName);
   const toggle = (id: string) => onChange(selected.includes(id) ? selected.filter((x) => x !== id) : full ? selected : [...selected, id]);
@@ -301,7 +301,7 @@ function StaffPicker({ staff, selected, onChange, storeName, busy }: { staff: Qu
 }
 
 /** 重複の確認 (選んだ担当者・日時が変わるたびに。古い結果は使わない) */
-function useConflicts(query: ConflictQuery | null): ConflictReport | null {
+export function useConflicts(query: ConflictQuery | null): ConflictReport | null {
   const key = query ? JSON.stringify(query) : "";
   const [state, setState] = useState<{ key: string; report: ConflictReport } | null>(null);
   useEffect(() => {
@@ -322,7 +322,7 @@ function useConflicts(query: ConflictQuery | null): ConflictReport | null {
   return key && state?.key === key ? state.report : null;
 }
 
-function ConflictNote({ report, label = "重複を承知で保存する" }: { report: ConflictReport | null; label?: string }) {
+export function ConflictNote({ report, label = "重複を承知で保存する" }: { report: ConflictReport | null; label?: string }) {
   const conflicts = report?.conflicts ?? [];
   if (!conflicts.length) return null;
   return (
@@ -412,7 +412,7 @@ const TIME_MODES: [TimeMode, string][] = [
   ["time", "時刻"],
 ];
 
-function TimeModeButtons({ mode, setMode }: { mode: TimeMode; setMode: (m: TimeMode) => void }) {
+export function TimeModeButtons({ mode, setMode }: { mode: TimeMode; setMode: (m: TimeMode) => void }) {
   return (
     <div className="inline-flex flex-wrap gap-1 rounded-xl border border-line bg-subtle/70 p-1">
       {TIME_MODES.map(([m, l]) => (
@@ -1455,7 +1455,7 @@ function RequestRow({ data, returnTo }: { data: EventQuickData; returnTo: string
               至急
             </label>
           </div>
-          <p className="text-[11px] leading-relaxed text-ink-3">受けた人のお知らせ (ベル) に届き、押すとこの案件の画面が開きます。業務依頼として「確認しました」「報告」で進められ、送った内容・日時・送信者・送信先は案件の「この案件への依頼」に残ります。</p>
+          <p className="text-[11px] leading-relaxed text-ink-3">受けた人のお知らせ (ベル) に届き、押すと依頼の画面 (お客様の電話・住所・内容・この案件の予定) が開きます。受けた人はその画面で日程を登録すると、依頼は報告・対応完了になります。送った内容・日時・送信者・送信先は案件の「この案件への依頼」に残ります。</p>
           <Button type="submit" size="sm" disabled={!kind || (target === "users" && sel.length === 0)} data-testid="request-submit">
             依頼を送る
           </Button>

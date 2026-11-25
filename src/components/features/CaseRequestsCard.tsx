@@ -15,7 +15,7 @@ const fmt = (iso: string) => {
 
 /**
  * この案件への依頼 (メンション) (お客様のご要望 2026-11-25「⑪」)。送った内容・日時・送信者・送信先・対応の状態を残し、
- * 依頼を受けた人はここで「確認しました」を押せる (報告はスレッドで)。ベルの依頼を押すとこのカード (#case-requests) が開く。下で新しい依頼も送れる
+ * 依頼を受けた人はここで「確認しました」を押せる (報告・日程の登録は依頼の画面で)。下で新しい依頼も送れる
  */
 export function CaseRequestsCard({ db, user, ids, caseId, storeId, returnTo }: { db: Database; user: User; ids: (string | undefined)[]; caseId: string; storeId: string; returnTo: string }) {
   const list = caseRequestsOf(db, ids);
@@ -65,7 +65,7 @@ export function CaseRequestsCard({ db, user, ids, caseId, storeId, returnTo }: {
                     </form>
                   )}
                   <Link href={`/messages/${t.id}`} className="text-accent hover:underline">
-                    {mine && t.taskStatus !== "confirmed" ? "報告・やりとりを開く" : "やりとりを開く"}
+                    {mine && t.taskStatus !== "confirmed" ? "依頼の画面を開く (日程の登録・報告)" : "依頼の画面を開く"}
                   </Link>
                   {t.eventId && db.schedule.some((e) => e.id === t.eventId) && (
                     <Link href={`/schedule/${t.eventId}`} className="text-accent hover:underline">

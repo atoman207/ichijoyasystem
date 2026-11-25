@@ -5,8 +5,8 @@ import { revalidatePath } from "next/cache";
 import { addAudit, getDb, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
 import type { Inquiry, ScheduleEvent, ScheduleKind, StoreId } from "@/lib/db/types";
 import { CATEGORY_LABEL, CHANNEL_LABEL, QUICK_MAX_ASSIGNEES, SCHEDULE_KIND, SCHEDULE_KINDS } from "@/lib/constants";
-import { canEditCaseStore, canViewCompanySchedule } from "@/lib/auth/permissions";
-import { createCaseResolver } from "@/lib/db/schedule";
+import { canEditCaseStore, canViewCompanySchedule, canViewThread } from "@/lib/auth/permissions";
+import { caseValue, createCaseResolver } from "@/lib/db/schedule";
 import { CASE_REQUEST_KIND, createCaseRequest, isCaseRequestKind } from "@/lib/case-requests";
 import { requestTargets } from "@/lib/inquiry-requests";
 import { dueAtFrom } from "@/lib/inquiry-flow";
@@ -23,6 +23,7 @@ import { toDateKey } from "@/lib/format";
 import { isMediaKey, MEDIA_LABEL } from "@/lib/media";
 import { newCaseStore } from "@/lib/store-area";
 import { updateQuote } from "./quotes";
+import { createScheduleEvent, quickUpdateScheduleEvent } from "./schedule";
 import { choice, fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
 /**
@@ -312,5 +313,95 @@ export async function sendCaseRequest(formData: FormData) {
   if (t) await sendAndRecord(taskNotices(db1, t, user.id, "request", note), user.id).catch((err) => console.warn("[case-request] notice failed:", (err as Error).message));
   revalidatePath("/", "layout");
   const to = byUsers ? assignees.filter((u) => u.id !== user.id).map((u) => u.name).join("・") : `${db1.stores.find((s) => s.id === storeId)?.name ?? storeId}の店長・スタッフ`;
-  redirect(withMsg(ret, `${CASE_REQUEST_KIND[kind].label}を ${to} に送りました。受けた人のお知らせ (ベル) から、この案件を直接開けます。送った内容は案件の「この案件への依頼」に残ります。`));
+  redirect(withMsg(ret, `${CASE_REQUEST_KIND[kind].label}を ${to} に送りました。受けた人はお知らせ (ベル) から依頼の画面を開き、お客様の電話・住所・内容を見ながら、その場で日程を登録できます (登録すると依頼は対応完了)。送った内容は案件の「この案件への依頼」に残ります。`));
+}
+
+/** Next.js の redirect() が投げるもの (digest = NEXT_REDIRECT;<種類>;<URL>;<状態>;) の URL */
+function redirectUrl(err: unknown): string | null {
+  const digest = (err as { digest?: unknown } | null)?.digest;
+  if (typeof digest !== "string" || !digest.startsWith("NEXT_REDIRECT;")) return null;
+  return digest.split(";").slice(2, -2).join(";");
+}
+
+/**
+ * 依頼 (メンション) の画面から日程を登録する (お客様のご要望 2026-11-25「メンションからの日程調整・予定登録」)。
+ * mode = new (案件の予定を登録 = createScheduleEvent) / move (依頼を送った予定の日時・担当を変える = quickUpdateScheduleEvent)。
+ * 予定の登録・変更は今までの処理 (権限・重複の確認・受注の日程との連動・お知らせ) のまま。登録できたら、close = 1 なら依頼を「報告・完了」にして依頼した人に知らせる
+ */
+export async function scheduleFromRequest(threadId: string, formData: FormData) {
+  const user = await requireActionUser();
+  const ret = `/messages/${threadId}`;
+  const db0 = getDb();
+  const t0 = db0.threads.find((x) => x.id === threadId);
+  if (!t0 || !t0.taskStatus) fail("/messages", "依頼が見つかりません。");
+  if (!canViewThread(user, t0)) fail("/messages", "この依頼を見る権限がありません。");
+  const chain = caseChainOf(db0, t0.relatedId);
+  if (!chain) fail(ret, "依頼の案件が見つかりません。");
+  const mode = str(formData, "mode") === "move" && t0.eventId ? "move" : "new";
+  const fd = new FormData();
+  for (const k of ["date", "timeMode", "startTime", "endTime", "memo", "allowOverlap"]) if (formData.has(k)) fd.set(k, str(formData, k));
+  const assignees = [...new Set(formData.getAll("assigneeIds").map(String))];
+  for (const a of assignees) fd.append("assigneeIds", a);
+  fd.set("returnTo", ret);
+  fd.set("back", ret);
+  let run: () => Promise<unknown>;
+  if (mode === "move") {
+    fd.set("assigneesSent", "1");
+    // 予定のメモは変えない (依頼の画面のメモ欄は新しい予定のときだけ)
+    fd.delete("memo");
+    run = () => quickUpdateScheduleEvent(t0.eventId!, fd);
+  } else {
+    const kind = str(formData, "kind");
+    if (!SCHEDULE_KINDS.includes(kind as ScheduleKind) || SCHEDULE_KIND[kind as ScheduleKind].group !== "case") fail(ret, "予定の種類を選んでください。");
+    fd.set("kind", kind);
+    fd.set("caseRef", caseValue({ type: chain.head.type, id: chain.head.id }));
+    fd.set("storeId", chain.head.storeId);
+    fd.set("locationMode", "follow");
+    const mode2 = str(formData, "timeMode");
+    if (mode2 === "am" || mode2 === "pm") fd.set("slot", mode2);
+    else if (mode2 !== "time") fd.set("allDay", "1");
+    run = () => createScheduleEvent(fd);
+  }
+  // 予定の処理は最後に redirect する (成功は ?msg=、失敗は ?err=)。失敗はそのまま依頼の画面に戻す
+  let message = "";
+  try {
+    await run();
+  } catch (err) {
+    const url = redirectUrl(err);
+    if (!url) throw err;
+    const u = new URL(url, "http://local");
+    if (u.searchParams.get("err")) throw err;
+    message = u.searchParams.get("msg") ?? "予定を登録しました。";
+  }
+  const close = str(formData, "close") === "1";
+  let closed = false;
+  if (close) {
+    const db1 = getDb();
+    const ev = mode === "move" ? db1.schedule.find((x) => x.id === t0.eventId) : db1.schedule.filter((x) => x.createdBy === user.id && ((chain.order && x.orderId === chain.order.id) || (chain.quote && x.quoteId === chain.quote.id) || (chain.inquiry && x.inquiryId === chain.inquiry.id))).sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))[0];
+    const text = ev ? `日程を${mode === "move" ? "変更" : "登録"}しました: ${periodLabel(ev)} ${SCHEDULE_KIND[ev.kind].label} (担当: ${ev.assigneeIds.map((a) => db1.users.find((u) => u.id === a)?.name ?? "-").join("・")})` : "日程を登録しました。";
+    await mutate((db) => {
+      const t = db.threads.find((x) => x.id === threadId);
+      if (!t || !t.taskStatus || t.taskStatus === "confirmed") return;
+      const now = nowIso();
+      const before = t.taskStatus;
+      t.taskStatus = "confirmed";
+      t.status = "done";
+      t.acknowledgedAt ??= now;
+      t.reportedAt ??= now;
+      t.confirmedAt = now;
+      t.confirmedBy = user.id;
+      t.updatedAt = now;
+      t.participants = [...new Set([...t.participants, user.id])];
+      db.messages.push({ id: newId("msg"), threadId, userId: user.id, body: `${text}\n(予定の登録で、この依頼を対応完了にしました)`, at: now, mentions: t.createdBy !== user.id ? [t.createdBy] : [], event: "report" });
+      addAudit(db, { userId: user.id, action: "status", entity: "thread", entityId: threadId, entityLabel: t.title, summary: `依頼を対応完了 (${text})`, storeId: t.storeId, changes: [{ field: "taskStatus", before, after: "confirmed" }] });
+      closed = true;
+    });
+    if (closed) {
+      const db2 = getDb();
+      const t = db2.threads.find((x) => x.id === threadId);
+      if (t) await sendAndRecord(taskNotices(db2, t, user.id, "report", text), user.id).catch((err) => console.warn("[case-request] report notice failed:", (err as Error).message));
+    }
+  }
+  revalidatePath("/", "layout");
+  redirect(withMsg(ret, `${message}${closed ? " 依頼を報告・対応完了にしました (依頼した人に知らせました)。" : ""}`));
 }

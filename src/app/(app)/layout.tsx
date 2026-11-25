@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { requireUser } from "@/lib/auth/session";
 import { notificationsFor, storeById, storeName, userName } from "@/lib/db/queries";
 import { lineText, noticeTime, unreadNotices } from "@/lib/change-notices";
-import { caseRequestHref } from "@/lib/case-requests";
 import { canApproveSignup, canExportAccounting, canExportData, canManageMaps, canManageSettings, canManageUsers, canRegisterPurchase, canSeeAllStores, canTriageFax, canViewFax, canViewRegistry, canViewReports, canViewSuppliers } from "@/lib/auth/permissions";
 import { getDb } from "@/lib/db/store";
 import { avatarUrl } from "@/lib/account-rules";
@@ -109,11 +108,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   nav.push({ href: "/settings", label: canManageSettings(user) ? "設定" : canManageUsers(user) ? "設定 (閲覧・自店舗のアカウント管理)" : "設定 (閲覧)", short: "設定", icon: "settings", group: "管理", badge: signups.length || undefined });
   nav.push({ href: "/help", label: "使い方 (操作説明)", short: "使い方", icon: "help", group: "管理" });
 
-  // 案件への依頼 (予定表・案件の画面から送ったメンション。src/lib/case-requests.ts) は、押すと案件の画面の「この案件への依頼」を開く (お客様のご要望 2026-11-25「⑪」)
-  const threadLink = (threadId: string) => {
-    const t = getDb().threads.find((x) => x.id === threadId);
-    return (t && caseRequestHref(getDb(), t)) || `/messages/${threadId}`;
-  };
+  // 業務依頼・メンションは依頼の画面へ。案件の依頼は、その画面にお客様の電話・住所・内容と日程の登録が出る (お客様のご要望 2026-11-25「メンションからの日程調整・予定登録」)
+  const threadLink = (threadId: string) => `/messages/${threadId}`;
   const notifications: NotificationItem[] = [
     ...n.pendingApprovals.map<NotificationItem>((a) => ({
       kind: "approval",

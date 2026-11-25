@@ -347,6 +347,52 @@ ok(/担当者を選んで/.test(r.err ?? ""), "自分だけを宛先にはでき
 r = await act(staffUser, () => CQ.sendCaseRequest(form({ eventId: evReq.id, kind: "bogus", target: "store", returnTo: ret })));
 ok(/種類/.test(r.err ?? ""), "種類のない依頼は断る");
 
+/* ================================================================== */
+section("メンションからの日程調整・予定登録 (依頼の画面)");
+const RC = await imp("lib/request-context.ts");
+await store.mutate((x) => {
+  const c = x.customers.find((y) => y.id === "c_cc_a");
+  c.phone = "090-1111-2222";
+  c.contacts = [{ id: "cc_x", relation: "ご家族 (携帯)", phone: "080-3333-4444" }];
+  x.inquiries.push({ id: "inq_cc_req", number: "INQ-CC-9", customerId: "c_cc_a", contactName: "変更 太郎", channel: "phone", storeId: M, category: "fusuma", summary: "襖 4 枚の張替えの相談", detail: "2 階の和室。日中は不在が多い", status: "new", receivedAt: now, createdBy: staffUser.id, updatedAt: now, media: "repeat" });
+});
+r = await act(staffUser, () => CQ.sendCaseRequest(form({ caseId: "inq_cc_req", kind: "schedule_change", target: "users", assigneeIds: [manager.id], note: "お客様に電話して見積の日を決めてください", returnTo: "/inquiries/inq_cc_req" })));
+let rt = db().threads.filter((x) => x.caseRequest).at(-1);
+let ctx = RC.requestContext(db(), manager, rt, future(0));
+eq(ctx?.phones.map((p) => p.number), ["090-1111-2222", "080-3333-4444"], "依頼の画面: お客様の電話番号 (押すと電話。ほかの電話番号も)");
+eq([ctx?.visit?.address, Boolean(ctx?.visit?.directionsUrl)], ["熊本県テスト市本町1-2-3", true], "訪問先の住所と経路のリンク");
+ok(ctx?.content[0]?.title === "襖 4 枚の張替えの相談" && /2 階の和室/.test(ctx?.content[0]?.text ?? ""), "問い合わせの内容");
+eq([ctx?.schedule?.caseRef, ctx?.schedule?.kind, ctx?.schedule?.move], ["inquiry:inq_cc_req", "survey", undefined], "日程の登録: 問い合わせの案件・初期値は見積り");
+r = await act(manager, () => CQ.scheduleFromRequest(rt.id, form({ mode: "new", kind: "survey", date: future(40), timeMode: "am", assigneeIds: [manager.id], close: "1", allowOverlap: "1" })));
+const regEv = db().schedule.find((x) => x.inquiryId === "inq_cc_req");
+rt = db().threads.find((x) => x.id === rt.id);
+eq([r.err, r.path, regEv?.kind, regEv?.date, regEv?.slot, regEv?.assigneeIds], [null, `/messages/${rt.id}`, "survey", future(40), "am", [manager.id]], `依頼の画面から予定を登録 (${r.msg ?? r.err})`);
+eq([rt.taskStatus, rt.status], ["confirmed", "done"], "予定を登録したら依頼は報告・対応完了");
+const rep = db().messages.filter((m) => m.threadId === rt.id).at(-1);
+ok(rep?.event === "report" && /日程を登録しました/.test(rep.body) && rep.mentions.includes(staffUser.id), "報告のメッセージ (依頼した人にメンション)");
+ok(/対応完了/.test(r.msg ?? ""), "画面に「対応完了にしました」");
+// 予定を送った日程変更依頼: 依頼の予定の日時を変える
+r = await act(staffUser, () => CQ.sendCaseRequest(form({ eventId: regEv.id, kind: "schedule_change", target: "users", assigneeIds: [manager.id], note: "お客様の都合で日を変えたい", returnTo: ret })));
+rt = db().threads.filter((x) => x.caseRequest).at(-1);
+ctx = RC.requestContext(db(), manager, rt, future(0));
+eq([ctx?.schedule?.preferMove, ctx?.schedule?.move?.id], [true, regEv.id], "日程変更依頼は「依頼の予定の日時を変更」が既定");
+r = await act(manager, () => CQ.scheduleFromRequest(rt.id, form({ mode: "move", date: future(42), timeMode: "time", startTime: "13:00", endTime: "14:00", assigneeIds: [manager.id, staffUser.id], memo: "消さない", close: "1", allowOverlap: "1" })));
+const moved = db().schedule.find((x) => x.id === regEv.id);
+eq([r.err, moved.date, moved.startTime, moved.assigneeIds, db().threads.find((x) => x.id === rt.id).taskStatus], [null, future(42), "13:00", [manager.id, staffUser.id], "confirmed"], `依頼の予定の日時・担当を変えて完了 (${r.msg ?? r.err})`);
+ok(db().schedule.filter((x) => x.inquiryId === "inq_cc_req").length === 1, "新しい予定は増えない (同じ予定を動かす)");
+// 登録できなかったときは依頼は完了にしない
+r = await act(staffUser, () => CQ.sendCaseRequest(form({ caseId: "inq_cc_req", kind: "other", target: "users", assigneeIds: [manager.id], note: "訪問の日程を", returnTo: ret })));
+rt = db().threads.filter((x) => x.caseRequest).at(-1);
+r = await act(manager, () => CQ.scheduleFromRequest(rt.id, form({ mode: "new", kind: "survey", date: future(43), timeMode: "allday", close: "1" })));
+eq([Boolean(r.err), r.path, db().threads.find((x) => x.id === rt.id).taskStatus], [true, `/messages/${rt.id}`, "requested"], `担当者がいないなど登録できないときは依頼の画面に戻り、依頼はそのまま (${r.err})`);
+r = await act(manager, () => CQ.scheduleFromRequest(rt.id, form({ mode: "new", kind: "survey", date: future(43), timeMode: "allday", assigneeIds: [manager.id], allowOverlap: "1" })));
+eq([r.err, db().threads.find((x) => x.id === rt.id).taskStatus], [null, "requested"], "「完了にする」を外せば予定だけ登録 (依頼は対応中のまま)");
+// 問い合わせの「担当へ依頼」(案件にひも付いた業務依頼) にも同じ情報を出す
+r = await act(staffUser, () => IA.requestInquiry("inq_cc_req", form({ purpose: "schedule", assigneeId: manager.id, due: "today", note: "訪問日程の打ち合わせをお願いします", returnTo: "/inquiries/inq_cc_req" })));
+const inqTh = db().threads.filter((x) => x.kind === "request" && x.relatedType === "inquiry" && x.relatedId === "inq_cc_req" && !x.caseRequest).at(-1);
+ok(Boolean(inqTh), `問い合わせの「担当へ依頼」(${r.msg ?? r.err})`);
+if (inqTh) ok(Boolean(RC.requestContext(db(), admin, inqTh, future(0))), "問い合わせの「担当へ依頼」の画面にもお客様の情報と日程の登録を出す");
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   for (const f of fails) console.log("  ✗", f);

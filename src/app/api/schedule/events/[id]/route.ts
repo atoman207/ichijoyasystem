@@ -19,7 +19,7 @@ import { canEditRecordMap, canViewRecordMap } from "@/lib/maps/access";
 import { mapIndex, placeOf } from "@/lib/maps/resolve";
 import { ZENRIN_GIS } from "@/lib/maps/purpose";
 import { isCommonStaff } from "@/lib/staff-choices";
-import { initialsByUser } from "@/lib/schedule-sheet/initials";
+import { quickStaff } from "@/lib/quick-staff";
 import { eventPair } from "@/lib/schedule-pair";
 import { handoverLabel } from "@/lib/handover";
 import { approvalSettings } from "@/lib/approval-rules";
@@ -161,21 +161,6 @@ function quickMap(db: Database, user: User, e: ScheduleEvent): QuickMap | undefi
     placeHref: place.location ? `/maps/locations/${place.location.id}` : undefined,
     zenrinUrl: ZENRIN_GIS.url,
   };
-}
-
-/** 担当者の選択肢: 予定の店舗の社員 → 本部の社員 (全店舗共通) → ほかの店舗の社員 (配送・施工の応援) */
-function quickStaff(db: Database, storeId: StoreId): QuickStaff[] {
-  const active = db.users.filter((u) => u.active && !u.id.startsWith("u_review"));
-  const initials = initialsByUser(active);
-  const order = new Map(db.stores.map((s, i) => [s.id, i]));
-  const group = (u: User): QuickStaff["group"] => (u.storeId === storeId ? "store" : isCommonStaff(db, u) ? "common" : "other");
-  const rank = { store: 0, common: 1, other: 2 };
-  return active
-    .map((u) => {
-      const s = db.stores.find((x) => x.id === u.storeId);
-      return { id: u.id, name: u.name, initial: initials.get(u.id) ?? [...u.name][0], storeId: u.storeId, storeName: s?.shortName ?? s?.name ?? u.storeId, color: s?.color ?? "#94a3b8", group: group(u) };
-    })
-    .sort((a, b) => rank[a.group] - rank[b.group] || (order.get(a.storeId) ?? 99) - (order.get(b.storeId) ?? 99) || a.name.localeCompare(b.name, "ja"));
 }
 
 /** 引取・現見 ⇄ 納品 の相手 (src/lib/schedule-pair.ts) */
