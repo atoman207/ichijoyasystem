@@ -27,7 +27,7 @@ import { EventQuickHost } from "@/components/schedule/EventQuick";
 import { ScheduleFinder } from "@/components/schedule/ScheduleFinder";
 import { initialsByUser } from "@/lib/schedule-sheet/initials";
 import { DaySheetView } from "@/components/schedule/DaySheet";
-import { buildStoreSheet, dayLoad, readDayLoadSettings, type DayLoad, type StoreSheet } from "@/lib/day-sheet";
+import { buildStoreSheet, carrySeries, carryStart, readDayLoadSettings, storeLoadOf, type CarryIn, type DayLoad, type StoreSheet } from "@/lib/day-sheet";
 import { isClosedDay } from "@/lib/schedule-capacity";
 
 type View = "month" | "week" | "staff" | "day" | "list";
@@ -150,10 +150,31 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   // 1 日の作業量と対応可能枚数 (対象人数 × 11 枚。お客様のご要望 2026-11-25「日ごとの予定表の表示形式と作業量の集計」。src/lib/day-sheet.ts)
   const loadSet = readDayLoadSettings(db);
   const leaveEvents = inRange.filter((e) => e.kind === "leave");
-  const storeEventsOf = (id: StoreId) => inRange.filter((e) => e.storeId === id && !e.companyWide);
   const loadStore = storeFilter && db.stores.find((s) => s.id === storeFilter)?.kind !== "hq" ? storeFilter : undefined;
+  // 前日繰越 (前日の超過分を翌日に。お客様のご要望 2026-11-25 の補足「③」): 繰り越しを数え始める日から表示の期間の前日までの予定も読む
+  const carryStores: StoreId[] =
+    view === "day" && layout === "sheet"
+      ? (storeFilter ? [storeFilter] : db.stores.map((s) => s.id)).filter((id) => db.stores.find((s) => s.id === id)?.kind !== "hq")
+      : loadStore && (view === "week" || view === "month")
+        ? [loadStore]
+        : [];
+  const chainFirst = carryStores
+    .map((id) => carryStart(loadSet, id, from))
+    .filter((d): d is string => Boolean(d))
+    .sort()[0];
+  const inRangeIds = new Set(inRange.map((e) => e.id));
+  const earlier = chainFirst && chainFirst < from ? db.schedule.filter((e) => !inRangeIds.has(e.id) && overlapsRange(e, chainFirst, addDays(from, -1))) : [];
+  const chainEvents = [...inRange.filter((e) => !e.id.startsWith("hold:")), ...earlier];
+  const chainWork = earlier.length ? new Map([...work, ...scheduleWork(db, earlier)]) : work;
+  const chainLeaves = chainEvents.filter((e) => e.kind === "leave");
+  const loadOfStore = new Map(
+    carryStores.map((id) => [
+      id,
+      storeLoadOf({ db, set: loadSet, storeId: id, events: chainEvents.filter((e) => e.storeId === id && !e.companyWide), leaves: chainLeaves, work: chainWork, closed: (d) => isClosedDay(db, d) }),
+    ]),
+  );
+  const carryOf = new Map<StoreId, Map<string, CarryIn>>(carryStores.map((id) => [id, carrySeries({ set: loadSet, storeId: id, from, to, loadOf: loadOfStore.get(id)! })]));
   const loadCache = new Map<string, DayLoad | undefined>();
-  const loadEvents = loadStore ? storeEventsOf(loadStore) : [];
   const ctx: CalendarContext = {
     today,
     nowMinutes: now.getHours() * 60 + now.getMinutes(),
@@ -183,7 +204,12 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
     loadOf:
       loadStore && (view === "week" || view === "month")
         ? (d) => {
-            if (!loadCache.has(d)) loadCache.set(d, dayLoad({ day: d, storeId: loadStore, events: loadEvents.filter((e) => occursOn(e, d)), capacityEvents: leaveEvents, work, set: loadSet, db, closed: isClosedDay(db, d) }));
+            if (!loadCache.has(d)) {
+              const l = loadOfStore.get(loadStore)?.(d);
+              const carry = carryOf.get(loadStore)?.get(d)?.value ?? 0;
+              const total = l ? Math.round((l.dayWorkload + carry) * 10) / 10 : 0;
+              loadCache.set(d, l && { ...l, carry, workload: total, over: Math.max(0, Math.round((total - l.capacity) * 10) / 10) });
+            }
             return loadCache.get(d);
           }
         : undefined,
@@ -206,6 +232,7 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
               set: loadSet,
               db,
               closed: isClosedDay(db, anchor),
+              carry: carryOf.get(s.id)?.get(anchor),
             }),
           )
           .filter((sh) => storeFilter || db.stores.find((s) => s.id === sh.storeId)?.kind !== "hq" || sh.rows.length > 0)
@@ -419,6 +446,9 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
           }}
           settingsHref={canManageSettings(user) ? "/schedule/capacity?tab=dayload" : undefined}
           filtered={Boolean(userParam || kindParam || onlyConflicts)}
+          day={anchor}
+          returnTo={here}
+          canFixCarry={(id) => canAccessStore(user, id)}
         />
       )}
       {view === "day" && layout === "staff" && <DayView day={anchor} rows={rowUsers} events={personEvents} unassigned={shown.filter((e) => e.assigneeIds.length === 0 && occursOn(e, anchor))} ctx={ctx} />}

@@ -137,7 +137,7 @@ export function LoadBadge({ ctx, day, variant }: { ctx: CalendarContext; day: st
   const l = ctx.loadOf?.(day);
   if (!l || l.workload <= 0) return null;
   const over = l.over > 0;
-  const label = `作業量 ${sheetNum(l.workload)} 枚 / 対応可能 ${sheetNum(l.capacity) || "0"} 枚${over ? ` (${sheetNum(l.over)} 枚オーバー)` : ""}`;
+  const label = `作業量 ${sheetNum(l.workload)} 枚${l.carry > 0 ? ` (その日 ${sheetNum(l.dayWorkload) || "0"} + 前日繰越 ${sheetNum(l.carry)})` : ""} / 対応可能 ${sheetNum(l.capacity) || "0"} 枚${over ? ` (${sheetNum(l.over)} 枚オーバー)` : ""}`;
   return (
     <Link
       href={ctx.dayHref(day)}

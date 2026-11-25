@@ -3,14 +3,15 @@ import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { canManageSettings } from "@/lib/auth/permissions";
 import { updateDayLoad } from "@/lib/actions/day-load";
-import { DAY_LOAD_DEFAULTS, SHEET_ITEMS, SHEET_ITEM_LABEL, readDayLoadSettings, sheetNum, storeCapacity } from "@/lib/day-sheet";
+import { DAY_LOAD_DEFAULTS, PER_EVENT_OPTIONS, SHEET_ITEMS, SHEET_ITEM_LABEL, perEventKindsLabel, readDayLoadSettings, sheetNum, storeCapacity } from "@/lib/day-sheet";
+import { SCHEDULE_KIND } from "@/lib/constants";
 import { isClosedDay } from "@/lib/schedule-capacity";
 import { toDateKey } from "@/lib/format";
 import { Button, Card, CardHeader, Field, Input, Note } from "@/components/ui";
 
 /**
  * 1 日の対応可能枚数 (お客様のご要望 2026-11-25「日ごとの予定表の表示形式と作業量の集計」③)。
- * 対応可能枚数 = 対象人数 × 1 人の枚数。換算作業量 = 畳 + 襖 + 障子 × 0.5 + 網戸 × 0.5。計算は src/lib/day-sheet.ts
+ * 対応可能枚数 = 対象人数 × 1 人の枚数。換算作業量 = 畳 + 襖 + 障子 × 0.5 + 網戸 × 0.5 + 見積など 件数 × 3 + 前日繰越。計算は src/lib/day-sheet.ts
  */
 export async function DayLoadTab() {
   const user = await requireUser();
@@ -43,12 +44,6 @@ export async function DayLoadTab() {
                 </span>
               </label>
               <label className="flex items-start gap-2">
-                <input type="checkbox" name="countEstimates" value="1" defaultChecked={set.countEstimates} className="mt-0.5 h-4 w-4" />
-                <span>
-                  見積・現調・採寸の予定に書いた枚数 (見込み) も作業量に数える <span className="text-xs text-ink-3">(既定は数えない = 実際の作業は引取の日に数えるため。これまでのスプレッドシートは見積の行の枚数も合計していました)</span>
-                </span>
-              </label>
-              <label className="flex items-start gap-2">
                 <input type="checkbox" name="countDelivery" value="1" defaultChecked={set.countDelivery} className="mt-0.5 h-4 w-4" />
                 <span>
                   納品の枚数も作業量に数える <span className="text-xs text-ink-3">(既定は数えない = これまでのスプレッドシートの「上限」の行と同じく、引取の欄の枚数だけ。表替えは同じ畳を午前に引き取って午後に納品するため)</span>
@@ -57,6 +52,41 @@ export async function DayLoadTab() {
             </div>
 
             <div className="grid grid-cols-1 gap-3 @3xl:grid-cols-2">
+              <div className="rounded-xl border border-line px-3 py-2.5">
+                <p className="mb-1 text-sm font-semibold text-ink">見積・現調・現場管理などの予定</p>
+                <p className="mb-2 text-[11px] leading-relaxed text-ink-3">
+                  1 件を決まった枚数で作業量に足します (枚数の欄には出しません)。これまでのスプレッドシートで見積の行に「襖 3」と書いていたのと同じです。
+                </p>
+                <div className="max-w-[200px]">
+                  <Field label="1 件の換算 (枚)" hint={`既定 ${DAY_LOAD_DEFAULTS.perEvent} 枚`}>
+                    <Input type="number" inputMode="decimal" name="perEvent" min={0} max={99} step={0.5} defaultValue={set.perEvent} required />
+                  </Field>
+                </div>
+                <p className="mt-2 mb-1 text-[11px] text-ink-3">1 件で数える予定の種類</p>
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  {PER_EVENT_OPTIONS.map((k) => (
+                    <label key={k} className="inline-flex items-center gap-1.5 text-sm text-ink">
+                      <input type="checkbox" name="perEventKinds" value={k} defaultChecked={set.perEventKinds.includes(k)} className="h-4 w-4" />
+                      {SCHEDULE_KIND[k].label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-xl border border-line px-3 py-2.5">
+                <p className="mb-1 text-sm font-semibold text-ink">前日繰越</p>
+                <label className="flex items-start gap-2 text-sm text-ink">
+                  <input type="checkbox" name="carry" value="1" defaultChecked={set.carry} className="mt-0.5 h-4 w-4" />
+                  <span>
+                    前日の超過分を翌日の作業量に繰り越す <span className="text-xs text-ink-3">(スプレッドシートの「繰り越し」の行と同じ。休業日はそのまま次の営業日へ)</span>
+                  </span>
+                </label>
+                <div className="mt-2 max-w-[220px]">
+                  <Field label="繰り越しを数え始める日" hint="この日の前日繰越は 0 枚から">
+                    <Input type="date" name="carryFrom" defaultValue={set.carryFrom} required />
+                  </Field>
+                </div>
+                <p className="mt-1 text-[11px] leading-relaxed text-ink-3">実際の進み具合とずれたときは、予定表の日の表示の一番下の「前日繰越を直す」で、店舗・日ごとに枚数を直せます (店舗の社員・本部・管理者)。</p>
+              </div>
               {stores.map((s) => {
                 const members = db.users.filter((u) => u.active && u.storeId === s.id);
                 const st = set.stores[s.id];
@@ -98,13 +128,25 @@ export async function DayLoadTab() {
         <ul className="space-y-1.5 text-xs leading-relaxed text-ink-2">
           <li>・対応可能枚数 = 対象人数 × {sheetNum(set.perPerson)} 枚。対象人数は店舗の社員のうちチェックした人 (人数を手で決めた店舗はその人数) から、その日の休暇の人を引いた数です。</li>
           <li>
-            ・換算作業量 = 畳 × {set.weights.tatami} + 襖 × {set.weights.fusuma} + 障子 × {set.weights.shoji} + 網戸 × {set.weights.amido} (表替え・張替えと新調は同じ扱い)。
+            ・換算作業量 = 畳 × {set.weights.tatami} + 襖 × {set.weights.fusuma} + 障子 × {set.weights.shoji} + 網戸 × {set.weights.amido} + 見積など 件数 × {sheetNum(set.perEvent) || "0"} (表替え・張替えと新調は同じ扱い)。
           </li>
           <li>
-            ・作業量に数えるのは、その日の 引き取り・現場見積 (現見)・施工{set.countEstimates ? "・見積・現調・採寸" : ""}{set.countDelivery ? "・納品" : ""} の予定の枚数です。{set.countEstimates ? "" : "見積・現調・採寸の枚数は見込みとして灰色で出し、合計には入れません。"}顧客訪問・会議などの予定は数えません。
+            ・作業量に数えるのは、その日の 引き取り・現場見積 (現見)・施工・採寸{set.countDelivery ? "・納品" : ""} の予定の枚数です。採寸の枚数は「新」(新調) に出します。新調も表替え・張替えと同じ換算です。
+          </li>
+          <li>
+            ・{perEventKindsLabel(set.perEventKinds)} の予定は 1 件 = {sheetNum(set.perEvent) || "0"} 枚として作業量に足します (枚数の欄には出しません)。{PER_EVENT_OPTIONS.filter((k) => !set.perEventKinds.includes(k))
+              .map((k) => SCHEDULE_KIND[k].short)
+              .join("・")}
+            などの予定は数えません。
+          </li>
+          <li>
+            ・
+            {set.carry
+              ? `前日繰越 = 前日の (換算作業量 + 前日繰越 − 対応可能枚数) の超えた分。${set.carryFrom} から数えます。休業日は対応可能 0 枚のため、そのまま次の営業日に繰り越します。`
+              : "前日の超過分は繰り越しません (日ごとに計算)。"}
           </li>
           <li>・枚数は、受注・見積の明細、移行した予定表の枚数、予定の「仕事内容」(予定を押した画面で直せます) から読み取ります。</li>
-          <li>・換算作業量が対応可能枚数を超えた日は、予定表の日の表示の一番下に「○枚オーバー (翌日持越の目安)」、店舗を選んだ週・月の表示に赤の「作業 26/22」を出します。</li>
+          <li>・作業量の合計 (前日繰越を含む) が対応可能枚数を超えた日は、予定表の日の表示の一番下に「○枚オーバー」、店舗を選んだ週・月の表示に赤の「作業 26/22」を出します。</li>
           <li>
             ・候補日の提案 (AI) の上限は「<Link href="/schedule/capacity?tab=capacity" className="underline">1 日の上限</Link>」の畳の製造の枚数です (この設定とは別)。
           </li>

@@ -6,7 +6,7 @@ import { categoryName } from "@/lib/mgmt/categories";
 import { applyLineFixes, planLineFixes } from "@/lib/quote-line-normalize";
 import { isDateKey } from "@/lib/calendar";
 import { addDays, toDateKey } from "@/lib/format";
-import { isOnsiteQuoteText, isSiteSurveyText } from "@/lib/schedule-sheet/parse";
+import { isOnsiteQuoteText, isSiteSurveyText, placeholderKind } from "@/lib/schedule-sheet/parse";
 import { SHEET_REF_PREFIX, eventFingerprint, sheetSettings, writeSheetSettings } from "@/lib/schedule-sheet/plan";
 import { applyAreaImport, planAreaImport, storeIdOfName } from "@/lib/mgmt/areas";
 import { prevDay } from "@/lib/mgmt/rules";
@@ -29,6 +29,7 @@ export const maxDuration = 60;
  *     既定は確認だけ、apply=1 で書き込み、変更履歴を残す
  *   task = schedule-kinds (旧 schedule-onsite): 予定表 (スプレッドシート) から取り込んだ「現見」「現調」の予定を、見積りから
  *     現場見積 (現見)・現地調査 (現調) にする (お客様のご要望 2026-11-24「■2」「業務フロー ③」。種類を足す前に取り込んだ予定)。
+ *     あわせて、「襖 3」だけの引き取りで備考に見積・現調とある予定 (1 件の仕事量の目安の行。お客様のご説明 2026-11-25) を見積・現調にする。
  *     from = この日以降の予定 (既定は今日)。既定は確認だけ、apply=1 で書き込み、予定ごとに変更履歴
  *   task = sales-areas: 営業エリア (住所 → 担当店舗。お客様のご要望 2026-11-24「③」。src/lib/store-area.ts) を登録する。
  *     本文 (JSON) = { rows: [{ store, town }] (予定表の「地域一覧」), manual: [{ store, town, note? }] (地域一覧にない地域), validFrom?, sourceName? }。
@@ -193,12 +194,17 @@ async function postalCodes(url: URL) {
 }
 
 /** 予定表から取り込んだ「現見」「現調」の予定 (見積りのまま) → 直す種類 */
-const KIND_TITLE: Partial<Record<ScheduleKind, string>> = { onsite_quote: "現場見積", site_survey: "現地調査" };
-function kindFix(e: { source?: string; kind: string; sourceRef?: string }): ScheduleKind | undefined {
-  if (e.source !== "import" || e.kind !== "survey" || !e.sourceRef?.startsWith(SHEET_REF_PREFIX)) return undefined;
+const KIND_TITLE: Partial<Record<ScheduleKind, string>> = { onsite_quote: "現場見積", site_survey: "現地調査", survey: "見積", site: "現場管理" };
+const KIND_WORD: Partial<Record<ScheduleKind, string>> = { onsite_quote: "現見", site_survey: "現調", survey: "見積", site: "現場管理" };
+function kindFix(e: { source?: string; kind: string; sourceRef?: string; memo?: string }): ScheduleKind | undefined {
+  if (e.source !== "import" || !e.sourceRef?.startsWith(SHEET_REF_PREFIX)) return undefined;
   // 印 = sheet:<日付>|<店舗>|<欄>|<…>|<書き込み>
   const raw = e.sourceRef.slice(SHEET_REF_PREFIX.length).split("|").slice(4).join("|");
-  return isOnsiteQuoteText(raw) ? "onsite_quote" : isSiteSurveyText(raw) ? "site_survey" : undefined;
+  if (e.kind === "survey") return isOnsiteQuoteText(raw) ? "onsite_quote" : isSiteSurveyText(raw) ? "site_survey" : undefined;
+  // 「襖 3」だけの引き取り (メモの 1 行目) で、備考に見積・現調・現場の言葉 → 1 件の仕事量の目安の行
+  const lines = (e.memo ?? "").split("\n");
+  if (e.kind === "pickup" && lines[0].trim() === "襖 張替3") return placeholderKind(raw, lines.slice(1).join(" "));
+  return undefined;
 }
 function onsiteTargets(db: Pick<Database, "schedule">, from: string) {
   return db.schedule.filter((e) => e.date >= from && kindFix(e));
@@ -221,7 +227,7 @@ async function scheduleOnsite(url: URL) {
       const kind = kindFix(e)!;
       const before = { kind: e.kind, title: e.title };
       e.kind = kind;
-      e.title = e.title.replace(/\s*(?:現地調査・見積|見積)$/, ` ${KIND_TITLE[kind]}`);
+      e.title = e.title.replace(/\s*(?:現地調査・見積|見積|引き取り)$/, ` ${KIND_TITLE[kind]}`);
       e.updatedAt = now;
       // 取込で書いた予定の印も新しい内容にする (次の取込で「新システムで変えた予定」と取り違えない)
       const written = settings.written ?? {};
@@ -233,7 +239,10 @@ async function scheduleOnsite(url: URL) {
         entity: "schedule",
         entityId: e.id,
         entityLabel: e.title,
-        summary: `予定表の「${kind === "onsite_quote" ? "現見" : "現調"}」の予定を、見積りから${kind === "onsite_quote" ? "現場見積 (現見)" : "現地調査 (現調)"}にしました (種類の追加にあわせて)`,
+        summary:
+          before.kind === "pickup"
+            ? `予定表の「襖 3」(見積などの 1 件の仕事量の目安) の行を、引き取りから${KIND_TITLE[kind]}にしました (備考の「${KIND_WORD[kind]}」から)`
+            : `予定表の「${kind === "onsite_quote" ? "現見" : "現調"}」の予定を、見積りから${kind === "onsite_quote" ? "現場見積 (現見)" : "現地調査 (現調)"}にしました (種類の追加にあわせて)`,
         storeId: e.storeId,
         changes: [
           { field: "kind", before: before.kind, after: e.kind },

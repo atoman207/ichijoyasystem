@@ -2,14 +2,17 @@ import Link from "@/components/ui/Link";
 import clsx from "clsx";
 import { Globe, Plus, Settings2, TriangleAlert } from "lucide-react";
 import type { ScheduleEvent } from "@/lib/db/types";
-import { SHEET_ITEMS, SHEET_ITEM_LABEL, hasCols, itemTotal, sheetNum, workloadFormula, type DayLoadSettings, type SheetBand, type SheetCols, type SheetRow, type SheetSide, type StoreSheet } from "@/lib/day-sheet";
+import { SHEET_ITEMS, SHEET_ITEM_LABEL, hasCols, itemTotal, perEventKindsLabel, sheetNum, workloadFormula, type DayLoadSettings, type SheetBand, type SheetCols, type SheetRow, type SheetSide, type StoreSheet } from "@/lib/day-sheet";
 import { KindMark, shortName } from "./parts";
 import { eventHref, titleOf, type CalendarContext } from "./CalendarViews";
 import { timeLabel } from "@/lib/calendar";
+import { setDayCarry } from "@/lib/actions/day-load";
+import { Button, Input } from "@/components/ui";
 
 /**
  * 日ごとの予定表 (スプレッドシートの形。お客様のご要望 2026-11-25「日ごとの予定表の表示形式と作業量の集計」)
- * 店舗ごとに 左 = 引取・見積・現調・会議など / 右 = 納品、上 = 午前 / 下 = 午後。一番下に枚数の合計・換算作業量・対応可能枚数と超過。
+ * 店舗ごとに 左 = 引取・見積・現調・会議など / 右 = 納品、上 = 午前 / 下 = 午後。一番下に枚数の合計・換算作業量・前日繰越・対応可能枚数と超過。
+ * 見積・現調・現場管理の行は枚数の欄に「1件 3枚換算」(実際の枚数ではない。お客様のご説明 2026-11-25 の補足「①」)。
  * 計算は src/lib/day-sheet.ts。予定を押すと予定表の上の小さな画面 (EventQuickHost) で開く
  */
 
@@ -23,17 +26,17 @@ const SIDE_TITLE: Record<SheetSide, string> = { left: "引取・見積・現調�
 
 const staffNames = (ctx: CalendarContext, ids: string[]) => ids.map((id) => ctx.users.get(id)?.name).filter((n): n is string => Boolean(n));
 
-function Verdict({ s, size = "md" }: { s: StoreSheet; size?: "sm" | "md" }) {
+function Verdict({ s, size = "md", carry = false }: { s: StoreSheet; size?: "sm" | "md"; carry?: boolean }) {
   const cap = s.capacity;
   if (!cap) return null;
   const base = size === "md" ? "rounded-xl px-3 py-2 text-sm" : "rounded-full px-2 py-0.5 text-[11px]";
-  if (cap.closed) return <span className={clsx(base, "bg-subtle font-medium text-ink-2")}>休業日</span>;
+  if (cap.closed) return <span className={clsx(base, "bg-subtle font-medium text-ink-2")}>休業日{carry && s.over > 0 && size === "md" ? ` (${sheetNum(s.over)} 枚を次の営業日へ繰越)` : ""}</span>;
   if (cap.capacity <= 0) return <span className={clsx(base, "bg-warn-soft font-medium text-warn-ink")}>対象人数 0 人</span>;
   if (s.over > 0)
     return (
       <span className={clsx(base, "inline-flex items-center gap-1 bg-critical-soft font-semibold text-critical-ink")} data-testid="day-load-over">
         <TriangleAlert className={size === "md" ? "h-4 w-4" : "h-3 w-3"} aria-hidden />
-        {sheetNum(s.over)} 枚オーバー{size === "md" && <span className="font-normal">(翌日持越の目安)</span>}
+        {sheetNum(s.over)} 枚オーバー{size === "md" && <span className="font-normal">{carry ? "(翌日に繰越)" : "(翌日持越の目安)"}</span>}
       </span>
     );
   return (
@@ -73,13 +76,20 @@ function colsText(c: SheetCols): string {
 function rowLabel(ctx: CalendarContext, r: SheetRow): string {
   const e = r.event;
   const staff = staffNames(ctx, e.assigneeIds).join("・") || "担当未定";
-  return `${timeLabel(e)} ${titleOf(ctx, e)} ${r.counted ? "" : "(作業量に数えない) "}${colsText(r.cols)} ${staff}`.replace(/\s+/g, " ").trim();
+  const load = r.mode === "fixed" ? `(1件 ${sheetNum(r.fixed ?? 0) || "0"}枚換算${r.counted ? "" : "・数えない"}) ` : r.counted || r.mode === "count" ? "" : "(作業量に数えない) ";
+  return `${timeLabel(e)} ${titleOf(ctx, e)} ${load}${colsText(r.cols)} ${staff}`.replace(/\s+/g, " ").trim();
 }
 
 function SideTable({ side, rows, totals, ctx, set }: { side: SheetSide; rows: SheetRow[]; totals: SheetCols; ctx: CalendarContext; set: DayLoadSettings }) {
   const bands = BANDS.filter((b) => b.id !== "none" || rows.some((r) => r.band === "none"));
-  const estimates = rows.some((r) => !r.counted && !r.hold && hasCols(r.cols) && (side === "left" || set.countDelivery));
-  const totalNote = side === "left" ? `作業量に数える予定 (引取・現見・施工${set.countEstimates ? "・見積・現調・採寸" : ""}) の合計` : set.countDelivery ? "納品の合計 (作業量に数える)" : "納品の合計 (作業量には数えない)";
+  const holds = rows.some((r) => r.hold && (hasCols(r.cols) || r.mode === "fixed"));
+  const fixedRows = rows.filter((r) => r.mode === "fixed" && r.counted);
+  const totalNote =
+    side === "left"
+      ? `引取・現見・施工・採寸の枚数の合計${fixedRows.length ? ` (ほかに${perEventKindsLabel(set.perEventKinds)} ${fixedRows.length} 件 × ${sheetNum(set.perEvent) || "0"} 枚)` : ""}`
+      : set.countDelivery
+        ? "納品の合計 (作業量に数える)"
+        : "納品の合計 (作業量には数えない)";
   return (
     <div className="min-w-0" data-testid={`day-sheet-${side}`}>
       <h4 className="mb-1.5 flex items-center gap-2 text-xs font-semibold text-ink">
@@ -159,7 +169,15 @@ function SideTable({ side, rows, totals, ctx, set }: { side: SheetSide; rows: Sh
                           <KindMark kind={e.kind} />
                         </Link>
                       </td>
-                      <NumCells cols={r.cols} muted={!r.counted && !(side === "right" && !r.hold)} />
+                      {r.mode === "count" ? (
+                        <NumCells cols={r.cols} muted={!r.counted && !(side === "right" && !r.hold)} />
+                      ) : r.mode === "fixed" ? (
+                        <td colSpan={8} className={clsx("border-l border-line px-1 py-1 text-center text-[10px]", r.counted ? "text-ink-2" : "text-ink-3 italic")} title={`${perEventKindsLabel(set.perEventKinds)}の予定は 1 件 = ${sheetNum(r.fixed ?? 0) || "0"} 枚として作業量に足します (実際の枚数ではありません)`}>
+                          1件 {sheetNum(r.fixed ?? 0) || "0"}枚換算
+                        </td>
+                      ) : (
+                        <td colSpan={8} className="border-l border-line" />
+                      )}
                       <td className="truncate border-l border-line px-1 py-1 text-ink-2" title={r.remark}>
                         {r.remark}
                       </td>
@@ -203,7 +221,7 @@ function SideTable({ side, rows, totals, ctx, set }: { side: SheetSide; rows: Sh
               : list.map((r) => {
                   const e = r.event;
                   const names = staffNames(ctx, e.assigneeIds);
-                  const work = colsText(r.cols);
+                  const work = r.mode === "fixed" ? `1件 ${sheetNum(r.fixed ?? 0) || "0"}枚換算` : colsText(r.cols);
                   return (
                     <li key={e.id} className={clsx("px-2 py-1.5", r.hold && "opacity-70")}>
                       <Link href={eventHref(e)} data-ev={e.id} aria-label={rowLabel(ctx, r)} className="flex min-w-0 items-center gap-1.5 text-[13px]">
@@ -230,17 +248,53 @@ function SideTable({ side, rows, totals, ctx, set }: { side: SheetSide; rows: Sh
           <span className="font-semibold">計</span> {colsText(totals) || "0 枚"} <span className="text-ink-3">({totalNote})</span>
         </li>
       </ul>
-      {estimates && <p className="mt-1 text-[10px] text-ink-3">灰色の斜体の数字は見積・現調・採寸などの見込み・仮押さえです (作業量の合計には入れません)。</p>}
+      {holds && <p className="mt-1 text-[10px] text-ink-3">灰色の斜体は仮押さえです (作業量の合計には入れません)。</p>}
     </div>
   );
 }
 
-function LoadFooter({ s, ctx, set, filtered }: { s: StoreSheet; ctx: CalendarContext; set: DayLoadSettings; filtered: boolean }) {
+/** 前日繰越を手で直す (スプレッドシートで繰り越しの欄を書き直していたのと同じ) */
+function CarryFix({ s, day, returnTo }: { s: StoreSheet; day: string; returnTo: string }) {
+  const c = s.carry!;
+  return (
+    <details className="group inline-block align-middle" data-testid="carry-fix">
+      <summary className="ml-1 inline cursor-pointer list-none text-[11px] text-info-ink underline-offset-2 hover:underline">前日繰越を直す</summary>
+      <div className="mt-1.5 flex flex-wrap items-end gap-2 rounded-lg border border-line bg-panel p-2">
+        <form action={setDayCarry} className="flex flex-wrap items-end gap-2">
+          <input type="hidden" name="storeId" value={s.storeId} />
+          <input type="hidden" name="date" value={day} />
+          <input type="hidden" name="returnTo" value={returnTo} />
+          <label className="text-[11px] text-ink-2">
+            この日の前日繰越 (枚)
+            <Input type="number" inputMode="decimal" name="value" min={0} max={9999} step={0.1} defaultValue={c.value} required className="mt-0.5 h-8 w-24 text-sm" />
+          </label>
+          <Button type="submit" size="sm" variant="secondary">
+            保存
+          </Button>
+        </form>
+        {c.manual && (
+          <form action={setDayCarry}>
+            <input type="hidden" name="storeId" value={s.storeId} />
+            <input type="hidden" name="date" value={day} />
+            <input type="hidden" name="returnTo" value={returnTo} />
+            <input type="hidden" name="value" value="" />
+            <Button type="submit" size="sm" variant="ghost">
+              自動の計算に戻す
+            </Button>
+          </form>
+        )}
+        <p className="w-full text-[10px] text-ink-3">実際の進み具合に合わせて直すと、翌日からはこの枚数から繰り越します。</p>
+      </div>
+    </details>
+  );
+}
+
+function LoadFooter({ s, ctx, set, filtered, day, returnTo, canFix }: { s: StoreSheet; ctx: CalendarContext; set: DayLoadSettings; filtered: boolean; day: string; returnTo: string; canFix: boolean }) {
   const cap = s.capacity;
   const counted = cap?.members.filter((m) => m.counted) ?? [];
   const excluded = cap?.members.filter((m) => !m.counted) ?? [];
   const onLeave = counted.filter((m) => (m.leave ?? 0) > 0);
-  const kinds = `引取・現見・施工${set.countEstimates ? "・見積・現調・採寸" : ""}${set.countDelivery ? "・納品" : ""}`;
+  const kinds = `引取・現見・施工・採寸${set.countDelivery ? "・納品" : ""}`;
   return (
     <div className="mt-3 grid grid-cols-1 gap-3 rounded-xl border border-line bg-subtle/50 p-3 @4xl:grid-cols-[minmax(0,1fr)_auto] @4xl:items-center" data-testid="day-load">
       <div className="min-w-0 space-y-2">
@@ -278,9 +332,33 @@ function LoadFooter({ s, ctx, set, filtered }: { s: StoreSheet; ctx: CalendarCon
             </tbody>
           </table>
         </div>
+        {set.perEventKinds.length > 0 && (
+          <p className="text-xs text-ink-2" data-testid="day-fixed">
+            {perEventKindsLabel(set.perEventKinds)}: {s.fixed.events} 件 × {sheetNum(set.perEvent) || "0"} 枚 = <span className="font-semibold text-ink tnum">{sheetNum(s.fixed.load) || "0"}</span> 枚
+            <span className="ml-1 text-[11px] text-ink-3">(1 件の仕事量の換算。枚数の欄には入れません)</span>
+          </p>
+        )}
         <p className="text-xs text-ink-2">
-          換算作業量 = {workloadFormula(s.counted, set.weights)} = <span className="text-sm font-semibold text-ink tnum" data-testid="day-workload">{sheetNum(s.workload) || "0"}</span> 枚
+          換算作業量{s.carry ? " (その日)" : ""} = {workloadFormula(s.counted, set.weights, { events: s.fixed.events, per: set.perEvent })} ={" "}
+          <span className="text-sm font-semibold text-ink tnum" data-testid="day-workload">
+            {sheetNum(s.dayWorkload) || "0"}
+          </span>{" "}
+          枚
         </p>
+        {s.carry && (
+          <p className="text-xs text-ink-2" data-testid="day-carry">
+            前日繰越 = <span className="font-semibold text-ink tnum">{sheetNum(s.carry.value) || "0"}</span> 枚
+            <span className="ml-1 text-[11px] text-ink-3">{s.carry.manual ? "(手で直した値)" : "(前日の超過分)"}</span>
+            {canFix && <CarryFix s={s} day={day} returnTo={returnTo} />}
+            <span className="mt-0.5 block">
+              作業量の合計 = {sheetNum(s.dayWorkload) || "0"} + {sheetNum(s.carry.value) || "0"} ={" "}
+              <span className="text-sm font-semibold text-ink tnum" data-testid="day-total-load">
+                {sheetNum(s.workload) || "0"}
+              </span>{" "}
+              枚
+            </span>
+          </p>
+        )}
         {cap && (
           <p className="text-xs text-ink-2">
             対応可能枚数 = 対象 {sheetNum(cap.people) || "0"} 人 × {sheetNum(cap.perPerson)} 枚 = <span className="text-sm font-semibold text-ink tnum" data-testid="day-capacity">{sheetNum(cap.capacity) || "0"}</span> 枚
@@ -291,7 +369,7 @@ function LoadFooter({ s, ctx, set, filtered }: { s: StoreSheet; ctx: CalendarCon
             </span>
           </p>
         )}
-        {filtered && <p className="text-[11px] text-warn-ink">担当者・種別で絞り込み中のため、表示している予定だけの合計です。</p>}
+        {filtered && <p className="text-[11px] text-warn-ink">担当者・種別で絞り込み中のため、表示している予定だけの合計です (前日繰越はすべての予定から計算)。</p>}
         {s.leaves.length > 0 && (
           <p className="text-[11px] text-ink-3">
             休暇・不在:{" "}
@@ -307,7 +385,7 @@ function LoadFooter({ s, ctx, set, filtered }: { s: StoreSheet; ctx: CalendarCon
         )}
       </div>
       <div className="flex justify-start @4xl:justify-end">
-        <Verdict s={s} />
+        <Verdict s={s} carry={Boolean(s.carry)} />
       </div>
     </div>
   );
@@ -321,6 +399,9 @@ export function DaySheetView({
   addHref,
   settingsHref,
   filtered,
+  day,
+  returnTo,
+  canFixCarry,
 }: {
   sheets: StoreSheet[];
   ctx: CalendarContext;
@@ -329,6 +410,10 @@ export function DaySheetView({
   addHref?: (storeId: string) => string;
   settingsHref?: string;
   filtered: boolean;
+  day: string;
+  returnTo: string;
+  /** 前日繰越を直せる店舗か (自店舗・本部・管理者) */
+  canFixCarry: (storeId: string) => boolean;
 }) {
   return (
     <div className="space-y-4" data-testid="day-sheet">
@@ -373,15 +458,16 @@ export function DaySheetView({
               <span className="text-xs text-ink-3 tnum">予定 {s.rows.length} 件</span>
               {s.capacity && (
                 <span className="text-xs text-ink-2 tnum">
-                  作業量 <span className="font-semibold text-ink">{sheetNum(s.workload) || "0"}</span> / 対応可能 <span className="font-semibold text-ink">{sheetNum(s.capacity.capacity) || "0"}</span> 枚
+                  作業量 <span className="font-semibold text-ink">{sheetNum(s.workload) || "0"}</span>
+                  {s.carry && s.carry.value > 0 && <span className="text-ink-3"> (繰越 {sheetNum(s.carry.value)} を含む)</span>} / 対応可能 <span className="font-semibold text-ink">{sheetNum(s.capacity.capacity) || "0"}</span> 枚
                 </span>
               )}
-              <Verdict s={s} size="sm" />
+              <Verdict s={s} size="sm" carry={Boolean(s.carry)} />
               <span className="ml-auto flex items-center gap-3">
                 {settingsHref && (
                   <Link href={settingsHref} className="inline-flex items-center gap-1 text-xs text-ink-3 hover:text-ink">
                     <Settings2 className="h-3.5 w-3.5" aria-hidden />
-                    人数・換算の設定
+                    人数・換算・繰越の設定
                   </Link>
                 )}
                 {addHref && (
@@ -396,7 +482,7 @@ export function DaySheetView({
               <SideTable side="left" rows={left} totals={s.totals.left} ctx={ctx} set={set} />
               <SideTable side="right" rows={right} totals={s.totals.right} ctx={ctx} set={set} />
             </div>
-            <LoadFooter s={s} ctx={ctx} set={set} filtered={filtered} />
+            <LoadFooter s={s} ctx={ctx} set={set} filtered={filtered} day={day} returnTo={returnTo} canFix={canFixCarry(s.storeId)} />
           </section>
         );
       })}

@@ -219,6 +219,22 @@ export function splitName(raw: string): { area?: string; name?: string; extra?: 
   return { area, name: first || undefined, extra: tokens.slice(1).join(" ") || undefined, tags, customerLike: Boolean(first) };
 }
 
+/**
+ * 「襖 3」だけの行 (C〜J = 0・0・3・0・0・0・0・0) = 見積・現調・現場管理・会議などの 1 件の仕事量の目安
+ * (実際の枚数ではない。お客様のご説明 2026-11-25。予定表の上限の行で 1 件 = 3 枚として足していた)
+ */
+export const isLoadPlaceholderCounts = (counts: number[]): boolean => counts.length >= 3 && counts.every((n, i) => (i === 2 ? n === 3 : !n));
+
+/** 「襖 3」だけの引き取りの行で、名前・備考に見積・現調・現場の言葉があればその種類 (名前の欄だけで見ると引き取りになっていた) */
+export function placeholderKind(raw: string, remark: string | undefined): ScheduleKind | undefined {
+  const t = nk(`${raw} ${remark ?? ""}`);
+  if (ONSITE_RE.test(t)) return undefined;
+  if (isSiteSurveyText(t)) return "site_survey";
+  if (SURVEY_RE.test(t)) return "survey";
+  if (SITE_RE.test(t)) return "site";
+  return undefined;
+}
+
 /** 予定の種類 */
 export function kindOf(side: SheetSide, raw: string, total: number, customerLike: boolean): ScheduleKind {
   const s = nk(raw);
@@ -393,9 +409,13 @@ function readDay(rows: string[][], date: string, ref: (row: number) => string, s
         const remark = nk(r[base + 9]) || undefined;
         const staffText = nk(r[base + 10]) || undefined;
         const sp = splitName(raw);
-        const customerLike = sp.customerLike || total > 0 || ((SURVEY_RE.test(raw) || MEASURE_RE.test(raw)) && Boolean(nk(raw.replace(TAG_RE, ""))));
+        // 「襖 3」だけの行は 1 件の仕事量の目安 (見積・現調・会議など)。会議 (店長会議など) は社内の予定、備考に見積・現調とあれば見積・現調
+        const placeholder = isLoadPlaceholderCounts(counts);
+        const meetingRow = placeholder && !/^[(（]/.test(raw) && MEETING_RE.test(raw) && !SURVEY_RE.test(raw);
+        const customerLike = !meetingRow && (sp.customerLike || total > 0 || ((SURVEY_RE.test(raw) || MEASURE_RE.test(raw)) && Boolean(nk(raw.replace(TAG_RE, "")))));
         const name = sp.name ?? (customerLike ? nk(raw.replace(TAG_RE, " ").replace(TIME_TEXT_RE, " ")).split(" ")[0] : undefined);
-        const kind = kindOf(side, raw, total, customerLike);
+        let kind: ScheduleKind = meetingRow ? "meeting" : kindOf(side, raw, total, customerLike);
+        if (placeholder && kind === "pickup") kind = placeholderKind(raw, remark) ?? kind;
         const memoRow = !customerLike && kind !== "leave";
         const rowSlot = slotWord(remark) ?? slot;
         const time = parseTime(remark, rowSlot) ?? parseTime(staffText, rowSlot) ?? (memoRow ? parseTime(raw, rowSlot) : undefined);

@@ -16,9 +16,19 @@ import { NEW_WORK, countsFromLines, countsFromText, emptyCounts, hasWork, mergeC
  * 5. 予定の件名・メモ (移行した予定表の「畳 表替え12 / 襖 張替3」、手書きの「タ6フ1」「縁無半12」)
  * 6. 見積の予定 (現地調査・採寸) の問い合わせ: 内容の文と種別 (畳・襖・障子・網戸)
  * 施工 (リフォーム) と社内の予定は対象外 (これまでどおりの表示)
+ * 移行した予定表の見積・現調・現場管理などの行の「襖 3」は実際の枚数ではなく 1 件の仕事量の目安 (お客様のご説明 2026-11-25) なので読まない
  */
 
 const CASE_KINDS = new Set(["pickup", "delivery", "survey", "site_survey", "onsite_quote", "measure", "visit", "site"]);
+/** 予定表 (スプレッドシート) で 1 件の仕事量の目安として「襖 3」を書いていた種類 */
+const PLACEHOLDER_KINDS = new Set(["survey", "site_survey", "site", "visit", "measure"]);
+const PLACEHOLDER_LINE = "襖 張替3";
+
+/** 移行した予定のメモの 1 行目が 1 件の仕事量の目安の「襖 張替3」(見積・現調・現場管理など) */
+export function isLoadPlaceholder(e: Pick<ScheduleEvent, "source" | "kind" | "memo">): boolean {
+  return e.source === "import" && PLACEHOLDER_KINDS.has(e.kind) && (e.memo ?? "").split("\n")[0].trim() === PLACEHOLDER_LINE;
+}
+
 const CATEGORY_KEY: Partial<Record<string, WorkKey>> = { tatami: "tatami", fusuma: "fusuma", shoji: "shoji", amido: "amido", curtain: "curtain" };
 
 interface Lookup {
@@ -133,7 +143,7 @@ function eventCounts(lk: Lookup, e: ScheduleEvent): WorkCounts | undefined {
 
   // 件名・メモ: 「畳 表替え12 / 襖 張替3」(移行した予定表はメモの 1 行目が数量の欄。2 行目からは手書きのメモ)。
   // なければメモの手書きの省略「タ6フ1」。へり無し畳 (「縁無半12」) はメモのどこに書いてあっても見る
-  const memoText = e.memo ?? "";
+  const memoText = isLoadPlaceholder(e) ? (e.memo ?? "").split("\n").slice(1).join("\n") : (e.memo ?? "");
   const structuredText = e.source === "import" ? `${e.title}\n${memoText.split("\n")[0]}` : `${e.title}\n${memoText}`;
   const herinashi = countsFromText(memoText);
   const withHerinashi = (c: WorkCounts): WorkCounts => (herinashi.herinashiSeen ? { ...c, herinashi: Math.max(c.herinashi, herinashi.herinashi), herinashiSeen: true, herinashiHalf: c.herinashiHalf || herinashi.herinashiHalf, seen: { ...c.seen, ...(c.tatami ? {} : { tatami: true }) } } : c);
