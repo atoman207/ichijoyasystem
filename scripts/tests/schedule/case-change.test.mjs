@@ -312,6 +312,41 @@ const ap = sch.properties.appointments;
 ok(sch.required.includes("appointments") && sch.required.includes("siteAddress") && ap.items.required.length === Object.keys(ap.items.properties).length && ap.items.additionalProperties === false, "AI の JSON Schema: 日程と施工現場の住所 (全項目 required・additionalProperties: false)");
 eq(R.normalizeReception({ siteAddress: " 熊本県テスト市南町1 " }).siteAddress, "熊本県テスト市南町1", "施工現場の住所");
 
+/* ================================================================== */
+section("⑪ 予定表からの依頼 (メンション)");
+const CR = await imp("lib/case-requests.ts");
+const MA = await imp("lib/actions/messages.ts");
+const Q = await imp("lib/db/queries.ts");
+const evReq = db().schedule.find((x) => x.id === "ev_cc_pk");
+d = await getData(staffUser, evReq.id);
+eq([d.request?.kinds.map((k) => k.label), d.request?.storeId], [["日程変更依頼", "仕様変更依頼", "クレーム・手直し", "その他"], M], "小さな画面のデータ: 依頼の種類の候補と宛先の店舗 (案件の店舗)");
+r = await act(staffUser, () => CQ.sendCaseRequest(form({ eventId: evReq.id, kind: "schedule_change", target: "store", storeId: M, note: "引取を午後にしてほしいとのこと", due: "tomorrow", returnTo: ret })));
+let th = db().threads.filter((x) => x.caseRequest).at(-1);
+const members = db().users.filter((u) => u.active && u.storeId === M && (u.role === "store_manager" || u.role === "store_staff") && u.id !== staffUser.id).map((u) => u.id);
+eq([r.err, th?.caseRequest, th?.relatedId, th?.eventId, th?.taskStatus, th?.assigneeStoreId], [null, "schedule_change", "o_cc_a", evReq.id, "requested", M], `店舗に日程変更依頼を送る (${r.msg ?? r.err})`);
+ok(members.length > 0 && members.every((id) => th.assigneeIds.includes(id)) && !th.assigneeIds.includes(staffUser.id), "宛先: 店舗の店長・スタッフ全員 (送った本人を除く)");
+const msg0 = db().messages.find((m) => m.threadId === th.id);
+ok(/【日程変更依頼】/.test(msg0.body) && /O-CC-1/.test(msg0.body) && /引取を午後に/.test(msg0.body) && /案件を開く: \/orders\/o_cc_a/.test(msg0.body) && msg0.mentions.includes(manager.id), "本文: 種類・案件番号・内容・案件の画面 (メンション)");
+ok(/日程変更依頼/.test(th.title) && /O-CC-1/.test(th.title), "件名で、どの案件の依頼かすぐ分かる");
+ok(Boolean(th.dueDate), "期限 (明日中)");
+const nt = Q.notificationsFor(manager).tasks.find((x) => x.threadId === th.id);
+ok(Boolean(nt), "店長のお知らせ (業務依頼) に出る");
+eq(CR.caseRequestHref(db(), th), "/orders/o_cc_a#case-requests", "お知らせを押すと案件の画面の「この案件への依頼」を開く");
+ok(db().orders.find((x) => x.id === "o_cc_a").progressNotes.some((n) => /日程変更依頼を送信/.test(n.body)), "受注の経過メモに残る");
+ok(db().auditLogs.some((l) => l.entity === "thread" && l.entityId === th.id && /日程変更依頼を送信/.test(l.summary)), "変更履歴に送信の記録 (日時・送信者・送信先)");
+ok(CR.caseRequestsOf(db(), ["inq_cc_a"]).some((x) => x.id === th.id), "問い合わせ・見積の ID からでも「この案件への依頼」に出る");
+r = await act(manager, () => MA.taskStep(th.id, "ack", form({ returnTo: "/orders/o_cc_a#case-requests" })));
+eq([r.err, db().threads.find((x) => x.id === th.id).taskStatus, r.path], [null, "acknowledged", "/orders/o_cc_a"], "受けた人が案件の画面で「確認しました」→ 案件の画面に戻る");
+r = await act(staffUser, () => CQ.sendCaseRequest(form({ caseId: "q_cc_a", kind: "claim", target: "users", assigneeIds: [manager.id], note: "引手がゆるい", urgent: "1", returnTo: "/quotes/q_cc_a" })));
+th = db().threads.filter((x) => x.caseRequest).at(-1);
+eq([r.err, th.caseRequest, th.assigneeIds, th.assigneeStoreId, /【至急】/.test(th.title)], [null, "claim", [manager.id], undefined, true], `案件の画面から担当者を選んでクレーム・手直し (至急) (${r.msg ?? r.err})`);
+r = await act(staffUser, () => CQ.sendCaseRequest(form({ eventId: evReq.id, kind: "other", target: "store", note: "", returnTo: ret })));
+ok(/内容を書いて/.test(r.err ?? ""), "「その他」は内容が必須");
+r = await act(staffUser, () => CQ.sendCaseRequest(form({ eventId: evReq.id, kind: "spec_change", target: "users", assigneeIds: [staffUser.id], returnTo: ret })));
+ok(/担当者を選んで/.test(r.err ?? ""), "自分だけを宛先にはできない");
+r = await act(staffUser, () => CQ.sendCaseRequest(form({ eventId: evReq.id, kind: "bogus", target: "store", returnTo: ret })));
+ok(/種類/.test(r.err ?? ""), "種類のない依頼は断る");
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   for (const f of fails) console.log("  ✗", f);

@@ -980,7 +980,14 @@ export interface Thread {
   reportedAt?: string;
   confirmedAt?: string;
   confirmedBy?: string;
+  /** 案件への依頼 (メンション) の種類 (予定表・案件の画面から。お客様のご要望 2026-11-25「⑪」。src/lib/case-requests.ts) */
+  caseRequest?: CaseRequestKind;
+  /** 依頼を送った予定 (予定表の小さな画面から送ったとき) */
+  eventId?: string;
 }
+
+/** 案件への依頼の種類: 日程変更依頼 / 仕様変更依頼 / クレーム・手直し / その他 */
+export type CaseRequestKind = "schedule_change" | "spec_change" | "claim" | "other";
 
 /**
  * 案件の変更のお知らせ (お客様のご要望 2026-11-25「⑥ 変更時の通知・履歴」。src/lib/change-notices.ts)

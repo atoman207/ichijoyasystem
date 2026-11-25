@@ -1,4 +1,4 @@
-import type { MediaKey, QuoteItem, ScheduleKind, StoreId } from "@/lib/db/types";
+import type { CaseRequestKind, MediaKey, QuoteItem, ScheduleKind, StoreId } from "@/lib/db/types";
 import type { TaxMode } from "@/lib/quote-calc";
 
 /** 予定表で予定を押したときの小さな画面の中身 (/api/schedule/events/[id] → EventQuickDialog) */
@@ -58,6 +58,19 @@ export interface EventQuickData {
   pair?: QuickPair;
   /** 案件の確認・変更・追加 (お客様のご要望 2026-11-25「③⑤⑨⑩」。src/lib/actions/case-quick.ts) */
   caseEdit?: QuickCase;
+  /** 担当店舗・担当者への依頼 (メンション。お客様のご要望 2026-11-25「⑪」。src/lib/case-requests.ts) */
+  request?: QuickRequest;
+}
+
+export interface QuickRequest {
+  /** 依頼する案件 (例: 受注 O-2026-0012 山田 花子 様) */
+  caseLabel: string;
+  /** 宛先の店舗の初期値 (案件の店舗) */
+  storeId: StoreId;
+  stores: { id: StoreId; name: string }[];
+  kinds: { id: CaseRequestKind; label: string; hint: string }[];
+  /** この案件への対応中の依頼 */
+  open: { id: string; title: string; status: string; at: string; from: string; to: string }[];
 }
 
 export interface QuickCase {

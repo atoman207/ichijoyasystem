@@ -9,7 +9,7 @@ import { periodLabel } from "@/lib/calendar";
 import { eventLabeler } from "@/lib/schedule-label";
 import { scheduleWork } from "@/lib/schedule-work";
 import { workDescription, workText } from "@/lib/work-summary";
-import type { EventQuickData, QuickCase, QuickMap, QuickPair, QuickRemove, QuickStaff, QuickStoreChange } from "@/components/schedule/quick-types";
+import type { EventQuickData, QuickCase, QuickMap, QuickPair, QuickRemove, QuickRequest, QuickStaff, QuickStoreChange } from "@/components/schedule/quick-types";
 import { approverRole, skipsApproval } from "@/lib/auth/permissions";
 import { caseChainOf, pendingStoreChange, storeChangeBlocker } from "@/lib/case-store";
 import { touchesConfirmedSales } from "@/lib/approval-decide";
@@ -23,7 +23,8 @@ import { initialsByUser } from "@/lib/schedule-sheet/initials";
 import { eventPair } from "@/lib/schedule-pair";
 import { handoverLabel } from "@/lib/handover";
 import { approvalSettings } from "@/lib/approval-rules";
-import { CATEGORY_LABEL, SCHEDULE_KIND } from "@/lib/constants";
+import { CATEGORY_LABEL, SCHEDULE_KIND, TASK_STATUS } from "@/lib/constants";
+import { CASE_REQUEST_KIND, CASE_REQUEST_KINDS, caseRequestsOf } from "@/lib/case-requests";
 import type { ScheduleKind } from "@/lib/db/types";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
 import { canLinkToCustomer, caseRelinkBlocker, isPlaceholderCustomer } from "@/lib/customer-link";
@@ -111,6 +112,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     staff: quickStaff(db, e.storeId),
     pair: quickPair(db, user, e, canEdit, labeler, users, resolver),
     caseEdit: quickCase(db, user, e, resolver),
+    request: quickRequest(db, e, resolver),
   };
   return NextResponse.json(data, { headers: NO_STORE });
 }
@@ -281,4 +283,27 @@ function quickCase(db: Database, user: User, e: ScheduleEvent, resolver: ReturnT
     };
   }
   return out;
+}
+
+/** 担当店舗・担当者への依頼 (メンション。お客様のご要望 2026-11-25「⑪」) */
+function quickRequest(db: Database, e: ScheduleEvent, resolver: ReturnType<typeof createCaseResolver>): QuickRequest | undefined {
+  const ref = resolver.ofEvent(e);
+  const chain = ref ? caseChainOf(db, ref.id) : undefined;
+  const customerId = chain ? (chain.order?.customerId ?? chain.quote?.customerId ?? chain.inquiry?.customerId) : e.customerId;
+  if (!chain && !customerId) return undefined;
+  const customer = customerId ? db.customers.find((c) => c.id === customerId) : undefined;
+  const name = (id: string) => db.users.find((u) => u.id === id)?.name ?? "-";
+  const storeName = (id: string) => db.stores.find((s) => s.id === id)?.name ?? id;
+  const ids = chain ? [chain.order?.id, chain.quote?.id, chain.inquiry?.id] : [customerId];
+  const open = caseRequestsOf(db, ids)
+    .filter((t) => t.taskStatus && t.taskStatus !== "confirmed")
+    .slice(0, 4)
+    .map((t) => ({ id: t.id, title: t.title, status: TASK_STATUS[t.taskStatus!].label, at: t.createdAt, from: name(t.createdBy), to: t.assigneeStoreId ? `${storeName(t.assigneeStoreId)} (店舗)` : (t.assigneeIds ?? []).map(name).join("・") }));
+  return {
+    caseLabel: [chain ? `${ref?.stage ?? ""} ${chain.head.number}`.trim() : "", customer ? `${customer.name} 様` : ""].filter(Boolean).join(" "),
+    storeId: chain?.head.storeId ?? e.storeId,
+    stores: db.stores.map((s) => ({ id: s.id, name: s.name })),
+    kinds: CASE_REQUEST_KINDS.map((k) => ({ id: k, label: CASE_REQUEST_KIND[k].label, hint: CASE_REQUEST_KIND[k].hint })),
+    open,
+  };
 }

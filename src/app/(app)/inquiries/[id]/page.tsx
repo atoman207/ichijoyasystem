@@ -1,4 +1,5 @@
 import { CaseChangeHistory } from "@/components/features/CaseChangeHistory";
+import { CaseRequestsCard } from "@/components/features/CaseRequestsCard";
 import type { ReactNode } from "react";
 import { CaseViewBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
 import { inquiryAccessInfo, deniedHref } from "@/lib/case-access";
@@ -483,6 +484,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
               </div>
             )}
           </Card>
+          <CaseRequestsCard db={db} user={user} ids={[inq.id, inq.quoteId, db.orders.find((x) => x.quoteId && x.quoteId === inq.quoteId)?.id]} caseId={inq.id} storeId={inq.storeId} returnTo={`/inquiries/${inq.id}`} />
           <CaseChangeHistory db={db} ids={[inq.id, inq.quoteId, db.orders.find((x) => x.quoteId && x.quoteId === inq.quoteId)?.id]} />
           <Card>
             <CardHeader title="変更履歴" />

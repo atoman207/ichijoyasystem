@@ -444,7 +444,9 @@ create table if not exists threads (
   assignee_store_id text,
   purpose text,
   reminded_at timestamptz,
-  remind_count integer
+  remind_count integer,
+  case_request text,
+  event_id text
 );
 comment on table threads is '社内連絡 (スレッド)';
 
@@ -1996,6 +1998,8 @@ alter table threads add column if not exists assignee_store_id text;
 alter table threads add column if not exists purpose text;
 alter table threads add column if not exists reminded_at timestamptz;
 alter table threads add column if not exists remind_count integer;
+alter table threads add column if not exists case_request text;
+alter table threads add column if not exists event_id text;
 alter table messages add column if not exists thread_id text not null references threads(id) on delete cascade;
 alter table messages add column if not exists user_id text not null;
 alter table messages add column if not exists body text not null;

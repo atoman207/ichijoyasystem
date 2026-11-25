@@ -1,4 +1,5 @@
 import { CaseChangeHistory } from "@/components/features/CaseChangeHistory";
+import { CaseRequestsCard } from "@/components/features/CaseRequestsCard";
 import { CaseCustomerSearch } from "@/components/features/LinkSearch";
 import { relinkCase } from "@/lib/actions/case-quick";
 import { caseRelinkBlocker } from "@/lib/customer-link";
@@ -355,6 +356,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
           <RecordDocDrafts db={db} user={user} type="quote" id={q.id} number={q.number} />
           <RecordStamp db={db} targets={[{ entity: "quote", id: q.id }]} created={{ by: q.createdBy, at: q.createdAt }} approved={q.approvedBy ? [{ by: q.approvedBy, at: q.approvedAt }] : []} />
           <ApprovalHistoryCard approvals={chain.approvals.filter((a) => a.targetId === q.id)} />
+          <CaseRequestsCard db={db} user={user} ids={[q.id, q.orderId ?? db.orders.find((x) => x.quoteId === q.id)?.id, q.inquiryId]} caseId={q.id} storeId={q.storeId} returnTo={`/quotes/${q.id}`} />
           <CaseChangeHistory db={db} ids={[q.id, q.orderId ?? db.orders.find((x) => x.quoteId === q.id)?.id, q.inquiryId]} />
           <HistoryCard db={db} user={user} targets={[{ entity: "quote", id: q.id }]} />
         </div>

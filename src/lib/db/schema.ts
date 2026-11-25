@@ -540,6 +540,9 @@ export const TABLES: TableDef[] = [
       ["purpose", "text"],
       ["remindedAt", ts],
       ["remindCount", "integer"],
+      // 案件への依頼 (メンション) の種類と送った予定 (お客様のご要望 2026-11-25「⑪」。src/lib/case-requests.ts)
+      ["caseRequest", "text"],
+      ["eventId", "text"],
     ],
     orderBy: ["created_at"],
   },

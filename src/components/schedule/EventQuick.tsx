@@ -5,10 +5,10 @@ import { createPortal } from "react-dom";
 import { usePathname, useSearchParams } from "next/navigation";
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
-import { CalendarPlus, ClipboardList, ExternalLink, FileText, FileUp, Link2, MapPin, Navigation, Pencil, Phone, Store, Trash2, TriangleAlert, Truck, UserRound, Users, X } from "lucide-react";
+import { CalendarPlus, ClipboardList, ExternalLink, FileText, FileUp, Link2, MapPin, Megaphone, Navigation, Pencil, Phone, Store, Trash2, TriangleAlert, Truck, UserRound, Users, X } from "lucide-react";
 import type { QuoteItem, ScheduleKind } from "@/lib/db/types";
 import { quoteTotals } from "@/lib/quote-calc";
-import { quickAmendLines, quickNewCase, relinkCase, setCaseSite } from "@/lib/actions/case-quick";
+import { quickAmendLines, quickNewCase, relinkCase, sendCaseRequest, setCaseSite } from "@/lib/actions/case-quick";
 import { CaseCustomerSearch } from "@/components/features/LinkSearch";
 import { MediaSelect } from "@/components/ops-reports/MediaFields";
 import { QUICK_MAX_ASSIGNEES, SCHEDULE_KIND } from "@/lib/constants";
@@ -626,6 +626,7 @@ function QuickBody({ data, returnTo, onOpenEvent, onReload }: { data: EventQuick
       <div className="mb-3 divide-y divide-line overflow-hidden rounded-xl border border-line bg-subtle/40" data-testid="event-quick-top">
         <MapRow map={data.map} eventId={data.id} returnTo={returnTo} onReload={onReload} />
         <AssigneeRow data={data} returnTo={returnTo} />
+        <RequestRow data={data} returnTo={returnTo} />
         <WorkRow data={data} returnTo={returnTo} />
         <StoreRow data={data} returnTo={returnTo} />
         <PairRow data={data} returnTo={returnTo} onOpenEvent={onOpenEvent} />
@@ -1357,5 +1358,109 @@ function NewCaseBlock({ data, returnTo }: { data: EventQuickData; returnTo: stri
         </Button>
       </form>
     </Disclosure>
+  );
+}
+
+/**
+ * 担当店舗・担当者への依頼 (メンション) (お客様のご要望 2026-11-25「⑪」)。種類 (日程変更依頼・仕様変更依頼・クレーム・手直し・その他) を選び、内容を追記して送る。
+ * 受けた人はベルから案件の画面を直接開け、送った内容・日時・送信者・送信先は案件の「この案件への依頼」に残る (src/lib/case-requests.ts)
+ */
+function RequestRow({ data, returnTo }: { data: EventQuickData; returnTo: string }) {
+  const rq = data.request;
+  const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState<string>("");
+  const [target, setTarget] = useState<"store" | "users">("store");
+  const [sel, setSel] = useState<string[]>([]);
+  if (!rq) return null;
+  const hint = rq.kinds.find((k) => k.id === kind)?.hint;
+  return (
+    <TopRow label="依頼" icon={<Megaphone className="h-3.5 w-3.5" aria-hidden />} testId="event-quick-request">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className={buttonClass(open ? "soft" : "secondary", "sm")} data-testid="request-toggle">
+          {open ? "閉じる" : "担当店舗・担当者に依頼を送る"}
+        </button>
+        {rq.open.length > 0 && <span className="text-[11px] text-warn-ink">対応中の依頼 {rq.open.length} 件</span>}
+      </div>
+      {rq.open.length > 0 && !open && (
+        <ul className="mt-1 space-y-0.5 text-[11px] text-ink-2">
+          {rq.open.map((x) => (
+            <li key={x.id} className="truncate">
+              <Link href={`/messages/${x.id}`} className="text-accent hover:underline">
+                {x.title}
+              </Link>{" "}
+              · {x.status} · {x.from} → {x.to}
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && (
+        <form action={sendCaseRequest} className="mt-2 space-y-2 rounded-xl border border-accent/30 bg-accent-soft/20 p-2.5" data-testid="request-form">
+          <input type="hidden" name="returnTo" value={returnTo} />
+          <input type="hidden" name="eventId" value={data.id} />
+          <input type="hidden" name="kind" value={kind} />
+          <input type="hidden" name="target" value={target} />
+          {target === "users" && sel.map((id) => <input key={id} type="hidden" name="assigneeIds" value={id} />)}
+          <p className="text-[11px] text-ink-3">案件: {rq.caseLabel}</p>
+          <fieldset>
+            <legend className="label">依頼の種類</legend>
+            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="依頼の種類">
+              {rq.kinds.map((k) => (
+                <button key={k.id} type="button" role="radio" aria-checked={kind === k.id} onClick={() => setKind(k.id)} className={clsx("rounded-lg border px-3 py-1.5 text-xs", kind === k.id ? "border-accent bg-accent-soft font-medium text-accent-ink" : "border-line bg-panel text-ink-2 hover:border-accent/50")}>
+                  {k.label}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend className="label">宛先</legend>
+            <div className="flex flex-wrap gap-1.5">
+              <button type="button" onClick={() => setTarget("store")} aria-pressed={target === "store"} className={clsx("rounded-lg border px-3 py-1.5 text-xs", target === "store" ? "border-accent bg-panel font-medium text-ink" : "border-line bg-panel text-ink-2")}>
+                店舗に送る
+              </button>
+              <button type="button" onClick={() => setTarget("users")} aria-pressed={target === "users"} className={clsx("rounded-lg border px-3 py-1.5 text-xs", target === "users" ? "border-accent bg-panel font-medium text-ink" : "border-line bg-panel text-ink-2")}>
+                担当者を選ぶ
+              </button>
+            </div>
+            {target === "store" ? (
+              <label className="mt-1.5 block">
+                <span className="sr-only">宛先の店舗</span>
+                <select name="storeId" defaultValue={rq.storeId} className="field">
+                  {rq.stores.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} (店長・スタッフ全員){s.id === rq.storeId ? " ← 担当店舗" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <StaffPicker staff={data.staff} selected={sel} onChange={setSel} storeName={data.storeName} />
+            )}
+          </fieldset>
+          <label className="block">
+            <span className="label">内容{kind === "other" ? " (必須)" : " (追記があれば)"}</span>
+            <textarea name="note" rows={3} maxLength={2000} required={kind === "other"} placeholder={hint ?? "依頼の種類を選ぶと例が出ます"} className="field" />
+          </label>
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="block">
+              <span className="label">期限</span>
+              <select name="due" defaultValue="none" className="field w-auto">
+                <option value="none">期限なし</option>
+                <option value="noon">本日12時まで</option>
+                <option value="today">本日中</option>
+                <option value="tomorrow">明日中</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5 pb-2 text-xs text-ink">
+              <input type="checkbox" name="urgent" value="1" className="h-4 w-4" />
+              至急
+            </label>
+          </div>
+          <p className="text-[11px] leading-relaxed text-ink-3">受けた人のお知らせ (ベル) に届き、押すとこの案件の画面が開きます。業務依頼として「確認しました」「報告」で進められ、送った内容・日時・送信者・送信先は案件の「この案件への依頼」に残ります。</p>
+          <Button type="submit" size="sm" disabled={!kind || (target === "users" && sel.length === 0)} data-testid="request-submit">
+            依頼を送る
+          </Button>
+        </form>
+      )}
+    </TopRow>
   );
 }

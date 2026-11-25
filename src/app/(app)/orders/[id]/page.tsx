@@ -13,6 +13,7 @@ import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, reques
 import { WORK_ROLES, WORK_ROLE_LABEL, workStaffOf } from "@/lib/work-staff";
 import { WorkStaffFields } from "@/components/features/WorkStaffFields";
 import { CaseChangeHistory } from "@/components/features/CaseChangeHistory";
+import { CaseRequestsCard } from "@/components/features/CaseRequestsCard";
 import { CaseCustomerSearch } from "@/components/features/LinkSearch";
 import { relinkCase } from "@/lib/actions/case-quick";
 import { caseRelinkBlocker } from "@/lib/customer-link";
@@ -719,6 +720,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           <AiSummary kind="order" id={o.id} />
           <RecordDocDrafts db={db} user={user} type="order" id={o.id} number={o.number} />
           <RecordStamp db={db} targets={[{ entity: "order", id: o.id }]} created={{ by: o.createdBy, at: o.createdAt }} approved={o.approvedBy ? [{ by: o.approvedBy }] : []} />
+          <CaseRequestsCard db={db} user={user} ids={[o.id, chain.quote?.id, chain.quote?.inquiryId]} caseId={o.id} storeId={o.storeId} returnTo={`/orders/${o.id}`} />
           <CaseChangeHistory db={db} ids={[o.id, chain.quote?.id, chain.quote?.inquiryId]} />
           <HistoryCard
             db={db}

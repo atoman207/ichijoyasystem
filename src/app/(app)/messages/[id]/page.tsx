@@ -1,3 +1,4 @@
+import { CASE_REQUEST_KIND, caseRequestHref } from "@/lib/case-requests";
 import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { canConfirmTask, canViewThread } from "@/lib/auth/permissions";
@@ -8,7 +9,7 @@ import { postMessage, setThreadStatus, taskStep } from "@/lib/actions/messages";
 import { fmtDate, fmtDateTime, toDateKey } from "@/lib/format";
 import { TASK_STATUS, THREAD_KIND_LABEL } from "@/lib/constants";
 import type { MessageEvent } from "@/lib/db/types";
-import { Avatar, Badge, Button, Card, CardHeader, Field, Flash, PageHeader, StatusBadge, StoreTag, Textarea } from "@/components/ui";
+import { Avatar, Badge, Button, Card, CardHeader, Field, Flash, PageHeader, StatusBadge, StoreTag, Textarea, LinkButton } from "@/components/ui";
 
 const EVENT_LABEL: Record<MessageEvent, { label: string; tone: "info" | "accent" | "good" | "serious" }> = {
   ack: { label: "確認しました", tone: "info" },
@@ -34,6 +35,7 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
   const messages = db.messages.filter((m) => m.threadId === id).sort((a, b) => a.at.localeCompare(b.at));
   const users = db.users.filter((u) => u.active && u.id !== user.id);
   const href = relatedHref(t.relatedType, t.relatedId);
+  const caseHrefOf = caseRequestHref(db, t);
   const isTask = Boolean(t.taskStatus);
   const isAssignee = (t.assigneeIds ?? []).includes(user.id);
   const isRequester = canConfirmTask(user, t);
@@ -56,6 +58,19 @@ export default async function ThreadPage({ params, searchParams }: { params: Pro
         }
       />
 
+      {/* 案件への依頼 (予定表・案件の画面から送ったメンション): どの案件かをすぐ確かめ、案件・予定を開く (お客様のご要望 2026-11-25「⑪」) */}
+      {t.caseRequest && (
+        <Card className="mb-4 border-accent/40" data-testid="thread-case">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone={t.caseRequest === "claim" ? "critical" : "accent"} dot={false}>{CASE_REQUEST_KIND[t.caseRequest].label}</Badge>
+            <span className="text-sm font-semibold text-ink">{t.relatedLabel ?? "案件"}</span>
+            <span className="ml-auto flex flex-wrap gap-2">
+              {caseHrefOf && <LinkButton href={caseHrefOf} size="sm">この案件を開く</LinkButton>}
+              {t.eventId && db.schedule.some((e) => e.id === t.eventId) && <LinkButton href={`/schedule/${t.eventId}`} size="sm" variant="secondary">予定を開く</LinkButton>}
+            </span>
+          </div>
+        </Card>
+      )}
       {isTask && (
         <Card className="mb-4 border-accent/30">
           <CardHeader title="業務依頼" description={`依頼 ${userName(t.createdBy)} → 依頼先 ${(t.assigneeIds ?? []).map((a) => userName(a)).join("・")}${t.dueDate ? ` · 期限 ${fmtDate(t.dueDate)}` : ""}`} />

@@ -5,7 +5,13 @@ import { revalidatePath } from "next/cache";
 import { addAudit, getDb, mutate, newId, nextNumber, nowIso } from "@/lib/db/store";
 import type { Inquiry, ScheduleEvent, ScheduleKind, StoreId } from "@/lib/db/types";
 import { CATEGORY_LABEL, CHANNEL_LABEL, QUICK_MAX_ASSIGNEES, SCHEDULE_KIND, SCHEDULE_KINDS } from "@/lib/constants";
-import { canEditCaseStore } from "@/lib/auth/permissions";
+import { canEditCaseStore, canViewCompanySchedule } from "@/lib/auth/permissions";
+import { createCaseResolver } from "@/lib/db/schedule";
+import { CASE_REQUEST_KIND, createCaseRequest, isCaseRequestKind } from "@/lib/case-requests";
+import { requestTargets } from "@/lib/inquiry-requests";
+import { dueAtFrom } from "@/lib/inquiry-flow";
+import { taskNotices } from "@/lib/notify/events";
+import { sendAndRecord } from "@/lib/notify/send";
 import { caseChainOf } from "@/lib/case-store";
 import { canLinkToCustomer, caseRelinkBlocker, moveCaseToCustomer } from "@/lib/customer-link";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
@@ -260,4 +266,51 @@ export async function quickNewCase(formData: FormData) {
   revalidatePath("/schedule");
   revalidatePath(`/customers/${customer.id}`);
   redirect(withMsg(ret, `${customer.name} 様の新しい案件を登録しました (${storeName})。${eventId ? "予定表に予定も登録しました。" : "日程が決まったら、問い合わせの画面か予定表から予定を登録してください。"}`));
+}
+
+/**
+ * 案件への依頼 (メンション) を送る (お客様のご要望 2026-11-25「⑪」。src/lib/case-requests.ts)。
+ * eventId (予定表の小さな画面から) か caseId (案件の画面から)。宛先は target = store (店舗の店長・スタッフ全員) / users (担当者を選ぶ)。
+ * 種類 kind・内容 note (「その他」は必須)・期限 due (なし・本日12時まで・本日中・明日中)・至急 urgent
+ */
+export async function sendCaseRequest(formData: FormData) {
+  const user = await requireActionUser();
+  const ret = back(formData, "/schedule");
+  if (!canViewCompanySchedule(user)) fail(ret, "依頼を送る権限がありません。");
+  const kind = str(formData, "kind");
+  if (!isCaseRequestKind(kind)) fail(ret, "依頼の種類 (日程変更依頼・仕様変更依頼・クレーム・手直し・その他) を選んでください。");
+  const note = str(formData, "note").slice(0, 2000);
+  if (kind === "other" && !note) fail(ret, "「その他」の依頼は、内容を書いてください。");
+  const db0 = getDb();
+  const eventId = str(formData, "eventId");
+  const ev = eventId ? db0.schedule.find((x) => x.id === eventId) : undefined;
+  if (eventId && !ev) fail(ret, "予定が見つかりません (削除された可能性があります)。");
+  const ref = ev ? createCaseResolver(db0).ofEvent(ev) : undefined;
+  const chain = caseChainOf(db0, str(formData, "caseId") || ref?.id);
+  const customerId = chain ? undefined : ev?.customerId;
+  if (!chain && !customerId) fail(ret, "依頼を送る案件が見つかりません (案件・お客様にひも付いた予定から送れます)。");
+  const active = db0.users.filter((u) => u.active && !u.id.startsWith("u_review"));
+  const byUsers = str(formData, "target") === "users";
+  const assignees = byUsers ? [...new Set(formData.getAll("assigneeIds").map(String))].map((id) => active.find((u) => u.id === id)).filter((u): u is NonNullable<typeof u> => Boolean(u)).slice(0, 10) : [];
+  if (byUsers && !assignees.filter((u) => u.id !== user.id).length) fail(ret, "依頼する担当者を選んでください (自分のほかに 1 人以上)。");
+  const storeRaw = str(formData, "storeId");
+  const storeId = (db0.stores.some((s) => s.id === storeRaw) ? storeRaw : chain?.head.storeId ?? ev?.storeId ?? user.storeId) as StoreId;
+  if (!byUsers && !requestTargets(db0, storeId).filter((u) => u.id !== user.id).length) fail(ret, "この店舗には依頼を受ける社員 (店長・スタッフ) がいません。担当者を選んで送ってください。");
+  const dueChoice = str(formData, "due");
+  const due = dueChoice === "noon" || dueChoice === "today" || dueChoice === "tomorrow" ? dueAtFrom(dueChoice, undefined, new Date()) : {};
+  if (due.error) fail(ret, due.error);
+  const urgent = str(formData, "urgent") === "1";
+  let tid = "";
+  await mutate((db) => {
+    const c = chain ? caseChainOf(db, chain.head.id) : undefined;
+    const e = ev ? db.schedule.find((x) => x.id === ev.id) : undefined;
+    const t = createCaseRequest(db, { actor: user, chain: c, customerId, event: e, kind, note: note || `${CASE_REQUEST_KIND[kind].label}をお願いします。`, storeId, assignees: byUsers ? assignees : undefined, dueAt: due.dueAt, urgent });
+    tid = t.id;
+  });
+  const db1 = getDb();
+  const t = db1.threads.find((x) => x.id === tid);
+  if (t) await sendAndRecord(taskNotices(db1, t, user.id, "request", note), user.id).catch((err) => console.warn("[case-request] notice failed:", (err as Error).message));
+  revalidatePath("/", "layout");
+  const to = byUsers ? assignees.filter((u) => u.id !== user.id).map((u) => u.name).join("・") : `${db1.stores.find((s) => s.id === storeId)?.name ?? storeId}の店長・スタッフ`;
+  redirect(withMsg(ret, `${CASE_REQUEST_KIND[kind].label}を ${to} に送りました。受けた人のお知らせ (ベル) から、この案件を直接開けます。送った内容は案件の「この案件への依頼」に残ります。`));
 }
