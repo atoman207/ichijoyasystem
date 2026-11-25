@@ -412,16 +412,17 @@ export function seedEvalCases(db: Database, by = "system"): number {
       storeId: s.input.storeId === ":store" ? store?.id : s.input.storeId === ":other" ? other?.id : s.input.storeId,
       origin: "seed",
     };
-    const exists = chatbotDb().prepare("select id, question, history, expect, answer_note, evidence_note, created_at, updated_at from eval_cases where seed_key = ?").get(s.key) as
-      | { id: number; question: string; history: string; expect: string; answer_note: string; evidence_note: string; created_at: string; updated_at: string }
+    const exists = chatbotDb().prepare("select id, question, history, store_id, expect, answer_note, evidence_note, created_at, updated_at from eval_cases where seed_key = ?").get(s.key) as
+      | { id: number; question: string; history: string; store_id: string; expect: string; answer_note: string; evidence_note: string; created_at: string; updated_at: string }
       | undefined;
     if (exists) {
       // 人が直していない質問 (登録したときのまま = 直した時刻と登録の時刻が同じ) は、始めの質問の新しい定義 (質問・前の質問・正解の条件・説明) にそろえる。
       // 人が直した質問は変えない。時刻は変えない (人が直していない印を残す)
       if (exists.updated_at !== exists.created_at) continue;
-      const next = { question: input.question.trim().slice(0, 1000), history: JSON.stringify((input.history ?? []).map((h) => h.slice(0, 500)).slice(0, 5)), expect: JSON.stringify(input.expect ?? {}).slice(0, 8000), answer_note: (input.answerNote ?? "").slice(0, 3000), evidence_note: (input.evidenceNote ?? "").slice(0, 1000) };
-      if (next.question !== exists.question || next.history !== exists.history || next.expect !== exists.expect || next.answer_note !== exists.answer_note || next.evidence_note !== exists.evidence_note) {
-        chatbotDb().prepare("update eval_cases set question = ?, history = ?, expect = ?, answer_note = ?, evidence_note = ? where id = ?").run(next.question, next.history, next.expect, next.answer_note, next.evidence_note, exists.id);
+      // 質問の店舗名 ({store_name}・{other_name}) と聞く人の店舗 (:store) は同じ並びで入れる (店舗の並びが変わっても、質問と聞く人の店舗が食い違わないように)
+      const next = { store_id: (input.storeId ?? "").slice(0, 40), question: input.question.trim().slice(0, 1000), history: JSON.stringify((input.history ?? []).map((h) => h.slice(0, 500)).slice(0, 5)), expect: JSON.stringify(input.expect ?? {}).slice(0, 8000), answer_note: (input.answerNote ?? "").slice(0, 3000), evidence_note: (input.evidenceNote ?? "").slice(0, 1000) };
+      if (next.store_id !== exists.store_id || next.question !== exists.question || next.history !== exists.history || next.expect !== exists.expect || next.answer_note !== exists.answer_note || next.evidence_note !== exists.evidence_note) {
+        chatbotDb().prepare("update eval_cases set store_id = ?, question = ?, history = ?, expect = ?, answer_note = ?, evidence_note = ? where id = ?").run(next.store_id, next.question, next.history, next.expect, next.answer_note, next.evidence_note, exists.id);
       }
       continue;
     }
