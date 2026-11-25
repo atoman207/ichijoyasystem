@@ -18,7 +18,11 @@ export function decodeCsv(bytes: Uint8Array): { text: string; encoding: "UTF-8" 
 }
 
 /** CSV の文字列を行 × 項目の配列にする (空行は除く) */
-export function parseCsv(text: string): string[][] {
+/**
+ * opts.keepEmpty = 空の行 (区切りだけの行) も残す。行の番号を表計算の行に合わせるとき (アンケートハガキ（回答）の行の照合など)。
+ * 最後の改行のあとの空の行は残さない
+ */
+export function parseCsv(text: string, opts: { keepEmpty?: boolean } = {}): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -43,7 +47,7 @@ export function parseCsv(text: string): string[][] {
       if (ch === "\r" && src[i + 1] === "\n") i++;
       row.push(field);
       field = "";
-      if (row.some((v) => v.trim() !== "")) rows.push(row);
+      if (opts.keepEmpty || row.some((v) => v.trim() !== "")) rows.push(row);
       row = [];
     } else field += ch;
   }

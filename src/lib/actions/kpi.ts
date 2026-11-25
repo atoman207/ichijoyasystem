@@ -7,6 +7,8 @@ import { missingTables, recheckMissingTables } from "@/lib/db/supabase";
 import { canAccessStore, canManageKpi, canManageSettings } from "@/lib/auth/permissions";
 import type { QualityKind, StoreId, SurveyResponse } from "@/lib/db/types";
 import { KPI_SETTINGS_ID, QUALITY_CATEGORIES, QUALITY_KIND_LABEL, kpiSettings, parseTiers } from "@/lib/kpi-settings";
+import { extraKey, incentiveYearId, parseAssign, readIncentiveYear, writeIncentiveYearPart, type AssignSegment, type IncentiveExtra } from "@/lib/incentive-year";
+import { readMonthlyEntries, type MonthlyEntry } from "@/lib/kpi-monthly";
 import { MEDIA_OPTIONS, PRIORITY_OPTIONS, normPostcardNo, tagComment } from "@/lib/survey";
 import { findOrderByPostcard, findSurveyByPostcard, storeFromPostcard, surveyFromExtracted } from "@/lib/survey-link";
 import { analyzeVoices } from "@/lib/ai/voice";
@@ -547,6 +549,12 @@ export async function updateKpiSettings(formData: FormData) {
       fewestQuality: numField(formData, "m_fewestQuality"),
       lowestQualityRate: numField(formData, "m_lowestQualityRate"),
     },
+    // 月次の手当 (月間人日・伝票件数)。古い画面から送られて欄がないときは今の値
+    monthly: (() => {
+      const cur = kpiSettings({ settings: getDb().settings }).incentive.monthly;
+      const n = (key: string, fallback: number) => (formData.has(key) && str(formData, key) !== "" ? numField(formData, key) : fallback);
+      return { manDayMin: n("mo_manDayMin", cur.manDayMin), manDayYen: n("mo_manDayYen", cur.manDayYen), slipPerClerk: n("mo_slipPerClerk", cur.slipPerClerk), slipYen: n("mo_slipYen", cur.slipYen) };
+    })(),
   };
   await mutate((db) => {
     const cur = kpiSettings(db);
@@ -576,29 +584,113 @@ export async function updateKpiSettings(formData: FormData) {
   redirect(withMsg(back, "KPI・インセンティブの設定を保存しました。"));
 }
 
-/** 年間インセンティブの調整額 (年度の途中で店舗を移った社員の月割りなど)。管理者のみ */
+/** 年間インセンティブの調整額 (自動で計算しない分)。管理者のみ。対象者のキー (社員 ID・「name:<名前>」) は画面の keys で受け取る */
 export async function saveIncentiveAdjustments(fy: number, formData: FormData) {
   const user = await requireActionUser();
   const back = `/kpi/incentives?fy=${fy}`;
   if (!canManageSettings(user)) fail(back, "調整額の入力は管理者のみ行えます。");
   await assertTable("settings", back);
   await mutate((db) => {
+    const year = readIncentiveYear(db, fy);
+    const keys = new Set(formData.getAll("keys").map(String).filter((k) => db.users.some((u) => u.id === k) || year.extra.some((e) => e.key === k)));
     const adjust: Record<string, { amount: number; note?: string }> = {};
-    for (const u of db.users) {
-      const raw = str(formData, `adj_${u.id}`).normalize("NFKC").replace(/[,円\s]/g, "");
-      const note = str(formData, `note_${u.id}`);
+    // 画面にない対象者の調整額は残す
+    for (const [k, a] of Object.entries(year.adjust)) if (!keys.has(k)) adjust[k] = a;
+    for (const k of keys) {
+      const raw = str(formData, `adj_${k}`).normalize("NFKC").replace(/[,円\s]/g, "").replace(/^▲/, "-");
+      const note = str(formData, `note_${k}`);
       if (!raw && !note) continue;
       const amount = Number(raw || 0);
-      if (!Number.isFinite(amount)) fail(back, `${u.name} の調整額が数値ではありません。`);
-      adjust[u.id] = { amount: Math.round(amount), note: note || undefined };
+      if (!Number.isFinite(amount)) fail(back, `${k.startsWith("name:") ? k.slice(5) : (db.users.find((u) => u.id === k)?.name ?? k)} の調整額が数値ではありません。`);
+      adjust[k] = { amount: Math.round(amount), note: note || undefined };
     }
-    const id = `incentive_${fy}`;
-    const row = db.settings.find((s) => s.id === id);
-    const value = { adjust };
-    if (row) Object.assign(row, { value, updatedBy: user.id, updatedAt: nowIso() });
-    else db.settings.push({ id, value, updatedBy: user.id, updatedAt: nowIso() });
-    addAudit(db, { userId: user.id, action: "update", entity: "settings", entityId: id, entityLabel: `${fy}年度 インセンティブ`, summary: `インセンティブの調整額を保存 (${Object.keys(adjust).length} 人)` });
+    writeIncentiveYearPart(db, fy, "adjust", adjust, user.id, nowIso());
+    addAudit(db, { userId: user.id, action: "update", entity: "settings", entityId: incentiveYearId(fy), entityLabel: `${fy}年度 インセンティブ`, summary: `インセンティブの調整額を保存 (${Object.keys(adjust).length} 人)` });
   });
   revalidatePath("/kpi/incentives");
   redirect(withMsg(back, "調整額を保存しました。"));
+}
+
+/**
+ * 年間インセンティブの対象者と所属の月割り (管理者のみ)
+ * - as_<キー>: 所属の月割り「合志 8, 中央 4」「事務 7」(空 = 今の所属で 12 か月)
+ * - extra: アカウントのない対象者 (1 行に 1 人「名前: 所属」。例: 山田: 事務)
+ */
+export async function saveIncentiveMembers(fy: number, formData: FormData) {
+  const user = await requireActionUser();
+  const back = `/kpi/incentives?fy=${fy}#members`;
+  if (!canManageSettings(user)) fail(back, "対象者・所属の設定は管理者のみ行えます。");
+  await assertTable("settings", back);
+  await mutate((db) => {
+    const year = readIncentiveYear(db, fy);
+    // アカウントのない対象者
+    const extra: IncentiveExtra[] = [];
+    for (const line of str(formData, "extra").normalize("NFKC").split(/\n+/).map((x) => x.trim()).filter(Boolean)) {
+      const m = line.match(/^(.+?)\s*[:：,、\s]\s*(.+)$/);
+      if (!m) fail(back, `アカウントのない対象者「${line}」は「名前: 所属」の形で入力してください (例: 山田: 事務)。`);
+      const name = m![1].trim();
+      if (db.users.some((u) => u.name.replace(/\s+/g, "") === name.replace(/\s+/g, "") || u.name.split(/\s+/)[0] === name)) fail(back, `「${name}」はアカウントのある社員です。設定 → KPI・インセンティブ で事務担当・対象を選んでください。`);
+      const segs = parseAssign(`${m![2].trim()} 12`, db.stores);
+      if (!segs || "error" in segs) fail(back, `アカウントのない対象者「${line}」の所属は店舗の名前か「事務」で入力してください。`);
+      const key = extraKey(name);
+      if (!extra.some((e) => e.key === key)) extra.push({ key, name, unit: (segs as AssignSegment[])[0].unit });
+    }
+    const assign: Record<string, AssignSegment[]> = {};
+    const keys = formData.getAll("keys").map(String);
+    for (const [k, segs] of Object.entries(year.assign)) if (!keys.includes(k)) assign[k] = segs;
+    for (const k of new Set(keys)) {
+      if (!db.users.some((u) => u.id === k) && !extra.some((e) => e.key === k)) continue;
+      const r = parseAssign(str(formData, `as_${k}`), db.stores);
+      if (r && "error" in r) fail(back, `${k.startsWith("name:") ? k.slice(5) : (db.users.find((u) => u.id === k)?.name ?? k)}: ${r.error}`);
+      if (r) assign[k] = r as AssignSegment[];
+    }
+    const now = nowIso();
+    writeIncentiveYearPart(db, fy, "extra", extra, user.id, now);
+    writeIncentiveYearPart(db, fy, "assign", assign, user.id, now);
+    addAudit(db, { userId: user.id, action: "update", entity: "settings", entityId: incentiveYearId(fy), entityLabel: `${fy}年度 インセンティブ`, summary: `インセンティブの対象者・所属の月割りを保存 (月割り ${Object.keys(assign).length} 人・アカウントのない対象者 ${extra.length} 人)` });
+  });
+  revalidatePath("/kpi/incentives");
+  redirect(withMsg(back, "対象者と所属の月割りを保存しました。"));
+}
+
+/** 月次の手当 (月間人日・伝票件数) の実績・クリアの印・人数・総残業代 (管理者のみ)。キー = `店舗|YYYY-MM` / `office|YYYY-MM` */
+export async function saveMonthlyAllowances(fy: number, formData: FormData) {
+  const user = await requireActionUser();
+  const back = `/kpi/incentives?fy=${fy}#monthly`;
+  if (!canManageSettings(user)) fail(back, "月次の手当の入力は管理者のみ行えます。");
+  await assertTable("settings", back);
+  await mutate((db) => {
+    const units = new Set(["office", ...db.stores.filter((x) => x.kind === "store").map((x) => x.id as string)]);
+    const cur = readMonthlyEntries(db, fy);
+    const next: Record<string, MonthlyEntry> = { ...cur };
+    const num = (key: string, label: string, max: number): number | undefined => {
+      const raw = str(formData, key).normalize("NFKC").replace(/[,円\s]/g, "");
+      if (!raw) return undefined;
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0 || n > max) fail(back, `${label} の値「${raw}」が正しくありません。`);
+      return n;
+    };
+    for (const k of new Set(formData.getAll("mkeys").map(String))) {
+      const [unit, month] = k.split("|");
+      if (!units.has(unit) || !/^\d{4}-\d{2}$/.test(month ?? "")) continue;
+      const label = `${unit === "office" ? "事務" : (db.stores.find((x) => x.id === unit)?.shortName ?? unit)} ${month}`;
+      const clearedRaw = str(formData, `mc_${k}`);
+      const entry: MonthlyEntry = {
+        value: num(`mv_${k}`, `${label} の実績`, 100000),
+        cleared: clearedRaw === "1" ? true : clearedRaw === "0" ? false : undefined,
+        people: num(`mp_${k}`, `${label} の人数`, 100),
+        overtime: num(`mo_${k}`, `${label} の総残業代`, 100_000_000),
+        note: str(formData, `mn_${k}`).slice(0, 200) || undefined,
+      };
+      if (Object.values(entry).some((x) => x !== undefined)) next[k] = entry;
+      else delete next[k];
+    }
+    const row = db.settings.find((x) => x.id === incentiveYearId(fy));
+    const value = { ...((row?.value ?? {}) as Record<string, unknown>), monthly: next };
+    if (row) Object.assign(row, { value, updatedBy: user.id, updatedAt: nowIso() });
+    else db.settings.push({ id: incentiveYearId(fy), value, updatedBy: user.id, updatedAt: nowIso() });
+    addAudit(db, { userId: user.id, action: "update", entity: "settings", entityId: incentiveYearId(fy), entityLabel: `${fy}年度 インセンティブ`, summary: `月次の手当 (月間人日・伝票件数) を保存 (${Object.keys(next).length} か月分の入力)` });
+  });
+  revalidatePath("/kpi/incentives");
+  redirect(withMsg(back, "月次の手当を保存しました。"));
 }

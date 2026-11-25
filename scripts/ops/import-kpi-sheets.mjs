@@ -73,6 +73,7 @@ if (workbook.length) {
   if (p.problems?.length) console.log("  注意:", p.problems.join(" / "));
   if (p.warnings?.length) console.log("  確認:", p.warnings.slice(0, 10).join(" / "));
   console.log("  タブ:", p.tabs.map((t) => `${t.title}(${t.label}・${t.rows} 行)`).join(" / "));
+  const xMark = (r) => (r.status === "sheet" ? "△ シートの誤り" : "✗");
   const pick = (o, ks) => Object.fromEntries(ks.map((k) => [k, o[k]]));
   console.log("  クレーム・手直し:", JSON.stringify(pick(p.claims, ["create", "update", "unchanged", "linked", "notCounted", "review", "overlapSkipped", "emptyRows"])));
   console.log("  口コミ:", JSON.stringify(pick(p.reviews, ["create", "update", "unchanged", "startYear", "unmatched", "ignored"])));
@@ -84,7 +85,7 @@ if (APPLY || args.includes("--check")) {
   console.log(`\n■ 支給前の照合 (KPI のタブ: ${c.label})`);
   if (c.problems?.length) console.log("  注意:", c.problems.join(" / "));
   for (const y of c.years) {
-    console.log(`  ${y.label} (比べた期間 ${y.compared.from}〜${y.compared.to}): 一致 ${y.matched} / 差あり ${y.differ}`);
-    for (const r of y.rows.filter((x) => !x.ok)) console.log(`    ✗ ${r.label} ${r.target}${r.month ? ` ${r.month}` : ""}: シート ${r.sheet ?? "-"} / システム ${r.system ?? "-"}${r.detail ? ` (${r.detail})` : ""}`);
+    console.log(`  ${y.label} (比べた期間 ${y.compared.from}〜${y.compared.to}): 一致 ${y.matched} / シート側の誤り ${y.sheetErrors ?? 0} / 差あり ${y.differ} / シート未集計の行 ${y.pending ?? 0}`);
+    for (const r of y.rows.filter((x) => (x.status ?? (x.ok ? "ok" : "differ")) === "differ" || x.status === "sheet")) console.log(`    ${xMark(r)} ${r.label} ${r.target}${r.month ? ` ${r.month}` : ""}: シート ${r.sheet ?? "-"} / システム ${r.system ?? "-"}${r.detail ? ` (${r.detail})` : ""}${r.cause ? ` — ${r.cause}` : ""}`);
   }
 }

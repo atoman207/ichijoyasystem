@@ -49,7 +49,8 @@ export interface KpiBasisRules {
 export interface KpiMonthValue {
   /** 個人件数 (返信率の分母) */
   individual?: number;
-  individualSrc?: "import" | "manual";
+  /** import = 年間チラシ計画の取込 / pivot = アンケートハガキ（回答）のピボットの「ハガキ個人件数」(シートの返信率に使った値) / manual = 手入力 */
+  individualSrc?: "import" | "manual" | "pivot";
   /** 全案件数 (クレーム・手直しポイント率の分母)。手入力 (空 = 自動) */
   sites?: number;
   note?: string;
@@ -104,7 +105,7 @@ export function kpiBasis(db: Partial<Pick<Database, "settings">>): KpiBasis {
     const e: KpiMonthValue = {};
     if (num(m.individual) !== undefined) {
       e.individual = num(m.individual);
-      e.individualSrc = m.individualSrc === "manual" ? "manual" : "import";
+      e.individualSrc = m.individualSrc === "manual" ? "manual" : m.individualSrc === "pivot" ? "pivot" : "import";
     }
     if (num(m.sites) !== undefined) e.sites = num(m.sites);
     if (typeof m.note === "string" && m.note) e.note = m.note.slice(0, 200);
@@ -314,10 +315,11 @@ export function caseUnits(orders: Order[], repeatDays: number): CaseUnit[] {
 /* 分母                                                                  */
 /* ------------------------------------------------------------------ */
 
-export type DenomSource = "import" | "manual" | "auto" | "cases" | "deliveries" | "system";
+export type DenomSource = "import" | "pivot" | "manual" | "auto" | "cases" | "deliveries" | "system";
 
 export const DENOM_SOURCE_LABEL: Record<DenomSource, string> = {
   import: "年間チラシ計画",
+  pivot: "アンケート集計 (ピボット)",
   manual: "手入力",
   auto: "自動 (リピートを 1 件)",
   cases: "案件の件数",

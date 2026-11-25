@@ -13,6 +13,7 @@ import { Flash, LinkButton, LinkTabs, Note, PageHeader } from "@/components/ui";
 import { AnalysisTab } from "./tab-analysis";
 import { ListTab } from "./tab-list";
 import { MappingTab } from "./tab-mapping";
+import { ProductsTab } from "./tab-products";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -22,6 +23,7 @@ export const maxDuration = 60;
  * - 分析: 媒体別・月別・チラシの地域別の反応・町別・アンケートの媒体・年度の比較・販促ごとの反応 (すべて CSV で書き出せる)
  * - 販促の記録: チラシ (配布月・地域・部数)・イベント・点検の DM・テレアポ
  * - 対応表: 見積書・アンケート・販売管理ソフトの媒体の値を全社共通の分類に読み替える
+ * - 商品の KPI: 販促計画の KPI の表 (畳・襖・障子・網戸の単価・売上・枚数、畳表・襖紙の内訳、防虫加工、リフォーム)・畳表の出数・Google ビジネスプロフィール (tab-products.tsx)
  */
 export default async function PromotionsPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -30,7 +32,7 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
   // 分析は経営の数字 (閲覧の範囲の設定で全社員が全店舗を見られる。src/lib/access-policy.ts)。登録・変更は本物の利用者 (realUser) の権限
   const user = policyReader(db, realUser);
   if (!canViewPromoAnalysis(user)) redirect("/?err=" + encodeURIComponent("販促と媒体の分析を閲覧する権限がありません (店長・本部スタッフ・管理者)。"));
-  const tab = sp.tab === "list" || sp.tab === "mapping" ? sp.tab : "analysis";
+  const tab = sp.tab === "list" || sp.tab === "mapping" || sp.tab === "products" ? sp.tab : "analysis";
   const today = toDateKey(new Date());
   const startMonth = kpiSettings(db).fiscalStartMonth;
   const rp = resolvePeriod(sp, startMonth, today);
@@ -65,6 +67,7 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
         current={base(tab)}
         items={[
           { href: base("analysis"), label: "分析" },
+          { href: base("products"), label: "商品の KPI" },
           { href: base("list"), label: "販促の記録" },
           { href: base("mapping"), label: "媒体の分類と対応表" },
         ]}
@@ -73,6 +76,7 @@ export default async function PromotionsPage({ searchParams }: { searchParams: P
       {tab === "analysis" && <AnalysisTab db={db} user={user} report={promoReport(db, user, { from: period.from, to: period.to, store: sp.store })} periodValue={rp.value} periodLabel={rp.label} startMonth={startMonth} today={today} store={store} sp={sp} />}
       {tab === "list" && <ListTab db={db} user={user} storeIds={storeIds} from={period.from} to={period.to} periodValue={rp.value} periodLabel={rp.label} startMonth={startMonth} today={today} store={store} sp={sp} />}
       {tab === "mapping" && <MappingTab db={db} canEdit={canManageOpsReportSettings(user)} />}
+      {tab === "products" && <ProductsTab db={db} user={user} sp={sp} today={today} canEdit={canManageOpsReportSettings(realUser)} />}
     </div>
   );
 }

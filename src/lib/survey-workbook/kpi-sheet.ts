@@ -1,6 +1,7 @@
 import type { Database, StoreId } from "@/lib/db/types";
 import { countedIssue, inPeriod, type Period } from "@/lib/kpi-core";
-import { denomSummary, kpiBasis, personScores, type KpiBasis } from "@/lib/kpi-basis";
+import { denomSummary, kpiBasis, personScores, unnamedCard, type KpiBasis } from "@/lib/kpi-basis";
+import { surveyKpiDate } from "@/lib/kpi-core";
 import { computeIncentives } from "@/lib/incentive";
 import { kpiSettings } from "@/lib/kpi-settings";
 import type { StaffMatch } from "./staff";
@@ -137,6 +138,12 @@ function endOf(month: string): string {
   return `${month}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
 }
 
+/**
+ * 照合の結果: ok = 一致 / differ = 差 (確かめるところ) / sheet = シート側の計算の誤り (原因が分かっている差) /
+ * pending = シートがまだ集計していない月 (シートの値のある最後の月より後。システムの値だけを出す)
+ */
+export type ReconStatus = "ok" | "differ" | "sheet" | "pending";
+
 export interface ReconRow {
   metric: Metric;
   label: string;
@@ -145,8 +152,11 @@ export interface ReconRow {
   sheet: number | undefined;
   system: number | null;
   ok: boolean;
+  status: ReconStatus;
   /** システムの値の計算 (例: 「105 枚 ÷ 個人件数 249」) */
   detail?: string;
+  /** 差の原因 (シート側の誤りのとき) */
+  cause?: string;
 }
 
 export interface ReconYear {
@@ -158,6 +168,10 @@ export interface ReconYear {
   rows: ReconRow[];
   matched: number;
   differ: number;
+  /** シート側の誤り (原因が分かっている差) */
+  sheetErrors: number;
+  /** シートがまだ集計していない月の行 */
+  pending: number;
 }
 
 type ReconDb = Pick<Database, "orders" | "customers" | "surveys" | "qualityIssues" | "reviews" | "users"> & Partial<Pick<Database, "settings" | "stores">>;
@@ -171,10 +185,18 @@ export function reconcileKpi(db: ReconDb, years: KpiYear[], match: (name: string
   const settings = kpiSettings({ settings: db.settings ?? [], users: db.users });
   return years.map((y) => {
     const rows: ReconRow[] = [];
-    const push = (metric: Metric, target: string, sheet: number | undefined, system: number | null, month?: string, digits = 0, detail?: string) => {
+    const through = lastFilledMonth(y);
+    const close = (a: number | undefined, b: number | null, digits: number) => a !== undefined && b !== null && Math.abs(a - b) < (digits ? 0.5 * 10 ** -digits + 1e-9 : 0.5);
+    type SheetStyle = { value: number | null; cause: string } | undefined;
+    const push = (metric: Metric, target: string, sheet: number | undefined, system: number | null, month?: string, digits = 0, detail?: string, sheetStyles: SheetStyle[] = []) => {
       if (sheet === undefined && (system === null || system === 0)) return;
-      const ok = sheet !== undefined && system !== null && Math.abs(sheet - system) < (digits ? 0.5 * 10 ** -digits + 1e-9 : 0.5);
-      rows.push({ metric, label: METRIC_LABEL[metric], target, month, sheet, system: system === null ? null : digits ? Number(system.toFixed(digits)) : system, ok, detail });
+      const ok = close(sheet, system, digits);
+      // シートの値のある最後の月より後の月 (まだ転記していない月。空欄・0 が入っている) は差に数えない
+      const later = Boolean(month && through && month > through);
+      // シート側の計算の誤り (原因の分かっている差): シートの数え方で計算し直すとシートの値になる
+      const known = ok || later ? undefined : sheetStyles.find((x) => x && close(sheet, x.value, digits));
+      const status: ReconStatus = ok ? "ok" : later ? "pending" : known ? "sheet" : "differ";
+      rows.push({ metric, label: METRIC_LABEL[metric], target, month, sheet, system: system === null ? null : digits ? Number(system.toFixed(digits)) : system, ok, status, detail, cause: known?.cause });
     };
     const issues = db.qualityIssues.filter(countedIssue);
     const unitOf = (target: string): { storeId?: StoreId; office: boolean } | null => {
@@ -202,25 +224,52 @@ export function reconcileKpi(db: ReconDb, years: KpiYear[], match: (name: string
     }
     // 累計 (年度の期間): 年間インセンティブと同じ計算 (分母・はがきの数え方・平均は kpi-basis.ts)。
     // シートの期間はまだ途中のことがある (例: 8 月分まで) ため、シートに値のある月の最後までで比べる
-    const through = lastFilledMonth(y);
     const period: Period = through ? { from: y.period.from, to: endOf(through) } : y.period;
-    const inc = computeIncentives({ ...db, users: db.users.map((u) => ({ ...u, active: true })) }, period, { ...settings, excludedUserIds: [] }, {}, basis);
+    // シート (ピボット) の平均の計算: 合計点は「店舗」のある行すべて (ハガキ№ のない行を含む)、枚数は ハガキ№ のある行だけ。
+    // システムは № のない行をはがきとして数えないため、その行があると ①・④ がずれる (シート側の誤り)
+    const pivotAvg = (score: "phoneScore" | "finishScore", storeId?: StoreId): { value: number | null; cause: string } | undefined => {
+      const rowsIn = db.surveys.filter((s) => s.storeId !== "hq" && (!storeId || s.storeId === storeId) && inPeriod(surveyKpiDate(s), period));
+      const noNo = rowsIn.filter((s) => !s.postcardNo && typeof s[score] === "number");
+      if (!noNo.length) return undefined;
+      const counted = rowsIn.filter((s) => s.postcardNo).length;
+      const sum = rowsIn.reduce((a, s) => a + (typeof s[score] === "number" ? (s[score] as number) : 0), 0);
+      const extra = noNo.reduce((a, s) => a + (s[score] as number), 0);
+      const days = [...new Set(noNo.map((s) => (s.answeredOn ?? s.receivedAt).slice(0, 10)))].join("・");
+      return { value: counted ? sum / counted : null, cause: `シートの合計点に ハガキ№ のない行 ${noNo.length} 行 (入力日 ${days}) の ${extra} 点が入り、枚数には入っていないためです (${sum} 点 ÷ ${counted} 枚)。№ のない行を除くとシステムの値になります` };
+    };
+    const allUsers = { ...db, users: db.users.map((u) => ({ ...u, active: true })) };
+    const inc = computeIncentives(allUsers, period, { ...settings, excludedUserIds: [] }, {}, basis);
     const people = personScores(db.surveys, period, basis);
+    // シートのピボットは「担当の名前が一つでも未記入の場合ノーカウント」を当てていない: 名前が空欄のはがきも数えたときの値
+    const unnamed = basis.requireStaffNames ? db.surveys.filter((s) => unnamedCard(s, basis) && inPeriod(surveyKpiDate(s), period)) : [];
+    const loose = { ...basis, requireStaffNames: false };
+    const incLoose = unnamed.length ? computeIncentives(allUsers, period, { ...settings, excludedUserIds: [] }, {}, loose) : undefined;
+    const peopleLoose = unnamed.length ? personScores(db.surveys, period, loose) : undefined;
+    const unnamedCause = (storeId?: StoreId): string => {
+      const list = unnamed.filter((s) => !storeId || s.storeId === storeId);
+      return `シートは担当の名前が空欄のはがき ${list.length} 枚 (${list.slice(0, 5).map((s) => `No.${s.postcardNo ?? "なし"}`).join("・")}) も数えています。KPI の決まり「担当の名前が一つでも未記入の場合ノーカウント」ではシステムの値です`;
+    };
+    const looseUnit = (u: { storeId?: StoreId; office: boolean }) => (u.office ? incLoose?.office : incLoose?.units.find((x) => x.unit === u.storeId));
+
     const unitRow = (u: { storeId?: StoreId; office: boolean }) => (u.office ? inc.office : inc.units.find((x) => x.unit === u.storeId));
     for (const t of y.totals) {
       const u = unitOf(t.target);
       const ur = u ? unitRow(u) : undefined;
       if (t.metric === "reply" && u?.storeId && ur) {
-        push("reply", t.target, t.value, ur.replyRate, undefined, 1, `${ur.cards} 枚 ÷ 個人件数 ${ur.individual} (${ur.denominators ? denomSummary(ur.denominators.individual) : ""})`);
+        const lu = looseUnit(u);
+        push("reply", t.target, t.value, ur.replyRate, undefined, 1, `${ur.cards} 枚 ÷ 個人件数 ${ur.individual} (${ur.denominators ? denomSummary(ur.denominators.individual) : ""})`, [lu ? { value: lu.replyRate, cause: unnamedCause(u.storeId) } : undefined]);
       } else if (t.metric === "phone") {
-        push("phone", t.target, t.value, inc.companyPhoneAvg, undefined, 2, `${inc.companyPhoneCount} 枚の平均`);
+        push("phone", t.target, t.value, inc.companyPhoneAvg, undefined, 2, `${inc.companyPhoneCount} 枚の平均`, [pivotAvg("phoneScore"), incLoose ? { value: incLoose.companyPhoneAvg, cause: unnamedCause() } : undefined]);
       } else if (t.metric === "finish" && u?.storeId && ur) {
-        push("finish", t.target, t.value, ur.finishAvg, undefined, 2, `${ur.finishCount} 枚の平均`);
+        const lu = looseUnit(u);
+        push("finish", t.target, t.value, ur.finishAvg, undefined, 2, `${ur.finishCount} 枚の平均`, [pivotAvg("finishScore", u.storeId), lu ? { value: lu.finishAvg, cause: unnamedCause(u.storeId) } : undefined]);
       } else if (t.metric === "sales" || t.metric === "craft") {
         const s = match(t.target);
         if (!s.userId) continue;
-        const v = people.get(s.userId)?.[t.metric === "sales" ? "sales" : "craft"];
-        push(t.metric, t.target, t.value, v?.avg ?? null, undefined, 2, v ? `${v.sum} 点 ÷ ${v.n} 枚${v.blank ? ` (空欄 ${v.blank})` : ""}` : undefined);
+        const key = t.metric === "sales" ? "sales" : "craft";
+        const v = people.get(s.userId)?.[key];
+        const lv = peopleLoose?.get(s.userId)?.[key];
+        push(t.metric, t.target, t.value, v?.avg ?? null, undefined, 2, v ? `${v.sum} 点 ÷ ${v.n} 枚${v.blank ? ` (空欄 ${v.blank})` : ""}` : undefined, [lv && lv.n !== v?.n ? { value: lv.avg, cause: unnamedCause() } : undefined]);
       } else if (t.metric === "qrate" && ur) {
         push("qrate", t.target, t.value, ur.qualityRate, undefined, 2, `${ur.qualityPoints} 点 ÷ 施工件数 ${ur.orders}`);
       } else if (t.metric === "qpoints" && ur) {
@@ -229,7 +278,7 @@ export function reconcileKpi(db: ReconDb, years: KpiYear[], match: (name: string
         push("sites", t.target, t.value, ur.orders, undefined, 0, ur.denominators ? denomSummary(ur.denominators.sites) : "4 店舗の合計");
       }
     }
-    return { label: y.label, period: y.period, compared: period, rows, matched: rows.filter((r) => r.ok).length, differ: rows.filter((r) => !r.ok).length };
+    return { label: y.label, period: y.period, compared: period, rows, matched: rows.filter((r) => r.status === "ok").length, differ: rows.filter((r) => r.status === "differ").length, sheetErrors: rows.filter((r) => r.status === "sheet").length, pending: rows.filter((r) => r.status === "pending").length };
   });
 }
 

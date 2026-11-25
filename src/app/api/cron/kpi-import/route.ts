@@ -40,7 +40,7 @@ export async function POST(req: Request) {
     const sheet = await readKpiSheet();
     if (!sheet) return NextResponse.json({ error: "KPI のタブがまだありません (kind=workbook で取り込むと残ります)" }, { status: 404 });
     const r = kpiCheck(db0, sheet);
-    return NextResponse.json({ ok: true, label: sheet.label, problems: r.problems, years: r.years.map((y) => ({ label: y.label, period: y.period, compared: y.compared, matched: y.matched, differ: y.differ, rows: y.rows })) });
+    return NextResponse.json({ ok: true, label: sheet.label, problems: r.problems, years: r.years.map((y) => ({ label: y.label, period: y.period, compared: y.compared, matched: y.matched, differ: y.differ, sheetErrors: y.sheetErrors, pending: y.pending, rows: y.rows })) });
   }
 
   if ((action !== "plan" && action !== "apply") || (kind !== "basis" && kind !== "workbook")) return NextResponse.json({ error: "action=plan|apply|check, kind=basis|workbook" }, { status: 400 });
@@ -93,7 +93,7 @@ export async function POST(req: Request) {
       claims: { ...plan.claims, items: undefined },
       reviews: { ...plan.reviews, items: undefined },
       history: { ...plan.history, rows: undefined },
-      kpi: plan.kpi.map((y) => ({ label: y.label, compared: y.compared, matched: y.matched, differ: y.differ })),
+      kpi: plan.kpi.map((y) => ({ label: y.label, compared: y.compared, matched: y.matched, differ: y.differ, sheetErrors: y.sheetErrors, pending: y.pending })),
     });
   }
   if (await workbookTablesMissing()) return NextResponse.json({ error: "取込の表がまだありません (npm run db:migrate)" }, { status: 409 });

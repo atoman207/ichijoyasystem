@@ -167,6 +167,9 @@ export const RULES: RegistryRule[] = [
   },
   { id: "holiday-calendar", test: /休日カレンダー/, action: "structured", category: "予定・作業日報", visibility: "manager", importedTo: "holidays (会社の休業日・社内行事)", note: "休日カレンダー。会社の休業日・社内行事として取込済み (予定表 → 休日カレンダー)" },
   { id: "tel-wait", test: /TEL待ちリスト/, action: "structured", category: "お客様対応", visibility: "manager", importedTo: "inquiries (TEL待ち・イベント来店)", note: "お客様の連絡待ちの一覧。問い合わせとして取込済み" },
+  // アンケートハガキ（回答）のタブごとの CSV (Google スプレッドシートのダウンロード)。ピボット・フォームの回答は全店・社員ごとの点数のため本部以上
+  { id: "survey-answers-pivot", test: /アンケートハガキ[^/]*(ピボット|計算表)[^/]*\.csv$/, action: "structured", category: "お客様対応", visibility: "hq", importedTo: "kpi_basis (返信率の分母の個人件数)・surveys の集計 (KPI の返信率・①〜④)", note: "アンケートはがきのピボット (店舗・社員ごとの枚数と合計点・ハガキ個人件数)。個人件数は KPI → 分母・照合 で取り込み、枚数・平均はシステムが同じ集計を作る (全店・社員ごとの数字のため本部以上)" },
+  { id: "survey-answers-form", test: /アンケートハガキ[^/]*フォームの回答[^/]*\.csv$/, action: "structured", category: "お客様対応", visibility: "hq", importedTo: "surveys (お客様アンケート・集計月)", note: "アンケートはがきの回答 (Google フォーム)。お客様アンケートとして取込済み、集計月は KPI → 分母・照合 で取込 (全店・社員ごとの点数のため本部以上)" },
   { id: "survey-answers", test: /アンケートハガキ/, action: "structured", category: "お客様対応", visibility: "manager", importedTo: "surveys (お客様アンケート)", note: "アンケートはがきの回答。お客様アンケートとして取込済み" },
   { id: "photo-sites", test: /^20_写真\/現場写真\//, action: "ledger", category: "写真・動画", visibility: "manager", importedTo: "photo_albums (現場写真台帳)", note: "現場写真。資料・写真 → 現場写真台帳 に登録済み" },
   { id: "photo-events", test: /^20_写真\/イベント\//, action: "ledger", category: "写真・動画", visibility: "all", note: "イベントの写真" },
@@ -232,6 +235,12 @@ export const RULES: RegistryRule[] = [
     sheets: { visibility: [[/アンケート|客数/, "hq"]] },
   },
   { id: "flyer-plan", test: /年間チラシ計画/, action: "knowledge", category: "販促・広告", visibility: "hq", note: "年間のチラシ計画・町別の反応率・個人の売上目標 (全店の数字のため本部以上)", sheets: { knowledge: /チラシ計画|反応率|個人件数/ } },
+  // 販促 (スプレッドシート) のタブごとの CSV。計画・行動計画・出数・アクセスは全店の数字のため本部以上
+  { id: "promo-plan-tabs", test: /販促 - [^/]*(販促計画|行動計画)[^/]*\.csv$/, action: "knowledge", category: "経営・計画", visibility: "hq", note: "販促計画・売上アップの行動計画と実績 (店舗ごとの目標・施策・販促 KPI。全店の数字のため本部以上)。畳・襖・障子・網戸の単価・枚数、畳表・襖紙の内訳、防虫加工、10 万円以上のリフォームは 販促と媒体の分析 → 商品の KPI でシステムが集計" },
+  { id: "promo-gbp", test: /販促 - [^/]*グーグルアクセス[^/]*\.csv$/, action: "structured", category: "販促・広告", visibility: "hq", importedTo: "promo_gbp (Google ビジネスプロフィールの通話・ウェブサイトへのアクセス・プロフィール閲覧)", note: "Google ビジネスプロフィールの店舗ごとの月の数。販促と媒体の分析 → 商品の KPI で取り込み・手入力" },
+  { id: "promo-omote", test: /販促 - [^/]*畳表出数表[^/]*\.csv$/, action: "materials", category: "販促・広告", visibility: "hq", note: "畳表の種類ごとの出数 (11 月〜翌 10 月)。システムでは 販促と媒体の分析 → 商品の KPI の「畳表の出数」で明細から集計" },
+  { id: "promo-uniform", test: /販促 - [^/]*ユニフォーム[^/]*\.csv$/, action: "materials", category: "販促・広告", visibility: "hq", note: "ユニフォームの発注 (社員ごとのサイズ・枚数。社員の情報のため本部以上)" },
+  { id: "promo-storefront", test: /販促 - [^/]*(店舗作り|のぼり)[^/]*\.csv$/, action: "knowledge", category: "販促・広告", visibility: "manager", note: "店舗作り (看板・のぼり・照明・美観の行動計画) とのぼりの必要枚数" },
   { id: "promo-plan", test: /^05_販促・広告\/(?:[^/]+\/)?販促\.xlsx$/, action: "knowledge", category: "経営・計画", visibility: "hq", note: "販促計画・売上アップの行動計画 (全店・店舗ごとの目標のため本部以上)" },
   { id: "sns", test: /SNS管理表/, action: "knowledge", category: "販促・広告", visibility: "all", note: "SNS の運用 (キャッチコピー・ネタ帳・お客様の悩み・畳の効能)" },
   // お客様アンケート集計表: タブごとの CSV (Google スプレッドシートのダウンロード。新しい版) はタブで扱いを分ける。

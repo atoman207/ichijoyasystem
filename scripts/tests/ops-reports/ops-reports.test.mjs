@@ -165,7 +165,8 @@ section("媒体: 全社共通の分類と、選ばない問い合わせは保存
   const unknown = await act(A, () => AI.createInquiry(form({ ...base, media: "unknown" })));
   const created = db.inquiries.find((i) => unknown.path === `/inquiries/${i.id}`);
   eq(created?.media, "unknown", "「不明」なら保存できる");
-  const text = await act(A, () => AI.createInquiry(form({ ...base, contactName: "媒体 テスト2", media: "チラシ" })));
+  // 問い合わせの登録で顧客も登録するため (2026-11-25)、別のお客様として別の電話番号にする (同じ番号は重複の確認で止まる)
+  const text = await act(A, () => AI.createInquiry(form({ ...base, contactName: "媒体 テスト2", contactPhone: "090-9999-0002", media: "チラシ" })));
   eq(db.inquiries.find((i) => text.path === `/inquiries/${i.id}`)?.media, "flyer", "言葉 (AI アシスタントなど) は対応表で分類に読み替える");
   // 失敗した保存は元に戻す (rollback) ので、毎回データベースから引き直す
   const find = (id) => db.inquiries.find((i) => i.id === id);

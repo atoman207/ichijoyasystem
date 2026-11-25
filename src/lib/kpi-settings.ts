@@ -41,6 +41,17 @@ export interface IncentiveRules {
     /** クレーム・手直しポイント率が最も低い店舗の職人 */
     lowestQualityRate: number;
   };
+  /** 月次の手当 (KPI シートの「月間人日」「伝票件数」。src/lib/kpi-monthly.ts) */
+  monthly: {
+    /** 月間人日の基準 (畳と襖類 (係数後) の 1 人日あたりの枚数) */
+    manDayMin: number;
+    /** 月間人日のクリアの月の金額 (円 × 人数 − 総残業代) ÷ 人数 */
+    manDayYen: number;
+    /** 伝票件数の基準 (事務 1 人あたりの件数。基準 = この件数 × 事務の人数) */
+    slipPerClerk: number;
+    /** 伝票件数のクリアの月の金額 (円 × 人数 − 総残業代) ÷ 人数 */
+    slipYen: number;
+  };
 }
 
 export interface KpiSettings {
@@ -115,6 +126,7 @@ export function defaultIncentiveRules(): IncentiveRules {
     storeQuality: [[0, 150000], [1, 50000], [2, 20000], [2.5, 0], [3, -5000], [3.5, -10000], [4, -15000], [4.5, -20000], [5, -25000], [5.5, -30000], [6, -35000], [6.5, -40000], [7, -45000], [7.5, -50000], [8, -55000], [8.5, -60000], [9, -65000], [9.5, -70000]],
     officeQuality: [[0, 50000], [1, 20000], [2, 10000], [2.5, 0], [3, -5000], [3.5, -10000]],
     mvp: { sales: [15000, 10000, 5000], craftsman: [15000, 10000, 5000], replyTop: 30000, finishTop: 20000, reviews: [30000, 15000, 10000], fewestQuality: 30000, lowestQualityRate: 30000 },
+    monthly: { manDayMin: 11, manDayYen: 25000, slipPerClerk: 110, slipYen: 10000 },
   };
 }
 
@@ -155,6 +167,7 @@ export function kpiSettings(db: Pick<Database, "settings"> & Partial<Pick<Databa
   const clerks = (v.clerkByStore ?? {}) as Record<string, unknown>;
   const inc = (v.incentive ?? {}) as Record<string, unknown>;
   const mvp = (inc.mvp ?? {}) as Record<string, unknown>;
+  const monthly = (inc.monthly ?? {}) as Record<string, unknown>;
   const di = d.incentive;
   // 事務担当が未設定のときは、役職に「事務」を含む社員を対象にする
   const clerkUserIds = Array.isArray(v.clerkUserIds) ? ids(v.clerkUserIds) : (db.users ?? []).filter((u) => u.active && /事務/.test(u.title ?? "")).map((u) => u.id);
@@ -185,6 +198,12 @@ export function kpiSettings(db: Pick<Database, "settings"> & Partial<Pick<Databa
         reviews: amounts(mvp.reviews, di.mvp.reviews),
         fewestQuality: num(mvp.fewestQuality, -1e7, 1e7) ?? di.mvp.fewestQuality,
         lowestQualityRate: num(mvp.lowestQualityRate, -1e7, 1e7) ?? di.mvp.lowestQualityRate,
+      },
+      monthly: {
+        manDayMin: num(monthly.manDayMin, 0, 1000) ?? di.monthly.manDayMin,
+        manDayYen: num(monthly.manDayYen, 0, 1e7) ?? di.monthly.manDayYen,
+        slipPerClerk: num(monthly.slipPerClerk, 0, 100000) ?? di.monthly.slipPerClerk,
+        slipYen: num(monthly.slipYen, 0, 1e7) ?? di.monthly.slipYen,
       },
     },
   };

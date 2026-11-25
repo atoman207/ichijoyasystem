@@ -67,6 +67,15 @@ export function KpiSettingsCard({ db, admin }: { db: Database; admin: boolean })
             <Field label="件数最少の単位 (円/人)"><Input type="number" name="m_fewestQuality" defaultValue={i.mvp.fewestQuality} /></Field>
             <Field label="率最低の店舗 (円/人)"><Input type="number" name="m_lowestQualityRate" defaultValue={i.mvp.lowestQualityRate} /></Field>
           </div>
+          <div>
+            <div className="label">月次の手当 (月締め・翌月に支給。KPI → インセンティブ の「月次の手当」で月ごとに決めます)</div>
+            <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-4">
+              <Field label="月間人日の基準 (枚/人日)" hint="畳と襖類 (係数後)"><Input type="number" step="0.1" name="mo_manDayMin" defaultValue={i.monthly.manDayMin} /></Field>
+              <Field label="月間人日 (円 × 人数 − 残業代)"><Input type="number" name="mo_manDayYen" defaultValue={i.monthly.manDayYen} /></Field>
+              <Field label="伝票件数の基準 (件/事務 1 人)"><Input type="number" name="mo_slipPerClerk" defaultValue={i.monthly.slipPerClerk} /></Field>
+              <Field label="伝票件数 (円 × 人数 − 残業代)"><Input type="number" name="mo_slipYen" defaultValue={i.monthly.slipYen} /></Field>
+            </div>
+          </div>
         </fieldset>
         {admin && <Button type="submit">保存</Button>}
       </form>

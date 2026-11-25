@@ -20,6 +20,7 @@ const ACTION: Record<string, { label: string; tone: "good" | "info" | "neutral" 
   update: { label: "更新", tone: "info" },
   unchanged: { label: "変更なし", tone: "neutral" },
   manual: { label: "手入力のため取り込まない", tone: "warn" },
+  pivot: { label: "ピボットの値 (シートの返信率に使った値) のため取り込まない", tone: "neutral" },
 };
 
 const monthLabel = (m: string) => `${Number(m.slice(0, 4))}年${Number(m.slice(5, 7))}月`;
@@ -58,7 +59,8 @@ export default async function KpiBasisPage({ searchParams }: { searchParams: Pro
         <CardHeader title="年間チラシ計画・アンケートはがきの取込" description="読み取って確認してから取り込みます (一方向: シート → システム)。手入力した個人件数は上書きしません" />
         <ul className="mb-3 space-y-1 text-xs text-ink-2">
           <li>・{BASIS_SOURCE_LABEL.individual}: 表「個人売上目標・実績（○○年度）」(7 月〜翌 6 月) の店舗ごとの「本年度実績」の件数。空欄の月 (まだ記入していない月) は読みません</li>
-          <li>・{BASIS_SOURCE_LABEL.cardMonths}: 移行したはがきの「月」(集計月) を入れます。シートでは前月のはがきを月初に入力していたため、入力日のままだと年度の境目 (11 月・12 月) で 1 か月ずれます。2 人目以降の担当を手で書き足した行 (タイムスタンプのない行) で移行に漏れたものは、②③ の評価の行として足します</li>
+          <li>・{BASIS_SOURCE_LABEL.cardMonths}: 移行したはがきの「月」(集計月) を入れます。シートでは前月のはがきを月初に入力していたため、入力日のままだと年度の境目 (11 月・12 月) で 1 か月ずれます。2 人目以降の担当を手で書き足した行 (タイムスタンプのない行) で移行に漏れたものは、②③ の評価の行として足します。「月」が空欄の行は、同じ日に続けて入力した前後の行の月にします</li>
+          <li>・{BASIS_SOURCE_LABEL.pivot}: タブごとの CSV (ファイル名「アンケートハガキ（回答） - ピボット テーブル 2026.9.csv」) を複数まとめて選べます。年度ごとに一番新しいタブの値を使い、年間チラシ計画の値より優先します (計画の値はあとで直ることがあるため、支給の計算に使った値を残します)</li>
           <li>・年間チラシ計画のファイルは 4 MB を超えるため、「個人件数売上」のタブを開いて ファイル → ダウンロード → CSV で保存したもの、またはタブの URL (共有・サービスアカウント) を使ってください</li>
         </ul>
         <form action={previewKpiBasisImport} className="space-y-3">
@@ -247,7 +249,7 @@ function PlanView({ plan, preview, hash, stores }: { plan: BasisPlan; preview: B
       <Card>
         <CardHeader title="確認 (まだ取り込んでいません)" description={`${preview.label} · 読み取り ${fmtDateTime(preview.at)} (${userName(preview.by)})`} />
         <div className="flex flex-wrap gap-1.5 text-xs">
-          <Badge tone="info" dot={false}>個人件数 {ind.length} か月分 (新規 {plan.counts.individual.create}・更新 {plan.counts.individual.update}・変更なし {plan.counts.individual.unchanged}・手入力のため取り込まない {plan.counts.individual.manual})</Badge>
+          <Badge tone="info" dot={false}>個人件数 {ind.length} か月分 (新規 {plan.counts.individual.create}・更新 {plan.counts.individual.update}・変更なし {plan.counts.individual.unchanged}・手入力のため取り込まない {plan.counts.individual.manual}{plan.counts.individual.pivot ? `・ピボットの値のため取り込まない ${plan.counts.individual.pivot}` : ""})</Badge>
           {preview.cardMonths.length > 0 && <Badge tone="info" dot={false}>はがきの集計月 {c.changes.length} 行 (変更なし {c.unchanged})</Badge>}
           {c.adds.length > 0 && <Badge tone="good" dot={false}>移行で漏れた担当の行を追加 {c.adds.length} 行</Badge>}
           {c.newCards.length > 0 && <Badge tone="good" dot={false}>新しいはがき (移行のあとに入力した行) {c.newCards.length} 枚</Badge>}
@@ -276,7 +278,7 @@ function PlanView({ plan, preview, hash, stores }: { plan: BasisPlan; preview: B
 
       {ind.length > 0 && (
         <Card padded={false}>
-          <div className="px-5 pt-5"><CardHeader title="個人件数 (年間チラシ計画)" description="シートの値 (いまの値)。新しい月から 24 か月" /></div>
+          <div className="px-5 pt-5"><CardHeader title="個人件数 (年間チラシ計画・アンケート集計のピボット)" description="シートの値 (いまの値)。新しい月から 24 か月。上にカーソルを置くと、どのシートの値か出ます" /></div>
           <div className="max-h-[28rem] overflow-auto">
             <table className="w-full min-w-[640px] text-xs">
               <thead className="sticky top-0"><tr className="bg-subtle text-ink-2"><th className="px-3 py-2 text-left font-medium">月</th>{stores.map((s) => <th key={s.id} className="px-2 py-2 text-right font-medium">{s.shortName}</th>)}</tr></thead>

@@ -27,14 +27,23 @@ const fmt = (r: ReconRow | undefined, digits: number) => (r?.system === null || 
 const fmtSheet = (r: ReconRow | undefined, digits: number) => (r?.sheet === undefined ? "(空欄)" : r.sheet.toFixed(digits));
 const DIGITS: Partial<Record<ReconRow["metric"], number>> = { reply: 1, finish: 2, qrate: 2, phone: 2, sales: 2, craft: 2 };
 
+const STATUS: Record<ReconRow["status"], { label: string; tone: "good" | "warn" | "info" | "neutral" }> = {
+  ok: { label: "一致", tone: "good" },
+  sheet: { label: "シートの誤り", tone: "info" },
+  differ: { label: "差", tone: "warn" },
+  pending: { label: "シート未集計", tone: "neutral" },
+};
+
 function Cell({ r, metric }: { r: ReconRow | undefined; metric: ReconRow["metric"] }) {
   if (!r) return <td className="px-2 py-2 text-right text-ink-3">-</td>;
   const d = DIGITS[metric] ?? 0;
+  const st = STATUS[r.status];
   return (
-    <td className={`px-2 py-2 text-right tnum ${r.ok ? "" : "bg-warn-soft/40"}`} title={r.detail}>
+    <td className={`px-2 py-2 text-right tnum ${r.status === "differ" ? "bg-warn-soft/40" : r.status === "sheet" ? "bg-info-soft/40" : ""}`} title={r.cause ?? r.detail}>
       <div className="font-medium">{fmt(r, d)}</div>
-      <div className="text-[10px] text-ink-3">シート {fmtSheet(r, d)} {r.ok ? <Badge tone="good" dot={false}>一致</Badge> : <Badge tone="warn" dot={false}>差</Badge>}</div>
+      <div className="text-[10px] text-ink-3">シート {fmtSheet(r, d)} <Badge tone={st.tone} dot={false}>{st.label}</Badge></div>
       {r.detail && <div className="text-[10px] text-ink-3">{r.detail}</div>}
+      {r.cause && <div className="mt-0.5 text-left text-[10px] text-info-ink">{r.cause}</div>}
     </td>
   );
 }
@@ -51,7 +60,9 @@ export default async function KpiCheckPage({ searchParams }: { searchParams: Pro
   const basis = kpiBasis(db);
   const rows = year?.rows ?? [];
   const totals = rows.filter((r) => !r.month);
-  const monthly = rows.filter((r) => r.month && !r.ok);
+  const monthly = rows.filter((r) => r.month && (r.status === "differ" || r.status === "sheet"));
+  const pending = rows.filter((r) => r.month && r.status === "pending");
+  const pendingMonths = [...new Set(pending.map((r) => r.month!))].sort();
   const units = ["合志", "中央", "西", "玉名", "事務"];
   const unitRow = (u: string, metric: ReconRow["metric"]) => totals.find((r) => r.metric === metric && storeOfLabel(r.target) === storeOfLabel(u));
   const people = [...new Set(totals.filter((r) => r.metric === "sales" || r.metric === "craft").map((r) => r.target.trim()))];
@@ -91,11 +102,13 @@ export default async function KpiCheckPage({ searchParams }: { searchParams: Pro
             ))}
             <span className="text-xs text-ink-3">比べた期間 {year.compared.from.replace(/-/g, "/")}〜{year.compared.to.replace(/-/g, "/")}{year.compared.to !== year.period.to ? " (年度の途中のため、シートに月ごとの値のある月まで)" : ""}</span>
             <Badge tone="good" dot={false}>一致 {year.matched}</Badge>
+            {year.sheetErrors > 0 && <Badge tone="info" dot={false}>シート側の誤り {year.sheetErrors}</Badge>}
             <Badge tone={year.differ ? "warn" : "neutral"} dot={false}>差あり {year.differ}</Badge>
+            {year.pending > 0 && <Badge tone="neutral" dot={false}>シート未集計の月 {pendingMonths.length} か月</Badge>}
           </div>
 
           <Card className="mt-3" padded={false}>
-            <div className="px-5 pt-5"><CardHeader title="店舗・事務" description="上段 = システム (支給額の計算に使う値)、下段 = シートの値と計算の内訳。差のある項目は色を付けています" /></div>
+            <div className="px-5 pt-5"><CardHeader title="店舗・事務" description="上段 = システム (支給額の計算に使う値)、下段 = シートの値と計算の内訳。差のある項目は色を付けています。「シートの誤り」は、シートの数え方で計算し直すとシートの値になる差 (原因を下に書いています)" /></div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[820px] text-xs">
                 <thead><tr className="bg-subtle text-ink-2"><th className="px-3 py-2 text-left font-medium">単位</th>{UNIT_METRICS.map((m) => <th key={m.metric} className="px-2 py-2 text-right font-medium">{m.label}</th>)}</tr></thead>
@@ -137,7 +150,7 @@ export default async function KpiCheckPage({ searchParams }: { searchParams: Pro
           )}
 
           <Card className="mt-4" padded={false}>
-            <div className="px-5 pt-5"><CardHeader title={`月ごとの件数の差 (${monthly.length} 件)`} description="クレーム件数・手直し件数 (店舗・事務) と Google 口コミの件数・ポイント (社員)。シートの空欄・0 は、まだ転記していない月のことがあります" /></div>
+            <div className="px-5 pt-5"><CardHeader title={`月ごとの件数の差 (${monthly.length} 件)`} description="クレーム件数・手直し件数 (店舗・事務) と Google 口コミの件数・ポイント (社員)。シートの値のある最後の月より後の月 (まだ転記していない月) は下の「シート未集計の月」に分けています" /></div>
             {monthly.length === 0 ? (
               <p className="px-5 pb-5 text-sm text-ink-3">差はありません</p>
             ) : (
@@ -151,6 +164,20 @@ export default async function KpiCheckPage({ searchParams }: { searchParams: Pro
               </div>
             )}
           </Card>
+
+          {pending.length > 0 && (
+            <Card className="mt-4" padded={false}>
+              <div className="px-5 pt-5"><CardHeader title={`シート未集計の月 (${pendingMonths.map((m) => `${Number(m.slice(5))}月`).join("・")})`} description="シートがまだ転記していない月のシステムの値です (システムに登録したクレーム・手直し・口コミ)。この月からはシステムの集計を使います" /></div>
+              <div className="max-h-80 overflow-auto">
+                <table className="w-full min-w-[520px] text-xs">
+                  <thead className="sticky top-0"><tr className="bg-subtle text-ink-2"><th className="px-3 py-1.5 text-left font-medium">項目</th><th className="px-2 py-1.5 text-left font-medium">対象</th><th className="px-2 py-1.5 text-left font-medium">月</th><th className="px-3 py-1.5 text-right font-medium">システム</th></tr></thead>
+                  <tbody>
+                    {pending.map((r, i) => <tr key={i} className="border-t border-line"><td className="px-3 py-1">{r.label}</td><td className="px-2 py-1">{r.target}</td><td className="px-2 py-1 tnum">{r.month}</td><td className="px-3 py-1 text-right tnum">{r.system ?? "-"}</td></tr>)}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
         </>
       )}
 
@@ -158,6 +185,7 @@ export default async function KpiCheckPage({ searchParams }: { searchParams: Pro
         <CardHeader title="システムの数え方と、差が出るときの主な理由" />
         <ul className="space-y-1 text-xs text-ink-2">
           {basisNotes(basis).map((t, i) => <li key={i}>・{t}</li>)}
+          <li>・シートのピボットは「担当の名前が一つでも未記入の場合ノーカウント」を当てていません (担当の名前が空欄のはがきも枚数・合計点に入ります)。システムは KPI の決まりどおり数えません</li>
           <li>・シートの平均は、ピボットの「合計点 ÷ ハガキ№ の数」です。ハガキ№ の入っていない行 (№ の書き忘れ) の点数は合計にだけ入り、枚数に入りません。システムはその行をはがきとして数えないため、その分だけ ① と ④ がずれます (№ を入れると両方で数えます)</li>
           <li>・全案件数の自動の値は、移行した売上台帳の行の数 + 新システムで完了した受注 (台帳の取込の最後の日より後) です。金額が 0 円の行 (移行で取り込まなかった行) と、移行のあと (11 月 11 日より後) に台帳へ書いただけの行は入らないため、その月は「分母・照合」で手入力してください</li>
           <li>・はがきは集計月 (アンケートハガキ（回答）の「月」) で数えます。「分母・照合」でアンケートハガキ（回答）を取り込むまでは入力日の月で数えるため、年度の境目で 1 か月ずれます</li>
