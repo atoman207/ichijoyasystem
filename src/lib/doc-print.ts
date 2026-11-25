@@ -28,7 +28,7 @@ export type Rendered = { ok: true; bytes: Uint8Array; fileName: string; input: O
 function nextReissue(db: Database, user: User, kind: DocOutputKind, refId: string, version: number | undefined, via: DocOutput["via"], now: Date): number {
   const past = outputsOf(db, kind, refId, kind === "quote" ? version : undefined);
   const last = past.at(-1);
-  if (last && last.by === user.id && now.getTime() - Date.parse(last.at) < 3 * 60 * 1000 && last.via !== "batch" && via !== "batch") return last.reissue;
+  if (last && last.userId === user.id && now.getTime() - Date.parse(last.at) < 3 * 60 * 1000 && last.via !== "batch" && via !== "batch") return last.reissue;
   return past.length;
 }
 

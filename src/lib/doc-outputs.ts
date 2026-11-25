@@ -38,8 +38,8 @@ export function recordOutput(db: Database, userId: string, input: OutputInput, n
   db.docOutputs ??= [];
   const past = outputsOf(db, input.kind, input.refId, input.kind === "quote" ? input.version : undefined);
   const last = past.at(-1);
-  if (last && last.by === userId && now.getTime() - Date.parse(last.at) < SAME_WINDOW_MS && last.via !== "batch" && input.via !== "batch") return { reissue: last.reissue, output: last };
-  const output: DocOutput = { id: newId(), kind: input.kind, refId: input.refId, number: input.number, ...(input.version !== undefined ? { version: input.version } : {}), storeId: input.storeId, ...(input.customerId ? { customerId: input.customerId } : {}), ...(input.orderId ? { orderId: input.orderId } : {}), at: now.toISOString(), by: userId, reissue: past.length, via: input.via };
+  if (last && last.userId === userId && now.getTime() - Date.parse(last.at) < SAME_WINDOW_MS && last.via !== "batch" && input.via !== "batch") return { reissue: last.reissue, output: last };
+  const output: DocOutput = { id: newId(), kind: input.kind, refId: input.refId, number: input.number, ...(input.version !== undefined ? { version: input.version } : {}), storeId: input.storeId, ...(input.customerId ? { customerId: input.customerId } : {}), ...(input.orderId ? { orderId: input.orderId } : {}), at: now.toISOString(), userId, reissue: past.length, via: input.via };
   db.docOutputs.push(output);
   return { reissue: output.reissue, output };
 }
@@ -48,5 +48,5 @@ export function recordOutput(db: Database, userId: string, input: OutputInput, n
 export function outputSummary(db: Pick<Database, "docOutputs" | "users">, kind: DocOutputKind, refId: string): { count: number; last?: DocOutput; lastBy?: string } {
   const list = outputsOf(db, kind, refId);
   const last = list.at(-1);
-  return { count: list.length, last, lastBy: last ? db.users.find((u) => u.id === last.by)?.name : undefined };
+  return { count: list.length, last, lastBy: last ? db.users.find((u) => u.id === last.userId)?.name : undefined };
 }

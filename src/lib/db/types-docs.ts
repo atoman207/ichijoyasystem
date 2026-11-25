@@ -68,7 +68,7 @@ export interface DocOutput {
   /** 対象の案件 (受注) */
   orderId?: string;
   at: string;
-  by: string;
+  userId: string;
   /** 0 = 最初の出力、1 以上 = 再発行の何回目 */
   reissue: number;
   /** view = 画面で開いた / download = 保存 / batch = まとめて印刷 */

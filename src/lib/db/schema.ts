@@ -393,7 +393,7 @@ export const TABLES: TableDef[] = [
       ["customerId", "text"],
       ["orderId", "text"],
       ["at", `${ts} not null`],
-      ["by", "text not null"],
+      ["userId", "text not null"],
       ["reissue", "integer not null default 0"],
       ["via", "text not null"],
     ],

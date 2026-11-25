@@ -226,6 +226,7 @@ create table if not exists orders (
   schedule_status text,
   billing text,
   planned_payment text,
+  receipt_wanted boolean,
   closed_at timestamptz,
   closed_by text,
   receipt_name text,
@@ -281,6 +282,51 @@ create table if not exists payments (
   created_at timestamptz not null
 );
 comment on table payments is '入金';
+
+-- 領収書 (発行した領収書の台帳: 支払方法ごとの内訳・宛名・但し書き・取り消し・作り直し)
+create table if not exists receipts (
+  id text primary key,
+  number text not null unique,
+  invoice_id text not null,
+  order_id text,
+  customer_id text not null,
+  store_id text not null references stores(id),
+  issue_date date not null,
+  addressee text not null,
+  honorific text not null,
+  purpose text not null,
+  amount numeric not null,
+  tax numeric not null default 0,
+  tax_exempt boolean,
+  parts jsonb not null default '[]',
+  status text not null check (status in ('issued','void')),
+  replaces_id text,
+  void_reason text,
+  voided_at timestamptz,
+  voided_by text,
+  note text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+comment on table receipts is '領収書 (発行した領収書の台帳: 支払方法ごとの内訳・宛名・但し書き・取り消し・作り直し)';
+
+-- 帳票の出力記録 (見積書・請求書・領収書を出力した日時・出力者・案件・何回目 = 再発行)
+create table if not exists doc_outputs (
+  id text primary key,
+  kind text not null check (kind in ('quote','invoice','receipt')),
+  ref_id text not null,
+  number text not null,
+  version integer,
+  store_id text not null,
+  customer_id text,
+  order_id text,
+  at timestamptz not null,
+  user_id text not null,
+  reissue integer not null default 0,
+  via text not null
+);
+comment on table doc_outputs is '帳票の出力記録 (見積書・請求書・領収書を出力した日時・出力者・案件・何回目 = 再発行)';
 
 -- 仕入先
 create table if not exists suppliers (
@@ -675,6 +721,8 @@ create table if not exists attachments (
   width integer,
   height integer,
   caption text,
+  category text,
+  derived_from text,
   taken_at timestamptz,
   uploaded_by text not null references users(id),
   uploaded_at timestamptz not null
@@ -1834,6 +1882,7 @@ alter table orders add column if not exists spec_note text;
 alter table orders add column if not exists schedule_status text;
 alter table orders add column if not exists billing text;
 alter table orders add column if not exists planned_payment text;
+alter table orders add column if not exists receipt_wanted boolean;
 alter table orders add column if not exists closed_at timestamptz;
 alter table orders add column if not exists closed_by text;
 alter table orders add column if not exists receipt_name text;
@@ -1875,6 +1924,39 @@ alter table payments add column if not exists memo text;
 alter table payments add column if not exists settled_on date;
 alter table payments add column if not exists recorded_by text not null;
 alter table payments add column if not exists created_at timestamptz not null;
+alter table receipts add column if not exists number text not null unique;
+alter table receipts add column if not exists invoice_id text not null;
+alter table receipts add column if not exists order_id text;
+alter table receipts add column if not exists customer_id text not null;
+alter table receipts add column if not exists store_id text not null references stores(id);
+alter table receipts add column if not exists issue_date date not null;
+alter table receipts add column if not exists addressee text not null;
+alter table receipts add column if not exists honorific text not null;
+alter table receipts add column if not exists purpose text not null;
+alter table receipts add column if not exists amount numeric not null;
+alter table receipts add column if not exists tax numeric not null default 0;
+alter table receipts add column if not exists tax_exempt boolean;
+alter table receipts add column if not exists parts jsonb not null default '[]';
+alter table receipts add column if not exists status text not null check (status in ('issued','void'));
+alter table receipts add column if not exists replaces_id text;
+alter table receipts add column if not exists void_reason text;
+alter table receipts add column if not exists voided_at timestamptz;
+alter table receipts add column if not exists voided_by text;
+alter table receipts add column if not exists note text;
+alter table receipts add column if not exists created_by text not null;
+alter table receipts add column if not exists created_at timestamptz not null;
+alter table receipts add column if not exists updated_at timestamptz not null;
+alter table doc_outputs add column if not exists kind text not null check (kind in ('quote','invoice','receipt'));
+alter table doc_outputs add column if not exists ref_id text not null;
+alter table doc_outputs add column if not exists number text not null;
+alter table doc_outputs add column if not exists version integer;
+alter table doc_outputs add column if not exists store_id text not null;
+alter table doc_outputs add column if not exists customer_id text;
+alter table doc_outputs add column if not exists order_id text;
+alter table doc_outputs add column if not exists at timestamptz not null;
+alter table doc_outputs add column if not exists user_id text not null;
+alter table doc_outputs add column if not exists reissue integer not null default 0;
+alter table doc_outputs add column if not exists via text not null;
 alter table suppliers add column if not exists name text not null;
 alter table suppliers add column if not exists category text not null default '';
 alter table suppliers add column if not exists phone text;
@@ -2157,6 +2239,8 @@ alter table attachments add column if not exists thumb_key text;
 alter table attachments add column if not exists width integer;
 alter table attachments add column if not exists height integer;
 alter table attachments add column if not exists caption text;
+alter table attachments add column if not exists category text;
+alter table attachments add column if not exists derived_from text;
 alter table attachments add column if not exists taken_at timestamptz;
 alter table attachments add column if not exists uploaded_by text not null references users(id);
 alter table attachments add column if not exists uploaded_at timestamptz not null;
@@ -2910,6 +2994,12 @@ create index if not exists invoices_store_id_idx on invoices (store_id);
 create index if not exists invoices_status_idx on invoices (status);
 create index if not exists invoices_load_order_idx on invoices (created_at, id);
 create index if not exists payments_load_order_idx on payments (created_at, id);
+create index if not exists receipts_invoice_id_idx on receipts (invoice_id);
+create index if not exists receipts_store_id_issue_date_idx on receipts (store_id, issue_date);
+create index if not exists receipts_load_order_idx on receipts (created_at, id);
+create index if not exists doc_outputs_ref_id_idx on doc_outputs (ref_id);
+create index if not exists doc_outputs_store_id_at_idx on doc_outputs (store_id, at);
+create index if not exists doc_outputs_load_order_idx on doc_outputs (at, id);
 create index if not exists purchases_status_idx on purchases (status);
 create index if not exists purchases_supplier_id_idx on purchases (supplier_id);
 create index if not exists purchases_load_order_idx on purchases (created_at, id);
@@ -3092,6 +3182,12 @@ grant select, insert, update, delete on table invoices to service_role;
 alter table payments enable row level security;
 revoke all on table payments from anon, authenticated;
 grant select, insert, update, delete on table payments to service_role;
+alter table receipts enable row level security;
+revoke all on table receipts from anon, authenticated;
+grant select, insert, update, delete on table receipts to service_role;
+alter table doc_outputs enable row level security;
+revoke all on table doc_outputs from anon, authenticated;
+grant select, insert, update, delete on table doc_outputs to service_role;
 alter table suppliers enable row level security;
 revoke all on table suppliers from anon, authenticated;
 grant select, insert, update, delete on table suppliers to service_role;

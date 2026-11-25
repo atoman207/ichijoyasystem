@@ -117,7 +117,7 @@ export function ReceiptsCard({ db, user, inv, returnTo }: { db: Database; user: 
           <ul className="mt-1 space-y-0.5 text-ink-2">
             {outputs.slice(0, 40).map((o) => (
               <li key={o.id}>
-                {fmtDateTime(o.at)} · {name(o.by)} · {DOC_OUTPUT_KIND_LABEL[o.kind]} {o.number} · {o.reissue ? `再発行 ${o.reissue} 回目` : "最初の出力"} · {DOC_OUTPUT_VIA_LABEL[o.via]}
+                {fmtDateTime(o.at)} · {name(o.userId)} · {DOC_OUTPUT_KIND_LABEL[o.kind]} {o.number} · {o.reissue ? `再発行 ${o.reissue} 回目` : "最初の出力"} · {DOC_OUTPUT_VIA_LABEL[o.via]}
               </li>
             ))}
           </ul>
