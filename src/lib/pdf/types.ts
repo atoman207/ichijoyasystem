@@ -46,6 +46,8 @@ export interface InvoicePdfData {
   taxIncluded?: boolean;
   /** 非課税 (消費税 0) */
   taxExempt?: boolean;
+  /** 納品書 (請求書と同じ書式・内容で、表題を「納品書」に。お客様のご要望 2026-11-25) */
+  delivery?: boolean;
 }
 
 export interface ReceiptPdfData {

@@ -60,6 +60,7 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
           // 帳票の出力は閲覧のみの社員もできる (お客様のご要望 2026-11-25「⑥」。出力の記録が残る)
           <>
             <LinkButton href={`/api/pdf/invoices/${inv.id}`} variant="secondary" size="sm" target="_blank">請求書 PDF</LinkButton>
+            {!batch && order && inv.status !== "void" && <LinkButton href={`/api/pdf/delivery/${order.id}`} variant="secondary" size="sm" target="_blank">納品書 PDF</LinkButton>}
             {inv.status !== "void" && <LinkButton href="#receipts" variant="secondary" size="sm">領収書</LinkButton>}
             <LinkButton href={`/print/invoices/${inv.id}`} variant="ghost" size="sm">画面で表示・印刷</LinkButton>
           </>

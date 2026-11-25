@@ -14,10 +14,13 @@ export const DOC_OUTPUT_VIA_LABEL: Record<DocOutput["via"], string> = { view: "�
 
 const SAME_WINDOW_MS = 3 * 60 * 1000;
 
-/** その帳票のこれまでの出力 (古い順)。見積は版ごと */
-export function outputsOf(db: Pick<Database, "docOutputs">, kind: DocOutputKind, refId: string, version?: number): DocOutput[] {
-  return (db.docOutputs ?? []).filter((o) => o.kind === kind && o.refId === refId && (version === undefined || o.version === version)).sort((a, b) => a.at.localeCompare(b.at));
+/** その帳票のこれまでの出力 (古い順)。見積は版ごと、納品書 (doc = delivery) は請求書と別に数える */
+export function outputsOf(db: Pick<Database, "docOutputs">, kind: DocOutputKind, refId: string, version?: number, doc?: DocOutput["doc"]): DocOutput[] {
+  return (db.docOutputs ?? []).filter((o) => o.kind === kind && o.refId === refId && (version === undefined || o.version === version) && (o.doc ?? "") === (doc ?? "")).sort((a, b) => a.at.localeCompare(b.at));
 }
+
+/** 出力記録の帳票の名前 (納品書は doc = delivery) */
+export const outputLabel = (o: Pick<DocOutput, "kind" | "doc">): string => (o.doc === "delivery" ? "納品書" : DOC_OUTPUT_KIND_LABEL[o.kind]);
 
 export interface OutputInput {
   kind: DocOutputKind;
@@ -28,6 +31,7 @@ export interface OutputInput {
   customerId?: string;
   orderId?: string;
   via: DocOutput["via"];
+  doc?: DocOutput["doc"];
 }
 
 /**
@@ -36,10 +40,10 @@ export interface OutputInput {
  */
 export function recordOutput(db: Database, userId: string, input: OutputInput, now: Date, newId: () => string): { reissue: number; output: DocOutput } {
   db.docOutputs ??= [];
-  const past = outputsOf(db, input.kind, input.refId, input.kind === "quote" ? input.version : undefined);
+  const past = outputsOf(db, input.kind, input.refId, input.kind === "quote" ? input.version : undefined, input.doc);
   const last = past.at(-1);
   if (last && last.userId === userId && now.getTime() - Date.parse(last.at) < SAME_WINDOW_MS && last.via !== "batch" && input.via !== "batch") return { reissue: last.reissue, output: last };
-  const output: DocOutput = { id: newId(), kind: input.kind, refId: input.refId, number: input.number, ...(input.version !== undefined ? { version: input.version } : {}), storeId: input.storeId, ...(input.customerId ? { customerId: input.customerId } : {}), ...(input.orderId ? { orderId: input.orderId } : {}), at: now.toISOString(), userId, reissue: past.length, via: input.via };
+  const output: DocOutput = { id: newId(), kind: input.kind, refId: input.refId, number: input.number, ...(input.version !== undefined ? { version: input.version } : {}), storeId: input.storeId, ...(input.customerId ? { customerId: input.customerId } : {}), ...(input.orderId ? { orderId: input.orderId } : {}), at: now.toISOString(), userId, reissue: past.length, via: input.via, ...(input.doc ? { doc: input.doc } : {}) };
   db.docOutputs.push(output);
   return { reissue: output.reissue, output };
 }

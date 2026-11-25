@@ -398,6 +398,8 @@ export const TABLES: TableDef[] = [
       ["userId", "text not null"],
       ["reissue", "integer not null default 0"],
       ["via", "text not null"],
+      // 2026-11-25: 納品書 (kind = invoice のまま doc = delivery。refId = 受注の ID)
+      ["doc", "text"],
     ],
     orderBy: ["at"],
     indexes: [["ref_id"], ["store_id", "at"]],

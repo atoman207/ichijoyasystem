@@ -3,8 +3,9 @@ import { PDFDocument } from "pdf-lib";
 import type { Database, User } from "@/lib/db/types";
 import { mutate, newId } from "@/lib/db/store";
 import { canOutputDocument } from "@/lib/auth/permissions";
-import { invoiceAccessInfo, quoteAccessInfo } from "@/lib/case-access";
-import { invoicePdfData, quotePdfData, receiptRecordPdfData } from "@/lib/pdf/data";
+import { invoiceAccessInfo, orderAccessInfo, quoteAccessInfo } from "@/lib/case-access";
+import { deliveryPdfData, invoicePdfData, quotePdfData, receiptRecordPdfData } from "@/lib/pdf/data";
+import { toDateKey } from "@/lib/format";
 import { renderInvoicePdf, renderQuotePdf, renderReceiptPdf } from "@/lib/pdf/render";
 import { outputsOf, recordOutput, type OutputInput } from "@/lib/doc-outputs";
 import type { DocOutput, DocOutputKind } from "@/lib/db/types";
@@ -16,7 +17,8 @@ import type { DocOutput, DocOutputKind } from "@/lib/db/types";
  */
 
 export interface PrintTarget {
-  kind: DocOutputKind;
+  /** delivery = 納品書 (id = 受注の ID。請求書と同じ内容で表題が「納品書」) */
+  kind: DocOutputKind | "delivery";
   id: string;
   /** 見積の版 */
   version?: number;
@@ -43,6 +45,13 @@ export async function renderTarget(db: Database, user: User, t: PrintTarget, via
     const order = db.orders.find((o) => o.quoteId === q.id && o.status !== "cancelled");
     const bytes = await renderQuotePdf(data);
     return { ok: true, bytes, fileName: `御見積書_${q.number}${data.version > 1 ? `_第${data.version}版` : ""}.pdf`, input: { kind: "quote", refId: q.id, number: q.number, version: data.version, storeId: q.storeId, customerId: q.customerId, orderId: order?.id, via } };
+  }
+  if (t.kind === "delivery") {
+    const o = db.orders.find((x) => x.id === t.id);
+    if (!o || o.status === "cancelled") return { ok: false, status: 404, error: "受注が見つかりません。" };
+    if (!canOutputDocument(user, orderAccessInfo(db, user, o).access)) return { ok: false, status: 403, error: "この受注の納品書を表示する権限がありません。" };
+    const bytes = await renderInvoicePdf(deliveryPdfData(db, o, toDateKey(now)));
+    return { ok: true, bytes, fileName: `納品書_${o.number}.pdf`, input: { kind: "invoice", doc: "delivery", refId: o.id, number: o.number, storeId: o.storeId, customerId: o.customerId, orderId: o.id, via } };
   }
   if (t.kind === "invoice") {
     const inv = db.invoices.find((x) => x.id === t.id);

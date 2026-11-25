@@ -1,6 +1,6 @@
 import type { Database, Order, ReceiptMethod, ScheduleEvent, ScheduleKind, StoreId, User } from "@/lib/db/types";
 import { caseChainOf } from "@/lib/case-store";
-import { invoiceAccessInfo, quoteAccessInfo } from "@/lib/case-access";
+import { invoiceAccessInfo, orderAccessInfo, quoteAccessInfo } from "@/lib/case-access";
 import { canAccessStore, canIssueInvoice, canIssueReceipt, canOutputDocument } from "@/lib/auth/permissions";
 import { liveInvoicesOfOrder } from "@/lib/billing";
 import { PRE_ISSUE_STATUSES } from "@/lib/invoice-rules";
@@ -32,7 +32,7 @@ export interface DayDocRow {
   events: { id: string; kind: ScheduleKind; label: string; period: string }[];
   sortKey: string;
   quote?: { id: string; number: string; version: number; draft: boolean; outputs: number; canPrint: boolean };
-  order?: { id: string; number: string; status: Order["status"]; total: number };
+  order?: { id: string; number: string; status: Order["status"]; total: number; deliveryOutputs: number; canPrintDelivery: boolean };
   invoice?: { id: string; number: string; total: number; paidAmount: number; outputs: number; canPrint: boolean };
   /** 請求書がないとき: 発行して印刷できるか */
   invoiceIssue?: { ok: boolean; pre: boolean; reason?: string };
@@ -85,7 +85,7 @@ export function dayDocRows(db: Database, user: User, date: string, store: StoreI
     }
     const o = chain.order;
     if (o && o.status !== "cancelled") {
-      row.order = { id: o.id, number: o.number, status: o.status, total: o.total };
+      row.order = { id: o.id, number: o.number, status: o.status, total: o.total, deliveryOutputs: outputsOf(db, "invoice", o.id, undefined, "delivery").length, canPrintDelivery: canOutputDocument(user, orderAccessInfo(db, user, o).access) };
       const inv = liveInvoicesOfOrder(db.invoices, o)[0];
       const wanted = receiptWanted(o);
       if (inv) {

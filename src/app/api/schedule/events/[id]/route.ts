@@ -33,7 +33,7 @@ import { WORK_ROLES, WORK_ROLE_LABEL, workStaffOf } from "@/lib/work-staff";
 import type { QuickWork } from "@/components/schedule/quick-types";
 import { ATTACHMENT_ACCEPT, canAddToParent, canViewAttachment, resolveParent, toView } from "@/lib/attachments";
 import { canIssueInvoice, canIssueReceipt, canOutputDocument } from "@/lib/auth/permissions";
-import { invoiceAccessInfo, quoteAccessInfo } from "@/lib/case-access";
+import { invoiceAccessInfo, orderAccessInfo, quoteAccessInfo } from "@/lib/case-access";
 import { canIssueFor } from "@/lib/invoice-rules";
 import { partLabel, receiptChecks, receiptDraft, receiptHeading, receiptWanted } from "@/lib/receipts";
 import { outputsOf } from "@/lib/doc-outputs";
@@ -356,6 +356,7 @@ function quickWork(db: Database, user: User, e: ScheduleEvent): QuickWork | unde
   const docs: NonNullable<QuickWork["docs"]> = { batchHref: `/schedule/print?date=${e.date}&store=${e.storeId}` };
   if (q) docs.quote = { id: q.id, number: q.number, version: q.version, draft: q.status === "draft" || q.status === "pending_approval", outputs: outputsOf(db, "quote", q.id, q.version).length, canPrint: canOutputDocument(user, quoteAccessInfo(db, user, q).access) };
   if (o) {
+    docs.delivery = { orderId: o.id, number: o.number, outputs: outputsOf(db, "invoice", o.id, undefined, "delivery").length, canPrint: canOutputDocument(user, orderAccessInfo(db, user, o).access) };
     const inv = liveInvoicesOfOrder(db.invoices, o)[0];
     const w = receiptWanted(o);
     const canSetWanted = canEditCaseStore(user, o.storeId) || canAccessStore(user, o.storeId);
@@ -381,6 +382,6 @@ function quickWork(db: Database, user: User, e: ScheduleEvent): QuickWork | unde
       docs.receipt = { wanted: w.wanted, auto: w.auto, reason: w.reason, canSetWanted, orderId: o.id, issued: [], checks: [] };
     }
   }
-  if (docs.quote || docs.invoice || docs.invoiceIssue) out.docs = docs;
+  if (docs.quote || docs.invoice || docs.invoiceIssue || docs.delivery) out.docs = docs;
   return out;
 }

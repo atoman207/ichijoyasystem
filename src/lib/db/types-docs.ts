@@ -73,4 +73,6 @@ export interface DocOutput {
   reissue: number;
   /** view = 画面で開いた / download = 保存 / batch = まとめて印刷 */
   via: "view" | "download" | "batch";
+  /** 納品書 (kind = invoice・refId = 受注の ID。請求書と同じ内容で表題が「納品書」。お客様のご要望 2026-11-25) */
+  doc?: "delivery";
 }

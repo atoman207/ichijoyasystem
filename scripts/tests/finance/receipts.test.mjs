@@ -390,6 +390,42 @@ section("7. 請求書・領収書の表示 (入金済みを載せない・お名
   } else console.log("  (pdftotext がないため PDF の文字の確かめは省略)");
 }
 
+
+/* ================================================================== */
+section("8. 納品書 (請求書と同じ書式・内容で表題が「納品書」)");
+{
+  const D = await imp("lib/pdf/data.ts");
+  const RN = await imp("lib/pdf/render.ts");
+  const DP = await imp("lib/doc-print.ts");
+  const OUT = await imp("lib/doc-outputs.ts");
+  const o1 = db().orders.find((o) => o.id === "o_rc1");
+  const inv = db().invoices.find((i) => i.orderId === "o_rc1" && i.status !== "void");
+  const dn = D.deliveryPdfData(db(), o1, today);
+  const iv = D.invoicePdfData(db(), inv);
+  eq([dn.delivery, dn.number, dn.total, dn.items.length, dn.dueDate], [true, o1.number, iv.total, iv.items.length, iv.dueDate], "請求書のある受注: 請求書と同じ内容 (番号は受注番号)");
+  const o3 = db().orders.find((o) => o.quoteId === "q_rc3");
+  const dn3 = D.deliveryPdfData(db(), o3, today);
+  eq([dn3.total, dn3.items.map((x) => x.name), dn3.dueDate, dn3.issuedOn], [6000, ["網戸 張替え"], undefined, today], "請求書のない受注: 受注・見積の明細から (お支払期限なし)");
+  const r = await DP.renderTarget(db(), u("u_rc_other"), { kind: "delivery", id: "o_rc1" }, "view");
+  ok(r.ok && r.fileName === `納品書_${o1.number}.pdf` && r.input.doc === "delivery" && r.input.kind === "invoice", "閲覧のみの社員も出力できる (出力の記録は請求書と分けて doc = delivery)");
+  await DP.recordOutputs(u("u_rc_other"), [r.input]);
+  eq([OUT.outputsOf(db(), "invoice", "o_rc1", undefined, "delivery").length, OUT.outputsOf(db(), "invoice", "o_rc1").length], [1, 0], "納品書の出力は請求書の出力と別に数える");
+  eq(OUT.outputLabel({ kind: "invoice", doc: "delivery" }), "納品書", "出力記録の帳票の名前");
+  const { execFileSync } = await import("node:child_process");
+  try {
+    execFileSync("pdftotext", ["-v"], { stdio: "ignore" });
+    const f = path.join(work, "dn.pdf");
+    fs.writeFileSync(f, await RN.renderInvoicePdf(dn));
+    const text = execFileSync("pdftotext", ["-layout", f, "-"]).toString();
+    ok(/納\s*品\s*書/.test(text) && !/請\s*求\s*書/.test(text.split("\n").slice(0, 8).join("")) && /納品番号/.test(text) && /合計金額/.test(text) && /納品いたしました/.test(text), "PDF: 表題「納品書」・納品番号・合計金額・「下記のとおり納品いたしました。」");
+  } catch {
+    console.log("  (pdftotext がないため PDF の文字の確かめは省略)");
+  }
+  const DDA2 = await imp("lib/actions/day-docs.ts");
+  const rr = await act(u("u_rc_mgr"), () => DDA2.prepareDayDocs(form({ date: today, store: S, case: ["o_rc1"], "orderId:o_rc1": "o_rc1", "delivery:o_rc1": "1", "invoice:o_rc1": "1" })));
+  eq((rr.sp?.get("docs") ?? "").split(",").map((d) => d.split(":")[0]), ["d", "i"], "まとめて印刷: 納品書 → 請求書");
+}
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   console.log(fails.map((f) => `  - ${f}`).join("\n"));

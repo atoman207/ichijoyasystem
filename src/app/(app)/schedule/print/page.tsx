@@ -33,7 +33,7 @@ export default async function SchedulePrintPage({ searchParams }: { searchParams
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title="帳票をまとめて印刷" description="その日に納品・施工・現場見積の案件の請求書・領収書・見積書を 1 つの PDF にまとめて印刷します。出力の記録が残り、2 回目からの領収書は「再発行」と印字します" back={{ href: back, label: "予定表 (この日)" }} />
+      <PageHeader title="帳票をまとめて印刷" description="その日に納品・施工・現場見積の案件の納品書・請求書・領収書・見積書を 1 つの PDF にまとめて印刷します。出力の記録が残り、2 回目からの領収書は「再発行」と印字します" back={{ href: back, label: "予定表 (この日)" }} />
 
       {docCount > 0 && (
         <Card className="mb-4 border-accent/40 bg-accent-soft/30">
@@ -98,9 +98,22 @@ export default async function SchedulePrintPage({ searchParams }: { searchParams
                     {r.caseNumber} {r.title}
                   </Link>
                 </div>
-                <div className="grid grid-cols-1 gap-3 px-4 py-3 text-xs @3xl:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 px-4 py-3 text-xs @xl:grid-cols-2 @4xl:grid-cols-4">
                   {r.order && <input type="hidden" name={`orderId:${r.key}`} value={r.order.id} />}
                   {r.quote && <input type="hidden" name={`quoteId:${r.key}`} value={r.quote.id} />}
+                  {/* 納品書 (請求書と同じ内容で表題が「納品書」。お客様のご要望 2026-11-25) */}
+                  <div className="rounded-lg bg-subtle/60 p-2.5">
+                    <div className="mb-1 font-semibold text-ink">納品書</div>
+                    {r.order ? (
+                      <label className="flex items-center gap-1.5">
+                        <input type="checkbox" name={`delivery:${r.key}`} value="1" disabled={!r.order.canPrintDelivery} className="h-4 w-4" />
+                        {r.order.number} {yen(r.order.total)}
+                        {r.order.deliveryOutputs > 0 && <span className="text-ink-3">(出力 {r.order.deliveryOutputs} 回)</span>}
+                      </label>
+                    ) : (
+                      <p className="text-ink-3">受注の前の案件です</p>
+                    )}
+                  </div>
                   {/* 請求書 */}
                   <div className="rounded-lg bg-subtle/60 p-2.5">
                     <div className="mb-1 font-semibold text-ink">請求書</div>

@@ -207,7 +207,7 @@ export function CaseWorkSection({ work, eventId, returnTo: listReturn, onReload 
       )}
 
       {docs && (
-        <Block title="帳票 (見積書・請求書・領収書)" icon={<Printer className="h-3.5 w-3.5 text-accent" aria-hidden />} testId="case-docs">
+        <Block title="帳票 (見積書・納品書・請求書・領収書)" icon={<Printer className="h-3.5 w-3.5 text-accent" aria-hidden />} testId="case-docs">
           <div className="space-y-2.5 text-xs">
             <div className="flex flex-wrap gap-1.5">
               {docs.quote && docs.quote.canPrint && (
@@ -216,6 +216,13 @@ export function CaseWorkSection({ work, eventId, returnTo: listReturn, onReload 
                   見積書 {docs.quote.number}
                   {docs.quote.draft ? " (承認前)" : ""}
                   {docs.quote.outputs ? ` · 出力 ${docs.quote.outputs} 回` : ""}
+                </a>
+              )}
+              {docs.delivery && docs.delivery.canPrint && (
+                <a href={`/api/pdf/delivery/${docs.delivery.orderId}`} target="_blank" rel="noopener" className={buttonClass("secondary", "sm")} data-testid="case-delivery-note">
+                  <FileText />
+                  納品書
+                  {docs.delivery.outputs ? ` · 出力 ${docs.delivery.outputs} 回` : ""}
                 </a>
               )}
               {docs.invoice && docs.invoice.canPrint && (

@@ -1,5 +1,6 @@
 import "server-only";
-import type { Customer, Database, Invoice, Quote, QuoteItem, Receipt, StoreId } from "@/lib/db/types";
+import type { Customer, Database, Invoice, Order, Quote, QuoteItem, Receipt, StoreId } from "@/lib/db/types";
+import { isBatchInvoice, liveInvoicesOfOrder } from "@/lib/billing";
 import { partLabel } from "@/lib/receipts";
 import { addresseeName, nameIndex, type NameIndex } from "@/lib/person-name";
 
@@ -165,6 +166,41 @@ export function invoicePdfData(db: Database, inv: Invoice): InvoicePdfData {
     company: pdfCompany(db, inv.storeId),
     voided: inv.status === "void",
   };
+}
+
+/**
+ * 納品書 (受注 1 件。お客様のご要望 2026-11-25「請求書と同じ書式・内容で、表題を納品書に」)。
+ * 受注の請求書があればその請求書と同じ内容 (まとめ請求の請求書は除く)、なければ受注・見積から請求書を発行するときと同じ作り方で作る
+ * (発行日は issuedOn、お支払期限は載せない)。納品番号は受注番号
+ */
+export function deliveryPdfData(db: Database, o: Order, issuedOn: string): InvoicePdfData {
+  const inv = liveInvoicesOfOrder(db.invoices, o).find((i) => !isBatchInvoice(i));
+  if (inv) return { ...invoicePdfData(db, inv), number: o.number, delivery: true };
+  const q = db.quotes.find((x) => x.id === o.quoteId);
+  const sameQuote = Boolean(q && q.total === o.total);
+  const subtotal = q && sameQuote ? q.total - q.tax : Math.round(o.total / 1.1);
+  const virtual: Invoice = {
+    id: `dn_${o.id}`,
+    number: o.number,
+    orderId: o.id,
+    customerId: o.customerId,
+    storeId: o.storeId,
+    issueDate: issuedOn,
+    dueDate: "",
+    subtotal,
+    tax: o.total - subtotal,
+    total: o.total,
+    paidAmount: 0,
+    status: "issued",
+    title: o.title,
+    items: q && sameQuote ? q.items : [{ id: "dn_line", name: o.title, qty: 1, unit: "式", unitPrice: subtotal, amount: subtotal }],
+    taxIncluded: sameQuote ? q!.taxIncluded : undefined,
+    taxExempt: sameQuote ? q!.taxExempt : undefined,
+    createdBy: o.createdBy,
+    createdAt: o.createdAt,
+    updatedAt: o.updatedAt,
+  };
+  return { ...invoicePdfData(db, virtual), dueDate: undefined, delivery: true };
 }
 
 /** 領収書 (入金済みの金額)。全額入金なら請求書の税額、一部入金なら 10% の内税で計算する */

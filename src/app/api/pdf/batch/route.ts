@@ -3,17 +3,16 @@ import { getSessionUser } from "@/lib/auth/session";
 import { syncDb } from "@/lib/db/store";
 import { pdfHeaders } from "@/lib/pdf/data";
 import { mergePdfs, recordOutputs, renderTarget, type PrintTarget } from "@/lib/doc-print";
-import type { DocOutputKind } from "@/lib/db/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const KIND: Record<string, DocOutputKind> = { q: "quote", i: "invoice", r: "receipt" };
+const KIND: Record<string, PrintTarget["kind"]> = { q: "quote", i: "invoice", r: "receipt", d: "delivery" };
 const MAX_DOCS = 60;
 
 /**
- * まとめて印刷: /api/pdf/batch?docs=q:<見積ID>,i:<請求書ID>,r:<領収書ID>,… (予定表の「帳票をまとめて印刷」。お客様のご要望 2026-11-25「⑦」)
+ * まとめて印刷: /api/pdf/batch?docs=q:<見積ID>,i:<請求書ID>,r:<領収書ID>,d:<受注ID (納品書)>,… (予定表の「帳票をまとめて印刷」。お客様のご要望 2026-11-25「⑦」)
  * 1 枚ずつ権限を確かめて PDF を作り、1 つの PDF にまとめる。出力の記録は 1 枚ずつ (via = batch。2 回目からは再発行)。
  * 見られない帳票は外し、PDF の名前に枚数を書く
  */

@@ -325,7 +325,8 @@ create table if not exists doc_outputs (
   at timestamptz not null,
   user_id text not null,
   reissue integer not null default 0,
-  via text not null
+  via text not null,
+  doc text
 );
 comment on table doc_outputs is '帳票の出力記録 (見積書・請求書・領収書を出力した日時・出力者・案件・何回目 = 再発行)';
 
@@ -1959,6 +1960,7 @@ alter table doc_outputs add column if not exists at timestamptz not null;
 alter table doc_outputs add column if not exists user_id text not null;
 alter table doc_outputs add column if not exists reissue integer not null default 0;
 alter table doc_outputs add column if not exists via text not null;
+alter table doc_outputs add column if not exists doc text;
 alter table suppliers add column if not exists name text not null;
 alter table suppliers add column if not exists category text not null default '';
 alter table suppliers add column if not exists phone text;

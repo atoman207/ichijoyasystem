@@ -245,6 +245,8 @@ export interface QuickWork {
 export interface QuickDocs {
   quote?: { id: string; number: string; version: number; draft: boolean; outputs: number; canPrint: boolean };
   invoice?: { id: string; number: string; total: number; paidAmount: number; outputs: number; canPrint: boolean; href: string };
+  /** 納品書 (受注。請求書と同じ内容で表題が「納品書」) */
+  delivery?: { orderId: string; number: string; outputs: number; canPrint: boolean };
   /** 請求書がないとき: 発行できるか (店長・本部・管理者。施工完了の前も) */
   invoiceIssue?: { ok: boolean; pre: boolean; reason?: string; orderId: string; total: number };
   receipt?: {

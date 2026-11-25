@@ -556,16 +556,19 @@ export async function renderQuotePdf(data: QuotePdfData): Promise<Uint8Array> {
 // ---------------------------------------------------------------- 請求書
 
 export async function renderInvoicePdf(data: InvoicePdfData): Promise<Uint8Array> {
+  // 納品書: 請求書と同じ書式・内容で、表題・番号の見出し・冒頭の文・金額の見出しだけを変える (お客様のご要望 2026-11-25)
+  const docTitle = data.delivery ? "納品書" : "請求書";
+  const numberLabel = data.delivery ? "納品番号" : "請求番号";
   const s = await Sheet.create({
-    title: `請求書 ${data.number}${data.corrected ? " (訂正版)" : ""}`,
-    subject: "請求書",
+    title: `${docTitle} ${data.number}${data.corrected ? " (訂正版)" : ""}`,
+    subject: docTitle,
     author: data.company.name,
   });
-  s.onNewPage = () => continuationHeader(s, "請求書", `請求番号 ${data.number}`, `${data.customerName} ${data.honorific}`);
+  s.onNewPage = () => continuationHeader(s, docTitle, `${numberLabel} ${data.number}`, `${data.customerName} ${data.honorific}`);
   s.addPage();
 
   const meta: [string, string][] = [
-    ["請求番号", data.number],
+    [numberLabel, data.number],
     ["発行日", fmtJpDate(data.issuedOn)],
   ];
   if (data.dueDate) meta.push(["お支払期限", fmtJpDate(data.dueDate)]);
@@ -582,19 +585,19 @@ export async function renderInvoicePdf(data: InvoicePdfData): Promise<Uint8Array
 
   s.y =
     firstPage(s, {
-      title: "請求書",
+      title: docTitle,
       tag: data.corrected ? "訂正版" : undefined,
       meta,
       customerName: data.customerName,
       honorific: data.honorific,
       customerAddress: data.customerAddress,
-      lead: "下記のとおりご請求申し上げます。",
+      lead: data.delivery ? "下記のとおり納品いたしました。" : "下記のとおりご請求申し上げます。",
       info: [
         ["件名", data.title],
         ["現場", data.siteAddress],
         ["受注番号", data.orderNumber],
       ],
-      amountLabel: "ご請求金額",
+      amountLabel: data.delivery ? "合計金額" : "ご請求金額",
       amount: total,
       company: data.company,
     }) + 18;

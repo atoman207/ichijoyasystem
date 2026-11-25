@@ -54,6 +54,8 @@ export async function prepareDayDocs(formData: FormData) {
         }
       }
       if (want("quote") && quoteId) docs.push(`q:${quoteId}`);
+      // 納品書 (請求書と同じ内容で表題が「納品書」。請求書がなくても受注から作る)
+      if (want("delivery") && o) docs.push(`d:${o.id}`);
       let inv = o ? liveInvoicesOfOrder(db.invoices, o)[0] : undefined;
       if (o && (want("invoice") || want("receipt")) && !inv) {
         const can = canIssueFor(db, o);

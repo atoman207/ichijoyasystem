@@ -3,7 +3,7 @@ import { Card, CardHeader, LinkButton, Note } from "@/components/ui";
 import { canAccessStore, canIssueReceipt, canVoidReceipt } from "@/lib/auth/permissions";
 import { invoiceAccessInfo } from "@/lib/case-access";
 import { partLabel, receiptChecks, receiptDraft, receiptHeading, receiptWanted } from "@/lib/receipts";
-import { DOC_OUTPUT_KIND_LABEL, DOC_OUTPUT_VIA_LABEL, outputSummary } from "@/lib/doc-outputs";
+import { DOC_OUTPUT_VIA_LABEL, outputLabel, outputSummary } from "@/lib/doc-outputs";
 import { recordReceiptPayments, voidReceipt } from "@/lib/actions/receipts";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
 import { ReceiptForm } from "./ReceiptForm";
@@ -23,7 +23,7 @@ export function ReceiptsCard({ db, user, inv, returnTo }: { db: Database; user: 
   const checks = receiptChecks(db, inv, order);
   const wanted = receiptWanted(order);
   const name = (id?: string) => db.users.find((u) => u.id === id)?.name ?? "-";
-  const outputs = (db.docOutputs ?? []).filter((o) => o.refId === inv.id || list.some((r) => r.id === o.refId)).sort((a, b) => b.at.localeCompare(a.at));
+  const outputs = (db.docOutputs ?? []).filter((o) => o.refId === inv.id || list.some((r) => r.id === o.refId) || (o.doc === "delivery" && o.refId === inv.orderId)).sort((a, b) => b.at.localeCompare(a.at));
   const canIssue = canIssueReceipt(user, access) && inv.status !== "void";
   return (
     <Card id="receipts">
@@ -117,7 +117,7 @@ export function ReceiptsCard({ db, user, inv, returnTo }: { db: Database; user: 
           <ul className="mt-1 space-y-0.5 text-ink-2">
             {outputs.slice(0, 40).map((o) => (
               <li key={o.id}>
-                {fmtDateTime(o.at)} · {name(o.userId)} · {DOC_OUTPUT_KIND_LABEL[o.kind]} {o.number} · {o.reissue ? `再発行 ${o.reissue} 回目` : "最初の出力"} · {DOC_OUTPUT_VIA_LABEL[o.via]}
+                {fmtDateTime(o.at)} · {name(o.userId)} · {outputLabel(o)} {o.number} · {o.reissue ? `再発行 ${o.reissue} 回目` : "最初の出力"} · {DOC_OUTPUT_VIA_LABEL[o.via]}
               </li>
             ))}
           </ul>
