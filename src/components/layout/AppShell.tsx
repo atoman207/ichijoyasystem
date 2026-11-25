@@ -27,7 +27,7 @@ import { Award, BookOpen, Calculator, CircleHelp, ClipboardList, Coins, Printer,
 import { Avatar, Badge } from "@/components/ui";
 import { IchijoyaLogo } from "@/components/brand/Logo";
 import { ChatbotWidget } from "@/components/chatbot/ChatbotWidget";
-import { ChatBadge } from "@/components/chat/ChatBadge";
+import { ChatIconButton, ChatLive, ChatPinnedButton } from "@/components/chat/ChatBadge";
 import type { ChatSummary } from "@/lib/chat/types";
 import { ScrollTopButton } from "./ScrollTopButton";
 
@@ -291,7 +291,8 @@ export function AppShell({
   const [menu, setMenu] = useState<MenuId>(null);
   const [lastPath, setLastPath] = useState(pathname);
   const [readNotifications, setReadNotifications] = useState<Set<string>>(new Set());
-  const pinned = nav.find((it) => it.pinned);
+  // ロゴの右に常に出す重要な機能 (予定表・チャット)。タブの列には出さない
+  const pinnedItems = nav.filter((it) => it.pinned);
   const tabs = nav.filter((it) => !it.pinned);
   const [visibleCount, setVisibleCount] = useState(tabs.length);
   const headerRef = useRef<HTMLElement>(null);
@@ -500,8 +501,10 @@ export function AppShell({
             <IchijoyaLogo title="" className="h-4 w-auto max-w-[4.75rem] shrink-0 sm:h-7 sm:max-w-none" />
           </Link>
 
-          {/* 重要な機能 (予定表): ロゴの右に常に表示し、アニメーションで目立たせる */}
-          {pinned && <PinnedButton item={pinned} active={isActive(pinned.href)} onClick={closeAll} />}
+          {/* 重要な機能 (予定表・チャット): ロゴの右に常に表示し、アニメーションで目立たせる。チャットは要対応・未読の数つき */}
+          {pinnedItems.map((it) =>
+            it.href === "/chat" && chat ? <ChatPinnedButton key={it.href} initial={chat} active={isActive("/chat")} onClick={closeAll} /> : <PinnedButton key={it.href} item={it} active={isActive(it.href)} onClick={closeAll} />,
+          )}
 
           {/* PC: メニューのタブ */}
           <nav ref={navRef} aria-label="メインメニュー" className="relative hidden min-w-0 flex-1 items-center justify-center lg:flex">
@@ -625,8 +628,8 @@ export function AppShell({
               </Link>
             )}
 
-            {/* チャット (チャンネル・DM・業務依頼・メンション。赤 = 要対応、青 = 未読。src/components/chat/ChatBadge.tsx) */}
-            {chat && <ChatBadge initial={chat} active={isActive("/chat")} />}
+            {/* チャット (スマートフォン。パソコン・タブレットはロゴの右の緑のボタン。赤 = 要対応、青 = 未読。src/components/chat/ChatBadge.tsx) */}
+            {chat && <ChatIconButton initial={chat} active={isActive("/chat")} />}
 
             {/* 通知 */}
             <div className="relative">
@@ -817,6 +820,8 @@ export function AppShell({
       <main id="main-content" className={MAIN_PAD}>
         <div className={MAIN_INNER}>{children}</div>
       </main>
+      {/* チャットの数の確認・通知音・アプリのアイコンの数字 (表示なし。1 つだけ) */}
+      {chat && <ChatLive initial={chat} />}
       {/* チャットの画面は入力欄が画面の下にあるため、左下の「質問する」と右下の「↑」を出さない */}
       {!isActive("/chat") && <ChatbotWidget userName={user.name} userId={user.id} avatarSrc={user.avatarSrc} />}
       {!isActive("/chat") && <ScrollTopButton />}

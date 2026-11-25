@@ -111,7 +111,7 @@ export function TaskFields({ dir, value, onChange, prefer }: { dir: Dir; value: 
         <span className="mb-1 block text-xs font-medium text-ink-2">件名 (空ならメッセージの 1 行目)</span>
         <input value={value.title} maxLength={80} onChange={(e) => onChange({ ...value, title: e.target.value })} className="h-9 w-full rounded-xl border border-line bg-panel px-3 text-sm outline-none focus:border-accent" placeholder="例: 合志店の在庫の確認" />
       </label>
-      <p className="text-[11px] leading-relaxed text-ink-3">依頼先は「確認しました」→「報告」、依頼した人が報告を確かめて「完了」にするまで、チャットのアイコンの「要対応」に残ります。業務依頼は「社内連絡・業務依頼」にも残り、依頼した人の店舗の社員・本部・管理者も見られます。</p>
+      <p className="text-[11px] leading-relaxed text-ink-3">依頼先は「確認しました」→「報告」、依頼した人が報告を確かめて「完了」にするまで、チャットのボタンの「要対応」に残ります。業務依頼は「社内連絡・業務依頼」にも残り、依頼した人の店舗の社員・本部・管理者も見られます。</p>
     </div>
   );
 }

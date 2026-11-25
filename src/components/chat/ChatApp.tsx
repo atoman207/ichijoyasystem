@@ -1036,7 +1036,7 @@ function InboxPane({ items, waiting, dir, onOpen, onAck, onBack }: { items: Inbo
               <Check className="h-6 w-6" />
             </span>
             <p className="text-sm font-medium text-ink">要対応はありません</p>
-            <p className="text-xs text-ink-3">新しい業務依頼・重要メッセージ・メンションが届くと、ここと右上のチャットのアイコン (赤い数字) に出ます。</p>
+            <p className="text-xs text-ink-3">新しい業務依頼・重要メッセージ・メンションが届くと、ここと左上の緑の「チャット」のボタン (赤い数字) に出ます。</p>
           </div>
         )}
         {groups
