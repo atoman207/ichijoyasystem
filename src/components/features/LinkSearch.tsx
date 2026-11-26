@@ -11,7 +11,7 @@ import type { CustomerHit, InquiryHit } from "@/lib/link-search";
  */
 
 /** 入力するたびに候補を読む (250 ミリ秒待ってから)。endpoint は ?q= を足す前の URL (ほかの条件は付けておく)。入力が空のときは initial */
-function useSearch<T>(endpoint: string, initial: T[] = [], initialQuery = "") {
+export function useSearch<T>(endpoint: string, initial: T[] = [], initialQuery = "") {
   const [q, setQuery] = useState(initialQuery);
   const [items, setItems] = useState<T[]>([]);
   const [busy, setBusy] = useState(Boolean(initialQuery.trim()));
@@ -47,7 +47,7 @@ function useSearch<T>(endpoint: string, initial: T[] = [], initialQuery = "") {
   return { q, setQ, items: q.trim() ? items : initial, busy, error };
 }
 
-function SearchBox({ value, onChange, placeholder, busy, label }: { value: string; onChange: (v: string) => void; placeholder: string; busy: boolean; label: string }) {
+export function SearchBox({ value, onChange, placeholder, busy, label }: { value: string; onChange: (v: string) => void; placeholder: string; busy: boolean; label: string }) {
   return (
     <label className="relative block">
       <span className="sr-only">{label}</span>

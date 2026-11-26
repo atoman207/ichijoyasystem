@@ -103,6 +103,11 @@ function CaptureQuote({ eventId, returnTo, capture }: { eventId: string; returnT
           </Link>
         </div>
       )}
+      {capture.placeholder && (
+        <p className="mb-1.5 rounded-lg bg-warn-soft px-3 py-2 text-[11px] leading-relaxed text-warn-ink" data-testid="case-capture-placeholder">
+          この案件のお客様は予定表から仮に登録したお客様です (名字と地区だけ)。見積書を撮影すると、読み取ったお名前・電話・住所で「既存のお客様に紐付ける」か「新しいお客様として登録する」を選べます (住所が一致するお客様を先に出します)。そのあと見積・受注を登録すると、この予定にそのままつながります (予定は増えません)。
+        </p>
+      )}
       <p className="mt-1.5 text-[11px] leading-relaxed text-ink-3">撮影すると AI が品名・数量・単価・引取日・納品日を読み取り (読めない行も空の行で残します)、この案件の見積の作成の画面を開きます。手入力はシステムの見積書の書式に直接入力します。どちらも保存すると、この予定表に戻ります。</p>
       {error && <p className="mt-1 text-[11px] text-critical-ink">{error}</p>}
     </div>

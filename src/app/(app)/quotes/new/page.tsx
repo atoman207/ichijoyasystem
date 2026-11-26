@@ -22,6 +22,9 @@ import type { ServiceCategory } from "@/lib/db/types";
 import { QuoteEditor, type EditorItem } from "@/components/features/QuoteEditor";
 import { QuoteStartChoice } from "@/components/features/QuoteStartChoice";
 import { QuoteCaseChoice } from "@/components/features/QuoteCaseChoice";
+import { PlaceholderCustomerChoice, type PlaceholderCandidate } from "@/components/features/PlaceholderCustomerChoice";
+import { isPlaceholderCustomer } from "@/lib/customer-link";
+import { matchReception, type ReceptionFields } from "@/lib/reception";
 import { CaptureUploader } from "@/components/features/CaptureUploader";
 import type { TaxMode } from "@/lib/quote-calc";
 import { itemCategoryProps } from "@/lib/mgmt/categories";
@@ -96,6 +99,37 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
   const original = doc ? attachmentsOf(db, "document", doc.id)[0] : undefined;
   const warnings = Array.isArray(ex._warnings) ? (ex._warnings as string[]).slice(0, 6) : [];
 
+  // 予定表 (スプレッドシート) から取り込んだ案件の仮のお客様 (「予定表から登録」): 読み取ったお客様の情報で、既存のお客様に紐付けるか新しいお客様として登録する
+  // (お客様のご要望 2026-11-26。候補は 住所 → 電話番号 → お名前 の順。src/lib/placeholder-customer.ts)
+  const placeholder = customer && isPlaceholderCustomer(customer) ? customer : undefined;
+  let placeholderCandidates: PlaceholderCandidate[] = [];
+  let placeholderSuggested: string | undefined;
+  const placeholderRead = { name: exText("customerName"), kana: exText("furigana"), phone: exText("phone"), address: exText("siteAddress") };
+  if (placeholder && (placeholderRead.name || placeholderRead.phone || placeholderRead.address)) {
+    const fields: ReceptionFields = { callType: "", callTypeReason: "", customerName: placeholderRead.name, kana: placeholderRead.kana, phone: placeholderRead.phone, otherPhone: "", email: "", postalCode: "", address: placeholderRead.address, category: "", summary: "", detail: "", desiredDate: "", urgency: "", callback: "", mediaText: "", storeHint: "", staffName: "", receivedAt: "", caseHint: "", companyName: "", memoText: "", uncertainFields: [], siteAddress: "", appointments: [] };
+    const m = matchReception(db, user, fields);
+    const storeName = new Map(db.stores.map((s) => [s.id, s.shortName || s.name]));
+    placeholderCandidates = m.customers
+      .filter((c) => c.customer.id !== placeholder.id && !isPlaceholderCustomer(c.customer))
+      .slice(0, 12)
+      .map(({ customer: c, level, reason }) => ({
+        id: c.id,
+        code: c.code,
+        name: c.name,
+        kana: c.kana,
+        phone: [c.phone, ...(c.contacts ?? []).map((x) => x.phone)].filter(Boolean).slice(0, 2).join(" / "),
+        address: c.address || (c.area ? `地区 ${c.area}` : ""),
+        storeName: storeName.get(c.storeId) ?? c.storeId,
+        corporate: c.type === "corporate",
+        placeholder: false,
+        open: 0,
+        level,
+        reason,
+      }));
+    const sug = m.suggestion.customerId;
+    placeholderSuggested = sug && placeholderCandidates.some((c) => c.id === sug) ? sug : undefined;
+  }
+
   /** この画面の場所 (案件・お客様・戻り先を付けたまま。読み取りの前に断られたとき・顧客の登録のあとに戻る) */
   const here = (extra: Record<string, string | undefined> = {}) => {
     const q = new URLSearchParams();
@@ -131,12 +165,18 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
           </div>
         )}
         <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2 @4xl:grid-cols-4">
-          <Field label="お客様" required className="@4xl:col-span-2" hint={choices.searchable ? "上の検索 (住所・町名が確実) で候補を表示。同じ氏名・電話でも住所が違うことがあるので、住所を確かめて選んでください" : "候補の住所を確かめて選んでください (受注番号は不要です)"}>
-            <Select name="customerId" defaultValue={customerId} required>
-              <option value="">選択してください</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{customerOptionLabel(c)}</option>)}
-            </Select>
-          </Field>
+          {placeholder ? (
+            <div className="@xl:col-span-2 @4xl:col-span-4">
+              <PlaceholderCustomerChoice placeholder={{ id: placeholder.id, name: placeholder.name, area: placeholder.area || placeholder.address || "" }} read={placeholderRead} candidates={placeholderCandidates} suggestedId={placeholderSuggested} />
+            </div>
+          ) : (
+            <Field label="お客様" required className="@4xl:col-span-2" hint={choices.searchable ? "上の検索 (住所・町名が確実) で候補を表示。同じ氏名・電話でも住所が違うことがあるので、住所を確かめて選んでください" : "候補の住所を確かめて選んでください (受注番号は不要です)"}>
+              <Select name="customerId" defaultValue={customerId} required>
+                <option value="">選択してください</option>
+                {customers.map((c) => <option key={c.id} value={c.id}>{customerOptionLabel(c)}</option>)}
+              </Select>
+            </Field>
+          )}
           <Field label="店舗" hint={contextStoreName ? `${inquiry ? "問い合わせ" : "案件"}の店舗 (${contextStoreName}) を入れています` : undefined}>
             <Select name="storeId" defaultValue={allStores ? (contextStore ?? customer?.storeId ?? "") : (contextStore ?? user.storeId)} disabled={!allStores}>
               {allStores && <option value="">お客様の担当店舗</option>}

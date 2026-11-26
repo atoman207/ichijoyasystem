@@ -302,7 +302,7 @@ function quickWork(db: Database, user: User, e: ScheduleEvent): QuickWork | unde
   const q = chain?.quote && !["rejected", "expired"].includes(chain.quote.status) ? chain.quote : undefined;
   const o = chain?.order && chain.order.status !== "cancelled" ? chain.order : undefined;
   // ② 見積書の撮影 (見積のない案件。案件がなければお客様の新しい見積)
-  if (!q && !o && canCase) out.capture = { inquiryId: chain?.inquiry?.id, customerId: customer?.id };
+  if (!q && !o && canCase) out.capture = { inquiryId: chain?.inquiry?.id, customerId: customer?.id, ...(isPlaceholderCustomer(customer) ? { placeholder: true } : {}) };
   // 見積・受注のある案件にも、別の見積 (追加工事・仕様や金額の違う案) を作れる (1 つの案件に複数の見積。src/lib/case-group.ts)
   else if (chain && canCase) out.capture = { caseId: caseIdOf(db, chain.head.id), customerId: customer?.id, additional: true };
   if (q) out.quote = { id: q.id, number: q.number, status: QUOTE_STATUS[q.status]?.label ?? q.status, href: `/quotes/${q.id}` };

@@ -198,6 +198,50 @@ section("5. 案件を決めずに見積を作る (caseId = 案件 / new)・見�
   eq(p1.visits.map((v) => v.date), [d1], "案件につないだ見積は、案件の訪問の予定 (見積) を受注にする画面に出す");
 }
 
+section("6. 予定表から移行した案件の仮のお客様: 撮影した見積書の内容で 既存のお客様に紐付ける / 新しいお客様として登録する");
+{
+  await store.mutate((x) => {
+    const ph = (id, name) => x.customers.push({ id, code: `C-7${id.slice(-4)}`, name, kana: "", phone: "", postalCode: "", address: "", area: "テスト町", storeId: S, type: "individual", preferredChannel: "phone", firstContactChannel: "phone", tags: ["予定表から登録"], notes: "", createdAt: now, updatedAt: now });
+    ph("c_dp_ph1", "架空");
+    ph("c_dp_ph2", "仮名");
+    x.customers.push({ id: "c_dp_real", code: "C-70099", name: "架空 太郎", kana: "カクウ タロウ", phone: "0968-00-0001", postalCode: "", address: "熊本県テスト市テスト町5-1", storeId: S, type: "individual", preferredChannel: "phone", firstContactChannel: "phone", tags: [], notes: "", createdAt: now, updatedAt: now });
+    const inq = (id, cid) => x.inquiries.push({ id, number: `INQ-2026-${id.slice(-4)}`, customerId: cid, storeId: S, channel: "phone", category: "tatami", summary: "予定表から", detail: "", status: "in_progress", receivedAt: now, createdBy: "u_dp_staff", createdAt: now, updatedAt: now, media: "unknown", source: "import", sourceRef: `sheet:case:${id}` });
+    inq("inq_dp_ph1", "c_dp_ph1");
+    inq("inq_dp_ph2", "c_dp_ph2");
+    const ev = (id, kind, date, inqId, cid) => x.schedule.push({ id, title: `（テスト町）${id}`, kind, date, storeId: S, assigneeIds: ["u_dp_staff"], source: "import", sourceRef: `sheet:${date}|koshi|${kind}|${id}`, inquiryId: inqId, customerId: cid, createdBy: "u_dp_staff", createdAt: now, updatedAt: now });
+    ev("ev_dp_ph1_pick", "pickup", d1, "inq_dp_ph1", "c_dp_ph1");
+    ev("ev_dp_ph1_deliv", "delivery", d1, "inq_dp_ph1", "c_dp_ph1");
+    ev("ev_dp_ph2_pick", "pickup", d5, "inq_dp_ph2", "c_dp_ph2");
+  });
+  const R = await imp("lib/reception.ts");
+  const blank = { callType: "", callTypeReason: "", customerName: "架空 太郎", kana: "", phone: "", otherPhone: "", email: "", postalCode: "", address: "テスト市テスト町5-1", category: "", summary: "", detail: "", desiredDate: "", urgency: "", callback: "", mediaText: "", storeHint: "", staffName: "", receivedAt: "", caseHint: "", companyName: "", memoText: "", uncertainFields: [], siteAddress: "", appointments: [] };
+  const m = R.matchReception(db(), u("u_dp_mgr"), blank);
+  eq([m.customers[0]?.customer.id, m.customers[0]?.level], ["c_dp_real", "address"], "読み取った住所で既存のお客様が最初の候補 (住所の一致)");
+  const items = JSON.stringify([{ name: "畳表替え", spec: "さくら", qty: 6, unit: "畳", unitPrice: 9900 }]);
+  const newQuoteId = (r) => (r.path?.startsWith("/quotes/") ? r.path.split("/")[2] : null);
+  const before = db().schedule.length;
+  let r = await act(u("u_dp_mgr"), () => QA.createQuote(form({ customerId: "c_dp_real", placeholderId: "c_dp_ph1", placeholderAction: "link", inquiryId: "inq_dp_ph1", title: "表替え", items, intent: "submit" })));
+  const q = db().quotes.find((x) => x.id === newQuoteId(r));
+  eq([q?.customerId, q?.inquiryId, db().inquiries.find((i) => i.id === "inq_dp_ph1")?.customerId], ["c_dp_real", "inq_dp_ph1", "c_dp_real"], `既存のお客様に紐付け: 見積・問い合わせが既存のお客様に ${r.err ?? ""}`);
+  eq(["ev_dp_ph1_pick", "ev_dp_ph1_deliv"].map((id) => db().schedule.find((e) => e.id === id)?.customerId), ["c_dp_real", "c_dp_real"], "予定表の予定も既存のお客様に (予定は増えない)");
+  ok(!db().customers.some((c) => c.id === "c_dp_ph1") && db().auditLogs.some((l) => l.entity === "customer" && l.entityId === "c_dp_ph1" && l.action === "delete"), "仮のお客様は記録が残らないので削除 (変更履歴つき)");
+  ok(/架空 太郎 様に紐付けました/.test(r.msg ?? ""), "紐付けたことを知らせる");
+  const p = planOf(q.id);
+  eq(p.existing.map((e) => e.id).sort(), ["ev_dp_ph1_deliv", "ev_dp_ph1_pick"].sort(), "受注にする画面に予定表の引き取り・納品の予定");
+  await act(u("u_dp_mgr"), () => QA.convertQuoteToOrder(q.id, form({ handovers: JSON.stringify(p.initial.map((x) => ({ id: x.id, item: x.item, pickupDate: x.pickupDate, deliveryDate: x.deliveryDate }))) })));
+  const o = db().orders.find((x) => x.quoteId === q.id);
+  eq([db().schedule.length, evOf(o.id).map((e) => e.id).sort()], [before, ["ev_dp_ph1_deliv", "ev_dp_ph1_pick"].sort()], "受注は予定表の予定をそのまま使う (新しい予定は作らない)");
+
+  r = await act(u("u_dp_mgr"), () => QA.createQuote(form({ customerId: "c_dp_ph2", placeholderId: "c_dp_ph2", placeholderAction: "promote", promoteName: "仮名 花子", promoteKana: "カリナ ハナコ", promotePhone: "+81 90-0000-0002", promoteAddress: "熊本県テスト市テスト町9-9", inquiryId: "inq_dp_ph2", title: "表替え", items, intent: "submit" })));
+  const q2 = db().quotes.find((x) => x.id === newQuoteId(r));
+  const c2 = db().customers.find((c) => c.id === "c_dp_ph2");
+  eq([q2?.customerId, c2?.name, c2?.kana, c2?.phone, c2?.address, c2?.tags.includes("予定表から登録")], ["c_dp_ph2", "仮名 花子", "カリナ ハナコ", "090-0000-0002", "熊本県テスト市テスト町9-9", false], `新しいお客様として登録: 仮のお客様を読み取った内容で正式に (電話は国内の形) ${r.err ?? ""}`);
+  eq(db().customers.filter((c) => c.name === "仮名 花子").length, 1, "新しい顧客は足さない (二重にならない)");
+  ok(db().auditLogs.some((l) => l.entity === "customer" && l.entityId === "c_dp_ph2" && l.changes?.some((c) => c.field === "name")), "変更履歴 (お名前・電話・住所・タグ)");
+  r = await act(u("u_dp_mgr"), () => QA.createQuote(form({ customerId: "c_dp_ph2", placeholderId: "c_dp_ph2", placeholderAction: "promote", promoteName: "", inquiryId: "inq_dp_ph2", title: "もう一度", items, intent: "submit" })));
+  ok(Boolean(newQuoteId(r)), "正式に登録したあとは仮のお客様ではないので、そのまま見積を作る");
+}
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 fs.rmSync(work, { recursive: true, force: true });
 if (fails.length) {

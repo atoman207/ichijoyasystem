@@ -28,6 +28,7 @@ import { quoteCompletedLock, completedLockMessage } from "@/lib/case-access";
 import { autoUnit } from "@/lib/line-kind";
 import { buildCaseMap, quoteLinkForCase } from "@/lib/case-group";
 import { scheduleCheckLink } from "@/lib/msg-link";
+import { resolvePlaceholderCustomer } from "@/lib/placeholder-customer";
 
 /**
  * 案件に見積を足すときのつながり (お客様のご要望 2026-11-26「■4」「■6」: 1 つの案件に見積を複数)。
@@ -182,7 +183,7 @@ const docBlocksQuote = (doc: { linkedType?: string; linkedId?: string; status: s
 export async function createQuote(formData: FormData) {
   const user = await requireActionUser();
   const back = newQuoteBack(formData);
-  const customerId = str(formData, "customerId");
+  let customerId = str(formData, "customerId");
   const title = str(formData, "title");
   if (!customerId) fail(back, "お客様を選択してください。");
   if (!title) fail(back, "件名を入力してください。");
@@ -190,11 +191,29 @@ export async function createQuote(formData: FormData) {
   const intent = str(formData, "intent");
   const id = newId("q");
   let submitted = "";
+  let customerNote = "";
   const approvalIds: string[] = [];
   await mutate((db) => {
     const documentId = str(formData, "documentId");
     const doc = documentId ? db.documents.find((d) => d.id === documentId) : undefined;
     if (doc && docBlocksQuote(doc)) fail("/capture?doc=" + doc.id, "この取込書類はすでに登録済み (または破棄済み) です。");
+    // 予定表から取り込んだ案件の仮のお客様: 既存のお客様に紐付ける / 読み取った内容で正式に登録する (src/lib/placeholder-customer.ts)
+    const placeholderId = str(formData, "placeholderId");
+    if (placeholderId) {
+      const r = resolvePlaceholderCustomer(db, user, {
+        placeholderId,
+        action: str(formData, "placeholderAction"),
+        customerId,
+        caseRecordId: str(formData, "inquiryId") || (str(formData, "caseId") === "new" ? "" : str(formData, "caseId")) || undefined,
+        name: str(formData, "promoteName"),
+        kana: str(formData, "promoteKana"),
+        phone: str(formData, "promotePhone"),
+        address: str(formData, "promoteAddress"),
+      });
+      if (r.error) fail(back, r.error);
+      customerId = r.customerId;
+      customerNote = r.note ?? "";
+    }
     const customer = db.customers.find((c) => c.id === customerId);
     if (!customer) fail(back, "お客様が見つかりません。");
     // 店舗のロールは自店舗のお客様だけ (一覧で見えないお客様の見積を作らない)。店長は全店舗のお客様 (permissions.ts の canEditCaseStore)
@@ -277,7 +296,8 @@ export async function createQuote(formData: FormData) {
   // 予定表の小さな画面から撮影して作った見積は、その画面に戻る (お客様のご要望 2026-11-25「②」)
   const ret = safeReturn(str(formData, "returnTo"), "");
   // 見積の画面では「受注登録へ進む」「見積のみで終了する」を出す (?next=1。お客様のご要望 2026-11-26「②」受注登録のし忘れを防ぐ)
-  redirect(withMsg(ret || `/quotes/${id}?next=1`, intent === "submit" ? `見積を作成し、${submitted}` : ret ? "見積を下書き保存しました。続けて「受注にする」で受注と日程を登録できます。" : "見積を下書き保存しました。"));
+  const lead = customerNote ? `${customerNote} ` : "";
+  redirect(withMsg(ret || `/quotes/${id}?next=1`, lead + (intent === "submit" ? `見積を作成し、${submitted}` : ret ? "見積を下書き保存しました。続けて「受注にする」で受注と日程を登録できます。" : "見積を下書き保存しました。")));
 }
 
 export async function updateQuote(id: string, formData: FormData) {
