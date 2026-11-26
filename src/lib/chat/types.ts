@@ -291,4 +291,13 @@ export const CHAT_MAX_FILE_BYTES = 9 * 1024 * 1024;
 /** 本文の長さ */
 export const CHAT_MAX_BODY = 8000;
 /** メッセージの上にすぐ出すリアクション (ほかは絵文字の一覧から。src/lib/chat/emoji.ts) */
+/**
+ * 非公開のチャンネル (メンバーだけが見られる) か: 店舗・店長のチャンネルと、非公開で作ったチャンネル。
+ * 全社 (全社員が参加) と公開のチャンネルは公開。DM はチャンネルではないので対象外 (false)。
+ * 画面ではチャンネルのアイコンの右下に鍵の印を付ける (parts.tsx の ChannelIcon。お客様のご要望 2026-11-26)
+ */
+export function isPrivateChannel(c: Pick<ChatChannelView, "kind" | "visibility">): boolean {
+  return c.kind === "store" || c.kind === "managers" || (c.kind === "custom" && c.visibility !== "public");
+}
+
 export const CHAT_REACTIONS = ["👍", "✅", "🙏", "😊", "🎉", "👀", "😢", "❗"] as const;

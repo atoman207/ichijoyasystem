@@ -3,13 +3,13 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import clsx from "clsx";
-import { AlertTriangle, Bookmark, BookmarkCheck, Check, ChevronLeft, ChevronRight, CircleCheck, Copy, Download, EyeOff, FileSpreadsheet, FileText, FileVideo, Forward, Hash, ListTodo, Lock, Megaphone, MessageSquare, MessageSquareReply, MoreVertical, Pencil, Pin, SmilePlus, Store, Trash2, X } from "lucide-react";
+import { AlertTriangle, Bookmark, BookmarkCheck, Check, ChevronLeft, ChevronRight, CircleCheck, Copy, Download, EyeOff, FileSpreadsheet, FileText, FileVideo, Forward, Hash, ListTodo, Lock, Megaphone, MessageSquare, MessageSquareReply, MoreVertical, Pencil, Pin, SmilePlus, Store, Trash2, UsersRound, X } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { Avatar, Badge, StatusBadge } from "@/components/ui";
 import { TASK_STATUS } from "@/lib/constants";
 import { blocks, inlines, segments } from "@/lib/chat/text";
 import { EMOJI_GROUPS } from "@/lib/chat/emoji";
-import { CHAT_REACTIONS, type ChatChannelView, type ChatFile, type ChatMessageView, type ChatStoreRef, type ChatUser } from "@/lib/chat/types";
+import { CHAT_REACTIONS, isPrivateChannel, type ChatChannelView, type ChatFile, type ChatMessageView, type ChatStoreRef, type ChatUser } from "@/lib/chat/types";
 import { dueLabel, fileUrl, fullWhen, sizeLabel, timeLabel } from "./client";
 
 /* ================================================================== */
@@ -41,8 +41,25 @@ export function UserAvatar({ dir, id, size = 36, presence = false }: { dir: Dir;
   );
 }
 
-/** チャンネルのアイコン (画像があれば画像。DM は相手の顔写真・人数) */
+/**
+ * チャンネルのアイコン (画像があれば画像。DM は相手の顔写真・人数)。
+ * 非公開のチャンネル (店舗・店長・非公開で作ったチャンネル。types.ts の isPrivateChannel) は右下に鍵の印 (お客様のご要望 2026-11-26「公開と非公開を区別」)
+ */
 export function ChannelIcon({ c, dir, size = 20 }: { c: Pick<ChatChannelView, "kind" | "memberIds" | "visibility" | "color" | "image">; dir: Dir; size?: number }) {
+  const body = <ChannelIconBody c={c} dir={dir} size={size} />;
+  if (!isPrivateChannel(c)) return body;
+  const b = Math.min(22, Math.max(11, Math.round(size * 0.42)));
+  return (
+    <span className="relative inline-flex shrink-0" title="非公開のチャンネル (メンバーだけが見られます)" data-private="1">
+      {body}
+      <span role="img" aria-label="非公開" className="absolute -right-1 -bottom-1 flex items-center justify-center rounded-full bg-ink text-white ring-2 ring-panel" style={{ width: b, height: b }} data-testid="channel-lock">
+        <Lock aria-hidden strokeWidth={2.75} style={{ width: Math.round(b * 0.6), height: Math.round(b * 0.6) }} />
+      </span>
+    </span>
+  );
+}
+
+function ChannelIconBody({ c, dir, size }: { c: Pick<ChatChannelView, "kind" | "memberIds" | "visibility" | "color" | "image">; dir: Dir; size: number }) {
   if (c.kind === "dm") {
     const others = c.memberIds.filter((id) => id !== dir.me.id);
     if (others.length <= 1) return <UserAvatar dir={dir} id={others[0] ?? dir.me.id} size={size} presence={size <= 24} />;
@@ -56,7 +73,8 @@ export function ChannelIcon({ c, dir, size = 20 }: { c: Pick<ChatChannelView, "k
   if (c.image)
     // eslint-disable-next-line @next/next/no-img-element -- ログインした社員だけが読める画像 (next/image の最適化を通さない)
     return <img src={c.image} alt="" width={size} height={size} className="shrink-0 bg-subtle object-cover" style={{ width: size, height: size, borderRadius: radius }} loading="lazy" draggable={false} />;
-  const Icon = c.kind === "all" ? Megaphone : c.kind === "store" ? Store : c.kind === "managers" ? Lock : c.visibility === "public" ? Hash : Lock;
+  // 鍵は右下の印で表すので、アイコン自体は種類だけで決める (店長 = 人の集まり・追加したチャンネル = #)
+  const Icon = c.kind === "all" ? Megaphone : c.kind === "store" ? Store : c.kind === "managers" ? UsersRound : Hash;
   return (
     <span className="flex shrink-0 items-center justify-center text-white" style={{ width: size, height: size, borderRadius: radius, background: c.color ?? (c.kind === "all" ? "#4a5ae8" : c.kind === "managers" ? "#8a5a00" : "#64748b") }}>
       <Icon className="h-[58%] w-[58%]" />

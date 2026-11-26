@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui";
 import { ackChatMessage, addChatMembers, deleteChatMessage, editChatMessage, joinChatChannel, leaveChatChannel, markChatRead, markChatUnread, openDirect, pinChatMessage, reactChatMessage, removeChatMember, saveChatMessage, setChatChannelNotify, starChatChannel } from "@/lib/actions/chat";
 import { chatNavKey, decodeMentions, matchName } from "@/lib/chat/text";
 import type { ChatBootstrap, ChatChannelView, ChatCounts, ChatFile, ChatMessageView, ChatPrefs, ChatSyncResponse, ChatTaskInfo, InboxItem, WaitingItem } from "@/lib/chat/types";
+import { isPrivateChannel } from "@/lib/chat/types";
 import { CHAT_COUNTS_EVENT } from "./ChatBadge";
 import { dayKey, dayLabel, dueLabel, fileUrl, fullWhen, getJson, shortWhen, signalChatRefresh, sizeLabel, timeLabel } from "./client";
 import { Composer, type ComposerHandle } from "./Composer";
@@ -1285,7 +1286,7 @@ function DetailsPanel({
               <div className="flex items-center gap-3 rounded-xl border border-line p-3">
                 <ChannelIcon c={channel} dir={dir} size={56} />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-[15px] font-bold text-ink"># {channel.name}</div>
+                  <div className="flex min-w-0 items-center gap-1 text-[15px] font-bold text-ink"><ChannelName c={channel} /></div>
                   <div className="text-[11px] text-ink-3">{channel.image ? (channel.imageInherited ? "本部のチャンネルの画像" : "チャンネルの画像") : "画像は登録されていません"}</div>
                 </div>
                 {channel.canEditImage && (
@@ -1451,6 +1452,16 @@ function ChannelRow({ c, dir, active, onClick }: { c: ChatChannelView; dir: Dir;
   );
 }
 
+/** チャンネルの名前の前の印: 公開 = # / 非公開 = 鍵 (アイコンの右下の鍵の印と同じ区別) */
+function ChannelName({ c }: { c: Pick<ChatChannelView, "kind" | "visibility" | "name"> }) {
+  return (
+    <>
+      {isPrivateChannel(c) ? <Lock className="h-[0.85em] w-[0.85em] shrink-0" aria-label="非公開" /> : <span aria-hidden>#</span>}
+      <span className="truncate">{c.name}</span>
+    </>
+  );
+}
+
 function ChannelIntro({ c, dir, onMembers }: { c: ChatChannelView; dir: Dir; onMembers: () => void }) {
   const text: Record<string, string> = {
     all: "全社員が参加するチャンネルです。全員へのお知らせ・全店舗で共有したい内容をここで公開します。",
@@ -1462,7 +1473,7 @@ function ChannelIntro({ c, dir, onMembers }: { c: ChatChannelView; dir: Dir; onM
   return (
     <div className="px-4 pt-6 pb-3 @xl:px-5">
       <ChannelIcon c={c} dir={dir} size={44} />
-      <h3 className="mt-2 text-lg font-bold text-ink">{c.kind === "dm" ? c.name : `# ${c.name}`}</h3>
+      <h3 className="mt-2 flex items-center gap-1 text-lg font-bold text-ink">{c.kind === "dm" ? c.name : <ChannelName c={c} />}</h3>
       <p className="mt-1 max-w-xl text-[13px] leading-relaxed text-ink-2">
         {text[c.kind]}
         {c.kind === "custom" && c.createdBy ? ` ${nameOf(dir, c.createdBy)} さんが${c.createdAt ? ` ${fullWhen(c.createdAt)} に` : ""}作成しました。` : ""}

@@ -669,6 +669,18 @@ DB.closeChatDb();
 PU.closePushDb();
 server.close();
 fs.rmSync(work, { recursive: true, force: true });
+// ---- 公開・非公開の区別 (アイコンの右下の鍵の印。お客様のご要望 2026-11-26)
+{
+  const TY = await imp("lib/chat/types.ts");
+  const P = (kind, visibility) => TY.isPrivateChannel({ kind, visibility });
+  ok(P("all") === false, "全社のチャンネルは公開 (鍵なし)");
+  ok(P("store") === true && P("managers") === true, "店舗・店長のチャンネルは非公開 (メンバーだけ・鍵)");
+  ok(P("custom", "public") === false && P("custom", "private") === true && P("custom", undefined) === true, "追加したチャンネルは公開範囲どおり (未設定は非公開)");
+  ok(P("dm") === false, "DM には鍵の印を付けない (チャンネルではない)");
+  const parts = fs.readFileSync(path.join(root, "src/components/chat/parts.tsx"), "utf8");
+  ok(/isPrivateChannel\(c\)/.test(parts) && /aria-label="非公開"/.test(parts), "ChannelIcon は非公開のチャンネルに「非公開」の鍵の印を付ける");
+}
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   for (const f of fails) console.log("  ✗", f);
