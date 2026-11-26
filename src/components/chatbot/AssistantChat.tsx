@@ -500,13 +500,13 @@ export function AssistantConversation({
                 </>
               ) : variant === "widget" ? (
                 <>
-                  {first} さん、お疲れさまです。使い方・検索・売上の集計など、気軽に聞いてください。
-                  {voice.stt !== "none" && <span className="mt-1 block text-xs text-ink-3">マイクで声の質問もできます。</span>}
+                  {first} さん、お疲れさまです。使い方・検索・売上の集計など、そのまま聞いてください。
+                  <span className="mt-1 block text-xs text-ink-3">下の「よくある質問」を押すか、入力して送信してください。{voice.stt !== "none" ? "マイクでも話せます。" : ""}</span>
                 </>
               ) : (
                 <>
-                  {first} さん、お疲れさまです。操作の手順、お客様・案件・予定の検索、売上や粗利の集計にお答えします。回答には根拠を付けます。
-                  {voice.stt !== "none" && <span className="mt-1 block text-xs text-ink-3">マイクのボタンで声の質問ができます。回答も読み上げます。</span>}
+                  {first} さん、お疲れさまです。操作の手順、お客様・案件・予定の検索、売上や粗利の集計にお答えします。
+                  <span className="mt-1 block text-xs text-ink-3">下の例を押すか、質問を入力して送信してください。{voice.stt !== "none" ? "マイクでも話せます。" : ""}</span>
                 </>
               )}
             </div>
@@ -827,7 +827,7 @@ export function AssistantConversation({
               }}
               rows={1}
               maxLength={1000}
-              placeholder={voice.stt !== "none" ? "質問を入力、またはマイクで話す" : "質問を入力してください"}
+              placeholder={pending ? "回答をお待ちください…" : voice.stt !== "none" ? "質問を入力（またはマイク）" : "質問を入力して送信"}
               aria-label="質問"
               disabled={pending || recording}
               className="max-h-32 min-h-10 w-full resize-none rounded-xl border border-line bg-subtle px-3 py-2.5 text-sm leading-snug text-ink placeholder:text-ink-3 focus:border-accent focus:bg-panel focus:outline-none disabled:opacity-60"
@@ -850,7 +850,7 @@ export function AssistantConversation({
               {recorder.state === "transcribing" ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : recording ? <Square className="h-4 w-4 fill-current" aria-hidden /> : <Mic className="h-4 w-4" aria-hidden />}
             </button>
           )}
-          <button type="submit" disabled={pending || !input.trim() || recording} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent text-white hover:bg-accent-hover disabled:opacity-40" aria-label="送信">
+          <button type="submit" disabled={pending || !input.trim() || recording} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent text-white hover:bg-accent-hover disabled:opacity-40" aria-label={pending ? "回答待ち" : "送信"} title={pending ? "前の回答が終わるまでお待ちください" : "送信 (Enter)"}>
             {pending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <SendHorizontal className="h-4 w-4" aria-hidden />}
           </button>
         </div>

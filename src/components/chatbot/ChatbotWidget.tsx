@@ -77,17 +77,16 @@ export function ChatbotWidget({ userName, userId, avatarSrc, guest = false }: { 
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           aria-controls="chatbot-panel"
-          aria-label={open ? "チャットボットを閉じる" : "チャットボットに質問する"}
-          className="group flex h-12 items-center gap-2 rounded-full bg-accent pr-4 pl-3 text-sm font-medium text-white shadow-pop transition-all hover:-translate-y-0.5 hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          aria-label={open ? "質問するを閉じる" : "質問する (社内 AI アシスタント)"}
+          className="group flex h-12 items-center gap-2 rounded-full bg-accent pr-4 pl-3 text-sm font-medium text-white shadow-pop transition-colors hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
-          <span className="relative grid h-7 w-7 place-items-center rounded-full bg-white/15">
+          <span className="grid h-7 w-7 place-items-center rounded-full bg-white/15">
             {open ? <X className="h-4 w-4" aria-hidden /> : <MessageCircleQuestion className="h-4 w-4" aria-hidden />}
-            {!open && <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-accent bg-good" aria-hidden />}
           </span>
           <span>{open ? "閉じる" : "質問する"}</span>
         </button>
         {!guest && (
-          <Link href="/schedule" className="flex h-12 items-center gap-1.5 rounded-full border border-line bg-panel pr-4 pl-3 text-sm font-medium text-ink shadow-pop transition-all hover:-translate-y-0.5 hover:bg-subtle lg:hidden" data-testid="schedule-launcher">
+          <Link href="/schedule" className="flex h-12 items-center gap-1.5 rounded-full border border-line bg-panel pr-4 pl-3 text-sm font-medium text-ink shadow-pop transition-colors hover:bg-subtle lg:hidden" data-testid="schedule-launcher">
             <CalendarDays className="h-5 w-5 text-accent" aria-hidden />
             予定表
           </Link>
@@ -109,31 +108,39 @@ export function ChatbotWidget({ userName, userId, avatarSrc, guest = false }: { 
               wide ? "sm:h-[min(880px,100%)] sm:max-w-[1120px]" : "sm:h-[min(760px,100%)] sm:max-w-[760px]",
             )}
           >
-            <header className="flex items-center gap-2 border-b border-line bg-accent-strong px-3 py-2.5 text-white sm:px-4 sm:py-3">
+            <header className="flex items-center gap-1.5 border-b border-line bg-accent-strong px-3 py-2.5 text-white sm:gap-2 sm:px-4 sm:py-3">
               <BotAvatar size={36} />
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold">{guest ? "システム案内" : "社内 AI アシスタント"}</p>
-                <p className="truncate text-[11px] text-white/75">{guest ? "使い方・ログインについて" : "使い方・検索・分析・社内資料"}</p>
+                <p className="text-sm font-semibold">{guest ? "システム案内" : "質問する"}</p>
+                <p className="truncate text-[11px] text-white/75">{guest ? "使い方・ログインについて" : "使い方・検索・集計 (回答まで少し待つことがあります)"}</p>
               </div>
               {!guest && (
                 <>
-                  <Link href="/ai" className="grid h-8 w-8 place-items-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white" aria-label="大きな画面で開く" title="AI アシスタント画面で開く">
+                  <Link href="/ai" className="grid h-8 w-8 place-items-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white" aria-label="大きな画面で開く" title="大きな画面で開く">
                     <ExternalLink className="h-4 w-4" aria-hidden />
                   </Link>
-                  <Link href="/ai?tab=history" className="grid h-8 w-8 place-items-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white" aria-label="相談の履歴" title="相談の履歴">
+                  <Link href="/ai?tab=history" className="grid h-8 w-8 place-items-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white" aria-label="これまでの相談" title="これまでの相談">
                     <History className="h-4 w-4" aria-hidden />
                   </Link>
                 </>
               )}
-              <button type="button" onClick={() => setWide((v) => !v)} className="hidden h-8 w-8 place-items-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white sm:grid" aria-label={wide ? "小さくする" : "大きくする"} title={wide ? "小さくする" : "大きくする (表・グラフを見やすく)"}>
+              <button type="button" onClick={() => setWide((v) => !v)} className="hidden h-8 w-8 place-items-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white sm:grid" aria-label={wide ? "窓を小さくする" : "窓を大きくする"} title={wide ? "窓を小さくする" : "窓を大きくする"}>
                 {wide ? <Minimize2 className="h-4 w-4" aria-hidden /> : <Maximize2 className="h-4 w-4" aria-hidden />}
               </button>
               {msgs.length > 0 && (
-                <button type="button" onClick={reset} className="grid h-8 w-8 place-items-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white" aria-label="新しい会話にする" title="新しい会話にする">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm("今の会話を消して、新しく始めますか？")) reset();
+                  }}
+                  className="grid h-8 w-8 place-items-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white"
+                  aria-label="会話を消して新しくする"
+                  title="会話を消して新しくする"
+                >
                   <Eraser className="h-4 w-4" aria-hidden />
                 </button>
               )}
-              <button type="button" onClick={() => setOpen(false)} className="grid h-8 w-8 place-items-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white" aria-label="閉じる" title="閉じる (Esc)">
+              <button type="button" onClick={() => setOpen(false)} className="grid h-8 w-8 place-items-center rounded-lg bg-white/10 text-white hover:bg-white/20" aria-label="閉じる (Esc)" title="閉じる (Esc)">
                 <X className="h-4 w-4" aria-hidden />
               </button>
             </header>

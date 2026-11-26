@@ -177,9 +177,10 @@ type MenuId = "notif" | "user" | "create" | "search" | "more" | null;
 
 const NO_KEYS: ReadonlySet<string> = new Set();
 
-/** ヘッダー左上に常に表示する重要な機能のボタン (光の輪・光の帯・アイコンの揺れで目立たせる) */
+/** ヘッダー左上に常に表示する重要な機能のボタン (件数があるときだけ光る。普段は静かに) */
 function PinnedButton({ item, active, onClick }: { item: NavItem; active: boolean; onClick: () => void }) {
   const Icon = ICONS[item.icon];
+  const alert = Boolean(item.badge);
   return (
     <Link
       href={item.href}
@@ -190,15 +191,17 @@ function PinnedButton({ item, active, onClick }: { item: NavItem; active: boolea
       title={item.label}
       className={clsx(
         // スマートフォンではヘッダーが窮屈になるため非表示 (メニューの「予定表」から開く)
-        "group relative hidden h-9 shrink-0 items-center gap-1.5 rounded-xl bg-linear-to-br from-accent to-info px-2.5 text-sm font-semibold text-white outline-none transition-transform duration-200 hover:-translate-y-px focus-visible:ring-4 focus-visible:ring-accent/30 sm:inline-flex sm:h-10 sm:px-3.5",
-        "animate-pin-glow motion-reduce:animate-none motion-reduce:shadow-[0_8px_18px_-10px_rgba(74,90,232,0.95)]",
+        "group relative hidden h-9 shrink-0 items-center gap-1.5 rounded-xl bg-linear-to-br from-accent to-info px-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_-10px_rgba(74,90,232,0.95)] outline-none transition-transform duration-200 hover:-translate-y-px focus-visible:ring-4 focus-visible:ring-accent/30 sm:inline-flex sm:h-10 sm:px-3.5",
+        alert && "animate-pin-glow motion-reduce:animate-none",
         active && "ring-2 ring-white ring-offset-2 ring-offset-accent/40",
       )}
     >
-      <span className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl" aria-hidden>
-        <span className="absolute inset-y-0 left-0 w-1/3 bg-linear-to-r from-transparent via-white/45 to-transparent animate-pin-shine motion-reduce:hidden" />
-      </span>
-      <Icon className="relative h-[18px] w-[18px] animate-pin-wiggle motion-reduce:animate-none sm:h-5 sm:w-5" strokeWidth={2.2} aria-hidden />
+      {alert && (
+        <span className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl" aria-hidden>
+          <span className="absolute inset-y-0 left-0 w-1/3 bg-linear-to-r from-transparent via-white/45 to-transparent animate-pin-shine motion-reduce:hidden" />
+        </span>
+      )}
+      <Icon className="relative h-[18px] w-[18px] sm:h-5 sm:w-5" strokeWidth={2.2} aria-hidden />
       <span className="relative max-[400px]:hidden">{item.short ?? item.label}</span>
       {item.badge ? <CountBubble n={item.badge} className="absolute -top-1.5 -right-1.5" /> : null}
     </Link>

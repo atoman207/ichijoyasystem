@@ -76,6 +76,11 @@
   --animate-chat-glow: chat-glow 2.4s ease-out infinite;
   --animate-chat-ring: chat-ring 2.8s ease-in-out infinite;
   --animate-chat-burst: chat-burst 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) 1;
+  /* チャットボットの待ち時間 (ドット・マーク・進み具合) */
+  --animate-wait-dot: wait-dot 1.05s ease-in-out infinite;
+  --animate-wait-float: wait-float 2.2s ease-in-out infinite;
+  --animate-wait-pulse: wait-pulse 2.4s ease-in-out infinite;
+  --animate-wait-shine: wait-shine 1.6s ease-in-out infinite;
 
   @keyframes pop {
     from {
@@ -196,6 +201,48 @@
     }
     100% {
       transform: scale(1) rotate(0deg);
+    }
+  }
+  /* 「考えています…」のドット (1 つずつ上下) */
+  @keyframes wait-dot {
+    0%,
+    70%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.45;
+    }
+    35% {
+      transform: translateY(-4px);
+      opacity: 1;
+    }
+  }
+  /* 待ちのあいだ、マークがゆるく上下する */
+  @keyframes wait-float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-3px);
+    }
+  }
+  @keyframes wait-pulse {
+    0%,
+    100% {
+      transform: scale(0.92);
+      opacity: 0.55;
+    }
+    50% {
+      transform: scale(1.08);
+      opacity: 0.95;
+    }
+  }
+  @keyframes wait-shine {
+    0% {
+      transform: translateX(-120%);
+    }
+    100% {
+      transform: translateX(160%);
     }
   }
 }

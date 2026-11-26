@@ -209,17 +209,19 @@ export function ChatPinnedButton({ initial, active, onClick }: { initial: ChatSu
       data-testid="header-chat"
       className={clsx(
         // スマートフォンはヘッダーが狭いため右上のアイコン (ChatIconButton)
-        "group relative hidden h-9 shrink-0 items-center gap-1.5 rounded-xl bg-linear-to-br from-good to-wa-green px-2.5 text-sm font-semibold text-white outline-none transition-transform duration-200 hover:-translate-y-px focus-visible:ring-4 focus-visible:ring-good/30 sm:inline-flex sm:h-10 md:px-3.5",
-        "animate-chat-glow motion-reduce:animate-none motion-reduce:shadow-[0_8px_18px_-10px_rgba(18,161,80,0.9)]",
+        "group relative hidden h-9 shrink-0 items-center gap-1.5 rounded-xl bg-linear-to-br from-good to-wa-green px-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_-10px_rgba(18,161,80,0.9)] outline-none transition-transform duration-200 hover:-translate-y-px focus-visible:ring-4 focus-visible:ring-good/30 sm:inline-flex sm:h-10 md:px-3.5",
+        // 要対応があるときだけ光る・揺れる (普段は静かに。誤操作・気が散るのを防ぐ)
+        s.action > 0 && "animate-chat-glow motion-reduce:animate-none",
         popping && "animate-chat-burst!",
         active && "ring-2 ring-white ring-offset-2 ring-offset-good/40",
       )}
     >
-      <span className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl" aria-hidden>
-        {/* 光の帯 (予定表のボタンと時間をずらす) */}
-        <span className="absolute inset-y-0 left-0 w-1/3 bg-linear-to-r from-transparent via-white/45 to-transparent animate-pin-shine [animation-delay:1.6s] motion-reduce:hidden" />
-      </span>
-      <MessagesSquare className={clsx("relative h-[18px] w-[18px] sm:h-5 sm:w-5", s.action > 0 ? "animate-chat-ring motion-reduce:animate-none" : "animate-pin-wiggle [animation-delay:2.4s] motion-reduce:animate-none")} strokeWidth={2.2} aria-hidden />
+      {s.action > 0 && (
+        <span className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl" aria-hidden>
+          <span className="absolute inset-y-0 left-0 w-1/3 bg-linear-to-r from-transparent via-white/45 to-transparent animate-pin-shine [animation-delay:1.6s] motion-reduce:hidden" />
+        </span>
+      )}
+      <MessagesSquare className={clsx("relative h-[18px] w-[18px] sm:h-5 sm:w-5", s.action > 0 && "animate-chat-ring motion-reduce:animate-none")} strokeWidth={2.2} aria-hidden />
       <span className="relative hidden md:inline">チャット</span>
       <Counts s={s} />
     </Link>
@@ -240,7 +242,7 @@ export function ChatIconButton({ initial, active }: { initial: ChatSummary; acti
       data-testid="header-chat-mobile"
       className={clsx(ICON_BUTTON, "relative bg-good-soft text-good-ink sm:hidden", popping && "animate-chat-burst", active && "ring-2 ring-good/40")}
     >
-      <MessagesSquare className={clsx("h-5 w-5", s.action > 0 ? "animate-chat-ring motion-reduce:animate-none" : "animate-pin-wiggle motion-reduce:animate-none")} strokeWidth={2.2} />
+      <MessagesSquare className={clsx("h-5 w-5", s.action > 0 && "animate-chat-ring motion-reduce:animate-none")} strokeWidth={2.2} />
       <Counts s={s} compact />
     </Link>
   );
