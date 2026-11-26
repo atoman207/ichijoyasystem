@@ -300,4 +300,9 @@ export function isPrivateChannel(c: Pick<ChatChannelView, "kind" | "visibility">
   return c.kind === "store" || c.kind === "managers" || (c.kind === "custom" && c.visibility !== "public");
 }
 
+/** 文字だけの場面 (入力欄の案内など) のチャンネルの名前: 公開 = 「# 名前」 / 非公開 = 「🔒 名前」 */
+export function channelLabel(c: Pick<ChatChannelView, "kind" | "visibility" | "name">): string {
+  return `${isPrivateChannel(c) ? "🔒" : "#"} ${c.name}`;
+}
+
 export const CHAT_REACTIONS = ["👍", "✅", "🙏", "😊", "🎉", "👀", "😢", "❗"] as const;

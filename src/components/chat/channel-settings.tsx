@@ -6,7 +6,7 @@ import { Archive, ArchiveRestore, Hash, ImagePlus, Lock, MessageSquare, Search, 
 import { Button } from "@/components/ui";
 import { archiveChatChannel, createChatChannel, deleteChatChannel, updateChatChannel } from "@/lib/actions/chat";
 import { matchName } from "@/lib/chat/text";
-import type { ChatChannelView } from "@/lib/chat/types";
+import { channelLabel, type ChatChannelView } from "@/lib/chat/types";
 import { fullWhen, shortWhen } from "./client";
 import { ErrorLine, PeoplePicker } from "./dialogs";
 import { ChannelIcon, Modal, nameOf, type Dir } from "./parts";
@@ -144,11 +144,11 @@ const imageNote = (kind: ChatChannelView["kind"]) =>
 /* 削除の確認                                                           */
 /* ================================================================== */
 
-export function DeleteChannelConfirm({ channel, messages, busy, onCancel, onDelete }: { channel: Pick<ChatChannelView, "name">; messages?: number; busy: boolean; onCancel: () => void; onDelete: () => void }) {
+export function DeleteChannelConfirm({ channel, messages, busy, onCancel, onDelete }: { channel: Pick<ChatChannelView, "name" | "kind" | "visibility">; messages?: number; busy: boolean; onCancel: () => void; onDelete: () => void }) {
   const [typed, setTyped] = useState("");
   return (
     <div className="rounded-xl border border-critical/40 bg-critical-soft/50 p-3" data-testid="chat-delete-confirm">
-      <p className="text-sm font-semibold text-critical-ink"># {channel.name} を削除しますか？</p>
+      <p className="text-sm font-semibold text-critical-ink">{channelLabel(channel)} を削除しますか？</p>
       <p className="mt-1 text-[12px] leading-relaxed text-ink-2">
         {messages !== undefined ? `メッセージ ${messages} 件` : "メッセージ"}・資料・写真もすべて消え、<strong>元に戻せません</strong>。残しておきたいときは「アーカイブ」にしてください (送れなくなり、一覧から外れます)。
       </p>
@@ -297,7 +297,7 @@ export function ChannelDialog({ dir, channel, messages, onClose, onSaved, onDele
         {confirmDelete && channel && <DeleteChannelConfirm channel={channel} messages={messages} busy={busy} onCancel={() => setConfirmDelete(false)} onDelete={() => void remove()} />}
         {system ? (
           <div className="flex items-center gap-2 rounded-xl border border-line bg-subtle/60 px-3 py-2 text-sm">
-            <span className="font-semibold text-ink"># {channel!.name}</span>
+            <span className="font-semibold text-ink">{channelLabel(channel!)}</span>
             <span className="text-[11px] text-ink-3">{kind === "store" ? "名前は店舗の名前です (設定 → 店舗 で変えられます)" : "名前は変えられません"}</span>
           </div>
         ) : (

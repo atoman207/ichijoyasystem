@@ -677,6 +677,7 @@ fs.rmSync(work, { recursive: true, force: true });
   ok(P("store") === true && P("managers") === true, "店舗・店長のチャンネルは非公開 (メンバーだけ・鍵)");
   ok(P("custom", "public") === false && P("custom", "private") === true && P("custom", undefined) === true, "追加したチャンネルは公開範囲どおり (未設定は非公開)");
   ok(P("dm") === false, "DM には鍵の印を付けない (チャンネルではない)");
+  ok(TY.channelLabel({ kind: "store", name: "中央店" }) === "🔒 中央店" && TY.channelLabel({ kind: "all", name: "全社" }) === "# 全社" && TY.channelLabel({ kind: "custom", visibility: "public", name: "相談" }) === "# 相談", "文字の場面の名前: 非公開は 🔒・公開は #");
   const parts = fs.readFileSync(path.join(root, "src/components/chat/parts.tsx"), "utf8");
   ok(/isPrivateChannel\(c\)/.test(parts) && /aria-label="非公開"/.test(parts), "ChannelIcon は非公開のチャンネルに「非公開」の鍵の印を付ける");
 }

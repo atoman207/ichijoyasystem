@@ -10,7 +10,7 @@ import { toast } from "@/components/ui/toast";
 import { ackChatMessage, addChatMembers, deleteChatMessage, editChatMessage, joinChatChannel, leaveChatChannel, markChatRead, markChatUnread, openDirect, pinChatMessage, reactChatMessage, removeChatMember, saveChatMessage, setChatChannelNotify, starChatChannel } from "@/lib/actions/chat";
 import { chatNavKey, decodeMentions, matchName } from "@/lib/chat/text";
 import type { ChatBootstrap, ChatChannelView, ChatCounts, ChatFile, ChatMessageView, ChatPrefs, ChatSyncResponse, ChatTaskInfo, InboxItem, WaitingItem } from "@/lib/chat/types";
-import { isPrivateChannel } from "@/lib/chat/types";
+import { channelLabel, isPrivateChannel } from "@/lib/chat/types";
 import { CHAT_COUNTS_EVENT } from "./ChatBadge";
 import { dayKey, dayLabel, dueLabel, fileUrl, fullWhen, getJson, shortWhen, signalChatRefresh, sizeLabel, timeLabel } from "./client";
 import { Composer, type ComposerHandle } from "./Composer";
@@ -984,7 +984,7 @@ export function ChatApp({ boot, initial }: { boot: ChatBootstrap; initial: ChatI
           onSent={onSent}
           typing={typing.channel}
           onEditLast={editLast}
-          placeholder={channel.kind === "dm" ? `${channel.name} さんへのメッセージ` : `# ${channel.name} へのメッセージ`}
+          placeholder={channel.kind === "dm" ? `${channel.name} さんへのメッセージ` : `${channelLabel(channel)} へのメッセージ`}
         />
       )}
     </div>

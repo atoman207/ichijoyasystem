@@ -5,7 +5,7 @@ import clsx from "clsx";
 import { AlertTriangle, AtSign, Bold, Camera, Code, FileText, Italic, Link2, List, ListOrdered, ListTodo, Loader2, Lock, Paperclip, Quote, SendHorizontal, Smile, SquareCode, Strikethrough, Type, X } from "lucide-react";
 import { chatTyping, sendChatMessage } from "@/lib/actions/chat";
 import { matchName, mentionQuery, mentionText } from "@/lib/chat/text";
-import { CHAT_MAX_FILES, type ChatChannelView, type ChatFileAccess, type ChatMessageView, type ChatTaskInput } from "@/lib/chat/types";
+import { CHAT_MAX_FILES, channelLabel, type ChatChannelView, type ChatFileAccess, type ChatMessageView, type ChatTaskInput } from "@/lib/chat/types";
 import { prepareFile } from "@/components/attachments/image-prep";
 import { sizeLabel } from "./client";
 import { emptyTask, ErrorLine, TaskFields } from "./dialogs";
@@ -456,7 +456,7 @@ export function Composer({
       {parentId && channel.kind !== "dm" && (
         <label className="mb-1.5 flex items-center gap-1.5 text-[12px] text-ink-2">
           <input type="checkbox" checked={alsoChannel} onChange={(e) => setAlsoChannel(e.target.checked)} className="h-3.5 w-3.5 accent-accent" data-testid="chat-also-channel" />
-          # {channel.name} にも送信する
+          {channelLabel(channel)} にも送信する
         </label>
       )}
       <div className={clsx("rounded-2xl border bg-panel transition focus-within:border-accent focus-within:ring-4 focus-within:ring-accent/15", important ? "border-warn" : "border-line-strong")}>
