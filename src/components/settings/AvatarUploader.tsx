@@ -143,7 +143,7 @@ export function AvatarUploader({
           </p>
           <ul className="flex flex-wrap gap-3">
             {previous.map((p) => (
-              <li key={p.id} className="flex w-[92px] flex-col items-center gap-1 text-center">
+              <li key={p.id} className="flex w-[132px] flex-col items-center gap-1 text-center">
                 <Avatar name={name} id={id} size={48} src={p.src} />
                 <span className="line-clamp-2 text-[10px] leading-tight text-ink-3" title={p.label}>{p.label}</span>
                 <Button type="button" size="sm" variant="ghost" onClick={() => start(() => restoreAvatar(id, p.id))} disabled={pending} data-testid="avatar-restore">
