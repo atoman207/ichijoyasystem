@@ -85,6 +85,8 @@ export function ChatLive({ initial }: { initial: ChatSummary }) {
         toast.notice(newAction ? "チャットにあなたへのメンション・依頼が届きました" : "チャットに新しいメッセージが届きました", {
           detail: newAction ? `要対応 ${c.action} 件${c.unread ? ` · 未読 ${c.unread} 件` : ""}` : `未読 ${c.unread} 件`,
           group: "chat",
+          // 色はチャットの色 (メンション・依頼はメンションの色)。src/components/ui/notice-style.ts
+          style: newAction ? "mention" : "chat",
           action: { label: "チャットを開く", href: newAction ? "/chat?view=inbox" : "/chat" },
         });
       }

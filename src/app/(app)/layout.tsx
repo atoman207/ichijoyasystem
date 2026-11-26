@@ -243,6 +243,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     const when = new Date(latest.at).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
     notifications.push({
       kind: "inbound",
+      channel: g.channel,
       title: g.items.length === 1 ? `${label}: ${latest.from}${latest.fromDetail && g.channel !== "email" ? ` (${latest.fromDetail})` : ""}` : `${label} のメッセージ ${g.items.length} 件`,
       detail: `${inboundLine(latest)} · ${when}`,
       href: g.items.length === 1 && latest.href ? latest.href : inboundListHref(g.channel),

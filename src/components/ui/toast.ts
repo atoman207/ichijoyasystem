@@ -4,7 +4,9 @@
  * - 画面の操作の結果 (Server Action の redirect の ?msg= / ?err=) は、AppShell の Toaster が URL から読んでトーストにする
  *   (showResult。読んだら URL から外す = 読み込み直しで二度出さない)。画面に <Flash> を書かなくても出る
  * - 画面の中の部品 (クライアント) は toast.success("…") / toast.error("…") / toast.info / toast.warn で出す
- * - 新しく届いた通知 (ヘッダーのベル・チャット) は toast.notice (「通知」。AppShell・ChatLive。開く画面のボタンつき)
+ * - 新しく届いた通知 (ヘッダーのベル・チャット) は toast.notice (「通知」。AppShell・ChatLive。開く画面のボタンつき)。
+ *   style = 通知の種類 (承認・請求・予定・LINE・メールなど。./notice-style.ts の NoticeStyleKey) で、種類ごとに色・アイコン・ラベルを変える
+ *   (お客様のご要望 2026-11-26「トーストは通知ごとに違う色で」。ベルの行と同じ色)
  * - 画面の右上 (ヘッダーのベルの下) に新しいものから並べる (スマートフォンは上に横いっぱい)
  * - 色 + ラベル (完了・エラー・お知らせ・注意・通知) + アイコンで表す (色だけに意味を持たせない)
  * - 完了・お知らせ・注意は文の長さに合わせて 4〜12 秒、通知は 8〜15 秒で消える (マウスを乗せる・押さえている・別のタブのあいだは止まる)。
@@ -36,6 +38,8 @@ export interface ToastOptions {
   group?: string;
   /** まとめて閉じるための印 (group と違い、前の知らせを閉じない。例: ベルを開いたらベルの通知を閉じる) */
   tag?: string;
+  /** 通知の種類 (tone = notice のときの色・アイコン・ラベル。./notice-style.ts の NoticeStyleKey) */
+  style?: string;
 }
 
 export interface ToastItem {
@@ -48,6 +52,7 @@ export interface ToastItem {
   action?: ToastAction;
   group?: string;
   tag?: string;
+  style?: string;
   /** 同じ知らせが何回続いたか */
   count: number;
   /** まとめたたびに増える (消えるまでの時間を数え直す) */
@@ -116,13 +121,13 @@ function trim(list: ToastItem[]): ToastItem[] {
 
 /** replaceGroup = false: 同じ group の前の知らせを閉じない (showResult が先に閉じる) */
 function add(list: ToastItem[], tone: ToastTone, text: string, opts: ToastOptions, replaceGroup = true): { list: ToastItem[]; id: string } {
-  const same = list.find((i) => i.tone === tone && i.text === text && (i.title ?? "") === (opts.title ?? ""));
+  const same = list.find((i) => i.tone === tone && i.text === text && (i.title ?? "") === (opts.title ?? "") && (i.style ?? "") === (opts.style ?? ""));
   if (same) {
     const bumped: ToastItem = { ...same, count: same.count + 1, bump: same.bump + 1, detail: opts.detail ?? same.detail, action: opts.action ?? same.action, path: currentPath() };
     return { list: [bumped, ...list.filter((i) => i !== same)], id: same.id };
   }
   const id = `t${++seq}`;
-  const item: ToastItem = { id, tone, text, title: opts.title, detail: opts.detail?.trim() || undefined, duration: opts.duration ?? toastDuration(tone, `${text}${opts.detail ?? ""}`), action: opts.action, group: opts.group, tag: opts.tag, count: 1, bump: 0, path: currentPath() };
+  const item: ToastItem = { id, tone, text, title: opts.title, detail: opts.detail?.trim() || undefined, duration: opts.duration ?? toastDuration(tone, `${text}${opts.detail ?? ""}`), action: opts.action, group: opts.group, tag: opts.tag, style: opts.style, count: 1, bump: 0, path: currentPath() };
   const rest = opts.group && replaceGroup ? list.filter((i) => i.group !== opts.group) : list;
   return { list: trim([item, ...rest]), id };
 }

@@ -6,6 +6,7 @@ import clsx from "clsx";
 import { Bell, CircleAlert, CircleCheck, Info, TriangleAlert, X, type LucideIcon } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { closeStickyElsewhere, getServerToasts, getToasts, showResult, subscribeToasts, toast, TOAST_LABEL, type ToastItem, type ToastTone } from "./toast";
+import { noticeStyle } from "./notice-style";
 
 /**
  * トーストの表示 (AppShell に 1 つだけ。仕組みは ./toast.ts)
@@ -14,6 +15,7 @@ import { closeStickyElsewhere, getServerToasts, getToasts, showResult, subscribe
  * - 画面の操作の結果 (?msg= / ?err=) を URL から読んで出し、URL から外す (ToastFromUrl)
  * - 閉じる: × / 横にはらう (タッチ) / 時間 (完了・お知らせ・注意)。マウスを乗せる・押さえる・別のタブのあいだは止める
  * - 読み上げ: 完了・お知らせ・通知は status (polite)、エラー・注意は alert
+ * - 通知 (tone = notice) は種類 (style) ごとの色・アイコン・ラベル (承認 = 黄・請求 = 赤・LINE = 緑・メール = 青緑など。./notice-style.ts。ベルの行と同じ)
  */
 
 const TONE: Record<ToastTone, { icon: LucideIcon; bar: string; chip: string; label: string }> = {
@@ -84,8 +86,18 @@ function ToastFromUrl() {
   return null;
 }
 
+/** トーストの色・アイコン・ラベル: 通知は種類ごと (notice-style.ts)、それ以外は完了・エラー・お知らせ・注意 */
+function toastLook(item: ToastItem): { icon: LucideIcon; bar: string; chip: string; label: string; title: string } {
+  if (item.tone === "notice") {
+    const s = noticeStyle(item.style);
+    return { icon: s.icon, bar: s.bar, chip: s.chip, label: s.text, title: item.title ?? s.label };
+  }
+  const t = TONE[item.tone];
+  return { ...t, title: item.title ?? TOAST_LABEL[item.tone] };
+}
+
 function ToastCard({ item, hidden }: { item: ToastItem; hidden: boolean }) {
-  const tone = TONE[item.tone];
+  const tone = toastLook(item);
   const Icon = tone.icon;
   const [hover, setHover] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -142,6 +154,7 @@ function ToastCard({ item, hidden }: { item: ToastItem; hidden: boolean }) {
       aria-atomic="true"
       data-testid="toast"
       data-tone={item.tone}
+      data-style={item.tone === "notice" ? (item.style ?? "bell") : undefined}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onFocus={() => setHover(true)}
@@ -163,7 +176,7 @@ function ToastCard({ item, hidden }: { item: ToastItem; hidden: boolean }) {
         </span>
         <div className="min-w-0 flex-1 pt-px">
           <div className={clsx("flex items-center gap-1.5 text-xs font-semibold", tone.label)}>
-            {item.title ?? TOAST_LABEL[item.tone]}
+            {tone.title}
             {item.count > 1 && <span className="rounded-full bg-neutral-soft px-1.5 text-[11px] font-medium text-ink-2 tnum">×{item.count}</span>}
           </div>
           <p className={clsx("mt-0.5 max-h-[40vh] overflow-y-auto text-sm leading-relaxed break-words whitespace-pre-line text-ink", item.tone === "notice" && "font-semibold")}>{item.text}</p>

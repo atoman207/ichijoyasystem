@@ -176,6 +176,34 @@ ok(/for \(const k of \["qe", "msg", "err"\]\) sp\.delete\(k\)/.test(quick), "msg
 const css = src("app/globals.css");
 ok(/@keyframes toast-bar/.test(css) && css.indexOf("@keyframes toast-bar") > css.lastIndexOf("@theme"), "残り時間の線のアニメーションは @theme の外");
 
+// ---- 通知の種類ごとの色 (お客様のご要望 2026-11-26「トーストは通知ごとに違う色で」。src/components/ui/notice-style.ts)
+{
+  const NS = await jiti.import(path.join(root, "src/components/ui/notice-style.ts"));
+  const keys = Object.keys(NS.NOTICE_STYLE);
+  const bars = keys.map((k) => NS.NOTICE_STYLE[k].bar);
+  ok(new Set(bars).size === bars.length, `通知の種類ごとに色が違う (${keys.length} 種類の帯の色が重ならない)`);
+  ok(keys.every((k) => NS.NOTICE_STYLE[k].label && NS.NOTICE_STYLE[k].icon && NS.NOTICE_STYLE[k].chip && NS.NOTICE_STYLE[k].text), "どの種類もアイコンとラベルつき (色だけに意味を持たせない)");
+  eq([NS.noticeStyleKey({ kind: "approval" }), NS.noticeStyleKey({ kind: "inbound", channel: "line" }), NS.noticeStyleKey({ kind: "inbound", channel: "email" }), NS.noticeStyleKey({ kind: "inbound" })], ["approval", "inbound:line", "inbound:email", "bell"], "ベルの通知 → 色の種類 (届いたメッセージは経路ごと)");
+  eq([NS.noticeStyle("overdue").label, NS.noticeStyle("inbound:slack").label, NS.noticeStyle("unknown").label, NS.noticeStyle(undefined).label], ["請求", "Slack", "通知", "通知"], "ラベル (知らない種類は「通知」)");
+  T.resetToasts();
+  T.toast.notice("承認依頼: 見積の確定", { style: "approval", tag: "bell" });
+  T.toast.notice("支払期日超過の請求 1 件", { style: "overdue", tag: "bell" });
+  T.toast.notice("同じ文", { style: "approval" });
+  T.toast.notice("同じ文", { style: "overdue" });
+  eq(list().map((t) => t.style), ["overdue", "approval", "overdue", "approval"], "通知のトーストは種類 (style) を持つ");
+  eq(list().filter((t) => t.text === "同じ文").length, 2, "同じ文でも種類が違えば 1 つにまとめない");
+  T.resetToasts();
+  const layout = src("app/(app)/layout.tsx");
+  const kinds = [...new Set([...layout.matchAll(/kind: "([a-z]+)"/g)].map((m) => m[1]))];
+  ok(kinds.length >= 10 && kinds.every((k) => k === "inbound" || NS.NOTICE_STYLE[k]), `ベルの通知の種類すべてに色がある (${kinds.join("・")})`);
+  ok(/channel: g\.channel/.test(layout), "届いたメッセージのベルの行は経路 (LINE・メールなど) を持つ");
+  const shell = src("components/layout/AppShell.tsx");
+  ok(/toast\.notice\(n\.title, \{[^}]*style: noticeStyleKey\(n\)/.test(shell) && /noticeStyle\(noticeStyleKey\(n\)\)/.test(shell) && !/NOTIFICATION_STYLE/.test(shell), "ベルの行とトーストは同じ色の表 (notice-style.ts)");
+  const toaster = src("components/ui/Toaster.tsx");
+  ok(/noticeStyle\(item\.style\)/.test(toaster) && /data-style=/.test(toaster), "Toaster は通知の種類の色・アイコン・ラベルで出す");
+  ok(/style: newAction \? "mention" : "chat"/.test(src("components/chat/ChatBadge.tsx")), "チャットの知らせはチャットの色 (メンション・依頼はメンションの色)");
+}
+
 console.log(`\n${pass} 件 OK${fails.length ? ` / ${fails.length} 件 NG` : ""}`);
 if (fails.length) {
   for (const f of fails) console.log("  NG:", f);

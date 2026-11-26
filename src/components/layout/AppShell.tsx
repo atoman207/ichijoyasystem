@@ -25,13 +25,14 @@ import {
   tileIcon,
   tileLabel,
 } from "./header-parts";
-import { Award, BookOpen, Calculator, CircleHelp, ClipboardList, Coins, Printer, Landmark, ListTodo, PhoneCall, Truck, ListChecks, Bell, CalendarDays, CalendarOff, CalendarPlus, CalendarX2, ChartColumn, ChevronDown, CircleUser, ClipboardCheck, Clock, ClockFading, FileSpreadsheet, FileText, Hammer, FolderOpen, House, Inbox, LayoutGrid, LogOut, Menu, MessageSquare, MessagesSquare, Package, Plus, Receipt, ScanLine, Search, Settings, Sparkles, UserCog, UserPlus, Users, Wallet, X, type LucideIcon, MapPinned, Scale, NotebookPen, Layers, ClipboardPen, Megaphone, Database, BookOpenCheck, History } from "lucide-react";
+import { Award, BookOpen, Calculator, CircleHelp, ClipboardList, Coins, Printer, Landmark, ListTodo, PhoneCall, Truck, ListChecks, Bell, CalendarDays, CalendarOff, CalendarPlus, ChartColumn, ChevronDown, CircleUser, ClipboardCheck, ClockFading, FileSpreadsheet, FileText, Hammer, FolderOpen, House, Inbox, LayoutGrid, LogOut, Menu, MessageSquare, MessagesSquare, Package, Plus, Receipt, ScanLine, Search, Settings, Sparkles, UserCog, Users, Wallet, X, type LucideIcon, MapPinned, Scale, NotebookPen, Layers, ClipboardPen, Megaphone, Database } from "lucide-react";
 import { Avatar, Badge } from "@/components/ui";
 import { IchijoyaLogo } from "@/components/brand/Logo";
 import { ChatbotWidget } from "@/components/chatbot/ChatbotWidget";
 import { ChatIconButton, ChatLive, ChatPinnedButton } from "@/components/chat/ChatBadge";
 import { Toaster } from "@/components/ui/Toaster";
 import { toast } from "@/components/ui/toast";
+import { noticeStyle, noticeStyleKey, type NoticeChannel, type NoticeKind } from "@/components/ui/notice-style";
 import type { ChatSummary } from "@/lib/chat/types";
 import { ScrollTopButton } from "./ScrollTopButton";
 
@@ -149,30 +150,16 @@ export interface ShellUser {
 }
 
 export interface NotificationItem {
-  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict" | "task" | "signup" | "fax" | "knowledge" | "change" | "inbound";
+  /** 種類 (ベルの行とトーストの色・アイコン・ラベル。src/components/ui/notice-style.ts) */
+  kind: NoticeKind;
+  /** 外部から届いたメッセージ (kind = inbound) の経路 (LINE・メール・Slack・Chatwork で色を変える) */
+  channel?: NoticeChannel;
   title: string;
   detail?: string;
   href: string;
   /** この通知が知らせる記録のキー (src/lib/notify-seen.ts)。すべて確認すると既読 */
   keys?: string[];
 }
-
-const NOTIFICATION_STYLE: Record<NotificationItem["kind"], { icon: LucideIcon; cls: string }> = {
-  approval: { icon: ClipboardCheck, cls: "bg-warn-soft text-warn-ink" },
-  mention: { icon: MessageSquare, cls: "bg-info-soft text-info-ink" },
-  overdue: { icon: Receipt, cls: "bg-critical-soft text-critical-ink" },
-  inquiry: { icon: Inbox, cls: "bg-accent-soft text-accent-ink" },
-  request: { icon: Clock, cls: "bg-neutral-soft text-ink-2" },
-  schedule: { icon: CalendarPlus, cls: "bg-info-soft text-info-ink" },
-  conflict: { icon: CalendarX2, cls: "bg-critical-soft text-critical-ink" },
-  task: { icon: ListTodo, cls: "bg-warn-soft text-warn-ink" },
-  signup: { icon: UserPlus, cls: "bg-accent-soft text-accent-ink" },
-  fax: { icon: Printer, cls: "bg-warn-soft text-warn-ink" },
-  knowledge: { icon: BookOpenCheck, cls: "bg-warn-soft text-warn-ink" },
-  change: { icon: History, cls: "bg-accent-soft text-accent-ink" },
-  // 外部から届いたメッセージ (LINE・メール・Slack・Chatwork。src/lib/inbound/feed.ts)
-  inbound: { icon: MessagesSquare, cls: "bg-good-soft text-good-ink" },
-};
 
 const CREATE_ITEMS: { href: string; label: string; desc: string; icon: LucideIcon }[] = [
   { href: "/inquiries/reception", label: "問合せ登録", desc: "手書きメモを撮影 → AI が読み取り (手入力・話して入力も)", icon: Inbox },
@@ -443,7 +430,8 @@ export function AppShell({
     addSeen(announceKey, all);
     // 新しいものが上に並ぶので、いちばん上の通知を最後に出す
     for (const n of [...show].reverse()) {
-      toast.notice(n.title, { detail: n.detail, tag: "bell", action: { label: "開く", href: n.href, onClick: () => markSeen(n.keys) } });
+      // 色・アイコン・ラベルは通知の種類ごと (承認・請求・予定・LINE など。ベルの行と同じ。src/components/ui/notice-style.ts)
+      toast.notice(n.title, { detail: n.detail, tag: "bell", style: noticeStyleKey(n), action: { label: "開く", href: n.href, onClick: () => markSeen(n.keys) } });
     }
     if (more > 0) toast.notice(`ほかに新しい通知が ${more} 件あります`, { detail: "右上のベルで確認できます", tag: "bell" });
   }, [notifications, seenReady, seen, announceKey, markSeen]);
@@ -700,7 +688,7 @@ export function AppShell({
                   <div className="max-h-[min(420px,calc(100dvh-7rem))] overflow-y-auto p-1.5">
                     {notifications.length === 0 && <div className="px-4 py-10 text-center text-xs text-ink-3">新しい通知はありません</div>}
                     {notifications.map((n, i) => {
-                      const st = NOTIFICATION_STYLE[n.kind];
+                      const st = noticeStyle(noticeStyleKey(n));
                       const keys = notifKeys(n);
                       const left = seenReady ? unseenCount(keys, seen) : 0;
                       const unread = left > 0;
@@ -715,8 +703,9 @@ export function AppShell({
                           }}
                           className={clsx("flex items-start gap-3 rounded-xl px-2.5 py-2 transition hover:bg-subtle", !unread && "opacity-70")}
                         >
-                          <span className={clsx("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", st.cls)}>
-                            <st.icon className="h-4 w-4" />
+                          <span className={clsx("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", st.chip)} title={st.label}>
+                            <st.icon className="h-4 w-4" aria-hidden />
+                            <span className="sr-only">{st.label}: </span>
                           </span>
                           <span className="min-w-0 flex-1">
                             <span className={clsx("block text-sm text-ink", unread ? "font-semibold" : "font-medium")}>{n.title}</span>
