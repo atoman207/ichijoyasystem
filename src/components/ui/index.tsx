@@ -2,7 +2,7 @@ import Link from "@/components/ui/Link";
 import { PendingButton } from "@/components/ui/PendingButton";
 import clsx from "clsx";
 import type { ReactNode } from "react";
-import { ArrowLeft, CircleAlert, CircleCheck, Info, Lightbulb, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Info, Lightbulb, TriangleAlert } from "lucide-react";
 import type { Tone } from "@/lib/constants";
 import type { Channel, Store } from "@/lib/db/types";
 import { CHANNEL_LABEL } from "@/lib/constants";
@@ -583,21 +583,8 @@ export function LinkTabs({ items, current }: { items: { href: string; label: str
   );
 }
 
-export function Flash({ msg, err }: { msg?: string; err?: string }) {
-  if (!msg && !err) return null;
-  return (
-    <div
-      role="status"
-      className={clsx(
-        "mb-4 flex items-start gap-2.5 rounded-xl border px-4 py-3 text-sm shadow-card animate-fade",
-        err ? "border-critical/30 bg-critical-soft text-critical-ink" : "border-accent/30 bg-accent-soft text-accent-ink",
-      )}
-    >
-      {err ? <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" /> : <CircleCheck className="mt-0.5 h-4 w-4 shrink-0" />}
-      <span>{err ?? msg}</span>
-    </div>
-  );
-}
+/** 画面の上の知らせ (操作の結果はトースト。./Flash.tsx) */
+export { Flash } from "./Flash";
 
 export function Section({ title, description, children, action, className }: { title: ReactNode; description?: ReactNode; children: ReactNode; action?: ReactNode; className?: string }) {
   return (

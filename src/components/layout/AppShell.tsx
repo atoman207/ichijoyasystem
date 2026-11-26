@@ -30,6 +30,7 @@ import { Avatar, Badge } from "@/components/ui";
 import { IchijoyaLogo } from "@/components/brand/Logo";
 import { ChatbotWidget } from "@/components/chatbot/ChatbotWidget";
 import { ChatIconButton, ChatLive, ChatPinnedButton } from "@/components/chat/ChatBadge";
+import { Toaster } from "@/components/ui/Toaster";
 import type { ChatSummary } from "@/lib/chat/types";
 import { ScrollTopButton } from "./ScrollTopButton";
 
@@ -855,6 +856,8 @@ export function AppShell({
       <Suspense fallback={null}>
         <SeenOnVisit keys={allKeys} onSeen={markSeen} />
       </Suspense>
+      {/* トースト (操作の結果 ?msg= / ?err= と、部品の toast.success() など。src/components/ui/toast.ts) */}
+      <Toaster />
       {/* チャットの数の確認・通知音・アプリのアイコンの数字 (表示なし。1 つだけ) */}
       {chat && <ChatLive initial={chat} />}
       {/* チャットの画面は入力欄が画面の下にあるため、左下の「質問する」と右下の「↑」を出さない */}

@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
 import { AlertTriangle, ArrowDown, AtSign, Bell, BellOff, Bookmark, Check, ChevronDown, ChevronLeft, FolderOpen, Hash, Inbox, ListTodo, Lock, LogOut, MessageSquare, Pin, Plus, Search, Settings2, SquarePen, Star, UserMinus, UserPlus, UsersRound, X } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { Badge } from "@/components/ui";
+import { toast } from "@/components/ui/toast";
 import { ackChatMessage, addChatMembers, deleteChatMessage, editChatMessage, joinChatChannel, leaveChatChannel, markChatRead, markChatUnread, openDirect, pinChatMessage, reactChatMessage, removeChatMember, saveChatMessage, setChatChannelNotify, starChatChannel } from "@/lib/actions/chat";
 import { chatNavKey, decodeMentions, matchName } from "@/lib/chat/text";
 import type { ChatBootstrap, ChatChannelView, ChatCounts, ChatFile, ChatMessageView, ChatPrefs, ChatSyncResponse, ChatTaskInfo, InboxItem, WaitingItem } from "@/lib/chat/types";
@@ -129,7 +129,6 @@ export function ChatApp({ boot, initial }: { boot: ChatBootstrap; initial: ChatI
   const [showList, setShowList] = useState(initial.mobileList);
   const [height, setHeight] = useState<number | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [toast, setToast] = useState<{ text: string; tone: "good" | "bad" } | null>(null);
   const [newBelow, setNewBelow] = useState(0);
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [dialog, setDialog] = useState<
@@ -169,9 +168,10 @@ export function ChatApp({ boot, initial }: { boot: ChatBootstrap; initial: ChatI
   }, [thread]);
 
   const channel = channels.find((c) => c.id === cid) ?? (preview?.id === cid ? preview : undefined);
+  // 知らせはシステム共通のトースト (src/components/ui/toast.ts)。チャットのエラーは小さなことが多いので 8 秒で消す
   const showToast = useCallback((text: string, tone: "good" | "bad" = "good") => {
-    setToast({ text, tone });
-    window.setTimeout(() => setToast((t) => (t?.text === text ? null : t)), 3500);
+    if (tone === "good") toast.success(text);
+    else toast.error(text, { duration: 8000 });
   }, []);
 
   /* ---------------- 画面の場所 (URL) ---------------- */
@@ -1200,13 +1200,6 @@ export function ChatApp({ boot, initial }: { boot: ChatBootstrap; initial: ChatI
       {dialog?.kind === "prefs" && <PrefsDialog prefs={prefs} vapidKey={boot.vapidKey} channels={channels} onClose={() => setDialog(null)} onPrefs={(p) => (setPrefs(p), signalChatRefresh())} onChannelNotify={(id, level) => void changeNotify(id, level)} />}
       {dialog?.kind === "image" && <Lightbox messageId={dialog.messageId} files={dialog.files} index={dialog.index} onClose={() => setDialog(null)} />}
       {profile && <ProfileCard dir={dir} userId={profile.userId} anchor={profile.anchor} onClose={() => setProfile(null)} onDm={(id) => void openDm(id)} />}
-      {toast &&
-        createPortal(
-          <div className={clsx("fixed top-[92px] left-1/2 z-[90] max-w-[90vw] -translate-x-1/2 rounded-xl px-4 py-2.5 text-sm font-medium text-white shadow-pop animate-pop", toast.tone === "good" ? "bg-ink" : "bg-critical")} role="status">
-            {toast.text}
-          </div>,
-          document.body,
-        )}
     </div>
   );
 }

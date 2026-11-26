@@ -25,7 +25,7 @@
     "chatbot:catalog": "node scripts/chatbot/extract-ui.mjs",
     "test:hr": "node scripts/tests/hr/leave.test.mjs",
     "test:office": "node scripts/tests/office/office.test.mjs",
-    "test:notify": "node scripts/tests/notify/seen.test.mjs",
+    "test:notify": "node scripts/tests/notify/seen.test.mjs && node scripts/tests/notify/toast.test.mjs",
     "test:accounts": "node scripts/tests/accounts/accounts.test.mjs",
     "test:registry": "node scripts/tests/registry/registry.test.mjs",
     "test:drafts": "node scripts/tests/drafts/drafts.test.mjs",
