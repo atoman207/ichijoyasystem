@@ -171,6 +171,8 @@ export interface QuickMap {
   /** 地図を見られない (店舗のメンバー・予定の担当者だけ) */
   hidden?: boolean;
   address: string;
+  /** 地図で探す住所 (都道府県 + 市区町村 + 町名 + 番地。「住所をコピー」で写す。src/lib/maps/query.ts) */
+  searchText?: string;
   heading: string;
   searchUrl?: string;
   directionsUrl?: string;

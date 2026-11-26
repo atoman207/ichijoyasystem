@@ -7,6 +7,7 @@ import { addAudit, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import { putObject, removeObjects, storageDir } from "@/lib/storage";
 import { decodeCsv, parseCsv, toCsv } from "@/lib/csv";
 import { normalizeAddress, sameAddressText, sameHouse } from "./address";
+import { mapSearchAddress } from "./query";
 import { inspectPdf } from "./pdf";
 import { detectMapImage, imageToPdf } from "./image";
 import { mapIndex, placeOf, touchMapIndex, type ResolvedPlace } from "./resolve";
@@ -239,7 +240,7 @@ function importTarget(db: Database, file: string, m: ManifestRow | undefined): I
     const n = normalizeAddress(m.address);
     if (n.precision !== "house") return { error: `住所「${m.address}」は番地がないため場所を決められません (顧客・受注を指定してください)` };
     const hits = db.customers.filter((c) => sameHouse(c.address, m.address));
-    const fake: ResolvedPlace = { role: "customer", heading: "住所", origin: "一括取込の住所", addressText: m.address, norm: n, location: mapIndex(db).byKey.get(n.key), record: { type: "customer", id: hits[0]?.id ?? "", storeId: hits[0]?.storeId ?? "hq", label: `住所 ${n.display}`, href: "" }, documents: [], target: {}, basis: "address", warnings: [], suggestions: [] };
+    const fake: ResolvedPlace = { role: "customer", heading: "住所", origin: "一括取込の住所", addressText: m.address, searchText: mapSearchAddress(m.address), norm: n, location: mapIndex(db).byKey.get(n.key), record: { type: "customer", id: hits[0]?.id ?? "", storeId: hits[0]?.storeId ?? "hq", label: `住所 ${n.display}`, href: "" }, documents: [], target: {}, basis: "address", warnings: [], suggestions: [] };
     return { place: fake, via: `manifest: 住所 (${hits.length} 件の顧客と一致)` };
   }
   const base = path.basename(file, path.extname(file)).normalize("NFKC");

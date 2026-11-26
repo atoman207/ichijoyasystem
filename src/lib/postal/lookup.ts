@@ -150,3 +150,25 @@ export function postalForSave(address: string | undefined, input: string | undef
   }
   return withPostal(address, typed);
 }
+
+/**
+ * 住所の都道府県 (地図の検索の文字に補うため。src/lib/maps/query.ts)。
+ * 書かれていればそれ。なければ頭の市区町村から (熊本県 → ほかの九州の県)。熊本市の区だけの住所 (「北区植木町…」) は addCity = "熊本市"。
+ * 市区町村が書かれていない (「須屋1234」「豊岡」) ・九州にない市区町村は undefined (呼ぶ側が既定の熊本県にする)
+ */
+export function prefectureOfAddress(address: string | undefined | null): { pref: string; written: boolean; addCity?: string } | undefined {
+  const t0 = prep(address ?? "");
+  if (!t0) return undefined;
+  const pm = PREF_RE.exec(t0);
+  if (pm && PREFS[pm[1]]) return { pref: pm[1], written: true };
+  if (pm) return undefined;
+  for (const pref of [DEFAULT_PREF, ...Object.keys(PREFS).filter((p) => p !== DEFAULT_PREF)]) {
+    const cands = cityCandidates(pref, t0, pref === DEFAULT_PREF);
+    if (!cands.length) continue;
+    const best = cands.reduce((a, b) => (b.rest.length < a.rest.length ? b : a));
+    const ward = /^(.+?市)(.+?区)$/.exec(best.city);
+    const addCity = ward && t0.startsWith(ward[2]) && !t0.startsWith(ward[1]) ? ward[1] : undefined;
+    return { pref, written: false, ...(addCity ? { addCity } : {}) };
+  }
+  return undefined;
+}

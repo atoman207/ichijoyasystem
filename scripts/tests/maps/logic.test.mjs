@@ -95,6 +95,35 @@ eq(pe.searchUrl, pc.searchUrl, "event shows same Google link");
 ok(pe.documents[0]?.id === r2.document.id, "event shows same PDF");
 eq(R.eventLocationMode(db, db.schedule.find((e) => e.id === "ev_case")), "follow", "legacy event with same text → follow");
 
+section("4b. Area-only event place (予定表の「須屋」) → the case/customer address down to the house number (2026-11-26)");
+// お客様のご要望 2026-11-26: 予定表から取り込んだ予定の場所は地区の名前だけ (「須屋」)。Google マップが別の場所を示し、「住所をコピー」に番地が入らなかった
+pe = R.placeOf(db, "event", "ev_abbrev");
+ok(pe.addressText === "熊本県合志市須屋1234-5" && pe.searchText === "熊本県合志市須屋1234-5", "area-only 「須屋」 within the customer address → customer address (with house number)");
+ok(pe.searchUrl === pc.searchUrl && pe.documents[0]?.id === r2.document.id && pe.origin.includes("地区だけ"), "same Google link and residential map as the customer; origin explains why");
+eq(R.eventLocationMode(db, db.schedule.find((e) => e.id === "ev_abbrev")), "follow", "eventLocationMode = follow (form default too)");
+await store.mutate((d) => {
+  d.schedule.push(mkEvent("ev_area_case", { orderId: "ord_diff2", customerId: C1.id, location: "植木岩野" }));     // 植木町岩野 (町 omitted)
+  d.schedule.push(mkEvent("ev_area_quick", { customerId: C1.id, location: "須屋" }));                            // saved by the quick dialog as custom (default before)
+  d.schedule.push(mkEvent("ev_area_pinned", { customerId: C1.id, location: "須屋" }));                           // explicitly linked to a location
+  d.schedule.push(mkEvent("ev_area_other", { customerId: C1.id, location: "竹迫" }));                            // a different area
+  d.mapLocationRefs.push({ id: "mlr_t_quick", recordType: "event", recordId: "ev_area_quick", mode: "custom", addressSnapshot: "須屋", linkedBy: admin.id, linkedAt: now });
+  d.mapLocationRefs.push({ id: "mlr_t_pin", recordType: "event", recordId: "ev_area_pinned", mode: "custom", locationId: pc.location.id, addressSnapshot: "須屋", linkedBy: admin.id, linkedAt: now });
+  R.touchMapIndex();
+});
+db = store.getDb();
+pe = R.placeOf(db, "event", "ev_area_case");
+ok(pe.addressText === "熊本市北区植木町岩野300" && pe.searchText === "熊本県熊本市北区植木町岩野300", "「植木岩野」 matches the order site 植木町岩野300 (町 omitted) → order site");
+pe = R.placeOf(db, "event", "ev_area_quick");
+ok(pe.addressText === "熊本県合志市須屋1234-5", "custom saved without a chosen location (quick edit default) still follows the house-number address");
+eq(R.eventLocationMode(db, db.schedule.find((e) => e.id === "ev_area_pinned")), "custom", "custom with an explicitly chosen location is kept");
+pe = R.placeOf(db, "event", "ev_area_other");
+ok(pe.role === "event" && pe.addressText === "竹迫" && pe.warnings.some((w) => w.includes("違う場所")), "different area (竹迫 vs 須屋…) stays the event's own place with a warning");
+ok(pe.searchText.startsWith("熊本県") && pe.searchUrl.includes(encodeURIComponent(pe.searchText)), "even then, the Google query carries the prefecture");
+po = R.placeOf(db, "order", "ord_shareA");
+eq(po.searchText, "熊本県熊本市中央区水前寺1-2-3", "copy / Google text: prefecture added, building name dropped");
+ok(po.searchUrl.includes(encodeURIComponent("熊本県熊本市中央区水前寺1-2-3")) && !po.searchUrl.includes(encodeURIComponent("サンハイツ")), "Google search uses the house-number address");
+ok(po.addressText === "熊本市中央区水前寺1-2-3 サンハイツ", "displayed address is unchanged (as registered)");
+
 section("5. Site differs from customer address");
 po = R.placeOf(db, "order", "ord_diff");
 ok(po.addressText === "熊本県菊池郡菊陽町原水2000-1" && po.sameAsCustomer === false, "order shows construction-site address");

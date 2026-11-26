@@ -8,6 +8,7 @@ import { getDb } from "@/lib/db/store";
 import { canManageMaps, canRemoveMapDocument } from "@/lib/auth/permissions";
 import { canEditLocation, canEditMapDocument, canViewLocation, canViewMapDocument, canViewRecordMap } from "@/lib/maps/access";
 import { BASIS_LABEL, fmtCoord, mapLinkBasis, mapsDirectionsUrl, mapsSearchUrl } from "@/lib/maps/google";
+import { mapSearchAddress } from "@/lib/maps/query";
 import { PRECISION_LABEL } from "@/lib/maps/address";
 import { locationReferences, mapIndex } from "@/lib/maps/resolve";
 import { geocodingEnabled, zenrinStatus } from "@/lib/maps/providers";
@@ -38,7 +39,7 @@ export default async function LocationPage({ params, searchParams }: { params: P
   // 地図の画面から戻るときは、この画面 (と、この画面の戻り先) に戻る
   const selfBack = back ? `${self}?returnTo=${encodeURIComponent(back)}` : self;
   const verified = loc.coordStatus === "verified";
-  const target = { address: loc.address, lat: loc.lat, lng: loc.lng, coordsVerified: verified, placeId: loc.placeId };
+  const target = { address: mapSearchAddress(loc.address) || undefined, lat: loc.lat, lng: loc.lng, coordsVerified: verified, placeId: loc.placeId };
   // 変更できるのは場所を参照する記録の地図を変更できる人だけ (閲覧の範囲の設定で見られるだけの人は見るだけ)
   const canEdit = canEditLocation(user, db, loc) && loc.status === "active";
   const refs = locationReferences(db, loc, { today: toDateKey(new Date()) }, idx).filter((r) => canViewRecordMap(user, db, r.type, r.id));

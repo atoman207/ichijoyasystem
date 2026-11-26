@@ -16,6 +16,9 @@ import { ConflictBadge, KindBadge, KindIcon, kindStyle } from "@/components/sche
 import { MapInfoCard } from "@/components/maps/MapInfoCard";
 import { SUGGEST_KINDS } from "@/lib/schedule-capacity";
 import { mapsSearchUrl } from "@/lib/maps/google";
+import { mapSearchAddress } from "@/lib/maps/query";
+import { placeOfEvent } from "@/lib/maps/resolve";
+import { canViewRecordMap } from "@/lib/maps/access";
 import { eventLabeler } from "@/lib/schedule-label";
 
 export const metadata: Metadata = { title: "予定の詳細" };
@@ -49,6 +52,10 @@ export default async function EventDetailPage({ params, searchParams }: { params
     items: db.schedule.filter((x) => x.id !== e.id && x.assigneeIds.includes(uid) && occursOn(x, e.date)).sort(compareInDay),
   }));
   const conflictIds = new Set(conflicts.map((c) => `${c.userId}|${c.event.id}`));
+  // 「場所」の地図のリンク: 地図の欄と同じ場所の決め方 (予定の場所が地区だけなら案件・お客様の番地までの住所。src/lib/maps/resolve.ts)
+  const place = e.location && canViewRecordMap(user, db, "event", e.id) ? placeOfEvent(db, e) : undefined;
+  const placeUrl = place?.searchUrl ?? (e.location ? mapsSearchUrl({ address: mapSearchAddress(e.location) }) : undefined);
+  const placeNote = place && place.addressText && place.addressText !== e.location?.trim() ? place.addressText : undefined;
 
   return (
     <div>
@@ -178,11 +185,14 @@ export default async function EventDetailPage({ params, searchParams }: { params
                   e.location ? (
                     <span key="l" className="inline-flex flex-wrap items-center gap-2">
                       {e.location}
-                      <a href={mapsSearchUrl({ address: e.location })} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-xs text-accent hover:underline">
-                        <MapPin className="h-3.5 w-3.5" aria-hidden />
-                        地図で開く
-                        <ExternalLink className="h-3 w-3" aria-hidden />
-                      </a>
+                      {placeUrl && (
+                        <a href={placeUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-xs text-accent hover:underline">
+                          <MapPin className="h-3.5 w-3.5" aria-hidden />
+                          地図で開く
+                          <ExternalLink className="h-3 w-3" aria-hidden />
+                        </a>
+                      )}
+                      {placeNote && <span className="text-[11px] text-ink-3">(地図は {placeNote} で開きます)</span>}
                     </span>
                   ) : (
                     "-"

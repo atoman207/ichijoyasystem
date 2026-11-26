@@ -1,6 +1,7 @@
 import type { Customer, Database, MapDocument, MapLocation, MapLocationRef, MapRefType, Order, Quote, ScheduleEvent, StoreId } from "@/lib/db/types";
-import { areaWithin, normalizeAddress, sameAddressText, type NormalizedAddress } from "./address";
+import { areaMatches, areaWithin, normalizeAddress, sameAddressText, type NormalizedAddress } from "./address";
 import { mapLinkBasis, mapsDirectionsUrl, mapsSearchUrl, type MapLinkBasis, type MapTarget } from "./google";
+import { mapSearchAddress } from "./query";
 
 /**
  * 顧客・見積・受注・予定の「場所」を決める (どの画面でも同じ結果になるよう、ここに集める)
@@ -11,7 +12,10 @@ import { mapLinkBasis, mapsDirectionsUrl, mapsSearchUrl, type MapLinkBasis, type
  * - 受注: 受注の施工場所 (現場住所)。お客様の住所と違う場所なら、施工場所の住宅地図だけを使う
  *   (施工場所の地図がないときに、お客様の住所の地図を施工場所の地図として出さない)
  * - 予定: この予定だけの場所 (custom) > 案件 (受注 → 見積 → 問い合わせ) の場所 > お客様の住所。
- *   関係のない住所を黙って選ばない (案件・お客様のどちらもなく、場所も書かれていなければ「場所の登録なし」)
+ *   関係のない住所を黙って選ばない (案件・お客様のどちらもなく、場所も書かれていなければ「場所の登録なし」)。
+ *   予定の場所が番地のない地区だけ (予定表の取込の「豊岡」) で、案件・お客様の番地までの住所の地区なら、案件・お客様の住所を使う
+ *   (お客様のご要望 2026-11-26: 地区の名前で Google マップを開くと別の県の「豊岡」を示し、「住所をコピー」に番地が入らなかった)
+ * - Google マップの検索と「住所をコピー」は searchText (都道府県 + 市区町村 + 町名 + 番地。src/lib/maps/query.ts)
  *
  * 場所 (MapLocation) の見つけ方: 記録ごとの結び付け (MapLocationRef。住所の文字が変わっていないときだけ) →
  * 住所のキー (番地まであるときだけ) で登録済みの場所を探す。見つからなければ「未登録の場所」(住所の文字だけ)
@@ -38,6 +42,8 @@ export interface ResolvedPlace {
   origin: string;
   /** 記録に書かれている住所 (元の文字) */
   addressText: string;
+  /** 地図で探す住所 (都道府県・熊本市を補い、建物名を外したもの)。Google マップの検索とゼンリン GIS の「住所をコピー」に使う */
+  searchText: string;
   norm: NormalizedAddress;
   /** 登録済みの場所 (なければ未登録 = 住所の文字だけ) */
   location?: MapLocation;
@@ -160,8 +166,9 @@ function build(db: Database, idx: MapIndex, input: PlaceInput): ResolvedPlace {
   const refRec = input.refRecord ?? input.record;
   const location = text ? findLocation(idx, refRec.type, refRec.id, text, norm) : undefined;
   const verified = location?.coordStatus === "verified";
+  const searchText = mapSearchAddress(text);
   const target: MapTarget = {
-    address: norm.display || undefined,
+    address: searchText || undefined,
     lat: location?.lat,
     lng: location?.lng,
     coordsVerified: verified,
@@ -177,6 +184,7 @@ function build(db: Database, idx: MapIndex, input: PlaceInput): ResolvedPlace {
     heading: input.heading,
     origin: input.origin,
     addressText: text,
+    searchText,
     norm,
     location,
     record: input.record,
@@ -213,6 +221,7 @@ function withCustomer(site: ResolvedPlace, cust: ResolvedPlace | undefined, what
       location,
       documents: site.location ? site.documents : cust.documents,
       target: site.location ? site.target : cust.target,
+      searchText: site.location ? site.searchText : cust.searchText,
       searchUrl: site.location ? site.searchUrl : cust.searchUrl,
       directionsUrl: site.location ? site.directionsUrl : cust.directionsUrl,
       basis: site.location ? site.basis : cust.basis,
@@ -287,6 +296,8 @@ export function basePlaceOfEvent(db: Database, e: Pick<ScheduleEvent, "orderId" 
 export function eventLocationMode(db: Database, e: ScheduleEvent, idx = mapIndex(db), base = basePlaceOfEvent(db, e, idx)): "follow" | "custom" {
   if (e.source === "order") return "follow";
   const ref = idx.refs.get(`event:${e.id}`);
+  // 地区だけの場所 (場所を選んで結び付けたものを除く) は、案件・お客様の番地までの住所の地区なら合わせる
+  if (base && !(ref?.mode === "custom" && ref.locationId) && eventAreaOfBase(e, base)) return "follow";
   if (ref?.mode === "follow" || ref?.mode === "custom") return base ? ref.mode : "custom";
   if (!base) return "custom";
   if (!e.location?.trim()) return "follow";
@@ -294,12 +305,28 @@ export function eventLocationMode(db: Database, e: ScheduleEvent, idx = mapIndex
   return sameAddressText(e.location, base.addressText) || (norm.precision === "house" && base.norm.precision === "house" && norm.key === base.norm.key) ? "follow" : "custom";
 }
 
+/**
+ * 予定の場所が番地のない地区だけ (予定表の取込の「豊岡」「植木平井」) で、案件・お客様の番地までの住所の地区か。
+ * そのときは地区の名前ではなく案件・お客様の住所で地図を開く (別の県の同じ地名を示さないように)
+ */
+export function eventAreaOfBase(e: Pick<ScheduleEvent, "location">, base: Pick<ResolvedPlace, "addressText" | "norm"> | undefined): boolean {
+  const text = e.location?.trim();
+  if (!text || !base?.addressText || base.norm.precision !== "house") return false;
+  if (normalizeAddress(text).precision === "house" || sameAddressText(text, base.addressText)) return false;
+  return areaMatches(text, base.addressText);
+}
+
 export function placeOfEvent(db: Database, e: ScheduleEvent, idx = mapIndex(db)): ResolvedPlace {
   const base = basePlaceOfEvent(db, e, idx);
   const mode = eventLocationMode(db, e, idx, base);
   const record: PlaceRecord = { type: "event", id: e.id, storeId: e.storeId, customerId: e.customerId, label: `予定 ${e.title}`, href: `/schedule/${e.id}` };
   if (mode === "follow" && base) {
-    const origin = e.source === "order" ? `${base.origin} (受注の施工予定と連動)` : `${base.origin} (案件・お客様の場所に合わせる)`;
+    const origin =
+      e.source === "order"
+        ? `${base.origin} (受注の施工予定と連動)`
+        : eventAreaOfBase(e, base)
+          ? `${base.origin} (予定の場所「${e.location!.trim()}」は地区だけのため、番地まである案件・お客様の住所で表示)`
+          : `${base.origin} (案件・お客様の場所に合わせる)`;
     return { ...base, role: base.role === "customer" ? "customer" : "site", heading: base.role === "customer" ? "訪問先 (お客様の住所)" : "施工場所 (現場)", origin };
   }
   const text = e.location?.trim() ?? "";

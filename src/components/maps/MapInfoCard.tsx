@@ -79,7 +79,7 @@ export function MapInfoCard({ db, user, target, returnTo, title = "地図・住�
                       {ZENRIN_GIS.label} で探す
                       <ExternalLink className="h-3 w-3" />
                     </a>
-                    <CopyAddress text={place.addressText} />
+                    <CopyAddress text={place.searchText || place.addressText} />
                   </div>
                   <p className="text-[11px] leading-relaxed text-ink-3">ゼンリン GIS にログイン → 住所を貼り付けて地点検索 →「印刷」で PDF、または「画像出力」で地図の画像をコピー → この画面に戻って下の欄で登録 (画像は Ctrl+V で貼り付け)。</p>
                   <MapDocUploader targetType={target.type} targetId={target.id} compact />

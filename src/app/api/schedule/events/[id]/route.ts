@@ -168,6 +168,7 @@ function quickMap(db: Database, user: User, e: ScheduleEvent): QuickMap | undefi
   if (!place) return undefined;
   return {
     address: place.addressText,
+    searchText: place.searchText,
     heading: place.heading,
     searchUrl: place.searchUrl,
     directionsUrl: place.directionsUrl,

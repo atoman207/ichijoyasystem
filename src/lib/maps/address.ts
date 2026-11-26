@@ -20,6 +20,13 @@ export interface NormalizedAddress {
   postalCode?: string;
   /** 都道府県 (書かれていなければ既定の都道府県) */
   prefecture: string;
+  /** 住所に都道府県が書かれていた */
+  prefectureWritten: boolean;
+  /**
+   * 地図の検索・ゼンリン GIS の地点検索に使う住所 (都道府県の後ろから、番地まで。書かれたままの形。建物名・部屋番号は入れない。
+   * 番地のない住所はそのまま)。都道府県・熊本市を補った検索の文字は src/lib/maps/query.ts の mapSearchAddress
+   */
+  core: string;
   /** 市区町村・町名 (照合用。空白・大字を除き、郡を外したもの) */
   town: string;
   /** 番地 (数字を「-」でつないだもの。例: 3-12-5) */
@@ -103,7 +110,7 @@ export function normalizeAddress(text: string | undefined | null, defaultPrefect
   s = s.replace(/^日本\s*/, "");
   const display = s;
   if (!s) {
-    return { original, display, postalCode, prefecture: defaultPrefecture, town: "", key: "", precision: "none", notes: ["住所がありません"] };
+    return { original, display, postalCode, prefecture: defaultPrefecture, prefectureWritten: false, town: "", core: "", key: "", precision: "none", notes: ["住所がありません"] };
   }
   let prefecture = defaultPrefecture;
   const pref = PREF_RE.exec(s);
@@ -111,6 +118,7 @@ export function normalizeAddress(text: string | undefined | null, defaultPrefect
     prefecture = pref[1];
     s = s.slice(pref[0].length).trim();
   }
+  const afterPref = s;
 
   // 番地: 最初の数字から、空白をまたがずに続く「数字 + 丁目・番地・番・号・-」のまとまり
   const hn = /(\d+)((?:丁目|番地|番|号|-)?(?:\d+(?:丁目|番地|番|号|-)?)*)/.exec(s);
@@ -118,9 +126,12 @@ export function normalizeAddress(text: string | undefined | null, defaultPrefect
   let houseNumber: string | undefined;
   let rest = "";
   let chomeOnly = false;
+  let houseText = "";
   if (hn) {
     townRaw = s.slice(0, hn.index);
     const block = hn[0];
+    // 書かれたままの番地 (3 つ目の数字まで。4 つ目以降は部屋番号)
+    houseText = (/^\d+(?:丁目|番地|番|号|-)?(?:\d+(?:丁目|番地|番|号|-)?){0,2}/.exec(block)?.[0] ?? block).replace(/-+$/, "");
     rest = s.slice(hn.index + block.length);
     const groups = block.match(/\d+/g) ?? [];
     chomeOnly = groups.length === 1 && /丁目$/.test(block);
@@ -164,7 +175,9 @@ export function normalizeAddress(text: string | undefined | null, defaultPrefect
     notes.push("市区町村が書かれていません");
   }
   const key = `${prefecture}${town}${houseNumber ? houseNumber : ""}`;
-  return { original, display, postalCode, prefecture, town, houseNumber, building, room, key, precision, notes };
+  // 番地まである住所は建物名・部屋番号を外す (Google マップ・ゼンリン GIS が建物名を別の場所と取り違えないように)
+  const core = precision === "house" ? `${townRaw.trim()}${houseText}` : afterPref;
+  return { original, display, postalCode, prefecture, prefectureWritten: Boolean(pref), town, core, houseNumber, building, room, key, precision, notes };
 }
 
 /** 2 つの住所が同じ場所 (番地まで同じ) か。番地のない住所どうしは同じとみなさない */
@@ -188,6 +201,26 @@ export function areaWithin(area: string | undefined | null, address: string | un
   const a = cleanAddressText(area).replace(/\s+/g, "").replace(/^熊本県/, "");
   const b = cleanAddressText(address).replace(/\s+/g, "");
   return a.length >= 2 && !/\d/.test(a) && b.includes(a);
+}
+
+/**
+ * 番地のない地区 (予定表の取込の「豊岡」「植木平井」「菊鹿町池永」など) が、番地まである住所 (「合志市豊岡459」「熊本市北区植木町平井123」) の地区か。
+ * areaWithin より広く、途中の「町」「村」「大字」「字」の省略も同じとみる。数字のある地区 (「須屋12」) は数字の途中で切れないときだけ (須屋12 = 須屋12-3、須屋12 ≠ 須屋1234)
+ */
+export function areaMatches(area: string | undefined | null, address: string | undefined | null): boolean {
+  const flat = (t: string | undefined | null) => cleanAddressText(t).replace(/\s+/g, "").replace(/^(?:〒?\d{3}-?\d{4})/, "").replace(/^日本/, "");
+  const a = flat(area).replace(/^(北海道|東京都|京都府|大阪府|[^\d市区町村郡]{2,3}県)/, "");
+  const b = flat(address);
+  if (a.length < 2 || !b) return false;
+  const loose = (t: string) => t.replace(/大字|字/g, "").replace(/[町村](?=.)/g, "").replace(/[ヶヵ]/g, "ケ");
+  const found = (x: string, y: string) => {
+    if (x.length < 2) return false;
+    for (let i = y.indexOf(x); i >= 0; i = y.indexOf(x, i + 1)) {
+      if (!/\d$/.test(x) || !/^\d/.test(y.slice(i + x.length))) return true;
+    }
+    return false;
+  };
+  return found(a, b) || found(loose(a), loose(b));
 }
 
 export const PRECISION_LABEL: Record<AddressPrecision, string> = {

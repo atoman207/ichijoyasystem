@@ -6,6 +6,7 @@ import { caseChainOf } from "@/lib/case-store";
 import { periodLabel } from "@/lib/calendar";
 import { caseValue, orderEditable } from "@/lib/db/schedule";
 import { mapsDirectionsUrl, mapsSearchUrl } from "@/lib/maps/google";
+import { mapSearchAddress } from "@/lib/maps/query";
 import { mapIndex, placeOfCustomer, placeOfOrder, placeOfQuote } from "@/lib/maps/resolve";
 import { parseHandoverRef } from "@/lib/handover";
 
@@ -91,11 +92,11 @@ export function requestContext(db: Database, user: User, t: Thread, today: strin
     const site = chain.order?.siteAddress || chain.quote?.siteAddress || inq?.siteAddress || "";
     const requester = customer?.address || inq?.intake?.address || "";
     if (place?.addressText) ctx.visit = { heading: place.heading, address: place.addressText, searchUrl: place.searchUrl, directionsUrl: place.directionsUrl };
-    else if (site) ctx.visit = { heading: "施工現場", address: site, searchUrl: mapsSearchUrl({ address: site }), directionsUrl: mapsDirectionsUrl({ address: site }) };
+    else if (site) ctx.visit = { heading: "施工現場", address: site, searchUrl: mapsSearchUrl({ address: mapSearchAddress(site) }), directionsUrl: mapsDirectionsUrl({ address: mapSearchAddress(site) }) };
     else if (customer) {
       const cp = placeOfCustomer(db, customer, idx);
       if (cp.addressText) ctx.visit = { heading: customer.type === "corporate" ? "依頼主 (業者) の住所 (施工現場は未登録)" : "お客様の住所", address: cp.addressText, searchUrl: cp.searchUrl, directionsUrl: cp.directionsUrl };
-    } else if (requester) ctx.visit = { heading: "問い合わせで聞いた住所", address: requester, searchUrl: mapsSearchUrl({ address: requester }), directionsUrl: mapsDirectionsUrl({ address: requester }) };
+    } else if (requester) ctx.visit = { heading: "問い合わせで聞いた住所", address: requester, searchUrl: mapsSearchUrl({ address: mapSearchAddress(requester) }), directionsUrl: mapsDirectionsUrl({ address: mapSearchAddress(requester) }) };
     if (requester && ctx.visit && ctx.visit.address !== requester) ctx.requesterAddress = requester;
   }
   // 内容: 問い合わせ (要件・詳細) → 見積 (件名・施工内容) → 受注 (件名・施工内容)

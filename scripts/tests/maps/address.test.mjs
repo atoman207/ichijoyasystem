@@ -36,6 +36,30 @@ ok(n("熊本市東区コーポ健軍1-2").building === undefined || true, "katak
 eq(A.cleanAddressText("須屋1ー2"), "須屋1-2", "ー between digits → hyphen");
 eq(A.cleanAddressText("コーポ"), "コーポ", "ー in katakana kept");
 
+section("15b. Map search text (Google マップ・住所をコピー。2026-11-26)");
+const Q = await imp("lib/maps/query.ts");
+const qs = (s) => Q.mapSearchAddress(s);
+eq(qs("合志市須屋1234-5"), "熊本県合志市須屋1234-5", "prefecture added when missing");
+eq(qs("〒861-1102 合志市須屋1234番地5 コーポ須屋201"), "熊本県合志市須屋1234番地5", "postal code, building and room dropped; 番地 kept as written");
+eq(qs("中央区水前寺1-2-3"), "熊本県熊本市中央区水前寺1-2-3", "ward only → 熊本県熊本市 (not 東京都中央区)");
+eq(qs("北区植木町平井123-4"), "熊本県熊本市北区植木町平井123-4", "北区 → 熊本市北区");
+eq(qs("熊本市東区上南部2丁目3-4ファミール弓削201号"), "熊本県熊本市東区上南部2丁目3-4", "building glued to the number is dropped");
+eq(qs("熊本市中央区水前寺1-2-3-405"), "熊本県熊本市中央区水前寺1-2-3", "4th number (room) dropped");
+eq(qs("菊陽町原水1234"), "熊本県菊陽町原水1234", "郡 omitted is fine");
+eq(qs("大牟田市新地町1-2"), "福岡県大牟田市新地町1-2", "other Kyushu prefecture inferred from the city");
+eq(qs("熊本県合志市須屋1234-5"), "熊本県合志市須屋1234-5", "written prefecture kept");
+eq(qs("須屋"), "熊本県合志市須屋", "town only → city added when the town is unique (postal data)");
+eq(qs("合志市須屋"), "熊本県合志市須屋", "area without house number kept as is (prefecture added)");
+eq(qs(""), "", "empty → empty");
+eq(n("合志市須屋1234-5 コーポ").core, "合志市須屋1234-5", "core = up to the house number");
+ok(A.areaMatches("豊岡", "合志市豊岡459-1"), "areaMatches: 豊岡 in 合志市豊岡459-1");
+ok(A.areaMatches("植木平井", "熊本市北区植木町平井1581"), "areaMatches: 町 omitted (植木平井 = 植木町平井)");
+ok(A.areaMatches("菊鹿町池永", "山鹿市菊鹿町池永100"), "areaMatches: 菊鹿町池永");
+ok(A.areaMatches("須屋12", "合志市須屋12-3"), "areaMatches: 須屋12 = 須屋12-3");
+ok(!A.areaMatches("須屋12", "合志市須屋1234"), "areaMatches: 須屋12 ≠ 須屋1234 (number not cut)");
+ok(!A.areaMatches("菊陽久保田", "菊池郡菊陽町新山2丁目1-1"), "areaMatches: different area");
+ok(!A.areaMatches("下", "玉名市下1234"), "areaMatches: 1-char area rejected");
+
 section("D. Google Maps URLs");
 const u1 = G.mapsSearchUrl({ address: "熊本県合志市須屋1234-5 サンハイツ#2" });
 ok(u1.startsWith("https://www.google.com/maps/search/?api=1&query="), "search URL uses api=1");

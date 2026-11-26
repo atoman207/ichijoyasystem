@@ -246,7 +246,7 @@ function MapRow({ map, eventId, returnTo, onReload }: { map?: QuickMap; eventId:
               ゼンリン GIS で探す
               <ExternalLink className="h-3 w-3" />
             </a>
-            <CopyAddress text={map.address} />
+            <CopyAddress text={map.searchText || map.address} />
           </div>
           <MapDocUploader
             targetType="event"
