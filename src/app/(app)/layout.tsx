@@ -244,7 +244,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     notifications.push({
       kind: "inbound",
       channel: g.channel,
-      title: g.items.length === 1 ? `${label}: ${latest.from}${latest.fromDetail && g.channel !== "email" ? ` (${latest.fromDetail})` : ""}` : `${label} のメッセージ ${g.items.length} 件`,
+      // グループ名・チャンネル名だけを添える (「LINE (1 対 1)」「Chatwork」のように経路の名前と同じものは重ねない)
+      title: g.items.length === 1 ? `${label}: ${latest.from}${latest.fromDetail && g.channel !== "email" && !latest.fromDetail.startsWith(label) ? ` (${latest.fromDetail})` : ""}` : `${label} のメッセージ ${g.items.length} 件`,
       detail: `${inboundLine(latest)} · ${when}`,
       href: g.items.length === 1 && latest.href ? latest.href : inboundListHref(g.channel),
       keys: g.items.slice(0, 100).map((i) => seenKey("in", i.id)),
