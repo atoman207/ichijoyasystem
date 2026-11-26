@@ -48,7 +48,7 @@ import { caseChainOf, pendingStoreChange, storeChangeBlocker, type CaseChain } f
 import { closeScheduleRequests } from "@/lib/inquiry-requests";
 import { taskNotices } from "@/lib/notify/events";
 import { PAIR_PREFIX, eventPair } from "@/lib/schedule-pair";
-import { countsFromText, hasWork, stripKindWords } from "@/lib/work-summary";
+import { isCountsOnlyText, stripKindWords } from "@/lib/work-summary";
 import { sendAndRecord } from "@/lib/notify/send";
 import { addChangeNotice, eventTarget } from "@/lib/change-notices";
 import { fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
@@ -211,6 +211,8 @@ function parseEventForm(
       orderId: caseRef?.orderId,
       location,
       memo: str(fd, "memo").slice(0, 2000) || undefined,
+      // 作業内容 (予定表に表示。数量「タ6 タ新4」か自由な文「養生、廃材撤去」)。欄のある画面だけ変える (ない画面の保存では今の値のまま)
+      ...(fd.has("work") ? { work: normWork(str(fd, "work")) || undefined } : {}),
     },
     locationMode,
     dates: repeatDates(date, repeat, until),
@@ -219,6 +221,9 @@ function parseEventForm(
     caseRef,
   };
 }
+
+/** 作業内容の文 (空白をそろえて 200 文字まで) */
+const normWork = (v: string) => v.replace(/\s+/g, " ").trim().slice(0, 200);
 
 /** 開始日を d に移した予定 (複数日の長さは保つ) */
 function shiftTo<T extends { date: string; endDate?: string }>(e: T, d: string): T {
@@ -946,10 +951,9 @@ export async function updateEventWork(id: string, formData: FormData) {
   const e = getDb().schedule.find((x) => x.id === id);
   if (!e) fail(returnTo, "予定が見つかりません (削除された可能性があります)。");
   if (!canEditEvent(user, e)) fail(returnTo, "この予定を変更する権限がありません (登録者・担当者・店舗のメンバーが変更できます)。");
-  const text = str(formData, "work").replace(/\s+/g, " ").trim().slice(0, 120);
-  if (text && !hasWork(countsFromText(text, { shorthand: true }))) {
-    fail(returnTo, `仕事内容「${text}」を読み取れませんでした。タ (畳)・フ (襖)・シ (障子)・ア (網戸) のあとに数を書いてください (例: タ12 フ6 シ4 ア2。へり無し畳は「縁無6」)。`);
-  }
+  // 数量 (「タ6 タ新4 フ2」= 作業量にも数える) か、自由な作業内容 (「養生、廃材撤去」「クロス工事、畳下床板2間」= そのまま表示)。お客様のご要望 2026-11-26
+  const text = normWork(str(formData, "work"));
+  const countsOnly = isCountsOnlyText(text);
   let changed = false;
   await mutate((db) => {
     const ev = db.schedule.find((x) => x.id === id);
@@ -965,7 +969,7 @@ export async function updateEventWork(id: string, formData: FormData) {
     addChangeNotice(db, user.id, eventTarget(db, ev), "仕事内容の変更", [{ label: `${SCHEDULE_KIND[ev.kind].label} ${shortDate(ev.date)} の仕事内容`, before: before ?? "(自動)", after: after ?? "(自動)" }]);
   });
   revalidateSchedule(e);
-  redirect(withMsg(returnTo, changed ? (text ? `仕事内容を「${text}」にしました。` : "仕事内容を自動に戻しました。") : "変更はありませんでした。"));
+  redirect(withMsg(returnTo, changed ? (text ? (countsOnly ? `仕事内容を「${text}」にしました。` : `作業内容を「${text}」にしました (予定表にこのまま表示します)。`) : "仕事内容を自動に戻しました。") : "変更はありませんでした。"));
 }
 
 /**

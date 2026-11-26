@@ -2,7 +2,7 @@ import type { Database, JobSpec, Order, Quote, ScheduleEvent } from "@/lib/db/ty
 import { HANDOVER_ITEM, classifyLine, parseHandoverRef } from "@/lib/handover";
 import { loadMasters, type Masters } from "@/lib/scheduling/masters";
 import { specId } from "@/lib/scheduling/spec";
-import { NEW_WORK, countsFromLines, countsFromText, emptyCounts, hasWork, mergeCounts, type WorkCounts, type WorkKey, type WorkLine } from "@/lib/work-summary";
+import { NEW_WORK, countsFromLines, countsFromText, emptyCounts, hasWork, isCountsOnlyText, mergeCounts, type WorkCounts, type WorkKey, type WorkLine } from "@/lib/work-summary";
 
 /**
  * 予定表の予定ごとの仕事内容と数量 (お客様のご要望 2026-11-23「■2」。表示は src/lib/work-summary.ts の workTokens)
@@ -106,8 +106,9 @@ function specCounts(lk: Lookup, s: JobSpec | undefined): WorkCounts | undefined 
 const specOf = (lk: Lookup, type: JobSpec["recordType"], id: string | undefined) => (id ? lk.specs.get(specId(type, id)) : undefined);
 
 function eventCounts(lk: Lookup, e: ScheduleEvent): WorkCounts | undefined {
-  // 0. 予定表で手で決めた仕事内容 (ScheduleEvent.work。「タ12 フ6」「畳 表替え12」の形)
-  if (e.work?.trim()) {
+  // 0. 予定表で手で決めた仕事内容 (ScheduleEvent.work。「タ12 フ6」「畳 表替え12」の形)。
+  //    自由な作業内容の文 (「養生、廃材撤去」「タ3間、フ1部屋」) は表示だけ (workNoteOf)。作業量の枚数は下の自動の数え方のまま
+  if (e.work?.trim() && isCountsOnlyText(e.work)) {
     const c = countsFromText(e.work, { shorthand: true });
     if (hasWork(c)) return c;
   }
@@ -166,6 +167,9 @@ function eventCounts(lk: Lookup, e: ScheduleEvent): WorkCounts | undefined {
   }
   return hasWork(structured) ? withHerinashi(structured) : undefined;
 }
+
+/** 予定表で手入力した自由な作業内容 (src/lib/work-summary.ts の workNoteOf) */
+export { workNoteOf } from "@/lib/work-summary";
 
 /** 予定ごとの仕事内容と数量 (案件の予定だけ。仕事内容の分からない予定は入れない) */
 export function scheduleWork(db: Database, events: ScheduleEvent[]): Map<string, WorkCounts> {

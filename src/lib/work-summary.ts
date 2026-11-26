@@ -102,6 +102,8 @@ const KEY_OF: Record<string, WorkKey> = { 畳: "tatami", 襖: "fusuma", フス�
 const SHORTHAND = /(?<![ァ-ヶー])([タフシア])(?![ァ-ヶー])(新)?(\d{1,3})?(半)?/g;
 /** 「畳 表替え6・新調2」の「・新調2」(同じ品目の続き) */
 const CONTINUED = /^[ \t]*・[ \t]*([^\d\s/、,()（）・]{0,8}?)[ \t]*(\d{1,3}(?:\.\d)?)(?![\d:/])/;
+/** 数量だけの文かを確かめるとき: 「・新調2」をどこでも外す */
+const CONTINUED_ANY = /・[ \t]*(?:新調|新規|新品|表替え?|裏返し?|張替え?)[ \t]*\d{1,3}(?:\.\d)?/g;
 /** 数量のない品目の言葉 (「障子見積のみ」「10時 畳」「アミ戸見積り」)。部屋の広さ「6畳」・「畳縁」「畳表」は除く */
 const WORD = /(?<![\d.])(畳|襖|フスマ|障子|網戸|アミ戸|カーテン)(?!縁|表[^替]|床|寄せ)/g;
 const SHORT_KEY: Record<string, WorkKey> = { タ: "tatami", フ: "fusuma", シ: "shoji", ア: "amido" };
@@ -162,6 +164,15 @@ export function countsFromText(text: string | undefined, opts: { shorthand?: boo
   return c;
 }
 
+/**
+ * 予定表で手入力した自由な作業内容 (お客様のご要望 2026-11-26「予定表の作業内容の表示」: 見積「タ3間、フ1部屋」・現場管理「養生、廃材撤去」・
+ * 施工「クロス工事、畳下床板2間」)。数量だけの文 (「タ6 タ新4」) は数量として数えるので undefined。予定表のチップ・日ごとの表にこのまま出す
+ */
+export function workNoteOf(e: { work?: string }): string | undefined {
+  const t = e.work?.trim();
+  return t && !isCountsOnlyText(t) ? t : undefined;
+}
+
 /** 2 つの数え方を足す (同じ予定の明細が複数の行のとき) */
 export function mergeCounts(a: WorkCounts, b: WorkCounts): WorkCounts {
   const c = emptyCounts();
@@ -179,16 +190,22 @@ export function mergeCounts(a: WorkCounts, b: WorkCounts): WorkCounts {
 /* ---------------- 表示 ---------------- */
 
 export interface WorkToken {
-  key: WorkKey;
-  /** 「タ12」「フ6」「フ」 */
+  /** 品目 (free = 予定表で手入力した自由な作業内容の文。お客様のご要望 2026-11-26) */
+  key: WorkKey | "free";
+  /** 「タ12」「タ新4」「フ6」「フ」(free は入力した文のまま) */
   text: string;
   /** へり無し畳の注記「(縁無6)」(目立たせる) */
   note?: string;
+  /** 新調 (新) の枚数の部品 (「タ新4」) */
+  fresh?: boolean;
 }
 
 const num = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 
-/** 省略表記の部品 (並び: タ フ シ ア カーテン) */
+/**
+ * 省略表記の部品 (並び: タ タ新 フ フ新 シ シ新 ア ア新 カーテン)。新調は「新」を付けて張替え (表替え・裏返し) と分ける
+ * (お客様のご要望 2026-11-26「■9」: 畳表替え6 = タ6・畳新調6 = タ新6・混在は「タ6 タ新4 フ2 フ新2」)
+ */
 export function workTokens(c: WorkCounts | undefined): WorkToken[] {
   if (!c) return [];
   const out: WorkToken[] = [];
@@ -197,14 +214,35 @@ export function workTokens(c: WorkCounts | undefined): WorkToken[] {
     if (k === "tatami" && c.herinashi > n) n = c.herinashi;
     const seen = n > 0 || c.seen[k] || (k === "tatami" && c.herinashiSeen);
     if (!seen) continue;
-    const token: WorkToken = { key: k, text: `${WORK_MARK[k]}${n > 0 ? num(n) : ""}` };
+    const fresh = k === "curtain" ? 0 : Math.min(n, c.fresh?.[k] ?? 0);
+    const plain = round(n - fresh);
+    const tokens: WorkToken[] = [];
+    if (plain > 0 || fresh <= 0) tokens.push({ key: k, text: `${WORK_MARK[k]}${plain > 0 ? num(plain) : ""}` });
+    if (fresh > 0) tokens.push({ key: k, text: `${WORK_MARK[k]}新${num(fresh)}`, fresh: true });
     if (k === "tatami" && c.herinashiSeen) {
       const part = c.herinashi > 0 && c.herinashi < n ? num(c.herinashi) : "";
-      token.note = `(縁無${c.herinashiHalf ? "半" : ""}${part})`;
+      tokens[tokens.length - 1].note = `(縁無${c.herinashiHalf ? "半" : ""}${part})`;
     }
-    out.push(token);
+    out.push(...tokens);
   }
   return out;
+}
+
+/**
+ * 予定表で手入力した作業内容が「数量だけ」か (「タ6 タ新4 フ2」「畳 表替え12」「タ12(縁無6)」= 数量として数える)。
+ * 「タ3間、フ1部屋」「養生、廃材撤去」「クロス工事、畳下床板2間」のような自由な文は false (そのまま表示し、作業量の枚数には使わない)
+ */
+export function isCountsOnlyText(text: string | undefined): boolean {
+  const t = (text ?? "").normalize("NFKC").trim();
+  if (!t || !hasWork(countsFromText(t, { shorthand: true }))) return false;
+  const rest = t
+    .replace(STRUCTURED, " ")
+    .replace(CONTINUED_ANY, " ")
+    .replace(SHORTHAND, " ")
+    .replace(HERINASHI_TEXT, " ")
+    .replace(/カーテン\s*\d{0,3}/g, " ")
+    .replace(/[\s、,，・/()（）]+/g, "");
+  return rest === "";
 }
 
 /** 省略表記の文字 (例: タ12(縁無6) フ6 シ4 ア2) */
@@ -214,12 +252,14 @@ export function workText(c: WorkCounts | undefined): string {
     .join(" ");
 }
 
-/** 読み上げ・ツールチップ用 (例: 畳 12 (うちへり無し 6)・襖 6・障子 4・網戸 2) */
+/** 読み上げ・ツールチップ用 (例: 畳 12 (うちへり無し 6)・畳 新調 4・襖 6・障子 4・網戸 2) */
 export function workDescription(c: WorkCounts | undefined): string {
   if (!c) return "";
   return workTokens(c)
     .map((t) => {
-      const n = t.text.slice(WORK_MARK[t.key].length);
+      if (t.key === "free") return t.text;
+      const n = t.text.slice(WORK_MARK[t.key].length + (t.fresh ? 1 : 0));
+      if (t.fresh) return `${WORK_LABEL[t.key]} 新調${n ? ` ${n}` : ""}${t.note ? ` (${t.note.replace(/[()]/g, "")})` : ""}`;
       const herinashi = t.note ? ` (${c.herinashi > 0 && c.herinashi < c.tatami ? `うちへり無し${c.herinashiHalf ? "半畳" : ""} ${num(c.herinashi)}` : `へり無し${c.herinashiHalf ? "半畳" : ""}`})` : "";
       return `${WORK_LABEL[t.key]}${n ? ` ${n}` : ""}${herinashi}`;
     })

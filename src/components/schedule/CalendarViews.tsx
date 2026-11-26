@@ -258,7 +258,7 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
       </span>
       <span className="mt-0.5 block font-medium">
         <span className="line-clamp-2">{titleOf(ctx, e)}</span>
-        {tokens?.length ? <WorkTokens tokens={tokens} className="mt-0.5 flex-wrap text-[12px]" /> : null}
+        {tokens?.length ? <WorkTokens tokens={tokens} className="mt-0.5 flex-wrap text-[12px]" multiline /> : null}
       </span>
       <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-ink-2">
         {e.companyWide && (

@@ -54,6 +54,8 @@ export interface EventFormValues {
   /** 場所の指定: follow = 案件・お客様の場所に合わせる (住所が変わると予定の場所も変わる) / custom = この予定だけの場所 */
   locationMode?: "follow" | "custom";
   memo: string;
+  /** 作業内容 (予定表に表示。数量「タ6 タ新4」か自由な文「養生、廃材撤去」。空 = 見積・受注の明細などから自動) */
+  work?: string;
 }
 
 const PRESETS: { label: string; start?: string; end?: string; minutes?: number; allDay?: boolean; slot?: "am" | "pm" }[] = [
@@ -515,6 +517,10 @@ export function EventForm({
                   )}
                 </>
               )}
+              {/* 作業内容 (お客様のご要望 2026-11-26: 見積・現場管理・施工なども具体的な内容を予定表に表示) */}
+              <Field label="作業内容 (予定表に表示)" hint="空欄なら見積・受注の明細などから自動 (例: タ6 タ新4 フ2)。自由な文も書けます (例: 養生、廃材撤去 / クロス工事、畳下床板2間)">
+                <Input name="work" value={v.work ?? ""} onChange={(e) => set("work", e.target.value)} maxLength={200} placeholder="例: タ3間、フ1部屋" />
+              </Field>
               <Field label="メモ (社内共有)">
                 <Textarea name="memo" value={v.memo} onChange={(e) => set("memo", e.target.value)} maxLength={2000} placeholder="持ち物・駐車場・事前連絡・議題など" />
               </Field>

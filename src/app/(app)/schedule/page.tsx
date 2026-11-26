@@ -16,7 +16,7 @@ import { addDays, toDateKey } from "@/lib/format";
 import { SCHEDULE_GROUP_LABEL, SCHEDULE_KIND, SCHEDULE_KINDS } from "@/lib/constants";
 import { Card, CardHeader, Flash, LinkButton, LinkTabs, PageHeader } from "@/components/ui";
 import { ConflictList, DayView, ListView, MonthView, ProductionLink, StaffView, WeekView, type CalendarContext, type CalUser } from "@/components/schedule/CalendarViews";
-import { scheduleWork } from "@/lib/schedule-work";
+import { scheduleWork, workNoteOf } from "@/lib/schedule-work";
 import { workDescription, workTokens } from "@/lib/work-summary";
 import { productionByDay, productionRows } from "@/lib/production/plan";
 import { KindLegend } from "@/components/schedule/parts";
@@ -190,11 +190,15 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
     dayHref: (d) => link({ view: "day", date: d }),
     closedDays: new Set(db.holidays.map((h) => h.date)),
     holidayOf: holidayResolver(db),
+    // 手入力の自由な作業内容 (「養生、廃材撤去」など) はそのまま、ほかは「タ6 タ新4 フ2」(src/lib/schedule-work.ts の workNoteOf・work-summary.ts)
     workOf: (e) => {
-      if (!tokenCache.has(e.id)) tokenCache.set(e.id, workTokens(work.get(e.id)));
+      if (!tokenCache.has(e.id)) {
+        const note = workNoteOf(e);
+        tokenCache.set(e.id, note ? [{ key: "free", text: note }] : workTokens(work.get(e.id)));
+      }
       return tokenCache.get(e.id);
     },
-    workTextOf: (e) => workDescription(work.get(e.id)) || undefined,
+    workTextOf: (e) => workNoteOf(e) ?? (workDescription(work.get(e.id)) || undefined),
     production: { byDay: productionDays, href: productionHref },
     labelOf: (e) => {
       if (!labelCache.has(e.id)) labelCache.set(e.id, labeler.label(e).text);

@@ -2,7 +2,7 @@ import type { Database, ScheduleEvent, ScheduleKind, StoreId } from "@/lib/db/ty
 import { SCHEDULE_KIND } from "@/lib/constants";
 import { compareInDay, isMultiDay, lastDay, occursOn } from "@/lib/calendar";
 import { addDays, daysBetween } from "@/lib/format";
-import type { WorkCounts } from "@/lib/work-summary";
+import { workNoteOf, type WorkCounts } from "@/lib/work-summary";
 
 /**
  * 日ごとの予定表 (スプレッドシートの形) と 1 日の作業量 (お客様のご要望 2026-11-25「日ごとの予定表の表示形式と作業量の集計」)
@@ -400,7 +400,8 @@ function sheetRow(e: ScheduleEvent, day: string, input: Pick<SheetInput, "work" 
   const raw = colsOf(c);
   const cols = mode !== "count" ? emptyCols() : e.kind === "measure" ? measureCols(raw) : raw;
   // 見積などの予定に枚数が分かっていれば、作業量の枚数とは別に備考に (移行した予定表のメモはそのまま備考に出るので足さない)
-  const contentNote = mode !== "count" && e.source !== "import" ? countsNote(raw) : undefined;
+  // 予定表で手入力した自由な作業内容 (「養生、廃材撤去」など) はそのまま備考の「内容」に
+  const contentNote = workNoteOf(e) ?? (mode !== "count" && e.source !== "import" ? countsNote(raw) : undefined);
   return {
     event: e,
     side: sideOf(e.kind),

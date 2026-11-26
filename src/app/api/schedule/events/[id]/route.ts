@@ -8,7 +8,7 @@ import { parseHandoverRef } from "@/lib/handover";
 import { periodLabel } from "@/lib/calendar";
 import { eventLabeler } from "@/lib/schedule-label";
 import { scheduleWork } from "@/lib/schedule-work";
-import { workDescription, workText } from "@/lib/work-summary";
+import { workDescription, workText, workNoteOf } from "@/lib/work-summary";
 import type { EventQuickData, QuickCase, QuickMap, QuickPair, QuickRemove, QuickRequest, QuickStoreChange } from "@/components/schedule/quick-types";
 import { approverRole, skipsApproval } from "@/lib/auth/permissions";
 import { caseChainOf } from "@/lib/case-store";
@@ -95,8 +95,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     storeName: store?.name ?? e.storeId,
     assigneeIds: e.assigneeIds,
     assignees: e.assigneeIds.map((a) => users.get(a) ?? "-"),
-    work: workDescription(workCounts) || undefined,
-    workText: workText(workCounts) || undefined,
+    // 手入力の自由な作業内容 (「養生、廃材撤去」) はそのまま、ほかは「タ6 タ新4 フ2」(src/lib/work-summary.ts)
+    work: workNoteOf(e) ?? (workDescription(workCounts) || undefined),
+    workText: workNoteOf(e) ?? (workText(workCounts) || undefined),
     workManual: e.work?.trim() || undefined,
     storeChange: quickStoreChange(db, user, e, canEdit, resolver),
     remove: quickRemove(db, user, e, canEdit, order, resolver),

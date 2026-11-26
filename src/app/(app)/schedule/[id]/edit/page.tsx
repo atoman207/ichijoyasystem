@@ -65,6 +65,7 @@ export default async function EditEventPage({ params, searchParams }: { params: 
           location: e.location ?? "",
           locationMode: currentEventMode(db, e),
           memo: e.memo ?? "",
+          work: e.work ?? "",
         }}
         users={formUsers(db)}
         stores={formStores(db)}

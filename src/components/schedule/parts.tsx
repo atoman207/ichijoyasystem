@@ -102,12 +102,19 @@ export function KindMark({ kind, className, size = "sm", iconOnly = false }: { k
 }
 
 /** 仕事内容と数量の省略表記 (「タ12 フ6 シ4 ア2」。へり無し畳の「(縁無6)」は目立たせる。src/lib/work-summary.ts) */
-export function WorkTokens({ tokens, className }: { tokens: WorkToken[] | undefined; className?: string }) {
+export function WorkTokens({ tokens, className, multiline = false }: { tokens: WorkToken[] | undefined; className?: string; multiline?: boolean }) {
   if (!tokens?.length) return null;
+  // 手入力の自由な作業内容 (「養生、廃材撤去」など)。長い文は省略して (週の表示は 2 行まで)、押すと小さな画面で全部見られる
+  if (tokens[0].key === "free")
+    return (
+      <span className={clsx("min-w-0 font-semibold text-ink", multiline ? "line-clamp-2 block" : "truncate", className)} data-testid="work-note" title={tokens[0].text}>
+        {tokens[0].text}
+      </span>
+    );
   return (
     <span className={clsx("inline-flex shrink-0 items-center gap-1 font-semibold tnum text-ink", className)} data-testid="work-tokens">
-      {tokens.map((t) => (
-        <span key={t.key} className="whitespace-nowrap">
+      {tokens.map((t, i) => (
+        <span key={`${t.key}${t.fresh ? "-new" : ""}-${i}`} className="whitespace-nowrap">
           {t.text}
           {t.note && <span className="text-critical-ink">{t.note}</span>}
         </span>

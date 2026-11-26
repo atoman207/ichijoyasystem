@@ -779,12 +779,28 @@ function QuickBody({ data, returnTo, onOpenEvent, onReload }: { data: EventQuick
   );
 }
 
-/** 仕事内容 (予定表のチップの「タ12 フ6 シ4 ア2」)。手で決めると自動より優先 (ScheduleEvent.work) */
+/** 引き取り・納品などの数量の例 / 見積・現場管理・施工などの作業内容の例 (お客様のご要望 2026-11-26) */
+const WORK_EXAMPLE: Partial<Record<string, string>> = {
+  pickup: "例: タ6 タ新4 フ2 フ新2",
+  delivery: "例: タ6 タ新4 フ2 フ新2",
+  onsite_quote: "例: タ6 フ2",
+  survey: "例: タ3間、フ1部屋",
+  site_survey: "例: タ3間、フ1部屋",
+  measure: "例: タ新4、2階和室",
+  site: "例: 養生、廃材撤去",
+  install: "例: クロス工事、畳下床板2間",
+  visit: "例: 仕様の打合せ、見本の持参",
+};
+
+/**
+ * 作業内容 (予定表のチップ)。手で決めると自動より優先 (ScheduleEvent.work)。
+ * 数量 (「タ6 タ新4 フ2」= 作業量にも数える) か、自由な文 (「養生、廃材撤去」= そのまま表示。src/lib/work-summary.ts の isCountsOnlyText)
+ */
 function WorkRow({ data, returnTo }: { data: EventQuickData; returnTo: string }) {
   const [open, setOpen] = useState(false);
   if (!data.work && !data.canEdit) return null;
   return (
-    <TopRow label="仕事" icon={<ClipboardList className="h-3.5 w-3.5" aria-hidden />} testId="event-quick-work">
+    <TopRow label="作業内容" icon={<ClipboardList className="h-3.5 w-3.5" aria-hidden />} testId="event-quick-work">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="text-xs text-ink">{data.work ?? <span className="text-ink-3">未設定</span>}</span>
         {data.workManual && <span className="rounded bg-accent-soft px-1 text-[10px] text-accent-ink">手入力</span>}
@@ -797,11 +813,14 @@ function WorkRow({ data, returnTo }: { data: EventQuickData; returnTo: string })
       {open && (
         <form action={updateEventWork.bind(null, data.id)} className="mt-1.5 space-y-1.5" data-testid="work-form">
           <input type="hidden" name="returnTo" value={returnTo} />
-          <input name="work" defaultValue={data.workManual ?? data.workText ?? ""} maxLength={120} placeholder="例: タ12 フ6 シ4 ア2" className="field" aria-label="仕事内容" />
-          <p className="text-[11px] leading-relaxed text-ink-3">タ = 畳・フ = 襖・シ = 障子・ア = 網戸 のあとに数 (例: タ12 フ6)。へり無し畳は「縁無6」。予定表の表示だけを変えます (見積・受注の明細は変わりません)。</p>
+          <input name="work" defaultValue={data.workManual ?? data.workText ?? ""} maxLength={200} placeholder={WORK_EXAMPLE[data.kind] ?? "例: タ6 タ新4 フ2 / 養生、廃材撤去"} className="field" aria-label="作業内容" />
+          <p className="text-[11px] leading-relaxed text-ink-3">
+            数量は タ = 畳・フ = 襖・シ = 障子・ア = 網戸 のあとに数、新調は「新」を付けます (例: タ6 タ新4 フ2 フ新2。へり無し畳は「縁無6」)。数量だけなら作業量にも数えます。
+            「養生、廃材撤去」「クロス工事、畳下床板2間」のような自由な文も、そのまま予定表に表示します。予定表の表示だけを変えます (見積・受注の明細は変わりません)。
+          </p>
           <div className="flex flex-wrap items-center gap-2">
             <Button type="submit" size="sm">
-              仕事内容を保存
+              作業内容を保存
             </Button>
             {data.workManual && (
               <button type="submit" name="work" value="" className="text-xs text-ink-2 hover:underline">
