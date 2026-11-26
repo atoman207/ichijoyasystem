@@ -622,6 +622,16 @@ export function canManageIntegrations(user: User): boolean {
 }
 
 /**
+ * 外部から届いたメッセージ (LINE・メール・Slack・Chatwork) の通知を見られるか (src/lib/inbound/feed.ts。お客様のご要望 2026-11-26)。
+ * 届いた店舗の社員と、本部・管理者 (全店舗)。お店の決まらないもの (storeId = hq: 未登録の相手・取引先・会社のメール・店舗を決めていない Slack) は本部・管理者だけ
+ */
+export function canSeeInboundMessage(user: Pick<User, "role" | "storeId" | "active">, storeId: StoreId | undefined): boolean {
+  if (user.active === false) return false;
+  if (user.role === "admin" || user.role === "hq_staff") return true;
+  return Boolean(storeId) && storeId !== "hq" && user.storeId === storeId;
+}
+
+/**
  * 顧客の新規登録 (重複を防ぐため、登録できる人を絞る)。
  * 管理者・本部スタッフ・事務担当 (設定 → KPI・インセンティブ の事務担当) は常に可。
  * mode: office = 事務のみ (初期設定) / office_and_managers = 店長も可 / all = 全員

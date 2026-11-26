@@ -27,7 +27,7 @@ export const USER_FIELDS = ["email", "passwordHash", "avatarKey", "avatarUpdated
 /** 画面の引き継ぎの判断を持つ設定 (テスト用のデータベースにだけ置く。本番には引き継がない) */
 export const CARRYOVER_REVIEW_ID = "carryover_review";
 /** 引き継がない設定 (サーバーの動きの記録・引き継ぎの判断。本番の側の値を残す) */
-export const RUNTIME_SETTINGS = new Set(["knowledge_sync_state", "line_groups", "survey_workbook_state", CARRYOVER_REVIEW_ID]);
+export const RUNTIME_SETTINGS = new Set(["knowledge_sync_state", "line_groups", "survey_workbook_state", "inbound_feed", CARRYOVER_REVIEW_ID]);
 /** 練習の記録の印 (お客様名・件名・要約に書いてもらう) */
 export const PRACTICE = /練習|テスト/;
 /** まとまりの名前に使う記録の優先順 */

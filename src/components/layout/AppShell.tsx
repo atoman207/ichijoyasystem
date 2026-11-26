@@ -149,7 +149,7 @@ export interface ShellUser {
 }
 
 export interface NotificationItem {
-  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict" | "task" | "signup" | "fax" | "knowledge" | "change";
+  kind: "approval" | "mention" | "overdue" | "inquiry" | "request" | "schedule" | "conflict" | "task" | "signup" | "fax" | "knowledge" | "change" | "inbound";
   title: string;
   detail?: string;
   href: string;
@@ -170,6 +170,8 @@ const NOTIFICATION_STYLE: Record<NotificationItem["kind"], { icon: LucideIcon; c
   fax: { icon: Printer, cls: "bg-warn-soft text-warn-ink" },
   knowledge: { icon: BookOpenCheck, cls: "bg-warn-soft text-warn-ink" },
   change: { icon: History, cls: "bg-accent-soft text-accent-ink" },
+  // 外部から届いたメッセージ (LINE・メール・Slack・Chatwork。src/lib/inbound/feed.ts)
+  inbound: { icon: MessagesSquare, cls: "bg-good-soft text-good-ink" },
 };
 
 const CREATE_ITEMS: { href: string; label: string; desc: string; icon: LucideIcon }[] = [

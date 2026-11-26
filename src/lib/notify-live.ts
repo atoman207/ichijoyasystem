@@ -6,6 +6,7 @@ import { notificationsFor, type NotificationSummary } from "@/lib/db/queries";
 import { pendingReceptionCount } from "@/lib/reception";
 import { canApproveLeave, canApproveSignup, canTriageFax, canViewFax } from "@/lib/auth/permissions";
 import { unreadNotices } from "@/lib/change-notices";
+import { INBOUND_BELL_DAYS, inboundForUser } from "@/lib/inbound/feed";
 
 /**
  * ヘッダーの件数 (承認・問い合わせ・通知のベル) の印。画面を開いたままでも、新しい承認の申請・問い合わせが届いたら
@@ -34,6 +35,8 @@ export function liveSignature(user: User, summary?: NotificationSummary): { sig:
     String((db.faxMessages ?? []).filter((f) => f.direction === "inbound" && ((f.triage === "review" && canTriageFax(user)) || (f.assignedUserId === user.id && f.purchaseOrderId && !f.checkedAt && canViewFax(user, f)))).length),
     // 新規登録の申請 (管理者)
     canApproveSignup(user) ? String(db.users.filter((u) => u.signupStatus === "pending").length) : "",
+    // 外部から届いたメッセージ (LINE・メール・Slack・Chatwork。src/lib/inbound/feed.ts): 新しいものが届いたら読み直す
+    inboundForUser(db, user, { days: INBOUND_BELL_DAYS }).slice(0, 5).map((i) => i.id).join(","),
   ];
   return { sig: createHash("sha1").update(parts.join("|")).digest("hex").slice(0, 16), approvals: n.pendingApprovals.length };
 }

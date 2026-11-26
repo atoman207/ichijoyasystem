@@ -5,7 +5,8 @@ import { addAudit, nextNumber, nowIso } from "@/lib/db/store";
 import { CATEGORY_LABEL } from "@/lib/constants";
 import { detectType } from "@/lib/attachments";
 import { customerHasPhone } from "@/lib/customer-contacts";
-import { LINE_GROUP_ID_RE, ensureLineGroup, findLineGroup, lineGroupName, touchLineGroups, trimPending, type LineGroup, type PendingLineMessage } from "@/lib/line-groups";
+import { LINE_GROUP_ID_RE, LINE_GROUP_PURPOSE_LABEL, ensureLineGroup, findLineGroup, lineGroupName, touchLineGroups, trimPending, type LineGroup, type PendingLineMessage } from "@/lib/line-groups";
+import { addInbound } from "@/lib/inbound/feed";
 
 /**
  * 外部からの受信 (LINE・Chatwork・Web フォーム) をやりとり履歴・問い合わせに登録する
@@ -13,6 +14,7 @@ import { LINE_GROUP_ID_RE, ensureLineGroup, findLineGroup, lineGroupName, touchL
  * - 署名・共有鍵を確かめてから呼ぶ (各ルート)
  * - 同じメッセージを 2 回受け取っても 1 件だけ登録する (メッセージの ID から記録の ID を決める)
  * - 登録した人は "system" (画面では「システム (外部連携)」)
+ * - 受け取ったメッセージは通知の一覧 (src/lib/inbound/feed.ts の addInbound) にも足し、届いた店舗の社員と本部・管理者のベルに出す
  */
 
 export const SYSTEM_USER = "system";
@@ -148,6 +150,7 @@ export function recordLineEvents(db: Database, events: LineEvent[]): LineInbound
         // ひも付け前・用途のグループ (店舗別・クレーム報告など) はグループのメッセージとして残す
         g.pending.push(pm);
         trimPending(g);
+        addInbound(db, { id: `line_${msgId}`, channel: "line", at, from: lineSender(db, pm.userId), fromDetail: lineGroupName(g), text: lineText(pm, false).replace(` ${LINE_MEDIA_APP}`, ""), storeId: g.storeId ?? "hq", href: lineGroupHref(g), ref: g.purpose ? LINE_GROUP_PURPOSE_LABEL[g.purpose].replace(/ \(.*\)$/, "") : "ひも付け前の LINE グループ" });
         // 施工事例写真・整理整頓の確認のグループの写真は、LINE のサーバーに一定期間しか残らないため受信のあとでこのサーバーに保存する
         if ((g.purpose === "photos" || g.purpose === "tidy") && pm.type === "image" && fileName) res.held.push({ groupId, messageId: msgId, fileName });
         res.recorded++;
@@ -171,6 +174,7 @@ export function recordLineEvents(db: Database, events: LineEvent[]): LineInbound
       db.commLogs.push({ id: logId, customerId: customer?.id, supplierId: supplier?.id, storeId: customer?.storeId ?? "hq", channel: "line", direction: "inbound", subject: `LINE: ${text.slice(0, 30)}`, body: text, at, userId: SYSTEM_USER });
       addAudit(db, { userId: SYSTEM_USER, action: "create", entity: "comm", entityId: logId, entityLabel: customer?.name ?? supplier?.name ?? "", summary: `LINE のメッセージを受信 (${customer ? `お客様: ${customer.name}` : `協力業者・仕入先: ${supplier!.name}`})`, storeId: customer?.storeId ?? "hq" });
       if (fileName && saveTo) res.media.push({ messageId: msgId, fileName, ...saveTo, logId, caption: "LINE で受信" });
+      addInbound(db, { id: `line_${msgId}`, channel: "line", at, from: customer ? `${customer.name} 様` : supplier!.name, fromDetail: "LINE (1 対 1)", text: lineText(ev.message, false).replace(` ${LINE_MEDIA_APP}`, ""), storeId: customer?.storeId ?? "hq", href: customer ? `/customers/${customer.id}` : `/suppliers/${supplier!.id}`, ref: customer ? "お客様" : "協力業者・仕入先" });
       res.recorded++;
       continue;
     }
@@ -182,21 +186,39 @@ export function recordLineEvents(db: Database, events: LineEvent[]): LineInbound
       open.updatedAt = nowIso();
       addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "inquiry", entityId: open.id, entityLabel: open.number, summary: "LINE の続きのメッセージを追記", storeId: open.storeId });
       if (fileName) res.media.push({ messageId: msgId, fileName, parentType: "inquiry", parentId: open.id, caption: "LINE で受信" });
+      addInbound(db, { id: `line_${msgId}`, channel: "line", at, from: open.contactName || "LINE のお客様", fromDetail: "LINE (1 対 1)", text: lineText(ev.message, false).replace(` ${LINE_MEDIA_APP}`, ""), storeId: open.storeId, href: `/inquiries/${open.id}`, ref: `問い合わせ ${open.number}` });
       res.recorded++;
       continue;
     }
     const inqId = `inq_line_${msgId}`;
     res.recorded += createInquiry(db, { id: inqId, channel: "line", storeId: "hq", contactName: "LINE のお客様 (未登録)", summary: text.split(/\r?\n/)[0].slice(0, 60) || "LINE のメッセージ", detail: `${text}\n\nLINE ユーザー ID: ${userId} (お客様を登録するときは顧客情報の LINE ID に入れると、次から自動でひも付きます)`, receivedAt: at, sourceRef: `${ref}:${msgId}` });
     if (fileName) res.media.push({ messageId: msgId, fileName, parentType: "inquiry", parentId: inqId, caption: "LINE で受信" });
+    const created = db.inquiries.find((i) => i.id === inqId);
+    addInbound(db, { id: `line_${msgId}`, channel: "line", at, from: "LINE のお客様 (未登録)", fromDetail: "LINE (1 対 1)", text: lineText(ev.message, false).replace(` ${LINE_MEDIA_APP}`, ""), storeId: created?.storeId ?? "hq", href: `/inquiries/${inqId}`, ref: created ? `新しい問い合わせ ${created.number}` : "新しい問い合わせ" });
   }
   return res;
+}
+
+/** LINE の送り主 (登録済みのお客様・協力業者なら名前) */
+function lineSender(db: Database, userId: string | undefined): string {
+  const c = userId ? db.customers.find((x) => x.lineId === userId) : undefined;
+  if (c) return `${c.name} 様`;
+  const s = userId ? db.suppliers.find((x) => x.lineId === userId) : undefined;
+  return s?.name ?? "グループのメンバー";
+}
+
+/** 用途のグループのメッセージを開く画面 (クレーム報告 = KPI のクレーム・手直し / 施工事例写真 = LINE の写真) */
+function lineGroupHref(g: Pick<LineGroup, "purpose">): string | undefined {
+  if (g.purpose === "quality") return "/kpi/quality";
+  if (g.purpose === "photos" || g.purpose === "tidy") return "/materials/cases/line";
+  return undefined;
 }
 
 /**
  * ひも付け済みのグループのメッセージを、案件 (受注) のやりとり履歴に登録する (mutate の中で呼ぶ)。
  * 写真・資料を保存するときは取得の依頼を返す
  */
-export function recordLineGroupMessage(db: Database, g: LineGroup, m: PendingLineMessage, saveMedia: boolean): LineMediaJob | undefined {
+export function recordLineGroupMessage(db: Database, g: LineGroup, m: PendingLineMessage, saveMedia: boolean, notify = true): LineMediaJob | undefined {
   const logId = `cl_line_${m.id}`;
   if (db.commLogs.some((c) => c.id === logId)) return undefined;
   const order = g.orderId ? db.orders.find((o) => o.id === g.orderId) : undefined;
@@ -223,6 +245,8 @@ export function recordLineGroupMessage(db: Database, g: LineGroup, m: PendingLin
     contactName: senderCustomer?.name ?? senderSupplier?.name ?? (m.userId ? "グループのメンバー" : undefined),
   });
   addAudit(db, { userId: SYSTEM_USER, action: "create", entity: "comm", entityId: logId, entityLabel: order?.number ?? supplier?.name ?? gname, summary: `LINE グループ「${gname}」のメッセージを受信${order ? ` (案件 ${order.number})` : ""}`, storeId });
+  // グループを案件にひも付けたときに保留のメッセージを移す (notify = false) は、届いたときに通知済みなので足さない
+  if (notify) addInbound(db, { id: `line_${m.id}`, channel: "line", at: m.at, from: senderCustomer ? `${senderCustomer.name} 様` : senderSupplier?.name ?? "グループのメンバー", fromDetail: gname, text: lineText(m, false).replace(` ${LINE_MEDIA_APP}`, ""), storeId, href: order ? `/orders/${order.id}` : supplier ? `/suppliers/${supplier.id}` : undefined, ref: order ? `案件 ${order.number}` : supplier ? "協力業者・仕入先" : undefined });
   return fileName && order ? { messageId: m.id, fileName, parentType: "order", parentId: order.id, logId, caption: `LINE グループ「${gname}」で受信` } : undefined;
 }
 
@@ -253,6 +277,7 @@ export function recordChatworkEvent(db: Database, p: ChatworkPayload, selfAccoun
   const at = new Date(Number.isFinite(ev.send_time) ? Number(ev.send_time) * 1000 : Date.now()).toISOString();
   db.commLogs.push({ id: logId, supplierId: supplier.id, storeId: "hq", channel: "chatwork", direction: "inbound", subject: `Chatwork: ${body.slice(0, 30)}`, body, at, userId: SYSTEM_USER });
   addAudit(db, { userId: SYSTEM_USER, action: "create", entity: "comm", entityId: logId, entityLabel: supplier.name, summary: `Chatwork の投稿を受信 (${supplier.name})`, storeId: "hq" });
+  addInbound(db, { id: `cw_${msgId}`, channel: "chatwork", at, from: supplier.name, fromDetail: "Chatwork", text: body, storeId: "hq", href: `/suppliers/${supplier.id}`, ref: "協力業者・仕入先" });
   return "recorded";
 }
 

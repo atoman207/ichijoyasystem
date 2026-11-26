@@ -62,7 +62,7 @@ export async function linkLineGroup(formData: FormData) {
     if (formData.has("label")) g.label = label || undefined;
     name = lineGroupName(g);
     for (const m of g.pending) {
-      const job = recordLineGroupMessage(db, g, m, true);
+      const job = recordLineGroupMessage(db, g, m, true, false);
       if (job) jobs.push(job);
       moved++;
     }

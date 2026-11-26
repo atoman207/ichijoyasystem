@@ -10,6 +10,8 @@ import { faxConnection, faxLocalNumber, faxWebhookSecret } from "@/lib/fax/adapt
  * LINE:     LINE_CHANNEL_ACCESS_TOKEN (送信) / LINE_CHANNEL_SECRET (受信の署名の確認)
  * Chatwork: CHATWORK_API_TOKEN (送信) / CHATWORK_ROOM_ID (社内通知のルーム) / CHATWORK_WEBHOOK_TOKEN (受信の署名の確認。ルームごとのトークンをカンマ区切り) / CHATWORK_SELF_ACCOUNT_ID (連携用アカウントの ID。自分の投稿を受信に数えない)
  * Web フォーム: WEBFORM_SECRET (受信の共有鍵)
+ * Slack:    SLACK_SIGNING_SECRET (受信の署名の確認) / SLACK_BOT_TOKEN (送り主・チャンネルの名前の取得。任意)。受信は通知だけ (src/lib/inbound/slack.ts)
+ * メールの受信: INBOUND_MAIL_HOST・INBOUND_MAIL_PORT・INBOUND_MAIL_USER・INBOUND_MAIL_PASSWORD (なければ SMTP_*)。設定でオンのときだけ (src/lib/inbound/mail.ts)
  * 画面へのリンク: APP_BASE_URL (例: https://ichijoyasystem.vercel.app)。未設定なら Vercel の URL
  * 接続先の URL (*_API_BASE) は検証用に差し替えられる (通常は設定しない)
  * 設定がないサービスは送らずに「記録のみ」として送信履歴に残す (src/lib/notify/send.ts)
@@ -109,7 +111,7 @@ export function linkSecret(): string {
 }
 
 export interface IntegrationStatus {
-  key: "email" | "line" | "chatwork" | "webform" | "ai_intake" | "fax";
+  key: "email" | "line" | "chatwork" | "slack" | "webform" | "ai_intake" | "fax";
   name: string;
   configured: boolean;
   detail: string;
@@ -142,6 +144,13 @@ export function integrationStatuses(): IntegrationStatus[] {
       configured: Boolean(cw),
       detail: cw ? `送信の設定あり${cw.roomId ? ` · 社内通知のルーム ${cw.roomId}` : " · 社内通知のルーム (CHATWORK_ROOM_ID) は未設定"}` : "CHATWORK_API_TOKEN を設定すると、協力業者のルームへの連絡と社内ルームへの通知を送ります",
       inbound: { configured: chatworkWebhookTokens().length > 0, path: "/api/integrations/chatwork", detail: chatworkWebhookTokens().length ? `受信の署名確認の設定あり (CHATWORK_WEBHOOK_TOKEN: Webhook ${chatworkWebhookTokens().length} 件)` : "CHATWORK_WEBHOOK_TOKEN を設定すると、協力業者のルームの投稿をやりとり履歴に登録します (Webhook はルームごと。トークンはカンマ区切りで複数)" },
+    },
+    {
+      key: "slack",
+      name: "Slack (受信の通知)",
+      configured: Boolean(env("SLACK_SIGNING_SECRET")),
+      detail: "送信はしません。届いたメッセージをシステムの通知にします (設定は下の「外部から届いたメッセージの通知」)",
+      inbound: { configured: Boolean(env("SLACK_SIGNING_SECRET")), path: "/api/integrations/slack", detail: env("SLACK_SIGNING_SECRET") ? `署名の確認の設定あり (SLACK_SIGNING_SECRET)${env("SLACK_BOT_TOKEN") ? " · 名前の取得の設定あり (SLACK_BOT_TOKEN)" : ""}` : "SLACK_SIGNING_SECRET を設定すると、Slack のアプリ (Events API) から届いたメッセージを通知にします" },
     },
     {
       key: "webform",

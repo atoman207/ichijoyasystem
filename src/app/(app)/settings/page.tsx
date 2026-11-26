@@ -28,6 +28,7 @@ import { Badge, Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkT
 import Link from "@/components/ui/Link";
 import { GoLivePanel } from "@/components/settings/GoLivePanel";
 import { LineGroupsCard } from "@/components/settings/LineGroupsCard";
+import { InboundCard } from "@/components/settings/InboundCard";
 import { MessagingConnectionCheck } from "@/components/settings/MessagingConnectionCheck";
 import { BackupCard } from "@/components/settings/BackupCard";
 import { credentialStatus } from "@/lib/account-rules";
@@ -379,6 +380,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             </Card>
           )}
           <LineGroupsCard db={db} admin={canManageIntegrations(user)} />
+          <InboundCard db={db} admin={canManageIntegrations(user)} base={appBaseUrl()} />
           {[
             (() => {
               // 非公開のシートの直接同期 (サービスアカウント。src/lib/google/sheets.ts)。鍵の中身は出さない

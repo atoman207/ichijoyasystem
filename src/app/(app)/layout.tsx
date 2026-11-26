@@ -27,6 +27,7 @@ import { docDraftAttention } from "@/lib/doc-drafts";
 import { casePostAttention } from "@/lib/case-posts";
 import { pendingReceptionIds } from "@/lib/reception";
 import { seenKey } from "@/lib/notify-seen";
+import { INBOUND_BELL_DAYS, INBOUND_CHANNEL_LABEL, inboundBellGroups, inboundForUser, inboundLine, inboundListHref } from "@/lib/inbound/feed";
 import { chatState } from "@/lib/chat/inbox";
 import { prefsOf } from "@/lib/chat/repo";
 import type { ChatSummary } from "@/lib/chat/types";
@@ -233,6 +234,20 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       notifications.push({ kind: "change", title: `${c.topic}: ${[c.number, c.title].filter(Boolean).join(" ")}`.slice(0, 80), detail: `${c.lines.slice(0, 2).map(lineText).join(" / ")} · ${userName(c.actorId)} ${noticeTime(c.at)}`, href: `/notices/${c.id}/open`, keys: [seenKey("chg", c.id, c.at)] });
     }
     if (changes.length > 4) notifications.push({ kind: "change", title: `ほかの変更のお知らせ ${changes.length - 4} 件`, detail: "変更のお知らせの一覧で確かめてください", href: "/notices", keys: changes.slice(4).map((c) => seenKey("chg", c.id, c.at)) });
+  }
+  // 外部から届いたメッセージ (LINE・メール・Slack・Chatwork。届いた店舗の社員と本部・管理者。src/lib/inbound/feed.ts)。経路ごとに 1 行、
+  // 1 件なら送り主と関係する記録へ、2 件以上なら一覧へ。確認していない件数はキー (in) で数える
+  for (const g of inboundBellGroups(inboundForUser(getDb(), user, { days: INBOUND_BELL_DAYS }))) {
+    const latest = g.items[0];
+    const label = INBOUND_CHANNEL_LABEL[g.channel];
+    const when = new Date(latest.at).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    notifications.push({
+      kind: "inbound",
+      title: g.items.length === 1 ? `${label}: ${latest.from}${latest.fromDetail && g.channel !== "email" ? ` (${latest.fromDetail})` : ""}` : `${label} のメッセージ ${g.items.length} 件`,
+      detail: `${inboundLine(latest)} · ${when}`,
+      href: g.items.length === 1 && latest.href ? latest.href : inboundListHref(g.channel),
+      keys: g.items.slice(0, 100).map((i) => seenKey("in", i.id)),
+    });
   }
   if (signups.length > 0) {
     notifications.push({ kind: "signup", title: `新規登録の申請 ${signups.length} 件`, detail: `${signups.slice(0, 3).map((u) => `${u.name} (${ROLE_LABEL[u.role]})`).join("・")}${signups.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/staff#signups", keys: signupKeys });

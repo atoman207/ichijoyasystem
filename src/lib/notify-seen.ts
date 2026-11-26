@@ -29,6 +29,8 @@ const VIEW_PATHS: Record<string, (id: string) => string[]> = {
   kc: () => ["/knowledge"],
   chg: (id) => [`/notices/${id}/open`, "/notices"],
   th: (id) => [`/messages/${id}`],
+  // 外部から届いたメッセージ (LINE・メール・Slack・Chatwork): 一覧を開くと確認したことになる
+  in: () => ["/notices/inbound"],
 };
 
 /** キーを作る (stamp: 状態が変わったら改めて知らせるための印) */
