@@ -208,6 +208,6 @@ export async function setAttendanceFinal(fd: FormData) {
     addAudit(db, { userId: user.id, action: "update", entity: "attendance_month", entityId: month.id, entityLabel: month.yearMonth, summary: `勤怠月次 ${month.yearMonth} を${final ? "確定" : "下書きに戻し"}` });
   });
   revalidate();
-  redirect(withMsg(back, final ? "確定しました。CSV を労務士へ送れます。" : "下書きに戻しました。"));
+  redirect(withMsg(back, final ? "確定しました。下の「労務士へ送る」で .xlsx を添付して送れます (ダウンロード・CSV も)。" : "下書きに戻しました。"));
 }
 
