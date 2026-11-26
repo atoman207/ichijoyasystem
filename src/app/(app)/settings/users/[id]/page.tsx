@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { assignableRoles, assignableStore, canManageUser, canManageUsers, canSeeAllStores, isDemoAccount } from "@/lib/auth/permissions";
+import { assignableRoles, assignableStore, canChangeUserRole, canManageUser, canManageUsers, canSeeAllStores, isDemoAccount } from "@/lib/auth/permissions";
 import { deleteUser, resetUserPassword, toggleUserActive, updateUserProfile, updateUserRole } from "@/lib/actions/accounts";
 import { ACCOUNT_LOCK_MESSAGE, PASSWORD_LOCK_MESSAGE, accountEditLocked, avatarUrl, credentialStatus } from "@/lib/account-rules";
 import { updateUserNotify } from "@/lib/actions/settings-ops";
@@ -31,7 +31,6 @@ export default async function UserAccountPage({ params, searchParams }: { params
   if (u.id === user.id && user.role !== "admin") redirect("/profile");
   if (!canManageUser(user, u)) redirect(`${list}${list.includes("?") ? "&" : "?"}err=` + encodeURIComponent("店長が管理できるのは、自店舗の店舗スタッフのアカウントです。"));
   if (u.signupStatus === "pending") redirect(`${list}#signups`);
-  const admin = user.role === "admin";
   const uploads = db.attachments.filter((a) => a.uploadedBy === u.id).length;
   const store = db.stores.find((s) => s.id === u.storeId);
   const returnTo = `/settings/users/${u.id}${fromStaff ? "?from=staff" : ""}`;
@@ -46,6 +45,8 @@ export default async function UserAccountPage({ params, searchParams }: { params
   const scope = canSeeAllStores(u) ? "全店舗の情報を閲覧・登録・編集できます" : `${store?.name ?? u.storeId} の情報だけを閲覧・登録・編集できます (予定表は全店舗を閲覧)`;
   // テスト期間中はアカウントの変更を止める。通知の受け取り方は変更可。ボタンは押すと理由を出す
   const locked = accountEditLocked();
+  // 管理者のロール・所属・役職の変更はテスト期間中も (canChangeUserRole)
+  const roleEdit = canChangeUserRole(user);
   const lockBtn = (label: string, variant: "primary" | "secondary" | "danger" = "primary") => <AccountLockButton label={label} variant={variant} message={ACCOUNT_LOCK_MESSAGE} />;
   const lockPwBtn = (label: string, variant: "primary" | "secondary" | "danger" = "primary") => <AccountLockButton label={label} variant={variant} message={PASSWORD_LOCK_MESSAGE} />;
 
@@ -60,7 +61,7 @@ export default async function UserAccountPage({ params, searchParams }: { params
       />
       {locked && (
         <div className="mb-4">
-          <Note tone="warn">テスト期間中のため、現在はアカウントの情報 (氏名・ログイン ID・役職・電話・ロール・所属・有効と無効) の変更・削除と、パスワードの再設定はできません。通知の受け取り方は変更できます。</Note>
+          <Note tone="warn">テスト期間中のため、現在はアカウントの情報 (氏名・ログイン ID・電話・有効と無効) の変更・削除と、パスワードの再設定はできません。{roleEdit ? "ロール・所属・役職 (権限) と通知の受け取り方は変更できます。" : "通知の受け取り方は変更できます。"}</Note>
         </div>
       )}
 
@@ -81,13 +82,14 @@ export default async function UserAccountPage({ params, searchParams }: { params
 
           <Card>
             <CardHeader title="ロール・所属 (権限)" description="ロールで操作できる内容、所属で閲覧・登録・編集できる店舗が決まります。本人の次の画面表示から反映されます" />
-            {admin ? (
-              <form action={updateUserRole} className="grid grid-cols-1 gap-3 @xl:grid-cols-3">
+            {roleEdit ? (
+              <form action={updateUserRole} className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @3xl:grid-cols-4">
                 <input type="hidden" name="userId" value={u.id} />
                 <input type="hidden" name="returnTo" value={returnTo} />
                 <Field label="ロール"><Select name="role" defaultValue={u.role}>{assignableRoles(user).map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}</Select></Field>
                 <Field label="所属"><Select name="storeId" defaultValue={u.storeId}>{db.stores.filter((s) => assignableStore(user, s.id)).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></Field>
-                <div className="flex items-end">{locked ? lockBtn("変更する", "secondary") : <Button type="submit" size="sm" variant="secondary">変更する</Button>}</div>
+                <Field label="役職・担当"><Input name="title" defaultValue={u.title} maxLength={60} /></Field>
+                <div className="flex items-end"><Button type="submit" size="sm" variant="secondary">変更する</Button></div>
               </form>
             ) : (
               <p className="text-xs text-ink-3">ロール・所属の変更 (店長・本部スタッフにする、ほかの店舗に移すなど) は管理者に依頼してください。</p>

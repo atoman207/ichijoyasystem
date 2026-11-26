@@ -103,7 +103,7 @@ export function ReceiptForm(p: ReceiptFormProps) {
                 </button>
               )}
               {rows.length > 1 && (
-                <button type="button" onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))} className="rounded p-1 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label="この支払方法を外す">
+                <button type="button" onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))} className="rounded p-1 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label="この支払方法を外す">
                   <X className="h-3.5 w-3.5" />
                 </button>
               )}

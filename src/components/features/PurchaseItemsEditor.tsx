@@ -51,7 +51,7 @@ export function PurchaseItemsEditor({ initial }: { initial?: { name: string; spe
                 <td className="px-1 py-1"><input type="number" step="any" value={r.unitPrice} onChange={(e) => set(i, "unitPrice", e.target.value)} className="field h-8 py-1 text-right text-xs tnum" aria-label={`${i + 1} 行目の単価`} /></td>
                 <td className="px-2 py-1 text-right text-xs tnum">{r.name.trim() ? `¥${amount(r).toLocaleString("ja-JP")}` : ""}</td>
                 <td className="px-1 py-1 text-center">
-                  <button type="button" onClick={() => setRows((rs) => (rs.length > 1 ? rs.filter((_, j) => j !== i) : [empty()]))} className="text-xs text-ink-3 hover:text-critical" aria-label={`${i + 1} 行目を削除`}>×</button>
+                  <button type="button" onClick={() => setRows((rs) => (rs.length > 1 ? rs.filter((_, j) => j !== i) : [empty()]))} className="text-sm font-semibold text-critical hover:text-critical-ink" aria-label={`${i + 1} 行目を削除`}>×</button>
                 </td>
               </tr>
             ))}

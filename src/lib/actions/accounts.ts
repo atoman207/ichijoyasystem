@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Database, Role, StoreId, User } from "@/lib/db/types";
-import { assignableRoles, assignableStore, canApproveSignup, canManageUser, canManageUsers } from "@/lib/auth/permissions";
+import { assignableRoles, assignableStore, canApproveSignup, canChangeUserRole, canManageUser, canManageUsers, roleStoreProblem } from "@/lib/auth/permissions";
 import { ROLE_LABEL } from "@/lib/constants";
 import { hashPassword } from "@/lib/auth/password";
 import { setSessionCookie } from "@/lib/auth/session";
@@ -16,7 +16,8 @@ import { fail, isKeyOf, requireActionUser, safeReturn, str, withMsg } from "./gu
  * アカウント管理
  * ------------------------------------------------------------
  * - 管理者はすべてのアカウント、店長は自店舗の店舗スタッフを追加・変更・削除できる (permissions.ts の canManageUser)
- * - 新規登録 (ログイン画面から) は申請として受け付け、承認されるまでログインできない (signupStatus = pending・active = false)
+ * - 新規登録 (ログイン画面から) は申請として受け付け、管理者が承認するまでログインできない (signupStatus = pending・active = false)
+ * - ロール・所属・役職の変更 (updateUserRole) は、管理者ならテスト期間中のアカウントの変更の停止の対象外 (お客様のご要望 2026-11-26)
  * - 画面は 設定 → ユーザーと権限 と 社員管理 (/staff) の 2 か所。フォームの returnTo (アカウント画面の削除は listTo) で操作した画面に戻る
  * - 顔写真は本人が プロフィール から登録する (VPS の保存先の avatars/<ユーザー ID>/<時刻>.jpg)
  */
@@ -55,6 +56,8 @@ function pickRoleStore(db: Database, actor: User, fd: FormData, back: string, fa
   const storeId = rawStore as StoreId;
   if (!assignableRoles(actor).includes(role)) fail(back, `${ROLE_LABEL[role]} のロールを付ける権限がありません (店長は店舗スタッフのみ)。`);
   if (!assignableStore(actor, storeId)) fail(back, "自店舗以外の所属にする権限がありません。");
+  const problem = roleStoreProblem(role, db.stores.find((s) => s.id === storeId));
+  if (problem) fail(back, problem);
   return { role, storeId };
 }
 
@@ -101,14 +104,20 @@ export async function resetUserPassword(formData: FormData) {
   redirect(withMsg(back, "パスワードを再設定しました。ログイン中の端末はログアウトされます。新しいパスワードは本人に直接伝えてください。"));
 }
 
-/** ロール・所属・役職の変更。空欄の項目は変更しない (店長は役職のみ。ロール・所属は自店舗の店舗スタッフに固定) */
+/**
+ * ロール・所属・役職の変更。空欄の項目は変更しない (店長は役職のみ。ロール・所属は自店舗の店舗スタッフに固定)。
+ * 管理者の変更はテスト期間中のアカウントの変更の停止の対象外 (canChangeUserRole。各社員を店長・店舗スタッフなどにできるように)
+ */
 export async function updateUserRole(formData: FormData) {
   const back = safeReturn(str(formData, "returnTo"), USERS);
   const actor = await requireManager(back);
-  assertUnlocked(back);
+  if (!canChangeUserRole(actor)) assertUnlocked(back);
   const id = str(formData, "userId");
   const title = str(formData, "title");
+  if (!id) fail(back, "変更する社員を選んでください。");
   if (!str(formData, "role") && !str(formData, "storeId") && !title) fail(back, "変更する項目を選んでください。");
+  let name = "";
+  let label = "";
   await mutate((db) => {
     const u = findManaged(db, actor, id, back);
     const { role, storeId } = pickRoleStore(db, actor, formData, back, { role: u.role, storeId: u.storeId });
@@ -116,16 +125,21 @@ export async function updateUserRole(formData: FormData) {
       if (u.id === actor.id) fail(back, "自分自身の管理者権限は外せません。他の管理者に依頼してください。");
       if (!db.users.some((x) => x.id !== u.id && x.active && x.role === "admin")) fail(back, "有効な管理者が 1 人もいなくなるため変更できません。");
     }
+    if (u.signupStatus === "pending") fail(back, "新規登録の申請中のアカウントです。「承認する」でロール・所属を決めてください。");
     const before = { ...u };
     u.role = role;
     u.storeId = storeId;
-    if (title) u.title = title;
+    if (title) u.title = title.slice(0, 60);
     const changes = diffChanges(before, u, ["role", "storeId", "title"]);
     if (changes.length === 0) fail(back, "変更はありませんでした。");
-    addAudit(db, { userId: actor.id, action: "update", entity: "user", entityId: u.id, entityLabel: u.name, summary: `ロール・所属を変更 (${ROLE_LABEL[u.role]} / ${storeLabel(db, u.storeId)})`, storeId: u.storeId, changes });
+    name = u.name;
+    label = `${ROLE_LABEL[u.role]} / ${storeLabel(db, u.storeId)}`;
+    addAudit(db, { userId: actor.id, action: "update", entity: "user", entityId: u.id, entityLabel: u.name, summary: `ロール・所属を変更 (${label})`, storeId: u.storeId, changes });
   });
   revalidatePath("/settings");
-  redirect(withMsg(back, "ロール・所属を変更しました。本人の次の画面表示から反映されます。"));
+  revalidatePath("/staff");
+  revalidatePath("/", "layout");
+  redirect(withMsg(back, `${name} さんを ${label} に変更しました。本人の次の画面表示から反映されます。`));
 }
 
 export async function toggleUserActive(id: string, formData?: FormData) {
@@ -203,7 +217,7 @@ export async function deleteUser(id: string, formData: FormData) {
 }
 
 /**
- * 新規登録の申請を承認する (ロール・所属は承認する人の権限の範囲で変えられる)。
+ * 新規登録の申請を承認する (管理者だけ。ロール・所属・役職は承認するときに決める)。承認するとすぐに、本人が登録したログイン ID とパスワードでログインできる。
  * テスト期間中のアカウントの変更の停止 (accountEditLocked) の対象外: 止めると申請した社員がログインできないため
  */
 export async function approveSignup(id: string, formData: FormData) {
@@ -213,13 +227,16 @@ export async function approveSignup(id: string, formData: FormData) {
   await mutate((db) => {
     const u = db.users.find((x) => x.id === id && x.signupStatus === "pending");
     if (!u) fail(back, "申請が見つかりません (すでに承認・却下されています)。");
-    if (!canApproveSignup(actor, u)) fail(back, "この申請を承認する権限がありません (店長は自店舗の店舗スタッフの申請のみ)。");
+    if (!canApproveSignup(actor)) fail(back, "新規登録の申請を承認できるのは管理者です。");
+    if (db.users.some((x) => x.id !== u.id && x.email.toLowerCase() === u.email.toLowerCase())) fail(back, "同じログイン ID のアカウントがほかにあるため承認できません。却下して、別のログイン ID で申請し直してもらってください。");
     const { role, storeId } = pickRoleStore(db, actor, formData, back, { role: u.role, storeId: u.storeId });
+    const title = str(formData, "title").slice(0, 60);
     const before = { ...u };
     u.role = role;
     u.storeId = storeId;
     u.active = true;
-    if (u.title === "申請中") u.title = "スタッフ";
+    if (title) u.title = title;
+    else if (u.title === "申請中") u.title = role === "store_manager" ? "店長" : "スタッフ";
     u.signupStatus = undefined;
     u.signupRequestedAt = undefined;
     name = u.name;
@@ -239,7 +256,7 @@ export async function rejectSignup(id: string, formData: FormData) {
   await mutate((db) => {
     const u = db.users.find((x) => x.id === id && x.signupStatus === "pending");
     if (!u) fail(back, "申請が見つかりません (すでに承認・却下されています)。");
-    if (!canApproveSignup(actor, u)) fail(back, "この申請を却下する権限がありません (店長は自店舗の店舗スタッフの申請のみ)。");
+    if (!canApproveSignup(actor)) fail(back, "新規登録の申請を却下できるのは管理者です。");
     name = u.name;
     db.users = db.users.filter((x) => x.id !== u.id);
     addAudit(db, { userId: actor.id, action: "reject", entity: "user", entityId: u.id, entityLabel: u.name, summary: `新規登録の申請を却下 (${u.email} / 希望: ${ROLE_LABEL[u.role]} / ${storeLabel(db, u.storeId)})`, storeId: u.storeId });

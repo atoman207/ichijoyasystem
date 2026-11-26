@@ -413,7 +413,7 @@ export function CameraDialog({
             <li key={t.url} className="relative shrink-0">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={t.url} alt={`${i + 1} 枚目`} className="h-14 w-14 rounded-lg border border-line object-cover" />
-              <button type="button" onClick={() => removeTaken(i)} className="absolute -right-1.5 -top-1.5 rounded-full border border-line bg-panel p-0.5 text-ink-3 hover:text-critical" aria-label={`${i + 1} 枚目を消す`}>
+              <button type="button" onClick={() => removeTaken(i)} className="absolute -right-1.5 -top-1.5 rounded-full border border-line bg-panel p-0.5 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label={`${i + 1} 枚目を消す`}>
                 <X className="h-3 w-3" />
               </button>
             </li>

@@ -283,7 +283,7 @@ export function PurchaseOrderEditor({ action, initial, suppliers, products, stor
                 <div className="flex gap-1">
                   <button type="button" onClick={() => move(i, -1)} className={buttonClass("ghost", "sm")} aria-label="上へ" disabled={i === 0}><ArrowUp className="h-3.5 w-3.5" aria-hidden /></button>
                   <button type="button" onClick={() => move(i, 1)} className={buttonClass("ghost", "sm")} aria-label="下へ" disabled={i === lines.length - 1}><ArrowDown className="h-3.5 w-3.5" aria-hidden /></button>
-                  <button type="button" onClick={() => setLines((ls) => (ls.length > 1 ? ls.filter((_, j) => j !== i) : [blank()]))} className={buttonClass("ghost", "sm")} aria-label={`${i + 1} 行目を削除`}><Trash2 className="h-3.5 w-3.5" aria-hidden /></button>
+                  <button type="button" onClick={() => setLines((ls) => (ls.length > 1 ? ls.filter((_, j) => j !== i) : [blank()]))} className={buttonClass("ghost", "sm", "text-critical hover:bg-critical-soft hover:text-critical-ink")} aria-label={`${i + 1} 行目を削除`}><Trash2 className="h-3.5 w-3.5" aria-hidden /></button>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2 @3xl:grid-cols-6">

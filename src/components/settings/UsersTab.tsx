@@ -1,5 +1,5 @@
 import type { Database, Role, User } from "@/lib/db/types";
-import { assignableRoles, assignableStore, canApproveSignup, canManageUser, canManageUsers, isDemoAccount, isReviewAccount } from "@/lib/auth/permissions";
+import { assignableRoles, assignableStore, canApproveSignup, canChangeUserRole, canManageUser, canManageUsers, isDemoAccount, isReviewAccount } from "@/lib/auth/permissions";
 import { ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 import { approveSignup, createUser, rejectSignup, resetUserPassword, toggleUserActive, updateUserRole } from "@/lib/actions/accounts";
 import { ACCOUNT_LOCK_MESSAGE, PASSWORD_LOCK_MESSAGE, accountEditLocked, avatarUrl, credentialStatus } from "@/lib/account-rules";
@@ -13,6 +13,8 @@ import { AccountLockButton } from "./AccountLockButton";
 
 /**
  * 設定 → ユーザーと権限、および 社員管理 (/staff。ヘッダーのアバターのメニューから開く)。管理者はすべて、店長は自店舗の店舗スタッフを管理する
+ * - 新規登録の申請の承認・却下は管理者だけ (canApproveSignup)。店長には自店舗を希望した申請の件数だけを出す
+ * - 管理者は社員の一覧の行でロール・所属を変えられる (テスト期間中も。canChangeUserRole)
  * - view = "staff": 社員だけを表示する (デモ用・確認用のアカウントを除く。店長は自店舗の社員のみ)。操作のあとは /staff に戻る
  */
 export function UsersTab({ db, user, view = "settings" }: { db: Database; user: User; view?: "settings" | "staff" }) {
@@ -26,8 +28,9 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
   const roles = assignableRoles(user);
   const stores = db.stores.filter((s) => assignableStore(user, s.id));
   const storeName = (id: string) => db.stores.find((s) => s.id === id)?.name ?? id;
-  const signups = db.users.filter((u) => u.signupStatus === "pending" && canApproveSignup(user, u));
-  const otherSignups = manager ? db.users.filter((u) => u.signupStatus === "pending" && !canApproveSignup(user, u)).length : 0;
+  const signups = db.users.filter((u) => u.signupStatus === "pending" && canApproveSignup(user));
+  const otherSignups = manager ? db.users.filter((u) => u.signupStatus === "pending" && !canApproveSignup(user) && (admin || u.storeId === user.storeId)).length : 0;
+  const roleEdit = canChangeUserRole(user);
   // 有効なアカウントを先に並べる (移行時のアカウントを無効にして作り直した社員は、同じ名前が有効・無効の 2 行になるため)
   const members = db.users.filter((u) => u.signupStatus !== "pending" && inScope(u)).sort((a, b) => Number(b.active) - Number(a.active));
   const managed = members.filter((u) => canManageUser(user, u));
@@ -41,17 +44,22 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
 
   return (
     <div className="space-y-4">
-      {locked && <Note tone="warn">テスト期間中のため、現在はアカウントの情報 (氏名・ログイン ID・役職・電話・ロール・所属・有効と無効) の変更、アカウントの追加・削除、パスワードの再設定はできません。新規登録の申請の承認・却下はできます。</Note>}
+      {locked && (
+        <Note tone="warn">
+          テスト期間中のため、現在はアカウントの情報 (氏名・ログイン ID・電話・有効と無効) の変更、アカウントの追加・削除、パスワードの再設定はできません。
+          {roleEdit ? "ロール・所属・役職の変更と、新規登録の申請の承認・却下はできます。" : "ロール・所属の変更と新規登録の申請の承認は管理者が行います。"}
+        </Note>
+      )}
       {manager && (signups.length > 0 || otherSignups > 0) && (
         <Card id="signups" padded={false}>
           <div className="px-5 pt-5">
             <CardHeader
               title={`新規登録の申請 (${signups.length} 件)`}
-              description={admin ? "ログイン画面から申請されたアカウントです。ロール・所属を確かめて承認すると、本人が登録したログイン ID とパスワードでログインできます。心当たりのない申請は却下してください" : "自店舗の店舗スタッフとしての申請です。本人に確かめてから承認してください (店長・本部スタッフ・管理者の申請は管理者が承認します)"}
+              description={admin ? "ログイン画面から申請されたアカウントです。承認するまでログインできません。ロール・所属・役職を決めて承認すると、本人が登録したログイン ID とパスワードでログインして使えます。心当たりのない申請は却下してください" : "新規登録の申請は管理者が承認します。承認されるまで、申請した社員はログインできません"}
             />
           </div>
           {signups.length === 0 ? (
-            <p className="px-5 pb-5 text-xs text-ink-3">あなたが承認できる申請はありません (ほかに管理者の承認を待つ申請が {otherSignups} 件あります)。</p>
+            <p className="px-5 pb-5 text-xs text-ink-3">{admin ? "承認を待つ申請はありません。" : `${storeName(user.storeId)}を所属に希望した申請が ${otherSignups} 件、管理者の承認を待っています。本人から問い合わせがあれば、管理者に承認を依頼してください。`}</p>
           ) : (
             <ul className="divide-y divide-line border-t border-line">
               {signups.map((u) => {
@@ -81,6 +89,9 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
                         <Field label="所属">
                           <Select name="storeId" defaultValue={store} className="h-9 w-32">{stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select>
                         </Field>
+                        <Field label="役職・担当">
+                          <Input name="title" placeholder="例: 営業・施工" maxLength={60} className="h-9 w-36" />
+                        </Field>
                         <Button type="submit" size="sm">承認する</Button>
                       </form>
                       <form action={rejectSignup.bind(null, u.id)}>
@@ -99,7 +110,7 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
       <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-3">
         <Card className="@4xl:col-span-2" padded={false}>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
+            <table className={roleEdit ? "w-full min-w-[820px] text-sm" : "w-full min-w-[640px] text-sm"}>
               <thead>
                 <tr className="bg-subtle text-xs text-ink-2">
                   <th className="px-4 py-2 text-left font-medium">氏名</th>
@@ -113,6 +124,9 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
               <tbody>
                 {members.map((u) => {
                   const can = canManageUser(user, u);
+                  // 管理者は行の中でロール・所属を変える (所属の欄と「変更」は form 属性で同じフォーム)
+                  const inline = roleEdit && can && u.id !== user.id;
+                  const formId = `role-${u.id}`;
                   return (
                     <tr key={u.id} className="border-t border-line">
                       <td className="px-4 py-2">
@@ -126,8 +140,28 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
                           </div>
                         </div>
                       </td>
-                      <td className="px-3 py-2 text-xs">{ROLE_LABEL[u.role]}</td>
-                      <td className="px-3 py-2"><StoreTag store={db.stores.find((s) => s.id === u.storeId)} short /></td>
+                      {inline ? (
+                        <>
+                          <td className="px-3 py-2">
+                            <form id={formId} action={updateUserRole}>
+                              {back}
+                              <input type="hidden" name="userId" value={u.id} />
+                              <Select name="role" defaultValue={u.role} aria-label={`${u.name} さんのロール`} className="h-8 w-32 py-0 text-xs" data-testid="row-role">{roleOptions(roles)}</Select>
+                            </form>
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-1">
+                              <Select name="storeId" form={formId} defaultValue={u.storeId} aria-label={`${u.name} さんの所属`} className="h-8 w-28 py-0 text-xs" data-testid="row-store">{stores.map((s) => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}</Select>
+                              <button type="submit" form={formId} className={buttonClass("secondary", "sm", "h-8 px-2.5")} data-testid="row-role-save">変更</button>
+                            </div>
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="px-3 py-2 text-xs">{ROLE_LABEL[u.role]}</td>
+                          <td className="px-3 py-2"><StoreTag store={db.stores.find((s) => s.id === u.storeId)} short /></td>
+                        </>
+                      )}
                       {manager && <td className="px-3 py-2 font-mono text-[11px] text-ink-2">{can || u.id === user.id ? u.email : ""}</td>}
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-1">
@@ -139,7 +173,7 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
                         <td className="px-4 py-2 text-right align-top">
                           {can && (
                             <div className="flex flex-wrap items-start justify-end gap-1">
-                              {locked ? lockBtn("編集", "secondary") : <Link href={detail(u.id)} className={buttonClass("secondary", "sm")}>編集</Link>}
+                              {locked && !roleEdit ? lockBtn("編集", "secondary") : <Link href={detail(u.id)} className={buttonClass("secondary", "sm")}>編集</Link>}
                               {u.id !== user.id &&
                                 (locked ? (
                                   <>
@@ -194,7 +228,7 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
           )}
           {admin && (
             <Card>
-              <CardHeader title="ロール・所属の変更" description="移行時にロール・所属を推定で設定しています。実際と異なる場合はここで直します (空欄の項目は変更しません)" />
+              <CardHeader title="ロール・所属・役職の変更" description="社員を店長・店舗スタッフ・本部スタッフ・管理者にする、ほかの店舗に移すときに使います (一覧の行でも変えられます。空欄の項目は変更しません)。本人の次の画面表示から反映されます" />
               <form action={updateUserRole} className="space-y-2">
                 {back}
                 <Field label="ユーザー">
@@ -207,8 +241,8 @@ export function UsersTab({ db, user, view = "settings" }: { db: Database; user: 
                   <Field label="新しいロール"><Select name="role" defaultValue=""><option value="">変更しない</option>{roleOptions(roles)}</Select></Field>
                   <Field label="新しい所属"><Select name="storeId" defaultValue=""><option value="">変更しない</option>{stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></Field>
                 </div>
-                <Field label="役職・担当 (空欄なら変更しない)"><Input name="title" placeholder="例: 店長" /></Field>
-                {locked ? lockBtn("変更する", "secondary") : <Button type="submit" size="sm" variant="secondary">変更する</Button>}
+                <Field label="役職・担当 (空欄なら変更しない)"><Input name="title" placeholder="例: 店長" maxLength={60} /></Field>
+                {locked && !roleEdit ? lockBtn("変更する", "secondary") : <Button type="submit" size="sm" variant="secondary">変更する</Button>}
               </form>
             </Card>
           )}

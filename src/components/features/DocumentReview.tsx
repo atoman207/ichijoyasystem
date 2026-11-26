@@ -319,7 +319,7 @@ export function DocumentReview({
                     </label>
                   ))}
                   {editable && (
-                    <button type="button" onClick={() => removeRow(t.key, i)} className="rounded p-1.5 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`${i + 1} 行目を削除`}>
+                    <button type="button" onClick={() => removeRow(t.key, i)} className="rounded p-1.5 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label={`${i + 1} 行目を削除`}>
                       <Trash2 className="h-4 w-4" />
                     </button>
                   )}
@@ -351,7 +351,7 @@ export function DocumentReview({
                 ))}
                 <div className="hidden justify-end @2xl:flex">
                   {editable && (
-                    <button type="button" onClick={() => removeRow(t.key, i)} className="rounded p-1.5 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`${i + 1} 行目を削除`}>
+                    <button type="button" onClick={() => removeRow(t.key, i)} className="rounded p-1.5 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label={`${i + 1} 行目を削除`}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   )}

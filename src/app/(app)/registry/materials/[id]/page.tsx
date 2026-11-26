@@ -286,7 +286,7 @@ export default async function MaterialPage({ params, searchParams }: { params: P
 
           {manage && doc.origin === "upload" && (
             <Card>
-              <CardHeader title="資料を消す" icon={<Trash2 />} description="画面から追加した資料だけ消せます。この資料から登録した社内資料も消えます" />
+              <CardHeader title="資料を消す" icon={<Trash2 className="text-critical" />} description="画面から追加した資料だけ消せます。この資料から登録した社内資料も消えます" />
               <form action={deleteMaterial}>
                 <input type="hidden" name="id" value={doc.id} />
                 <Button type="submit" variant="danger">

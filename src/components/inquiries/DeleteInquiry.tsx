@@ -46,7 +46,7 @@ export function DeleteInquiryButton({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className={compact ? "rounded-md p-1.5 text-ink-3 hover:bg-critical-soft hover:text-critical-ink" : clsx(buttonClass("ghost", "sm"), "text-critical-ink hover:bg-critical-soft")}
+        className={compact ? "rounded-md p-1.5 text-critical hover:bg-critical-soft hover:text-critical-ink" : clsx(buttonClass("ghost", "sm"), "text-critical-ink hover:bg-critical-soft")}
         aria-label={`${number} を削除`}
         title={mode === "direct" ? "この問い合わせを削除" : "この問い合わせの削除を申請 (店長の承認)"}
         data-testid="inquiry-delete-open"

@@ -5,6 +5,7 @@ import clsx from "clsx";
 import { ArrowRight, Building, CircleAlert, CircleCheck, Store, UserRound, Users } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { signup, type SignupState } from "@/lib/actions/auth";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 import type { Role, StoreId } from "@/lib/db/types";
 import { ROLE_DESCRIPTION, ROLE_LABEL } from "@/lib/constants";
 
@@ -13,14 +14,6 @@ const ROLE_ICON: Record<Role, React.ComponentType<{ className?: string }>> = {
   store_manager: Store,
   store_staff: Users,
   hq_staff: Building,
-};
-
-/** 承認する人 (申請したロールごと) */
-const APPROVER: Record<Role, string> = {
-  store_staff: "所属店舗の店長または管理者",
-  store_manager: "管理者",
-  hq_staff: "管理者",
-  admin: "管理者",
 };
 
 const ROLE_ORDER: Role[] = ["store_staff", "store_manager", "hq_staff", "admin"];
@@ -54,7 +47,7 @@ export function SignupForm({ stores }: { stores: { id: StoreId; name: string; co
         <p className="text-sm leading-relaxed text-ink-2">
           {state.done.name} さん ({state.done.role} / {state.done.store}) の新規登録を申請しました。
           <br />
-          承認されると、登録したログイン ID とパスワードでログインできます。
+          管理者が承認すると、登録したログイン ID とパスワードでログインできます。承認されるまではログインできません。
         </p>
         <Link href="/login" className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-accent px-5 text-sm font-medium text-white hover:bg-accent-hover">
           ログイン画面へ <ArrowRight className="h-4 w-4" />
@@ -113,7 +106,7 @@ export function SignupForm({ stores }: { stores: { id: StoreId; name: string; co
             );
           })}
         </div>
-        <p className="mt-2 text-[11px] text-ink-3">承認する人: {APPROVER[role]}。承認するときにロール・所属が直されることがあります。</p>
+        <p className="mt-2 text-[11px] text-ink-3">承認する人: 管理者。承認されるまでログインできません。承認するときにロール・所属が直されることがあります。</p>
       </fieldset>
 
       <fieldset>
@@ -153,11 +146,11 @@ export function SignupForm({ stores }: { stores: { id: StoreId; name: string; co
         </label>
         <label className="block">
           <span className="label">パスワード (8 文字以上) *</span>
-          <input {...field("password")} type="password" required minLength={8} className="field" autoComplete="new-password" />
+          <PasswordInput {...field("password")} required minLength={8} autoComplete="new-password" />
         </label>
         <label className="block">
           <span className="label">パスワード (確認) *</span>
-          <input {...field("confirm")} type="password" required minLength={8} className="field" autoComplete="new-password" />
+          <PasswordInput {...field("confirm")} required minLength={8} autoComplete="new-password" />
         </label>
         <label className="block sm:col-span-2">
           <span className="label">承認する人へのメモ (任意)</span>

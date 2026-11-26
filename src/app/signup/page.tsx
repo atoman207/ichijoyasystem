@@ -10,7 +10,7 @@ import { Card, PageHeader } from "@/components/ui";
 export const metadata: Metadata = { title: "新規登録" };
 export const dynamic = "force-dynamic";
 
-/** 社員の新規登録 (申請)。承認されるまでログインできない */
+/** 社員の新規登録 (申請)。管理者が承認するまでログインできない */
 export default async function SignupPage() {
   if (await getSessionUser()) redirect("/");
   const db = await syncDb();
@@ -23,8 +23,8 @@ export default async function SignupPage() {
           <ol className="space-y-3 text-sm">
             {[
               ["申請する", "この画面で氏名・ログイン ID・パスワード・役割・所属を入力します。"],
-              ["承認を待つ", "店舗スタッフは所属店舗の店長または管理者、店長・本部スタッフ・管理者は管理者が承認します。"],
-              ["ログインする", "承認されたら、登録したログイン ID とパスワードでログインします。"],
+              ["管理者の承認を待つ", "管理者が申請を確かめ、役割 (ロール) と所属を決めて承認します。承認されるまではログインできません。"],
+              ["ログインする", "承認されたら、登録したログイン ID とパスワードでログインして、すぐに使えます。"],
             ].map(([t, d], i) => (
               <li key={t} className="flex items-start gap-3 rounded-2xl border border-line/70 bg-panel p-4 shadow-card">
                 <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent text-[11px] font-semibold text-white">{i + 1}</span>

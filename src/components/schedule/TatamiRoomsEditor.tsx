@@ -85,7 +85,7 @@ export function TatamiRoomsEditor({
                 <button type="button" onClick={() => copy(r.id)} className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-ink-2 hover:bg-subtle" aria-label={`部屋 ${n} を複製`} title="同じ仕様の部屋を足す (縁だけ違う部屋など)">
                   <Copy className="h-3.5 w-3.5" /> 複製
                 </button>
-                <button type="button" onClick={() => setRows((rs) => rs.filter((x) => x.id !== r.id))} className="rounded p-1.5 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`部屋 ${n} を削除`}>
+                <button type="button" onClick={() => setRows((rs) => rs.filter((x) => x.id !== r.id))} className="rounded p-1.5 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label={`部屋 ${n} を削除`}>
                   <Trash className="h-4 w-4" />
                 </button>
               </span>

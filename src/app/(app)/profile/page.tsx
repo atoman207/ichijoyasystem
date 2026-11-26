@@ -60,7 +60,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
     { ok: canManageFinance(user) || isManagerOrAbove(user), label: `請求書の発行 (${allStores ? "全店舗" : "自店舗"})` },
     { ok: true, label: `入金の登録 (${allStores ? "全店舗" : "自店舗"})` },
     { ok: canManageFinance(user), label: "請求書の無効化、仕入請求書 (買掛) の登録・支払処理" },
-    { ok: canManageUsers(user), label: canManageSettings(user) ? "すべてのアカウントの追加・削除・権限の変更、新規登録の申請の承認" : `${storeName(user.storeId)} の店舗スタッフのアカウントの追加・削除、新規登録の申請の承認` },
+    { ok: canManageUsers(user), label: canManageSettings(user) ? "すべてのアカウントの追加・削除・権限の変更、新規登録の申請の承認" : `${storeName(user.storeId)} の店舗スタッフのアカウントの追加・削除` },
     { ok: canManageSettings(user), label: "店舗・商品マスタ・運用ルールの変更、サンプルデータの初期化" },
     { ok: true, label: `予定表で全社員・全店舗の予定を閲覧し、${allStores ? "全店舗" : storeName(user.storeId)}の予定を登録・変更 (担当になった他店舗の予定も変更可)` },
     { ok: canManageCompanyEvents(user), label: "全社共通の予定 (社内行事・全社会議など全店舗のカレンダーに載る予定) の登録" },

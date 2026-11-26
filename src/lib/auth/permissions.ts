@@ -257,9 +257,23 @@ export function assignableStore(user: User, storeId: StoreId): boolean {
   return user.role === "admin" || (user.role === "store_manager" && storeId === user.storeId);
 }
 
-/** 新規登録の申請 (希望のロール・所属) を承認・却下できるか */
-export function canApproveSignup(user: User, req: Pick<User, "id" | "role" | "storeId">): boolean {
-  return canManageUser(user, req);
+/**
+ * 新規登録の申請 (希望のロール・所属) を承認・却下できるか。管理者だけ (お客様のご要望 2026-11-26「管理者の承認を得て初めてログインし、正常に利用できるように」。
+ * それまでは店舗スタッフの申請を所属店舗の店長も承認できた)
+ */
+export function canApproveSignup(user: User): boolean {
+  return user.role === "admin";
+}
+
+/** ロール・所属・役職を変えられるか (管理者。テスト期間中のアカウントの変更の停止の対象外 = お客様のご要望 2026-11-26) */
+export function canChangeUserRole(user: User): boolean {
+  return user.role === "admin";
+}
+
+/** 店舗のロール (店長・店舗スタッフ) は本部ではなく店舗に所属させる (店舗の範囲で権限を判定するため) */
+export function roleStoreProblem(role: Role, store: { id: string; kind?: string } | undefined): string | undefined {
+  if ((role === "store_manager" || role === "store_staff") && (!store || store.kind === "hq" || store.id === "hq")) return "店長・店舗スタッフは、所属する店舗 (本部以外) を選んでください。";
+  return undefined;
 }
 
 export function canManageFinance(user: User): boolean {

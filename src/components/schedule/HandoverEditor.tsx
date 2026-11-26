@@ -375,7 +375,7 @@ export function HandoverEditor({
                     分けて納品
                   </button>
                 )}
-                <button type="button" onClick={() => setRows((rs) => rs.filter((x) => x.id !== r.id))} className="mb-1 rounded p-2 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`品目 ${n} を削除`}>
+                <button type="button" onClick={() => setRows((rs) => rs.filter((x) => x.id !== r.id))} className="mb-1 rounded p-2 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label={`品目 ${n} を削除`}>
                   <Trash className="h-4 w-4" />
                 </button>
               </div>

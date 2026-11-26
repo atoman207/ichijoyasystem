@@ -68,7 +68,7 @@ export function AvatarUploader({ name, id, src }: { name: string; id: string; sr
           )}
           {src && !preview && (
             <Button type="button" size="sm" variant="ghost" onClick={() => start(() => removeOwnAvatar())} disabled={pending}>
-              <Trash2 className="h-4 w-4" /> 削除
+              <Trash2 className="h-4 w-4 text-critical" /> 削除
             </Button>
           )}
         </div>

@@ -224,7 +224,7 @@ export function QuoteEditor({
               <div key={r.key} role="group" aria-label={`明細 ${i + 1} 行目`} className="grid grid-cols-2 gap-x-2 gap-y-2 p-3 @md:grid-cols-4 @4xl:grid-cols-(--qcols) @4xl:items-start @4xl:gap-x-1.5 @4xl:gap-y-0 @4xl:px-2 @4xl:py-1.5">
                 <div className="col-span-2 flex items-center justify-between @md:col-span-4 @4xl:hidden">
                   <span className="text-xs font-medium text-ink-2">明細 {i + 1}</span>
-                  <button type="button" onClick={() => remove(r.key)} className="rounded p-1.5 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`明細 ${i + 1} 行目を削除`}>
+                  <button type="button" onClick={() => remove(r.key)} className="rounded p-1.5 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label={`明細 ${i + 1} 行目を削除`}>
                     <Trash className="h-4 w-4" />
                   </button>
                 </div>
@@ -302,7 +302,7 @@ export function QuoteEditor({
                   <span className="block py-2 text-base font-semibold tnum @4xl:py-1.5 @4xl:text-sm @4xl:font-normal">{yen(r.qty * r.unitPrice)}</span>
                 </div>
                 <div className="hidden justify-end @4xl:flex">
-                  <button type="button" onClick={() => remove(r.key)} className="rounded p-1 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`明細 ${i + 1} 行目を削除`}>
+                  <button type="button" onClick={() => remove(r.key)} className="rounded p-1 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label={`明細 ${i + 1} 行目を削除`}>
                     <Trash className="h-4 w-4" />
                   </button>
                 </div>

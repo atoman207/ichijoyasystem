@@ -190,7 +190,7 @@ export function QuoteCalcSheet({
                         <Check className="h-3.5 w-3.5" /> 用紙と同じ
                       </button>
                     )}
-                    <button type="button" onClick={() => remove(i)} className="rounded p-1.5 text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label={`${i + 1} 行目を削除`}>
+                    <button type="button" onClick={() => remove(i)} className="rounded p-1.5 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label={`${i + 1} 行目を削除`}>
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </div>

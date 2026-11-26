@@ -25,8 +25,8 @@ function DeleteButton({ item, action, returnTo, compact = false }: { item: Attac
       }}
     >
       <input type="hidden" name="returnTo" value={returnTo} />
-      <button type="submit" className={compact ? "rounded-md p-1 text-ink-3 hover:bg-critical-soft hover:text-critical-ink" : "inline-flex h-9 items-center gap-1 rounded-lg bg-white/10 px-3 text-xs text-white hover:bg-critical"} aria-label={`${item.fileName} を削除`}>
-        <Trash2 className="h-4 w-4" aria-hidden />
+      <button type="submit" className={compact ? "rounded-md p-1 text-critical hover:bg-critical-soft hover:text-critical-ink" : "group inline-flex h-9 items-center gap-1 rounded-lg bg-white/10 px-3 text-xs text-white hover:bg-critical"} aria-label={`${item.fileName} を削除`}>
+        <Trash2 className={compact ? "h-4 w-4" : "h-4 w-4 text-critical group-hover:text-white"} aria-hidden />
         {!compact && "削除"}
       </button>
     </form>

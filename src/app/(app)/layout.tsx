@@ -38,7 +38,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const n = notificationsFor(user);
   const allStores = canSeeAllStores(user);
   const store = storeById(user.storeId);
-  const signups = canManageUsers(user) ? getDb().users.filter((u) => u.signupStatus === "pending" && canApproveSignup(user, u)) : [];
+  const signups = canManageUsers(user) ? getDb().users.filter((u) => u.signupStatus === "pending" && canApproveSignup(user)) : [];
   // FAX: 要確認の受信 (仕分けをする本部・管理者)、自分が担当の未確認の返信、自分が送って失敗した送信
   const faxes = getDb().faxMessages;
   const faxReviewKeys = canTriageFax(user) ? faxes.filter((f) => f.direction === "inbound" && f.triage === "review").map((f) => seenKey("fax", f.id)) : [];

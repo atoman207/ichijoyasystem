@@ -896,7 +896,7 @@ function DeleteSection({ data, returnTo }: { data: EventQuickData; returnTo: str
     <div className="mt-4 border-t border-line pt-3" data-testid="event-quick-delete">
       {!confirm ? (
         <button type="button" onClick={() => setConfirm(true)} className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-critical-ink hover:bg-critical-soft" data-testid="delete-open">
-          <Trash2 className="h-3.5 w-3.5" aria-hidden />
+          <Trash2 className="h-3.5 w-3.5 text-critical" aria-hidden />
           この予定を削除
         </button>
       ) : (

@@ -210,7 +210,7 @@ function permissionCards(user: User, storeName: string): { can: string[]; cannot
         can: [
           `${storeName}の顧客・問い合わせ・見積・受注・請求・経費を登録・更新できる`,
           `${storeName}の承認依頼 (見積・契約・経費) を店長として決裁できる`,
-          `${storeName}の店舗スタッフの新規登録申請を承認し、アカウントを管理できる`,
+          `${storeName}の店舗スタッフのアカウントを管理できる (新規登録の申請の承認は管理者)`,
           "予定表は全店舗を閲覧でき、担当または自店舗の予定を変更できる",
         ],
         cannot: [

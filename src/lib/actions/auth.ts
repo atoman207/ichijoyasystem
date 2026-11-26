@@ -58,7 +58,7 @@ export async function login(_prev: LoginState, formData: FormData): Promise<Logi
     // 申請中のアカウントは、パスワードが合っているときだけ承認待ちと伝える (ID の有無を推測させない)
     const pendingUser = !user ? db.users.find((u) => u.email.toLowerCase() === email && u.signupStatus === "pending") : undefined;
     if (pendingUser && verifyPassword(pendingUser, password)) {
-      return { error: "新規登録の申請は承認待ちです。管理者または店長が承認すると、このログイン ID とパスワードでログインできます。" };
+      return { error: "新規登録の申請は承認待ちです。管理者が承認すると、このログイン ID とパスワードでログインできます。" };
     }
     return { error: "ログイン ID またはパスワードが正しくありません。" };
   }
@@ -192,8 +192,8 @@ function imageType(buf: Buffer): "image/jpeg" | "image/png" | "image/webp" | und
 }
 
 /**
- * ログイン画面からの新規登録。希望するロール・所属を選んで申請し、承認されるまでログインできない。
- * 店舗スタッフの申請はその店舗の店長か管理者、それ以外のロールは管理者が承認する (accounts.ts の approveSignup)
+ * ログイン画面からの新規登録。希望するロール・所属を選んで申請し、管理者が承認するまでログインできない (accounts.ts の approveSignup。
+ * 承認のときに管理者がロール・所属・役職を決める)
  */
 export async function signup(_prev: SignupState, formData: FormData): Promise<SignupState> {
   // ロボットよけ (人には見えない欄)

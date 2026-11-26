@@ -2,6 +2,7 @@
 
 import { useActionState, useMemo, useState } from "react";
 import clsx from "clsx";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 import { ArrowRight, Building, CircleAlert, Store, UserRound, Users } from "lucide-react";
 import { login, type LoginState } from "@/lib/actions/auth";
 import type { Role, StoreId } from "@/lib/db/types";
@@ -169,7 +170,7 @@ export function LoginForm({ accounts, stores, next }: { accounts: LoginAccount[]
         </label>
         <label className="block">
           <span className="label">パスワード</span>
-          <input name="password" type="text" required value={password} onChange={(e) => setPassword(e.target.value)} className="field font-mono" autoComplete="current-password" />
+          <PasswordInput name="password" required value={password} onChange={(e) => setPassword(e.target.value)} className="font-mono" autoComplete="current-password" defaultShown />
         </label>
       </div>
 
@@ -204,7 +205,7 @@ export function PlainLoginForm({ next }: { next?: string }) {
       </label>
       <label className="block">
         <span className="label">パスワード</span>
-        <input name="password" type="password" required autoComplete="current-password" className="field" />
+        <PasswordInput name="password" required autoComplete="current-password" />
       </label>
       {state.error && (
         <div role="alert" className="flex items-start gap-2 rounded-xl border border-critical/30 bg-critical-soft px-3 py-2.5 text-sm text-critical-ink">

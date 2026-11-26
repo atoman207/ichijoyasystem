@@ -43,7 +43,7 @@ export function ContactsEditor({ initial = [] }: { initial?: CustomerContact[] }
               <input className="field h-9 text-sm" value={r.name} onChange={(e) => update(r.key, { name: e.target.value })} placeholder="名前 (任意)" aria-label="名前" />
               <input className="field h-9 text-sm tnum" type="tel" value={r.phone} onChange={(e) => update(r.key, { phone: e.target.value })} placeholder="090-0000-0000" aria-label="電話番号" />
               <input className="field h-9 text-sm" value={r.note} onChange={(e) => update(r.key, { note: e.target.value })} placeholder="メモ (例: 平日は夕方以降)" aria-label="メモ" />
-              <button type="button" onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))} className="grid h-9 w-9 place-items-center justify-self-end rounded-lg text-ink-3 hover:bg-critical-soft hover:text-critical" aria-label="この連絡先を削除" title="削除">
+              <button type="button" onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))} className="grid h-9 w-9 place-items-center justify-self-end rounded-lg text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label="この連絡先を削除" title="削除">
                 <Trash className="h-4 w-4" aria-hidden />
               </button>
             </div>
