@@ -21,6 +21,7 @@ import { mapViewHref, reopenHref } from "@/lib/maps/links";
 import { KINDS_BY_GROUP, KindMark, kindLabel } from "./parts";
 import type { EventQuickData, QuickMap, QuickStaff } from "./quick-types";
 import { CaseWorkSection } from "./CaseWork";
+import { StaffFace } from "./StaffFace";
 
 /**
  * 予定表で予定を押したときの小さな画面 (お客様のご要望 2026-11-24「■3」「■4」、追加「②」「⑥」「⑦」「⑧」)
@@ -262,13 +263,9 @@ function MapRow({ map, eventId, returnTo, onReload }: { map?: QuickMap; eventId:
   );
 }
 
-/** 担当者の丸 (予定表のチップと同じ略称・店舗の色) */
-function StaffDot({ s, size = "sm" }: { s: Pick<QuickStaff, "initial" | "color">; size?: "sm" | "md" }) {
-  return (
-    <span className={clsx("grid shrink-0 place-items-center rounded-full border font-bold leading-none text-ink", size === "md" ? "h-5 w-5 text-[10px]" : "h-4 w-4 text-[9px]")} style={{ borderColor: s.color, background: `color-mix(in srgb, ${s.color} 22%, white)` }} aria-hidden>
-      {s.initial}
-    </span>
-  );
+/** 担当者の顔写真 (予定表のチップと同じ。輪の色 = 店舗の色) */
+function StaffDot({ s, size = "sm" }: { s: Pick<QuickStaff, "id" | "name" | "avatar" | "color">; size?: "sm" | "md" }) {
+  return <StaffFace name={s.name} id={s.id} src={s.avatar} color={s.color} size={size === "md" ? 22 : 18} />;
 }
 
 const GROUP_LABEL = (storeName: string) => ({ store: `${storeName} (この予定の店舗)`, common: "本部 (全店舗共通)", other: "ほかの店舗 (配送・施工の応援)" });
@@ -314,7 +311,7 @@ export function StaffPicker({ staff, selected, onChange, storeName, busy }: { st
           </div>
         );
       })}
-      <p className="text-[10px] text-ink-3">{full ? `最大 ${QUICK_MAX_ASSIGNEES} 名まで選べます (外してから選び直してください)` : `最大 ${QUICK_MAX_ASSIGNEES} 名。丸の色は店舗の色です`}</p>
+      <p className="text-[10px] text-ink-3">{full ? `最大 ${QUICK_MAX_ASSIGNEES} 名まで選べます (外してから選び直してください)` : `最大 ${QUICK_MAX_ASSIGNEES} 名。顔写真の輪の色は店舗の色です`}</p>
     </div>
   );
 }

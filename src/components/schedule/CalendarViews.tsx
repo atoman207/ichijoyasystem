@@ -22,6 +22,7 @@ import {
 } from "@/lib/calendar";
 import { daysBetween } from "@/lib/format";
 import { Avatar } from "@/components/ui";
+import { StaffFace } from "./StaffFace";
 import { ConflictBadge, KindBadge, KindIcon, KindMark, WorkTokens, kindLabel, kindStyle, shortName } from "./parts";
 import { stripKindWords, type WorkToken } from "@/lib/work-summary";
 import type { DayTotal } from "@/lib/production/plan";
@@ -37,27 +38,22 @@ export interface CalUser {
   name: string;
   title: string;
   storeId: StoreId;
-  /** 予定表に出す略称 (1 文字。src/lib/schedule-sheet/initials.ts の initialsByUser) */
-  initial?: string;
+  /** 顔写真の URL (account-rules.ts の avatarUrl。登録していなければ undefined = 名前の 1 文字の丸) */
+  avatar?: string;
 }
 
 /**
- * 担当者の略称の丸 (お客様のご要望 2026-11-24「⑥」: 予定表でも誰が現場へ行くか分かるように)。
- * 丸の色 = その人の店舗の色 (ほかの店舗の応援が分かる)。名前は title (押すと予定の画面で全員の名前)
+ * 担当者の顔写真 (お客様のご要望 2026-11-24「⑥」: 予定表でも誰が現場へ行くか分かるように。2026-11-26: 略称の文字ではなく顔写真)。
+ * 顔写真のない社員は名前の 1 文字の丸 (ui の Avatar)。外側の細い輪 = その人の店舗の色 (ほかの店舗の応援が分かる)。名前は title
  */
-export function StaffMarks({ ids, ctx, max = 4, className }: { ids: string[]; ctx: Pick<CalendarContext, "users" | "stores">; max?: number; className?: string }) {
+export function StaffMarks({ ids, ctx, max = 4, size = 18, className }: { ids: string[]; ctx: Pick<CalendarContext, "users" | "stores">; max?: number; size?: number; className?: string }) {
   const list = ids.map((id) => ctx.users.get(id)).filter((u): u is CalUser => Boolean(u));
   if (!list.length) return null;
   return (
-    <span className={clsx("inline-flex shrink-0 items-center gap-px", className)} title={`担当: ${list.map((u) => u.name).join("・")}`} data-testid="staff-marks">
-      {list.slice(0, max).map((u) => {
-        const color = ctx.stores.get(u.storeId)?.color ?? "#94a3b8";
-        return (
-          <span key={u.id} className="grid h-4 min-w-4 place-items-center rounded-full border px-px text-[9px] leading-none font-bold text-ink" style={{ borderColor: color, background: `color-mix(in srgb, ${color} 22%, white)` }}>
-            {u.initial ?? [...u.name][0]}
-          </span>
-        );
-      })}
+    <span className={clsx("inline-flex shrink-0 items-center gap-[3px] pl-px", className)} title={`担当: ${list.map((u) => u.name).join("・")}`} data-testid="staff-marks">
+      {list.slice(0, max).map((u) => (
+        <StaffFace key={u.id} name={u.name} id={u.id} src={u.avatar} color={ctx.stores.get(u.storeId)?.color} size={size} />
+      ))}
       {list.length > max && <span className="pl-0.5 text-[9px] leading-none text-ink-3 tnum">+{list.length - max}</span>}
     </span>
   );
@@ -228,7 +224,7 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
         <span className="shrink-0 font-medium text-ink-2 tnum">{shortTime(e)}</span>
         <span className="min-w-0 truncate">{titleOf(ctx, e)}</span>
         <WorkTokens tokens={tokens} />
-        {variant === "month" && <StaffMarks ids={e.assigneeIds} ctx={ctx} max={3} className="ml-auto hidden @5xl:inline-flex" />}
+        {variant === "month" && <StaffMarks ids={e.assigneeIds} ctx={ctx} max={3} size={15} className="ml-auto hidden @5xl:inline-flex" />}
         {conflict && <TriangleAlert className="ml-auto h-3 w-3 shrink-0 text-critical" aria-hidden />}
       </Link>
     );
@@ -564,7 +560,7 @@ function StaffGroup({ store, users, days, cell, ctx }: { store: Store | undefine
         <tr key={u.id} className="border-b border-line align-top">
           <th scope="row" className="sticky left-0 z-10 bg-panel px-3 py-2 text-left font-normal">
             <span className="flex items-center gap-2">
-              <Avatar name={u.name} id={u.id} size={26} />
+              <Avatar name={u.name} id={u.id} size={26} src={u.avatar} />
               <span className="min-w-0">
                 <span className="block truncate text-[13px] font-medium text-ink">{u.name}</span>
                 <span className="block truncate text-[10px] text-ink-3">{u.title}</span>
@@ -707,7 +703,7 @@ export function DayView({ day, rows, events, unassigned, ctx }: { day: string; r
               row(
                 u.id,
                 <span className="flex items-center gap-2">
-                  <Avatar name={u.name} id={u.id} size={26} />
+                  <Avatar name={u.name} id={u.id} size={26} src={u.avatar} />
                   <span className="min-w-0">
                     <span className="block truncate text-[13px] font-medium text-ink">{u.name}</span>
                     <span className="block truncate text-[10px] text-ink-3">{u.title}</span>

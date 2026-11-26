@@ -156,8 +156,10 @@ export interface QuickRemove {
 export interface QuickStaff {
   id: string;
   name: string;
-  /** 略称 (1 文字。予定表のチップと同じ) */
+  /** 略称 (1 文字。スプレッドシートの略称と同じ決め方。顔写真のないときの読み上げ・検索用) */
   initial: string;
+  /** 顔写真の URL (予定表のチップと同じく顔写真で出す。なければ名前の 1 文字の丸) */
+  avatar?: string;
   storeId: StoreId;
   storeName: string;
   color: string;

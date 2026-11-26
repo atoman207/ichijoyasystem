@@ -2,6 +2,7 @@ import Link from "@/components/ui/Link";
 import clsx from "clsx";
 import { CalendarDays, CalendarOff, ChartGantt, ChevronLeft, ChevronRight, Columns3, Factory, FileSpreadsheet, Gauge, LayoutGrid, List, Plus, Printer, Route, Rows3, TriangleAlert, UserRound } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
+import { avatarUrl } from "@/lib/account-rules";
 import { getDb } from "@/lib/db/store";
 import { defaultScheduleStore } from "@/lib/schedule-default";
 import type { ScheduleEvent, ScheduleKind, StoreId } from "@/lib/db/types";
@@ -25,7 +26,6 @@ import { expireHoldsNow } from "@/lib/actions/scheduling";
 import { eventLabeler } from "@/lib/schedule-label";
 import { EventQuickHost } from "@/components/schedule/EventQuick";
 import { ScheduleFinder } from "@/components/schedule/ScheduleFinder";
-import { initialsByUser } from "@/lib/schedule-sheet/initials";
 import { DaySheetView } from "@/components/schedule/DaySheet";
 import { buildStoreSheet, carrySeries, carryStart, readDayLoadSettings, storeLoadOf, type CarryIn, type DayLoad, type StoreSheet } from "@/lib/day-sheet";
 import { isClosedDay } from "@/lib/schedule-capacity";
@@ -119,7 +119,7 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   // 担当者別・日表示の行: 店舗の所属メンバー + その店舗の予定に入っている他店舗の応援者
   const activeUsers = db.users.filter((u) => u.active);
   const helpers = new Set(shown.filter((e) => storeFilter && e.storeId === storeFilter).flatMap((e) => e.assigneeIds));
-  const rowUsers: CalUser[] = (userParam ? activeUsers.filter((u) => u.id === userParam) : activeUsers.filter((u) => !storeFilter || u.storeId === storeFilter || helpers.has(u.id))).map((u) => ({ id: u.id, name: u.name, title: u.title, storeId: u.storeId }));
+  const rowUsers: CalUser[] = (userParam ? activeUsers.filter((u) => u.id === userParam) : activeUsers.filter((u) => !storeFilter || u.storeId === storeFilter || helpers.has(u.id))).map((u) => ({ id: u.id, name: u.name, title: u.title, storeId: u.storeId, avatar: avatarUrl(u) }));
   const rowIds = new Set(rowUsers.map((u) => u.id));
   const personEvents = inRange.filter((e) => kindOk(e) && conflictOk(e));
 
@@ -145,8 +145,6 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   const production = productionRows(db, { from, to, today }).filter((r) => !storeFilter || r.storeId === storeFilter);
   const productionDays = productionByDay(production.filter((r) => r.date && r.date >= from && r.date <= to));
   const productionHref = (d: string) => `/schedule/production?date=${d}&days=1${storeFilter ? `&store=${storeFilter}` : ""}`;
-  // 担当者の略称 (予定表のスプレッドシートと同じ 1 文字。お客様のご要望 2026-11-24「⑥」)
-  const initials = initialsByUser(db.users.filter((u) => u.active));
   // 1 日の作業量と対応可能枚数 (対象人数 × 11 枚。お客様のご要望 2026-11-25「日ごとの予定表の表示形式と作業量の集計」。src/lib/day-sheet.ts)
   const loadSet = readDayLoadSettings(db);
   const leaveEvents = inRange.filter((e) => e.kind === "leave");
@@ -179,7 +177,8 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
     today,
     nowMinutes: now.getHours() * 60 + now.getMinutes(),
     stores: new Map(db.stores.map((s) => [s.id, s])),
-    users: new Map(db.users.map((u) => [u.id, { id: u.id, name: u.name, title: u.title, storeId: u.storeId, initial: initials.get(u.id) }])),
+    // 担当者は顔写真で出す (お客様のご要望 2026-11-26: 名前の略称ではなく顔写真。顔写真のない社員は名前の 1 文字の丸)
+    users: new Map(db.users.map((u) => [u.id, { id: u.id, name: u.name, title: u.title, storeId: u.storeId, avatar: avatarUrl(u) }])),
     byId: new Map(inRange.map((e) => [e.id, e])),
     conflicts: byEvent,
     caseOf: (e) => {

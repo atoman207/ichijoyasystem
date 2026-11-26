@@ -178,6 +178,18 @@ const ini = IN.initialsByUser(people);
 eq(["a", "b", "c", "d"].map((k) => ini.get(k)), ["太", "花", "社", "鈴"], "名字の 1 文字目が重なる人は名前の 1 文字目・社長は「社」");
 const find = IN.staffInitials(people);
 ok(["a", "b", "c", "d"].every((k) => find(ini.get(k)).userId === k), "略称から同じ人に戻る (予定表のスプレッドシートの書き方と同じ)");
+// 予定表・小さな画面の担当者は顔写真で出す (お客様のご要望 2026-11-26): 担当者の選択肢に顔写真の URL (なければ undefined = 名前の 1 文字)
+{
+  const QS = await imp("lib/quick-staff.ts");
+  const withPhoto = { id: "u_face1", name: "写真 有子", storeId: manager.storeId, active: true, title: "施工", role: "store_staff", email: "face1@example.test", avatarKey: "avatars/u_face1/1.jpg", avatarUpdatedAt: "2026-11-26T00:00:00Z" };
+  const noPhoto = { id: "u_face2", name: "写真 無男", storeId: manager.storeId, active: true, title: "施工", role: "store_staff", email: "face2@example.test" };
+  const list = QS.quickStaff({ users: [withPhoto, noPhoto], stores: db().stores }, manager.storeId);
+  const a1 = list.find((x) => x.id === "u_face1");
+  const a2 = list.find((x) => x.id === "u_face2");
+  ok(a1?.avatar?.startsWith("/api/avatars/u_face1?v=") && a2 && a2.avatar === undefined && a2.initial, "担当者の選択肢: 顔写真の URL (ない人は名前の 1 文字の丸)");
+  const cal = fs.readFileSync(path.join(root, "src/components/schedule/CalendarViews.tsx"), "utf8");
+  ok(/<StaffFace /.test(cal) && !/u\.initial/.test(cal), "予定表のチップは略称の文字ではなく顔写真 (StaffFace)");
+}
 
 /* ================================================================== */
 section("⑦ 引取・現見 ⇄ 納品 と「納品予定を追加」");
