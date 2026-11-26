@@ -115,7 +115,7 @@ export const SOURCE_FOLDERS: SourceFolder[] = [
   { folder: "12_商品・価格", label: "商品・価格", holds: "縁 (ヘリ) のラインナップと在庫・取扱商品 (クロス・クラッシーノ)・ミニ畳体験・畳材料原価の単価表 (新原本)", action: "materials", category: "商品・価格", visibility: "hq" },
   { folder: "13_店舗・設備・車両", label: "店舗・設備・車両", holds: "車両点検表・設備・畳の製造と材料 (発注・移動・棚卸)", action: "materials", category: "店舗・設備・車両", visibility: "hq" },
   { folder: "14_施工事例", label: "施工事例", holds: "施工事例の写真と資料 (畳・襖・クロス・畳勉強会)", action: "materials", category: "施工・作業手順", visibility: "all" },
-  { folder: "15_人事・労務", label: "人事・労務", holds: "求人。社員・ご家族の個人の情報 (健康診断・就労証明・有給・慶弔・給与・社員の写真) は「個人の情報（取り込まない）」に置く (中身を読まない)", action: "materials", category: "人事・労務", visibility: "admin" },
+  { folder: "15_人事・労務", label: "人事・労務", holds: "求人・勤怠の月次 (令和○年度.xlsx)。社員・ご家族の個人の情報 (健康診断・就労証明・有給・慶弔・給与・社員の写真) は「個人の情報（取り込まない）」に置く (中身を読まない)", action: "materials", category: "人事・労務", visibility: "admin" },
   { folder: "16_社外の参考資料", label: "社外の参考資料", holds: "社外の講座・SNS の資料・地域の事業の案内", action: "materials", category: "参考資料 (社外)", visibility: "manager" },
   { folder: "20_写真", label: "写真", holds: "現場写真 (現場ごと)・イベント・施工写真・ショールーム・CM の写真など (資料の一部の写真はその資料のフォルダー)", action: "ledger", category: "写真・動画", visibility: "manager" },
   { folder: "21_動画・音声", label: "動画・音声", holds: "CM・テーマソング・作業手順の動画など", action: "ledger", category: "写真・動画", visibility: "manager" },
@@ -144,6 +144,7 @@ export const RULES: RegistryRule[] = [
   { id: "self-intro", test: /自己紹介\.docx$/, action: "exclude", category: "人事・労務", visibility: "admin", note: "個人の自己紹介。内容は取り込みません" },
   { id: "condolence", test: /慶弔リスト/, action: "exclude", category: "人事・労務", visibility: "admin", note: "慶弔 (ご家族の情報)。事務 → 慶弔リスト (/office) で取り込みます" },
   { id: "leave", test: /有給管理表|休日出勤管理表/, action: "exclude", category: "人事・労務", visibility: "admin", note: "社員ごとの有給・休日出勤。有給・休日出勤 (/leave) で取り込みます" },
+  { id: "attendance", test: /勤怠月次|令和\d+年度_勤怠|令和\d+年度\.xlsx$/, action: "exclude", category: "人事・労務", visibility: "hq", note: "労務士へ送る勤務表 (令和○年度.xlsx)。勤怠 (/attendance) の「労務士へ送る勤務表」で取り込みます" },
   { id: "salary", test: /給与シュミレーション|給与|源泉|使用人名簿|(?<!工事)履歴書/, action: "exclude", category: "人事・労務", visibility: "admin", note: "給与・社員の名簿。内容は取り込みません" },
   { id: "personal", test: /^15_人事・労務\/個人の情報/, action: "exclude", category: "人事・労務", visibility: "admin", note: "社員・ご家族の個人の情報 (人事・労務 → 個人の情報 のフォルダー)。内容は取り込みません" },
 

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { toDateKey } from "@/lib/format";
@@ -49,8 +50,11 @@ export default async function LeavePage({ searchParams }: { searchParams: Promis
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader
         title="有給・休日出勤"
-        description="有給の残日数と休暇 (有給・振休・特別休暇。終日・午前・午後) の申請、店長・管理者の承認、休日出勤と振休の対応、年度 (7 月〜翌 6 月) の取得状況。承認した休暇は予定表に「休暇」として載り、予定の重複の警告に入ります"
+        description="有給の残日数と休暇 (有給・振休・特別休暇。終日・午前・午後) の申請、店長・管理者の承認、休日出勤と振休の対応、年度 (7 月〜翌 6 月) の取得状況。承認した休暇は予定表に「休暇」として載り、予定の重複の警告に入ります。出勤・退勤の打刻・勤務表・打刻修正と休日出勤の申請・労務士へ送る勤務表は「勤怠」で行います"
       />
+      <p className="mb-3 text-sm text-ink-2">
+        <Link href="/attendance" className="text-accent underline-offset-2 hover:underline">勤怠 (打刻・勤務表・休日出勤の申請・労務士へ送る勤務表)</Link>
+      </p>
       {!ready && <Note tone="warn">有給・休日出勤の表がまだデータベースにありません。管理者がデプロイ (npm run deploy) するまで、表示は空で、登録はできません。</Note>}
       <LinkTabs current={`/leave?tab=${tab}`} items={tabs.map((t) => ({ href: `/leave?tab=${t.id}`, label: t.label, count: "count" in t && t.count ? t.count : undefined }))} />
       {tab === "me" && <MeTab ctx={ctx} />}

@@ -985,9 +985,12 @@ export function canViewLeaveOf(user: User, target: { id: string; storeId: StoreI
   return user.role === "store_manager" && target.storeId === user.storeId;
 }
 
-/** 社員ごとの一覧・年度の取得状況・CSV を見る: 店長 (自店舗の社員)・本部スタッフ・管理者 */
+/**
+ * 社員ごとの残日数の一覧・休日出勤と振休の未取得・年度の取得状況・CSV を見る: 本部スタッフ・管理者
+ * (お客様のご要望 2026-11-26「他の社員の残日数は本部・管理者のみ」。以前は店長も自店舗の社員を見られた)
+ */
 export function canViewLeaveReport(user: User): boolean {
-  return canSeeAllStores(user) || user.role === "store_manager";
+  return canSeeAllStores(user);
 }
 
 /**
@@ -1030,6 +1033,64 @@ export function canManageLeaveGrants(user: User): boolean {
 /** 有給・振休のルール (振休のため込みの上限・有給の消化の順番・年度・締め日・半日の時間帯) の変更: 管理者 */
 export function canManageLeaveSettings(user: User): boolean {
   return user.role === "admin";
+}
+
+/* ---------------- 勤怠月次 (src/lib/hr/attendance.ts・/attendance。打刻・給与計算は対象外) ---------------- */
+
+/** 勤怠の月次表の閲覧: 店長は自店舗の行、本部スタッフ・管理者は全員 */
+export function canViewAttendance(user: User): boolean {
+  return user.active && (canSeeAllStores(user) || user.role === "store_manager");
+}
+
+/** 勤怠の月次表の登録・取込・確定: 本部スタッフ・管理者 (労務士へ送る一覧の担当) */
+export function canManageAttendance(user: User): boolean {
+  return user.active && canSeeAllStores(user);
+}
+
+/* ---------------- 打刻・勤務表 (src/lib/hr/timecard.ts・/attendance。キャスタイムの代わり) ---------------- */
+
+/** 出勤・退勤の打刻: 有効な社員全員 (本人の分だけ) */
+export function canStampAttendance(user: User): boolean {
+  return user.active;
+}
+
+/**
+ * 勤務表 (日ごとの打刻・遅刻早退・残業) を見る: 本人、店長は自店舗の社員 (店舗スタッフの打刻漏れ・休日出勤などを店長が申請する)、本部スタッフ・管理者は全員。
+ * 有給・振休の残日数は canViewLeaveBalanceOf (本人と本部・管理者だけ)
+ */
+export function canViewAttendanceOf(user: User, target: { id: string; storeId: StoreId }): boolean {
+  if (!user.active) return false;
+  if (target.id === user.id || canSeeAllStores(user)) return true;
+  return user.role === "store_manager" && target.storeId === user.storeId;
+}
+
+/** 打刻修正・休日出勤の申請: 本人。店長は自店舗の社員の分、本部スタッフ・管理者は全員の分を代わりに申請できる (承認できる人が申請したときはそのまま承認) */
+export function canRequestAttendanceFor(user: User, target: { id: string; storeId: StoreId }): boolean {
+  return canViewAttendanceOf(user, target);
+}
+
+/** 打刻修正・休日出勤の申請の承認・却下: 休暇と同じ (管理者は全件・店長は自店舗の社員。自分の申請は管理者) */
+export function canApproveAttendance(user: User, req: { userId: string; storeId: StoreId }): boolean {
+  return user.active && canApproveLeave(user, req);
+}
+
+/** 申請の取り下げ: 申請中は本人・申請した人・承認できる人、承認済みは承認できる人 (打刻を元に戻す) */
+export function canCancelAttendanceRequest(user: User, req: { userId: string; storeId: StoreId; requestedBy: string; status: string }): boolean {
+  if (req.status === "pending") return req.userId === user.id || req.requestedBy === user.id || canApproveAttendance(user, req);
+  return req.status === "approved" && canApproveAttendance(user, req);
+}
+
+/**
+ * 有給・振休の残日数を見る: 本人と本部スタッフ・管理者だけ (お客様のご要望 2026-11-26「他の社員の残日数については、本部・管理者のみ確認可能」)。
+ * 店長は自店舗の社員の休暇の申請・承認はできるが、残日数は見ない
+ */
+export function canViewLeaveBalanceOf(user: User, target: { id: string }): boolean {
+  return user.active && (target.id === user.id || canSeeAllStores(user));
+}
+
+/** 勤怠の設定 (社員の区分・社員番号・時給・シフト・労務士の宛先・インセンティブの調整): 本部スタッフ・管理者。決まり (シフトの時間・固定残業・インセンティブの単価) は管理者 */
+export function canManageAttendanceRules(user: User): boolean {
+  return user.active && user.role === "admin";
 }
 
 /* ---------------- 施工事例の投稿 (src/lib/case-posts.ts。資料・写真 → 施工事例の投稿) ---------------- */

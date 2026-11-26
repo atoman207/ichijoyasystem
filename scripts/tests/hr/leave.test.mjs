@@ -77,13 +77,17 @@ section("権限 (permissions.ts)");
   ok(P.canRegisterHolidayWork(hq, chuo) && P.canRegisterHolidayWork(managerK, staff) && !P.canRegisterHolidayWork(managerK, chuo) && !P.canRegisterHolidayWork(staff, staff), "休日出勤の登録: 本部・管理者は全員、店長は自店舗、スタッフは不可");
   ok(P.canManageLeaveGrants(hq) && P.canManageLeaveGrants(admin) && !P.canManageLeaveGrants(managerK), "有給の付与・取込は本部 (事務)・管理者");
   ok(P.canManageLeaveSettings(admin) && !P.canManageLeaveSettings(hq), "ルールの変更は管理者");
-  ok(P.canViewLeaveReport(managerK) && P.canViewLeaveReport(hq) && !P.canViewLeaveReport(staff), "一覧・CSV は店長・本部・管理者");
+  // お客様のご要望 2026-11-26「他の社員の残日数については、本部・管理者のみ確認可能」: 一覧・CSV は本部・管理者だけ
+  ok(!P.canViewLeaveReport(managerK) && P.canViewLeaveReport(hq) && P.canViewLeaveReport(admin) && !P.canViewLeaveReport(staff), "残日数の一覧・CSV は本部・管理者だけ (店長は見ない)");
+  ok(P.canViewLeaveBalanceOf(staff, staff) && !P.canViewLeaveBalanceOf(managerK, staff) && P.canViewLeaveBalanceOf(hq, staff) && P.canViewLeaveBalanceOf(admin, staff), "残日数: 本人と本部・管理者だけ");
+  ok(P.canRequestLeaveFor(managerK, staff) && P.canApproveLeave(managerK, { userId: staff.id, storeId: staff.storeId }), "店長は自店舗の社員の休暇の申請・承認はそのまま");
   throws(() => A.addGrant(db, managerK, { userId: staff.id, grantDate: "2031-04-01", days: 10 }), "本部スタッフ", "店長は付与を登録できない");
   throws(() => A.addHolidayWork(db, staff, { userId: staff.id, date: "2031-06-07", slot: "day" }), "権限", "店舗スタッフは休日出勤を登録できない");
   throws(() => leave(staff, { userId: staff2.id, date: "2031-05-12" }), "権限", "店舗スタッフはほかの社員の休暇を申請できない");
   const scope = MODEL.scopeStatements(staff).join("\n");
   ok(scope.includes("create temp view leave_requests") && scope.includes(`user_id = '${staff.id}'`), "AI の SQL でも店舗スタッフは自分の休暇だけ (scopeStatements)");
-  ok(MODEL.scopeStatements(managerK).join("\n").includes("create temp view holiday_works as select * from main.holiday_works where user_id in (select id from main.users where store_id = 'koshi')"), "AI の SQL でも店長は自店舗の社員だけ");
+  ok(MODEL.scopeStatements(managerK).join("\n").includes("create temp view leave_requests as select * from main.leave_requests where user_id in (select id from main.users where store_id = 'koshi')"), "AI の SQL でも店長は自店舗の社員の休暇の申請だけ");
+  ok(MODEL.scopeStatements(managerK).join("\n").includes(`create temp view holiday_works as select * from main.holiday_works where user_id = '${managerK.id}'`) && MODEL.scopeStatements(managerK).join("\n").includes(`create temp view leave_grants as select * from main.leave_grants where user_id = '${managerK.id}'`), "AI の SQL でも店長は残日数の分かる表 (付与・休日出勤) は自分の分だけ");
 }
 
 section("受け入れ条件: 承認した有給が予定表に表示され、残日数が減る");

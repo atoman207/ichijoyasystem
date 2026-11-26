@@ -20,6 +20,9 @@ const VIEW_PATHS: Record<string, (id: string) => string[]> = {
   cf: (id) => [...id.split("+").map((e) => `/schedule/${e}`), "/schedule?conflicts=1"],
   apv: () => ["/approvals?tab=mine", "/approvals?tab="],
   lv: () => ["/leave?tab=approve", "/leave?tab="],
+  // 勤怠: 打刻修正・休日出勤の申請 (承認する人) / 自分の打刻漏れ (勤務表・打刻の画面)
+  atr: () => ["/attendance?tab=requests"],
+  atm: () => ["/attendance?tab=sheet", "/attendance?tab=stamp", "/attendance?tab="],
   heri: () => ["/heri"],
   su: () => ["/staff"],
   dr: (id) => [`/ai/drafts/${id}`],

@@ -25,7 +25,7 @@ import {
   tileIcon,
   tileLabel,
 } from "./header-parts";
-import { Award, BookOpen, Calculator, CircleHelp, ClipboardList, Coins, Printer, Landmark, ListTodo, PhoneCall, Truck, ListChecks, Bell, CalendarDays, CalendarOff, CalendarPlus, ChartColumn, ChevronDown, CircleUser, ClipboardCheck, ClockFading, FileSpreadsheet, FileText, Hammer, FolderOpen, House, Inbox, LayoutGrid, LogOut, Menu, MessageSquare, MessagesSquare, Package, Plus, Receipt, ScanLine, Search, Settings, Sparkles, UserCog, Users, Wallet, X, type LucideIcon, MapPinned, Scale, NotebookPen, Layers, ClipboardPen, Megaphone, Database } from "lucide-react";
+import { Award, BookOpen, Calculator, CircleHelp, ClipboardList, Coins, Printer, Landmark, ListTodo, PhoneCall, Truck, ListChecks, Bell, CalendarDays, CalendarOff, CalendarPlus, ChartColumn, ChevronDown, CircleUser, ClipboardCheck, ClockFading, ClipboardClock, FileSpreadsheet, FileText, Hammer, FolderOpen, House, Inbox, LayoutGrid, LogOut, Menu, MessageSquare, MessagesSquare, Package, Plus, Receipt, ScanLine, Search, Settings, Sparkles, UserCog, Users, Wallet, X, type LucideIcon, MapPinned, Scale, NotebookPen, Layers, ClipboardPen, Megaphone, Database } from "lucide-react";
 import { Avatar, Badge } from "@/components/ui";
 import { IchijoyaLogo } from "@/components/brand/Logo";
 import { ChatbotWidget } from "@/components/chatbot/ChatbotWidget";
@@ -70,6 +70,7 @@ export type NavIcon =
   | "management"
   | "help"
   | "leave"
+  | "attendance"
   | "office"
   | "heri"
   | "workReport"
@@ -110,6 +111,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   help: CircleHelp,
   management: Scale,
   leave: CalendarOff,
+  attendance: ClipboardClock,
   office: NotebookPen,
   heri: Layers,
   workReport: ClipboardPen,

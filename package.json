@@ -23,7 +23,7 @@
     "test:assistant-actions": "node scripts/tests/assistant-actions/actions.test.mjs",
     "test:chatbot": "node scripts/tests/chatbot/unit.test.mjs && node scripts/tests/chatbot/mock-ai.test.mjs",
     "chatbot:catalog": "node scripts/chatbot/extract-ui.mjs",
-    "test:hr": "node scripts/tests/hr/leave.test.mjs",
+    "test:hr": "node scripts/tests/hr/leave.test.mjs && node scripts/tests/hr/attendance.test.mjs && node scripts/tests/hr/timecard.test.mjs",
     "test:office": "node scripts/tests/office/office.test.mjs",
     "test:cases": "node scripts/tests/cases/case-group.test.mjs",
     "test:notify": "node scripts/tests/notify/seen.test.mjs && node scripts/tests/notify/toast.test.mjs",

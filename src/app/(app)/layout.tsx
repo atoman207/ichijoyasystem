@@ -10,9 +10,11 @@ import { AppShell, type NavItem, type NotificationItem } from "@/components/layo
 import { logout } from "@/lib/actions/auth";
 import { canViewMgmt } from "@/lib/mgmt/access";
 import { canViewPromoAnalysis } from "@/lib/auth/permissions";
-import { yen } from "@/lib/format";
+import { toDateKey, yen } from "@/lib/format";
 import { policyReader } from "@/lib/access-policy";
-import { canApproveLeave } from "@/lib/auth/permissions";
+import { canApproveAttendance, canApproveLeave } from "@/lib/auth/permissions";
+import { attentionDays } from "@/lib/hr/timecard";
+import { kpiSettings } from "@/lib/kpi-settings";
 import { canManageHeriStock } from "@/lib/auth/permissions";
 import { officeCtx } from "@/lib/office";
 import { heriBelow } from "@/lib/heri-stock";
@@ -57,6 +59,15 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   // 休暇の申請 (承認できる人: 店長は自店舗の社員、管理者は全員。src/lib/hr)
   const leavePending = (getDb().leaveRequests ?? []).filter((r) => r.status === "pending" && canApproveLeave(user, r));
   const leaveKeys = leavePending.map((r) => seenKey("lv", r.id));
+  const attPending = (getDb().attendanceRequests ?? []).filter((r) => r.status === "pending" && canApproveAttendance(user, r));
+  const attMissing = (() => {
+    try {
+      return attentionDays(getDb(), user, toDateKey(new Date()), kpiSettings(getDb()).clerkUserIds);
+    } catch {
+      return [];
+    }
+  })();
+  const attKeys = [...attPending.map((r) => seenKey("atr", r.id)), ...attMissing.map((d) => seenKey("atm", d.date, d.warnings.length))];
   const signupKeys = signups.map((u) => seenKey("su", u.id));
   // チャットのアイコン (要対応 = 業務依頼・未確認の重要メッセージ・未読のメンション / 未読)。チャットのデータ (SQLite) が読めなくても画面は出す
   let chat: ChatSummary | undefined;
@@ -105,6 +116,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     { href: "/materials", label: "資料・写真", icon: "materials", group: "業務支援" },
   );
   nav.push({ href: "/leave", label: "有給・休日出勤 (休暇の申請・承認・振休・年度の取得状況)", short: "有給・休暇", icon: "leave", group: "業務支援", badge: leavePending.length || undefined, seenKeys: leaveKeys });
+  // 勤怠 (打刻・勤務表・申請・労務士へ送る勤務表)。数字 = 自分の打刻漏れの日 + 承認する打刻修正・休日出勤の申請
+  nav.push({ href: "/attendance", label: "勤怠 (出勤・退勤の打刻・勤務表・打刻修正と休日出勤の申請・労務士へ送る勤務表)", short: "勤怠", icon: "attendance", group: "業務支援", badge: attKeys.length || undefined, seenKeys: attKeys });
   // 事務 (事務改善シート・慶弔リスト) と縁在庫。縁在庫のバッジ = 共通在庫が規定量を下回った品番の数 (事務担当・本部・管理者・店長)
   const heriKeys = canManageHeriStock(user, officeCtx(getDb())) || user.role === "store_manager" ? heriBelow(getDb()).map((r) => seenKey("heri", r.material.id, r.common)) : [];
   const heriBadge = heriKeys.length;
@@ -206,6 +219,13 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   }
   if (posts.toPost.length > 0) {
     notifications.push({ kind: "task", title: `承認された施工事例の投稿 ${posts.toPost.length} 件 (投稿待ち)`, detail: "文面をコピー・写真を保存して投稿し、投稿したら記録してください", href: "/materials?tab=cases&view=approved", keys: posts.toPost.map((p) => seenKey("cp", p.id, p.status)) });
+  }
+  if (attPending.length > 0) {
+    const nameOf = (id: string) => getDb().users.find((u) => u.id === id)?.name ?? "";
+    notifications.push({ kind: "approval", title: `打刻修正・休日出勤の申請 ${attPending.length} 件`, detail: `${attPending.slice(0, 3).map((r) => `${nameOf(r.userId)} ${r.date.slice(5).replace("-", "/")}`).join("・")}${attPending.length > 3 ? " ほか" : ""}。承認または却下してください`, href: "/attendance?tab=requests", keys: attPending.map((r) => seenKey("atr", r.id)) });
+  }
+  if (attMissing.length > 0) {
+    notifications.push({ kind: "task", title: `打刻漏れ・休日の打刻 ${attMissing.length} 日`, detail: `${attMissing.slice(0, 3).map((d) => d.date.slice(5).replace("-", "/")).join("・")}${attMissing.length > 3 ? " ほか" : ""}。勤務表の「直す」から打刻修正を申請してください`, href: "/attendance?tab=sheet", keys: attMissing.map((d) => seenKey("atm", d.date, d.warnings.length)) });
   }
   if (leavePending.length > 0) {
     const nameOf = (id: string) => getDb().users.find((u) => u.id === id)?.name ?? "";

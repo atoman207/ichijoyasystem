@@ -240,6 +240,7 @@ export const NAV_ITEMS: { href: string; label: string; short?: string }[] = [
   { href: "/settings", label: "設定", short: "設定" },
   { href: "/help", label: "使い方 (操作説明)", short: "使い方" },
   { href: "/leave", label: "有給・休日出勤 (休暇の申請・承認・振休・年度の取得状況)", short: "有給・休暇" },
+  { href: "/attendance", label: "勤怠 (出勤・退勤の打刻・勤務表・打刻修正と休日出勤の申請・労務士へ送る勤務表)", short: "勤怠" },
   { href: "/office", label: "事務 (事務改善シート・慶弔リスト)", short: "事務" },
   { href: "/heri", label: "縁在庫 (品番 × 場所の数量・入庫・振り分け・使用・棚卸)", short: "縁在庫" },
   { href: "/work-reports", label: "作業日報 (引取・納品の件数・枚数の月次集計)", short: "作業日報" },

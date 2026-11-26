@@ -203,6 +203,22 @@ export function leaveResultNotices(db: Database, r: LeaveNotice): Outgoing[] {
   return build(db, "leave", to, `休暇の${label}: ${LEAVE_KIND[r.leaveType] ?? ""} ${r.date}`, `休暇の申請が「${label}」になりました (${nameOf(db, r.decidedBy)} さん)。\n種類: ${LEAVE_KIND[r.leaveType] ?? r.leaveType}\n日付: ${leaveWhen(r)}${r.decisionComment ? `\nコメント: ${r.decisionComment}` : ""}`, "/leave", {});
 }
 
+/** 打刻修正・休日出勤の申請 (src/lib/hr/timecard-apply.ts): 承認できる人へ (休暇と同じ人・同じ通知の設定) */
+type AttendanceNotice = { number: string; userId: string; storeId: string; requestedBy: string; status: string; kind: string; date: string; reason: string; decidedBy?: string; decisionComment?: string };
+const ATT_KIND: Record<string, string> = { correction: "打刻修正", holiday_work: "休日出勤" };
+
+export function attendanceRequestNotices(db: Database, r: AttendanceNotice, summary: string): Outgoing[] {
+  const by = r.requestedBy !== r.userId ? ` (${nameOf(db, r.requestedBy)} さんが代理で申請)` : "";
+  const approvers = leaveApprovers(db, { id: "", number: r.number, userId: r.userId, storeId: r.storeId, requestedBy: r.requestedBy, status: r.status, date: r.date, slot: "day", days: 0, leaveType: "" });
+  return build(db, "leave", approvers, `${ATT_KIND[r.kind] ?? "勤怠"}の申請: ${nameOf(db, r.userId)} ${r.date}`, `${nameOf(db, r.userId)} さんから${ATT_KIND[r.kind] ?? "勤怠"}の申請があります${by}。\n日付: ${r.date}\n内容: ${summary}\n理由: ${r.reason}`, "/attendance?tab=requests", {});
+}
+
+export function attendanceResultNotices(db: Database, r: AttendanceNotice): Outgoing[] {
+  const to = db.users.filter((u) => (u.id === r.userId || u.id === r.requestedBy) && u.id !== r.decidedBy);
+  const label = r.status === "approved" ? "承認" : r.status === "rejected" ? "却下" : r.status;
+  return build(db, "leave", to, `${ATT_KIND[r.kind] ?? "勤怠"}の${label}: ${r.date}`, `${ATT_KIND[r.kind] ?? "勤怠"}の申請が「${label}」になりました (${nameOf(db, r.decidedBy)} さん)。\n日付: ${r.date}${r.decisionComment ? `\nコメント: ${r.decisionComment}` : ""}`, "/attendance?tab=sheet", {});
+}
+
 /* ---------------- 文書の下書き (src/lib/doc-drafts.ts) ---------------- */
 
 /** 文書が「確認済み」になった: 承認する人へ (承認できる人は docDraftApprovers で決める) */

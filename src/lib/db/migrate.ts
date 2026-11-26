@@ -8,8 +8,8 @@ export const MGMT_COLLECTIONS = ["mgmtRules", "itemCategories", "salesAreas", "o
 /** 予定の計画のコレクション (後から追加。無ければ空で作る) */
 export const PLAN_COLLECTIONS = ["jobSpecs", "productionJobs", "resourceBookings", "scheduleHolds"] as const;
 
-/** 有給・休日出勤のコレクション (後から追加。無ければ空で作る) */
-export const HR_COLLECTIONS = ["leaveRequests", "leaveGrants", "holidayWorks"] as const;
+/** 有給・休日出勤・勤怠月次のコレクション (後から追加。無ければ空で作る) */
+export const HR_COLLECTIONS = ["leaveRequests", "leaveGrants", "holidayWorks", "attendanceMonths", "attendanceLines", "attendanceDays", "attendanceRequests"] as const;
 
 /** 作業日報の手入力・販促の記録のコレクション (後から追加。無ければ空で作る) */
 export const OPS_COLLECTIONS = ["workReportDays", "promotions"] as const;

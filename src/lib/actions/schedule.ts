@@ -213,6 +213,8 @@ function parseEventForm(
       memo: str(fd, "memo").slice(0, 2000) || undefined,
       // 作業内容 (予定表に表示。数量「タ6 タ新4」か自由な文「養生、廃材撤去」)。欄のある画面だけ変える (ない画面の保存では今の値のまま)
       ...(fd.has("work") ? { work: normWork(str(fd, "work")) || undefined } : {}),
+      // 点検の電話をした人 (欄のある画面だけ変える。有効な社員だけ)
+      ...(fd.has("inspectionBy") ? { inspectionBy: getDb().users.some((u) => u.id === str(fd, "inspectionBy") && u.active) ? str(fd, "inspectionBy") : undefined } : {}),
     },
     locationMode,
     dates: repeatDates(date, repeat, until),

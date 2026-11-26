@@ -679,8 +679,21 @@ export function scopeStatements(user: Pick<User, "id" | "role" | "storeId">): st
             ...["allocation_runs", "period_closes", "purchase_line_allocs"].map(none),
           ]
         : mgmtTables.map(none)),
-    // 有給・休日出勤 (permissions.ts の canViewLeaveOf と同じ): 店長は自店舗の社員、店舗スタッフは本人
-    ...["leave_requests", "leave_grants", "holiday_works"].map((t) => v(t, `select * from main.${t} where ${manager ? `user_id in (select id from main.users where store_id = ${store})` : `user_id = ${me}`}`)),
+    // 有給・休日出勤: 休暇の申請は canViewLeaveOf と同じ (店長は自店舗の社員、店舗スタッフは本人)。
+    // 付与・休日出勤 (= 残日数が分かる) は canViewLeaveBalanceOf と同じ本人だけ (お客様のご要望 2026-11-26「他の社員の残日数は本部・管理者のみ」)
+    v("leave_requests", `select * from main.leave_requests where ${manager ? `user_id in (select id from main.users where store_id = ${store})` : `user_id = ${me}`}`),
+    ...["leave_grants", "holiday_works"].map((t) => v(t, `select * from main.${t} where user_id = ${me}`)),
+    // 打刻・勤務表・打刻修正と休日出勤の申請 (canViewAttendanceOf と同じ): 店長は自店舗の社員、店舗スタッフは本人
+    ...["attendance_days", "attendance_requests"].map((t) => v(t, `select * from main.${t} where ${manager ? `user_id in (select id from main.users where store_id = ${store})` : `user_id = ${me}`}`)),
+    // 労務士へ送る勤務表 (canViewAttendance: 店長は自店舗の行。計算の内訳 calc は残日数・インセンティブを含むので出さない。店舗スタッフは見ない)
+    ...(manager
+      ? [
+          v(
+            "attendance_lines",
+            `select id, month_id, kind, sort, employee_no, user_id, name, work_days, absence_days, late_early, overtime, work_hours, hourly_rate, paid_leave_days, note, source, created_at, updated_at from main.attendance_lines where user_id in (select id from main.users where store_id = ${store}) or user_id is null`,
+          ),
+        ]
+      : ["attendance_months", "attendance_lines"].map(none)),
   ];
 }
 

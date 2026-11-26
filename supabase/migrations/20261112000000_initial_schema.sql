@@ -558,7 +558,8 @@ create table if not exists schedule_events (
   updated_by text,
   updated_at timestamptz,
   source_ref text,
-  work text
+  work text,
+  inspection_by text
 );
 comment on table schedule_events is '予定 (全社カレンダー)';
 
@@ -1451,6 +1452,95 @@ create table if not exists holiday_works (
 );
 comment on table holiday_works is '休日出勤 (振休の発生。切り替え時点の振休の残を含む)';
 
+-- 労務士へ送る勤務表 (月。打刻・休暇・インセンティブから作る・取込)
+create table if not exists attendance_months (
+  id text primary key,
+  year_month text not null unique,
+  pay_label text,
+  status text not null default 'draft' check (status in ('draft','final')),
+  note text,
+  source_label text,
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text not null,
+  updated_at timestamptz not null,
+  finalized_by text,
+  finalized_at timestamptz,
+  sent_at timestamptz,
+  sent_by text,
+  sent_to text,
+  delivery_ids jsonb
+);
+comment on table attendance_months is '労務士へ送る勤務表 (月。打刻・休暇・インセンティブから作る・取込)';
+
+-- 勤怠の月次表の行 (社員・パート)
+create table if not exists attendance_lines (
+  id text primary key,
+  month_id text not null references attendance_months(id),
+  kind text not null check (kind in ('staff','part')),
+  sort integer not null default 0,
+  employee_no text,
+  user_id text,
+  name text not null,
+  work_days numeric,
+  absence_days numeric,
+  late_early text,
+  overtime text,
+  work_hours text,
+  hourly_rate numeric,
+  paid_leave_days numeric,
+  note text,
+  source text,
+  calc jsonb,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+comment on table attendance_lines is '勤怠の月次表の行 (社員・パート)';
+
+-- 打刻・勤怠 (社員 × 日。出勤・退勤・休憩・打刻の記録)
+create table if not exists attendance_days (
+  id text primary key,
+  user_id text not null,
+  store_id text not null,
+  date date not null,
+  clock_in timestamptz,
+  clock_out timestamptz,
+  skip_breaks jsonb,
+  log jsonb not null default '[]',
+  note text,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+comment on table attendance_days is '打刻・勤怠 (社員 × 日。出勤・退勤・休憩・打刻の記録)';
+
+-- 打刻修正・休日出勤の申請
+create table if not exists attendance_requests (
+  id text primary key,
+  number text not null,
+  user_id text not null,
+  store_id text not null,
+  kind text not null check (kind in ('correction','holiday_work')),
+  date date not null,
+  clock_in text,
+  clock_out text,
+  skip_breaks jsonb,
+  slot text,
+  reason text not null,
+  status text not null default 'pending' check (status in ('pending','approved','rejected','cancelled')),
+  requested_by text not null,
+  requested_at timestamptz not null,
+  decided_by text,
+  decided_at timestamptz,
+  decision_comment text,
+  holiday_work_id text,
+  event_id text,
+  previous jsonb,
+  cancelled_by text,
+  cancelled_at timestamptz,
+  updated_at timestamptz not null
+);
+comment on table attendance_requests is '打刻修正・休日出勤の申請';
+
 -- 作業日報の手入力 (店舗 × 日。チラシの配布人・枚数・地域、来店数)
 create table if not exists work_report_days (
   id text primary key,
@@ -2138,6 +2228,7 @@ alter table schedule_events add column if not exists updated_by text;
 alter table schedule_events add column if not exists updated_at timestamptz;
 alter table schedule_events add column if not exists source_ref text;
 alter table schedule_events add column if not exists work text;
+alter table schedule_events add column if not exists inspection_by text;
 alter table company_holidays add column if not exists date date not null unique;
 alter table company_holidays add column if not exists label text not null default '休業日';
 alter table survey_responses add column if not exists received_at timestamptz not null;
@@ -2775,6 +2866,71 @@ alter table holiday_works add column if not exists created_by text not null;
 alter table holiday_works add column if not exists created_at timestamptz not null;
 alter table holiday_works add column if not exists updated_by text;
 alter table holiday_works add column if not exists updated_at timestamptz;
+alter table attendance_months add column if not exists year_month text not null unique;
+alter table attendance_months add column if not exists pay_label text;
+alter table attendance_months add column if not exists status text not null default 'draft' check (status in ('draft','final'));
+alter table attendance_months add column if not exists note text;
+alter table attendance_months add column if not exists source_label text;
+alter table attendance_months add column if not exists created_by text not null;
+alter table attendance_months add column if not exists created_at timestamptz not null;
+alter table attendance_months add column if not exists updated_by text not null;
+alter table attendance_months add column if not exists updated_at timestamptz not null;
+alter table attendance_months add column if not exists finalized_by text;
+alter table attendance_months add column if not exists finalized_at timestamptz;
+alter table attendance_months add column if not exists sent_at timestamptz;
+alter table attendance_months add column if not exists sent_by text;
+alter table attendance_months add column if not exists sent_to text;
+alter table attendance_months add column if not exists delivery_ids jsonb;
+alter table attendance_lines add column if not exists month_id text not null references attendance_months(id);
+alter table attendance_lines add column if not exists kind text not null check (kind in ('staff','part'));
+alter table attendance_lines add column if not exists sort integer not null default 0;
+alter table attendance_lines add column if not exists employee_no text;
+alter table attendance_lines add column if not exists user_id text;
+alter table attendance_lines add column if not exists name text not null;
+alter table attendance_lines add column if not exists work_days numeric;
+alter table attendance_lines add column if not exists absence_days numeric;
+alter table attendance_lines add column if not exists late_early text;
+alter table attendance_lines add column if not exists overtime text;
+alter table attendance_lines add column if not exists work_hours text;
+alter table attendance_lines add column if not exists hourly_rate numeric;
+alter table attendance_lines add column if not exists paid_leave_days numeric;
+alter table attendance_lines add column if not exists note text;
+alter table attendance_lines add column if not exists source text;
+alter table attendance_lines add column if not exists calc jsonb;
+alter table attendance_lines add column if not exists created_at timestamptz not null;
+alter table attendance_lines add column if not exists updated_at timestamptz not null;
+alter table attendance_days add column if not exists user_id text not null;
+alter table attendance_days add column if not exists store_id text not null;
+alter table attendance_days add column if not exists date date not null;
+alter table attendance_days add column if not exists clock_in timestamptz;
+alter table attendance_days add column if not exists clock_out timestamptz;
+alter table attendance_days add column if not exists skip_breaks jsonb;
+alter table attendance_days add column if not exists log jsonb not null default '[]';
+alter table attendance_days add column if not exists note text;
+alter table attendance_days add column if not exists created_at timestamptz not null;
+alter table attendance_days add column if not exists updated_at timestamptz not null;
+alter table attendance_requests add column if not exists number text not null;
+alter table attendance_requests add column if not exists user_id text not null;
+alter table attendance_requests add column if not exists store_id text not null;
+alter table attendance_requests add column if not exists kind text not null check (kind in ('correction','holiday_work'));
+alter table attendance_requests add column if not exists date date not null;
+alter table attendance_requests add column if not exists clock_in text;
+alter table attendance_requests add column if not exists clock_out text;
+alter table attendance_requests add column if not exists skip_breaks jsonb;
+alter table attendance_requests add column if not exists slot text;
+alter table attendance_requests add column if not exists reason text not null;
+alter table attendance_requests add column if not exists status text not null default 'pending' check (status in ('pending','approved','rejected','cancelled'));
+alter table attendance_requests add column if not exists requested_by text not null;
+alter table attendance_requests add column if not exists requested_at timestamptz not null;
+alter table attendance_requests add column if not exists decided_by text;
+alter table attendance_requests add column if not exists decided_at timestamptz;
+alter table attendance_requests add column if not exists decision_comment text;
+alter table attendance_requests add column if not exists holiday_work_id text;
+alter table attendance_requests add column if not exists event_id text;
+alter table attendance_requests add column if not exists previous jsonb;
+alter table attendance_requests add column if not exists cancelled_by text;
+alter table attendance_requests add column if not exists cancelled_at timestamptz;
+alter table attendance_requests add column if not exists updated_at timestamptz not null;
 alter table work_report_days add column if not exists store_id text not null references stores(id);
 alter table work_report_days add column if not exists date date not null;
 alter table work_report_days add column if not exists visitors integer check (visitors is null or visitors >= 0);
@@ -3127,6 +3283,16 @@ create index if not exists leave_grants_user_id_grant_date_idx on leave_grants (
 create index if not exists leave_grants_load_order_idx on leave_grants (grant_date, id);
 create index if not exists holiday_works_user_id_date_idx on holiday_works (user_id, date);
 create index if not exists holiday_works_load_order_idx on holiday_works (date, created_at, id);
+create index if not exists attendance_months_load_order_idx on attendance_months (year_month, id);
+create index if not exists attendance_lines_month_id_idx on attendance_lines (month_id);
+create index if not exists attendance_lines_user_id_idx on attendance_lines (user_id);
+create index if not exists attendance_lines_load_order_idx on attendance_lines (month_id, sort, id);
+create index if not exists attendance_days_user_id_date_idx on attendance_days (user_id, date);
+create index if not exists attendance_days_date_idx on attendance_days (date);
+create index if not exists attendance_days_load_order_idx on attendance_days (date, user_id, id);
+create index if not exists attendance_requests_user_id_date_idx on attendance_requests (user_id, date);
+create index if not exists attendance_requests_status_idx on attendance_requests (status);
+create index if not exists attendance_requests_load_order_idx on attendance_requests (date, requested_at, id);
 create index if not exists work_report_days_store_id_date_idx on work_report_days (store_id, date);
 create index if not exists work_report_days_load_order_idx on work_report_days (date, id);
 create index if not exists tatami_production_store_id_date_idx on tatami_production (store_id, date);
@@ -3358,6 +3524,18 @@ grant select, insert, update, delete on table leave_grants to service_role;
 alter table holiday_works enable row level security;
 revoke all on table holiday_works from anon, authenticated;
 grant select, insert, update, delete on table holiday_works to service_role;
+alter table attendance_months enable row level security;
+revoke all on table attendance_months from anon, authenticated;
+grant select, insert, update, delete on table attendance_months to service_role;
+alter table attendance_lines enable row level security;
+revoke all on table attendance_lines from anon, authenticated;
+grant select, insert, update, delete on table attendance_lines to service_role;
+alter table attendance_days enable row level security;
+revoke all on table attendance_days from anon, authenticated;
+grant select, insert, update, delete on table attendance_days to service_role;
+alter table attendance_requests enable row level security;
+revoke all on table attendance_requests from anon, authenticated;
+grant select, insert, update, delete on table attendance_requests to service_role;
 alter table work_report_days enable row level security;
 revoke all on table work_report_days from anon, authenticated;
 grant select, insert, update, delete on table work_report_days to service_role;

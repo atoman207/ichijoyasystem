@@ -1,5 +1,5 @@
 import Link from "@/components/ui/Link";
-import { canApproveLeave, canViewLeaveOf } from "@/lib/auth/permissions";
+import { canApproveLeave, canViewLeaveBalanceOf, canViewLeaveOf } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
 import { fmtDateTime } from "@/lib/format";
 import { compBalance, fmtDays, leaveConflicts, paidRemainingOn } from "@/lib/hr/leave";
@@ -24,8 +24,10 @@ export function ApproveTab({ ctx }: { ctx: Ctx }) {
       {pending.length === 0 && <Card><p className="py-6 text-center text-sm text-ink-3">承認待ちの休暇はありません</p></Card>}
       {pending.map((r) => {
         const conflicts = leaveConflicts(db, r);
-        const paidLeft = r.leaveType === "paid" ? paidRemainingOn(db, r.userId, r.date) : undefined;
-        const comp = r.leaveType === "comp" ? compBalance(db, r.userId) : undefined;
+        // 残日数は本部・管理者だけ (お客様のご要望 2026-11-26)。店長には出さない (足りない申請は承認のときに断る)
+        const balance = canViewLeaveBalanceOf(user, { id: r.userId });
+        const paidLeft = balance && r.leaveType === "paid" ? paidRemainingOn(db, r.userId, r.date) : undefined;
+        const comp = balance && r.leaveType === "comp" ? compBalance(db, r.userId) : undefined;
         return (
           <Card key={r.id}>
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -43,8 +45,8 @@ export function ApproveTab({ ctx }: { ctx: Ctx }) {
                 <div className="mt-1 text-xs text-ink-2">
                   {paidLeft !== undefined && <>承認前の有給の残 {fmtDays(paidLeft)} → 承認後 {fmtDays(Math.max(0, paidLeft - r.days))}</>}
                   {comp && <>振休の残り {fmtDays(comp.remaining)} → 承認後 {fmtDays(Math.max(0, comp.remaining - r.days))}</>}
-                  {" · "}
-                  <Link href={`/leave?tab=me&user=${r.userId}`} className="text-accent hover:underline">この社員の残日数・履歴</Link>
+                  {balance && " · "}
+                  <Link href={`/leave?tab=me&user=${r.userId}`} className="text-accent hover:underline">{balance ? "この社員の残日数・履歴" : "この社員の休暇の履歴"}</Link>
                 </div>
                 {conflicts.length > 0 && (
                   <div className="mt-2 rounded-lg border border-warn/30 bg-warn-soft px-3 py-2 text-xs text-warn-ink">

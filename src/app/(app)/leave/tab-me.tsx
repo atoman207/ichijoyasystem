@@ -1,5 +1,5 @@
 import Link from "@/components/ui/Link";
-import { canApproveLeave, canCancelLeave, canManageLeaveGrants, canRegisterHolidayWork, canRequestLeaveFor } from "@/lib/auth/permissions";
+import { canApproveLeave, canCancelLeave, canManageLeaveGrants, canRegisterHolidayWork, canRequestLeaveFor, canViewLeaveBalanceOf } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
 import { fmtDate, fmtDateTime } from "@/lib/format";
 import {
@@ -46,6 +46,8 @@ export function MeTab({ ctx }: { ctx: Ctx }) {
   const profile = leaveProfile(db, target);
   const store = db.stores.find((s) => s.id === target.storeId);
   const hidden = <input type="hidden" name="returnTo" value={base} />;
+  // 残日数は本人と本部・管理者だけ (お客様のご要望 2026-11-26)。店長は自店舗の社員の休暇を申請・承認できるが残日数は見ない
+  const showBalance = canViewLeaveBalanceOf(user, target);
 
   return (
     <div className="space-y-4">
@@ -70,6 +72,8 @@ export function MeTab({ ctx }: { ctx: Ctx }) {
         </span>
       </div>
 
+      {showBalance ? (
+        <>
       <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-4">
         <Stat
           label="有給の残日数"
@@ -96,6 +100,10 @@ export function MeTab({ ctx }: { ctx: Ctx }) {
       </div>
       {paid.shortage > 0 && <Note tone="warn">承認済みの有給のうち {fmtDays(paid.shortage)} に充てる付与がありません (付与の登録漏れ・期限切れ)。付与の登録を確かめてください。</Note>}
       {comp.shortage > 0 && <Note tone="warn">休日出勤のない振休が {fmtDays(comp.shortage)} あります (休日出勤の登録漏れ)。</Note>}
+        </>
+      ) : (
+        <Note>有給・振休の残日数は、本人と本部・管理者だけが見られます。休暇の申請・承認はこの画面でできます。</Note>
+      )}
 
       <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-3">
         <div className="space-y-4 @4xl:col-span-2">
@@ -151,6 +159,8 @@ export function MeTab({ ctx }: { ctx: Ctx }) {
             </Table>
           </Card>
 
+          {showBalance && (
+            <>
           <Card padded={false}>
             <div className="p-5 pb-0">
               <CardHeader title="有給の付与と消化" description={`付与ごとの残。期限 (付与から 2 年) の早いものから${ctx.settings.consumeOrder === "oldest" ? "" : "ではなく、新しい付与 (当年度分) から"}消化します`} />
@@ -244,6 +254,8 @@ export function MeTab({ ctx }: { ctx: Ctx }) {
               </tbody>
             </Table>
           </Card>
+            </>
+          )}
         </div>
 
         <div className="space-y-4">
@@ -255,7 +267,7 @@ export function MeTab({ ctx }: { ctx: Ctx }) {
                 <input type="hidden" name="userId" value={target.id} />
                 <Field label="種類">
                   <Select name="leaveType" defaultValue={sp.leaveType === "comp" ? "comp" : "paid"}>
-                    {(Object.keys(LEAVE_TYPE) as (keyof typeof LEAVE_TYPE)[]).map((t) => <option key={t} value={t}>{LEAVE_TYPE[t].label}{t === "paid" ? ` (残 ${fmtDays(paid.remaining - paid.pending)})` : t === "comp" ? ` (残 ${fmtDays(comp.remaining - comp.pending)})` : ""}</option>)}
+                    {(Object.keys(LEAVE_TYPE) as (keyof typeof LEAVE_TYPE)[]).map((t) => <option key={t} value={t}>{LEAVE_TYPE[t].label}{showBalance ? (t === "paid" ? ` (残 ${fmtDays(paid.remaining - paid.pending)})` : t === "comp" ? ` (残 ${fmtDays(comp.remaining - comp.pending)})` : "") : ""}</option>)}
                   </Select>
                 </Field>
                 <div className="grid grid-cols-2 gap-2">

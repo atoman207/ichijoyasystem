@@ -56,6 +56,8 @@ export interface EventFormValues {
   memo: string;
   /** 作業内容 (予定表に表示。数量「タ6 タ新4」か自由な文「養生、廃材撤去」。空 = 見積・受注の明細などから自動) */
   work?: string;
+  /** 点検の予定: 点検の電話をした社員 (点検インセンティブ。空 = 点検ではない) */
+  inspectionBy?: string;
 }
 
 const PRESETS: { label: string; start?: string; end?: string; minutes?: number; allDay?: boolean; slot?: "am" | "pm" }[] = [
@@ -520,6 +522,17 @@ export function EventForm({
               {/* 作業内容 (お客様のご要望 2026-11-26: 見積・現場管理・施工なども具体的な内容を予定表に表示) */}
               <Field label="作業内容 (予定表に表示)" hint="空欄なら見積・受注の明細などから自動 (例: タ6 タ新4 フ2)。自由な文も書けます (例: 養生、廃材撤去 / クロス工事、畳下床板2間)">
                 <Input name="work" value={v.work ?? ""} onChange={(e) => set("work", e.target.value)} maxLength={200} placeholder="例: タ3間、フ1部屋" />
+              </Field>
+              {/* 点検 (お客様のご要望 2026-11-26: 点検インセンティブ = 点検の電話をした人 × お客様宅に行った件数。勤怠 → インセンティブ) */}
+              <Field label="点検の電話をした人 (点検の予定のとき)" hint="選ぶと点検インセンティブに数えます (予定の日が過ぎた = お客様宅に行った件数)">
+                <Select name="inspectionBy" value={v.inspectionBy ?? ""} onChange={(e) => set("inspectionBy", e.target.value)}>
+                  <option value="">点検ではない</option>
+                  {users.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name}
+                    </option>
+                  ))}
+                </Select>
               </Field>
               <Field label="メモ (社内共有)">
                 <Textarea name="memo" value={v.memo} onChange={(e) => set("memo", e.target.value)} maxLength={2000} placeholder="持ち物・駐車場・事前連絡・議題など" />

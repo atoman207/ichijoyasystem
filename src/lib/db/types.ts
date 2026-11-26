@@ -11,7 +11,7 @@ export type * from "./types-mgmt";
 import type { JobSpec, ProductionJob, ResourceBooking, ScheduleHold } from "./types-plan";
 import type { AvatarPhoto } from "../avatar-photos";
 export type * from "./types-plan";
-import type { HolidayWork, LeaveGrant, LeaveRequest } from "./types-hr";
+import type { AttendanceDay, AttendanceLine, AttendanceMonth, AttendanceRequest, HolidayWork, LeaveGrant, LeaveRequest } from "./types-hr";
 export type * from "./types-hr";
 import type { Condolence, OfficeImprovement } from "./types-office";
 export type * from "./types-office";
@@ -1252,6 +1252,11 @@ export interface ScheduleEvent {
    * 空なら自動 (見積の明細・件名・メモから。src/lib/schedule-work.ts)
    */
   work?: string;
+  /**
+   * 点検の予定: 点検の電話をした社員 (点検インセンティブ = 点検 1 件 × 500 円。お客様宅に行って初めて発生 = 予定の日が過ぎたもの。
+   * src/lib/hr/incentive-month.ts)。空 = 点検ではない
+   */
+  inspectionBy?: string;
   createdBy?: string;
   createdAt?: string;
   updatedBy?: string;
@@ -1914,10 +1919,15 @@ export interface Database {
   productionJobs: ProductionJob[];
   resourceBookings: ResourceBooking[];
   scheduleHolds: ScheduleHold[];
-  /* 有給・休日出勤 (types-hr.ts) */
+  /* 有給・休日出勤・勤怠月次 (types-hr.ts) */
   leaveRequests: LeaveRequest[];
   leaveGrants: LeaveGrant[];
   holidayWorks: HolidayWork[];
+  attendanceMonths: AttendanceMonth[];
+  attendanceLines: AttendanceLine[];
+  /* 打刻・勤務表 (types-hr.ts・src/lib/hr/timecard.ts) */
+  attendanceDays: AttendanceDay[];
+  attendanceRequests: AttendanceRequest[];
   /* 作業日報・販促の記録 (types-ops.ts) */
   workReportDays: WorkReportDay[];
   promotions: Promotion[];
