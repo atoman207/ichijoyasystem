@@ -4,11 +4,12 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Database, Role, StoreId, User } from "@/lib/db/types";
-import { assignableRoles, assignableStore, canApproveSignup, canChangeUserRole, canManageUser, canManageUsers, roleStoreProblem } from "@/lib/auth/permissions";
+import { assignableRoles, assignableStore, canApproveSignup, canChangeUserRole, canManageUser, canManageUserAvatar, canManageUsers, roleStoreProblem } from "@/lib/auth/permissions";
 import { ROLE_LABEL } from "@/lib/constants";
 import { hashPassword } from "@/lib/auth/password";
 import { setSessionCookie } from "@/lib/auth/session";
-import { putObject, removeObjects } from "@/lib/storage";
+import { putObject } from "@/lib/storage";
+import { addAvatarPhoto, avatarPhotoId, findAvatarPhoto, restoreAvatarPhoto, setAvatarHidden, validAvatarPhotoId } from "@/lib/avatar-photos";
 import { loginIdProblem, PASSWORD_AUDIT, ACCOUNT_LOCK_MESSAGE, PASSWORD_LOCK_MESSAGE, accountEditLocked } from "@/lib/account-rules";
 import { fail, isKeyOf, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
@@ -19,7 +20,9 @@ import { fail, isKeyOf, requireActionUser, safeReturn, str, withMsg } from "./gu
  * - 新規登録 (ログイン画面から) は申請として受け付け、管理者が承認するまでログインできない (signupStatus = pending・active = false)
  * - ロール・所属・役職の変更 (updateUserRole) は、管理者ならテスト期間中のアカウントの変更の停止の対象外 (お客様のご要望 2026-11-26)
  * - 画面は 設定 → ユーザーと権限 と 社員管理 (/staff) の 2 か所。フォームの returnTo (アカウント画面の削除は listTo) で操作した画面に戻る
- * - 顔写真は本人が プロフィール から登録する (VPS の保存先の avatars/<ユーザー ID>/<時刻>.jpg)
+ * - 顔写真は本人が プロフィール から登録する (VPS の保存先の avatars/<ユーザー ID>/<時刻>.jpg)。管理者はアカウントの画面でほかの社員の顔写真も。
+ *   顔写真は削除しない (お客様のご要望 2026-11-26): 「表示しない」で隠し、写真を変えても前の写真を残す (src/lib/avatar-photos.ts)。
+ *   アカウントを削除しても写真のファイルは残す
  */
 
 const USERS = "/settings?tab=users";
@@ -194,7 +197,6 @@ export async function deleteUser(id: string, formData: FormData) {
   const actor = await requireManager(back);
   assertUnlocked(back);
   if (str(formData, "confirm") !== "1") fail(back, "削除の確認にチェックを入れてください。");
-  let removedKey: string | undefined;
   let label = "";
   await mutate((db) => {
     const u = findManaged(db, actor, id, back);
@@ -205,12 +207,11 @@ export async function deleteUser(id: string, formData: FormData) {
     // データベースの外部キー (on delete set null) と同じ扱いを手元のデータにもする
     for (const c of db.customers) if (c.assignedUserId === u.id) c.assignedUserId = undefined;
     for (const i of db.inquiries) if (i.assignedUserId === u.id) i.assignedUserId = undefined;
-    removedKey = u.avatarKey;
     label = u.name;
     db.users = db.users.filter((x) => x.id !== u.id);
     addAudit(db, { userId: actor.id, action: "delete", entity: "user", entityId: u.id, entityLabel: u.name, summary: `アカウントを削除 (${u.name} / ${ROLE_LABEL[u.role]} / ${storeLabel(db, u.storeId)} / ${u.email})`, storeId: u.storeId });
   });
-  if (removedKey) await removeObjects([removedKey]).catch((err) => console.error("[accounts] avatar remove failed:", err));
+  // 顔写真のファイルは消さない (お客様のご要望 2026-11-26「元の写真データは削除できない」)
   revalidatePath("/settings");
   // 削除したアカウントの画面には戻れないので、開いた一覧 (社員管理・設定) に戻る
   redirect(withMsg(safeReturn(str(formData, "listTo"), USERS), `${label} さんのアカウントを削除しました。`));
@@ -277,50 +278,99 @@ function imageType(buf: Buffer): "image/jpeg" | "image/png" | "image/webp" | und
   return undefined;
 }
 
-/** 顔写真を登録・変更する (ブラウザで正方形 256px の JPEG に縮小してから送る) */
+/** 顔写真の操作の戻り先 (本人 = プロフィール、管理者がほかの社員 = アカウントの画面) */
+function avatarBack(actor: User, targetId: string, fd?: FormData): string {
+  if (targetId === actor.id) return "/profile";
+  return safeReturn(fd ? str(fd, "returnTo") : "", `/settings/users/${encodeURIComponent(targetId)}`);
+}
+
+/** 顔写真を操作できる社員 (本人・管理者)。テスト期間中のアカウントの変更の停止の対象外 (本人の顔写真と同じ) */
+function avatarTarget(db: Database, actor: User, targetId: string, back: string): User {
+  const u = db.users.find((x) => x.id === targetId);
+  if (!u) fail(back, "ユーザーが見つかりません。");
+  if (!canManageUserAvatar(actor, u)) fail(back, "ほかの社員の顔写真を変えられるのは管理者です。");
+  return u;
+}
+
+function avatarAuditLabel(actor: User, u: User, what: string): string {
+  return actor.id === u.id ? what : `${what} (${actor.name} さんが変更)`;
+}
+
+/**
+ * 顔写真を登録・変更する (ブラウザで正方形 256px の JPEG に縮小してから送る)。
+ * userId = 変える社員 (なければ本人。ほかの社員は管理者だけ)。前の写真は以前の写真として残し、ファイルは消さない
+ */
 export async function updateOwnAvatar(formData: FormData) {
-  const back = "/profile";
   const user = await requireActionUser();
+  const targetId = str(formData, "userId") || user.id;
+  const back = avatarBack(user, targetId, formData);
   const file = formData.get("avatar");
   if (!(file instanceof File) || file.size === 0) fail(back, "写真を選んでください。");
   if (file.size > AVATAR_MAX_BYTES) fail(back, "写真が大きすぎます (512 KB まで)。別の写真を選んでください。");
+  avatarTarget(getDb(), user, targetId, back);
   const body = Buffer.from(await file.arrayBuffer());
   const type = imageType(body);
   if (!type) fail(back, "JPEG・PNG・WebP の写真を選んでください。");
   const ext = type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
-  const key = `avatars/${user.id.replace(/[^\w-]/g, "")}/${Date.now()}.${ext}`;
+  const key = `avatars/${targetId.replace(/[^\w-]/g, "")}/${Date.now()}.${ext}`;
   try {
     await putObject(key, body);
   } catch (err) {
     console.error("[accounts] avatar upload failed:", err);
     fail(back, "写真を保存できませんでした。時間をおいて再度お試しください。");
   }
-  const old = getDb().users.find((u) => u.id === user.id)?.avatarKey;
+  let name = "";
   await mutate((db) => {
-    const u = db.users.find((x) => x.id === user.id);
-    if (!u) fail(back, "ユーザーが見つかりません。");
-    u.avatarKey = key;
-    u.avatarUpdatedAt = nowIso();
-    addAudit(db, { userId: user.id, action: "update", entity: "user", entityId: user.id, entityLabel: user.name, summary: old ? "顔写真を変更" : "顔写真を登録", storeId: user.storeId });
+    const u = avatarTarget(db, user, targetId, back);
+    const had = Boolean(u.avatarKey);
+    const before: Pick<User, "avatarHidden"> = { avatarHidden: u.avatarHidden };
+    addAvatarPhoto(u, { key, at: nowIso(), by: user.id });
+    name = u.name;
+    addAudit(db, { userId: user.id, action: "update", entity: "user", entityId: u.id, entityLabel: u.name, summary: avatarAuditLabel(user, u, had ? "顔写真を変更 (前の写真は以前の写真に残す)" : "顔写真を登録"), storeId: u.storeId, changes: diffChanges(before, u, ["avatarHidden"]) });
   });
-  if (old && old !== key) await removeObjects([old]).catch((err) => console.error("[accounts] old avatar remove failed:", err));
   revalidatePath("/", "layout");
-  redirect(withMsg(back, "顔写真を保存しました。"));
+  redirect(withMsg(back, targetId === user.id ? "顔写真を保存しました。" : `${name} さんの顔写真を保存しました。`));
 }
 
-export async function removeOwnAvatar() {
-  const back = "/profile";
+/**
+ * 顔写真を「表示しない」/「表示する」(写真のファイルと記録は消さない。お客様のご要望 2026-11-26)。
+ * 表示しない間は、ヘッダー・予定表・チャットなどは名前の 1 文字の丸になる
+ */
+export async function setAvatarVisible(userId: string, visible: boolean) {
   const user = await requireActionUser();
-  let old: string | undefined;
+  const back = avatarBack(user, userId);
+  let name = "";
   await mutate((db) => {
-    const u = db.users.find((x) => x.id === user.id);
-    if (!u?.avatarKey) fail(back, "顔写真は登録されていません。");
-    old = u.avatarKey;
-    u.avatarKey = undefined;
-    u.avatarUpdatedAt = undefined;
-    addAudit(db, { userId: user.id, action: "update", entity: "user", entityId: user.id, entityLabel: user.name, summary: "顔写真を削除", storeId: user.storeId });
+    const u = avatarTarget(db, user, userId, back);
+    if (!u.avatarKey) fail(back, "顔写真は登録されていません。");
+    if (Boolean(u.avatarHidden) === !visible) fail(back, visible ? "顔写真はすでに表示しています。" : "顔写真はすでに表示しないにしています。");
+    const before: Pick<User, "avatarHidden"> = { avatarHidden: u.avatarHidden };
+    setAvatarHidden(u, !visible);
+    name = u.name;
+    addAudit(db, { userId: user.id, action: "update", entity: "user", entityId: u.id, entityLabel: u.name, summary: avatarAuditLabel(user, u, visible ? "顔写真を表示する" : "顔写真を表示しない (写真は残す)"), storeId: u.storeId, changes: diffChanges(before, u, ["avatarHidden"]) });
   });
-  if (old) await removeObjects([old]).catch((err) => console.error("[accounts] avatar remove failed:", err));
   revalidatePath("/", "layout");
-  redirect(withMsg(back, "顔写真を削除しました。"));
+  const who = userId === user.id ? "" : `${name} さんの`;
+  redirect(withMsg(back, visible ? `${who}顔写真を表示に戻しました。` : `${who}顔写真を表示しないにしました。写真は残っているので、「表示する」でいつでも戻せます。`));
+}
+
+/** 以前の顔写真に戻す (今の写真も以前の写真として残る)。表示しないにしていたら表示に戻す */
+export async function restoreAvatar(userId: string, photoId: string) {
+  const user = await requireActionUser();
+  const back = avatarBack(user, userId);
+  if (!validAvatarPhotoId(photoId)) fail(back, "写真が見つかりません。");
+  let name = "";
+  await mutate((db) => {
+    const u = avatarTarget(db, user, userId, back);
+    const photo = findAvatarPhoto(u, photoId);
+    if (!photo) fail(back, "写真が見つかりません。");
+    if (u.avatarKey === photo.key && !u.avatarHidden) fail(back, "この写真はいま表示している写真です。");
+    const before: Pick<User, "avatarHidden"> = { avatarHidden: u.avatarHidden };
+    const from = u.avatarKey ? avatarPhotoId(u.avatarKey) : "なし";
+    restoreAvatarPhoto(u, photo.key, nowIso());
+    name = u.name;
+    addAudit(db, { userId: user.id, action: "update", entity: "user", entityId: u.id, entityLabel: u.name, summary: avatarAuditLabel(user, u, `顔写真を以前の写真に戻す (${from} → ${photoId})`), storeId: u.storeId, changes: diffChanges(before, u, ["avatarHidden"]) });
+  });
+  revalidatePath("/", "layout");
+  redirect(withMsg(back, userId === user.id ? "顔写真を以前の写真に戻しました。" : `${name} さんの顔写真を以前の写真に戻しました。`));
 }

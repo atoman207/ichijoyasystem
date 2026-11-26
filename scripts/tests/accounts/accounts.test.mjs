@@ -5,6 +5,7 @@
  * - 管理者はロール・所属・役職を変えられる (canChangeUserRole。テスト期間中のアカウントの変更の停止の対象外)
  * - 店長・店舗スタッフは本部に所属させない (roleStoreProblem)
  * - 権限一覧 (permission-table.ts) の行が同じ内容
+ * - 顔写真は削除しない (2026-11-26): 表示しない / 表示する・前の写真を残す・以前の写真に戻す (avatar-photos.ts)・avatarUrl・本人と管理者だけ
  * 画面の流れ (申請 → ログインできない → 管理者が承認 → ログイン) は試しのサーバーで確かめる
  */
 import path from "node:path";
@@ -16,6 +17,8 @@ const jiti = createJiti(import.meta.url, { alias: { "@": path.join(root, "src") 
 const perm = await jiti.import(path.join(root, "src/lib/auth/permissions.ts"));
 const table = await jiti.import(path.join(root, "src/lib/auth/permission-table.ts"));
 const rules = await jiti.import(path.join(root, "src/lib/account-rules.ts"));
+const photos = await jiti.import(path.join(root, "src/lib/avatar-photos.ts"));
+const carry = await jiti.import(path.join(root, "src/lib/carryover.ts"));
 
 let pass = 0;
 const fails = [];
@@ -66,6 +69,56 @@ ok(signupRow && signupRow.admin === "○" && signupRow.manager === "−" && sign
 const roleRow = rows.find((r) => r.action.startsWith("ロール・所属・役職の変更"));
 ok(roleRow && roleRow.admin === "○" && roleRow.manager === "−", "権限一覧: ロール・所属・役職の変更は管理者");
 ok(!rows.some((r) => /新規登録の申請の承認 \(店長/.test(r.action)), "権限一覧に「店長も承認」の古い文がない");
+
+// 6. 顔写真は削除しない (お客様のご要望 2026-11-26「非表示にできても元の写真データは削除できない。後からいつでも表示に戻せる」)
+{
+  const a = { id: "u_a", avatarKey: "avatars/u_a/100.jpg", avatarUpdatedAt: "2026-11-18T02:20:34.148Z" }; // この機能より前の写真 (一覧なし)
+  ok(photos.avatarPhotosOf(a).length === 1 && photos.avatarPhotosOf(a)[0].key === a.avatarKey, "一覧のない写真は今の写真 1 枚として扱う");
+  ok(rules.avatarUrl(a)?.startsWith("/api/avatars/u_a?v="), "表示している写真の URL");
+  photos.setAvatarHidden(a, true);
+  ok(a.avatarHidden === true && a.avatarKey === "avatars/u_a/100.jpg", "表示しない: 写真 (avatarKey) は残る");
+  ok(rules.avatarUrl(a) === undefined, "表示しない: 画面の URL は出さない (名前の 1 文字の丸)");
+  ok(a.avatarPhotos?.length === 1, "表示しない: 前からの写真も一覧に残す");
+  photos.setAvatarHidden(a, false);
+  ok(a.avatarHidden === undefined && rules.avatarUrl(a) !== undefined, "表示する: 同じ写真に戻る");
+
+  photos.addAvatarPhoto(a, { key: "avatars/u_a/200.jpg", at: "2026-11-26T08:00:00.000Z", by: "system", note: "公開サイトのスタッフ紹介" });
+  ok(a.avatarKey === "avatars/u_a/200.jpg" && a.avatarUpdatedAt === "2026-11-26T08:00:00.000Z", "新しい写真が今の写真");
+  ok(a.avatarPhotos.map((p) => p.key).join(",") === "avatars/u_a/200.jpg,avatars/u_a/100.jpg", "前の写真は一覧に残る (新しい順)");
+  ok(photos.previousAvatarPhotos(a).map((p) => p.key).join(",") === "avatars/u_a/100.jpg", "以前の写真 = 今の写真を除く");
+  ok(photos.currentAvatarPhoto(a)?.note === "公開サイトのスタッフ紹介", "今の写真のどこから");
+
+  photos.setAvatarHidden(a, true);
+  photos.addAvatarPhoto(a, { key: "avatars/u_a/300.jpg", at: "2026-11-26T09:00:00.000Z", by: "u_a" });
+  ok(a.avatarHidden === undefined, "表示しないの間に新しい写真を登録すると表示に戻る");
+  ok(a.avatarPhotos.length === 3, "写真は 3 枚とも残る");
+
+  ok(photos.findAvatarPhoto(a, "100.jpg")?.key === "avatars/u_a/100.jpg", "写真の ID (ファイル名) で探せる");
+  ok(photos.findAvatarPhoto(a, "999.jpg") === undefined, "ない写真は見つからない");
+  ok(photos.restoreAvatarPhoto(a, "avatars/u_a/100.jpg", "2026-11-26T10:00:00.000Z") === true && a.avatarKey === "avatars/u_a/100.jpg", "以前の写真に戻す");
+  ok(a.avatarUpdatedAt === "2026-11-26T10:00:00.000Z", "戻すと URL (?v=) が変わる");
+  ok(a.avatarPhotos.length === 3 && a.avatarPhotos[0].key === "avatars/u_a/300.jpg", "戻しても一覧の順と写真はそのまま");
+  ok(photos.restoreAvatarPhoto(a, "avatars/u_b/1.jpg", "2026-11-26T10:00:00.000Z") === false && a.avatarKey === "avatars/u_a/100.jpg", "ほかの社員の写真には戻せない");
+  photos.addAvatarPhoto(a, { key: "avatars/u_a/100.jpg", at: "2026-11-26T11:00:00.000Z" });
+  ok(a.avatarPhotos.length === 3 && a.avatarPhotos[0].key === "avatars/u_a/100.jpg", "同じファイルを登録し直しても二重にしない");
+
+  ok(photos.validAvatarPhotoId("1794968434148.jpg") && !photos.validAvatarPhotoId("../x.jpg") && !photos.validAvatarPhotoId("a/b.jpg") && !photos.validAvatarPhotoId("x.svg"), "写真の ID の形 (パスを含まない)");
+  ok(photos.avatarPhotoUrl("u_a", "avatars/u_a/100.jpg") === "/api/avatars/u_a?photo=100.jpg", "確認用の URL");
+  const v = photos.avatarPhotoViews(a, (iso) => iso.slice(0, 10), (id) => (id === "u_a" ? "本人" : undefined));
+  ok(v.current?.id === "100.jpg" && v.previous.length === 2 && v.previous[0].label.includes("本人"), "画面の今の写真・以前の写真");
+  const sys = photos.avatarPhotoViews({ id: "u_a", avatarKey: "avatars/u_a/200.jpg", avatarPhotos: [{ key: "avatars/u_a/200.jpg", at: "2026-11-26T08:00:00.000Z", by: "system", note: "公開サイトのスタッフ紹介" }] }, (iso) => iso.slice(0, 10), () => undefined);
+  ok(sys.current?.label === "2026-11-26 登録 (システム) 公開サイトのスタッフ紹介", "どこから・システムの登録の表示");
+  ok(photos.avatarPhotoViews({ id: "u_x" }, String, () => undefined).current === undefined, "写真のない社員");
+
+  // 本人と管理者だけ
+  ok(perm.canManageUserAvatar(staff, staff) === true, "本人は自分の顔写真を変えられる");
+  ok(perm.canManageUserAvatar(admin, staff) === true, "管理者はほかの社員の顔写真を変えられる");
+  for (const x of [manager, hq]) ok(perm.canManageUserAvatar(x, staff) === false, `${x.role} はほかの社員の顔写真を変えられない`);
+  const avRow = rows.find((r) => r.action.startsWith("ほかの社員の顔写真"));
+  ok(avRow && avRow.admin === "○" && avRow.hq === "−" && avRow.manager === "−" && avRow.staff === "−", "権限一覧: ほかの社員の顔写真は管理者");
+  // 試験期間の引き継ぎに入る
+  ok(carry.USER_FIELDS.includes("avatarHidden") && carry.USER_FIELDS.includes("avatarPhotos"), "引き継ぐ社員の項目に表示しない・写真の一覧");
+}
 
 console.log(`\n${pass} OK${fails.length ? ` / ${fails.length} NG` : ""}`);
 if (fails.length) process.exit(1);

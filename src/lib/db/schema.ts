@@ -81,6 +81,9 @@ export const TABLES: TableDef[] = [
       // アカウントの自己管理: 顔写真 (VPS のファイルのパス) と新規登録の申請 (承認されるまで active = false)
       ["avatarKey", "text"],
       ["avatarUpdatedAt", ts],
+      // 顔写真は削除しない: 表示しない印と、これまでに登録したすべての写真 (src/lib/avatar-photos.ts。2026-11-26)
+      ["avatarHidden", "boolean"],
+      ["avatarPhotos", "jsonb"],
       ["signupStatus", "text check (signup_status in ('pending'))"],
       ["signupRequestedAt", ts],
       ["signupNote", "text"],

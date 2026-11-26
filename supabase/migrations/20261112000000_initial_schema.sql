@@ -63,6 +63,8 @@ create table if not exists users (
   chatwork_account_id text,
   avatar_key text,
   avatar_updated_at timestamptz,
+  avatar_hidden boolean,
+  avatar_photos jsonb,
   signup_status text check (signup_status in ('pending')),
   signup_requested_at timestamptz,
   signup_note text
@@ -1754,6 +1756,8 @@ alter table users add column if not exists notify_by_email boolean;
 alter table users add column if not exists chatwork_account_id text;
 alter table users add column if not exists avatar_key text;
 alter table users add column if not exists avatar_updated_at timestamptz;
+alter table users add column if not exists avatar_hidden boolean;
+alter table users add column if not exists avatar_photos jsonb;
 alter table users add column if not exists signup_status text check (signup_status in ('pending'));
 alter table users add column if not exists signup_requested_at timestamptz;
 alter table users add column if not exists signup_note text;

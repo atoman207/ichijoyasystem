@@ -9,6 +9,7 @@
 import type { AllocationRun, Bom, ExpenseClass, ItemCategory, Material, MaterialCost, MaterialTransfer, MaterialUsage, MgmtEntry, MgmtRule, OrderAttribution, PeriodClose, PurchaseLineAlloc, SalesAdjustment, SalesArea, StockMove } from "./types-mgmt";
 export type * from "./types-mgmt";
 import type { JobSpec, ProductionJob, ResourceBooking, ScheduleHold } from "./types-plan";
+import type { AvatarPhoto } from "../avatar-photos";
 export type * from "./types-plan";
 import type { HolidayWork, LeaveGrant, LeaveRequest } from "./types-hr";
 export type * from "./types-hr";
@@ -76,6 +77,10 @@ export interface User {
   /** 顔写真 (VPS のファイルのパス。src/lib/storage.ts)。画面では /api/avatars/<ID>?v=<avatarUpdatedAt> で表示する */
   avatarKey?: string;
   avatarUpdatedAt?: string;
+  /** 顔写真を表示しない (写真のファイルと記録は残す。本人・管理者がいつでも表示に戻せる。src/lib/avatar-photos.ts。2026-11-26) */
+  avatarHidden?: boolean;
+  /** これまでに登録したすべての顔写真 (新しい順。写真は削除しない = 以前の写真にいつでも戻せる。src/lib/avatar-photos.ts) */
+  avatarPhotos?: AvatarPhoto[];
   /** 新規登録の申請中 (承認されるまで active = false。承認すると消える) */
   signupStatus?: "pending";
   signupRequestedAt?: string;

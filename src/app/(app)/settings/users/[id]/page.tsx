@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { assignableRoles, assignableStore, canChangeUserRole, canManageUser, canManageUsers, canSeeAllStores, isDemoAccount } from "@/lib/auth/permissions";
+import { assignableRoles, assignableStore, canChangeUserRole, canManageUser, canManageUserAvatar, canManageUsers, canSeeAllStores, isDemoAccount } from "@/lib/auth/permissions";
+import { AvatarUploader } from "@/components/settings/AvatarUploader";
+import { avatarPhotoViews } from "@/lib/avatar-photos";
 import { deleteUser, resetUserPassword, toggleUserActive, updateUserProfile, updateUserRole } from "@/lib/actions/accounts";
 import { ACCOUNT_LOCK_MESSAGE, PASSWORD_LOCK_MESSAGE, accountEditLocked, avatarUrl, credentialStatus } from "@/lib/account-rules";
 import { updateUserNotify } from "@/lib/actions/settings-ops";
@@ -122,7 +124,10 @@ export default async function UserAccountPage({ params, searchParams }: { params
             <CardHeader title="状態" />
             <div className="mb-3 flex items-center gap-3">
               <Avatar name={u.name} id={u.id} size={56} src={avatarUrl(u)} />
-              <p className="text-[11px] leading-relaxed text-ink-3">顔写真は本人がプロフィールで登録します。</p>
+              <p className="text-[11px] leading-relaxed text-ink-3">
+                {u.avatarKey && u.avatarHidden ? "顔写真は「表示しない」になっています (写真は残っています)。" : "顔写真は本人がプロフィールで登録します。"}
+                {canManageUserAvatar(user, u) && u.id !== user.id ? " 管理者は下の「顔写真」で変更・表示しない・以前の写真に戻すができます。" : ""}
+              </p>
             </div>
             <Dl columns={1} items={[["状態", u.active ? "有効 (ログインできます)" : "無効 (ログインできません)"], ["ログイン ID", <span key="id" className="font-mono text-[13px]">{u.email}</span>], ["ログイン ID の変更", loginIdLabel], ["最終ログイン", lastLogin ? fmtDateTime(lastLogin.at) : "-"], ["パスワード", passwordLabel]]} />
             <p className="mt-2 text-[11px] leading-relaxed text-ink-3">パスワードは暗号化 (ハッシュ) して保存しているため、管理者を含め誰も中身を見られません。忘れたときは下の「パスワードの再設定」で新しいパスワードを決めて本人に伝えます。</p>
@@ -132,6 +137,12 @@ export default async function UserAccountPage({ params, searchParams }: { params
               {u.id === user.id && <p className="mt-1 text-[11px] text-ink-3">自分自身は無効にできません。</p>}
             </form>
           </Card>
+          {u.id !== user.id && canManageUserAvatar(user, u) && (
+            <Card id="avatar">
+              <CardHeader title="顔写真" description="管理者が変更できます。写真は削除されず、「表示しない」・以前の写真に戻すができます" />
+              <AvatarUploader name={u.name} id={u.id} self={false} returnTo={returnTo} hidden={Boolean(u.avatarHidden)} {...avatarPhotoViews(u, fmtDateTime, (x) => db.users.find((y) => y.id === x)?.name)} />
+            </Card>
+          )}
           <Card>
             <CardHeader title="通知の受け取り方" description="承認依頼・承認の結果・メンション・業務依頼をメール・Chatwork でも知らせる設定" />
             <NotifyPrefsForm u={u} action={updateUserNotify.bind(null, u.id)} returnTo={returnTo} />

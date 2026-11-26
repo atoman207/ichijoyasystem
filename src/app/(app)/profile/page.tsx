@@ -11,6 +11,7 @@ import { Avatar, Badge, Button, Card, CardHeader, ChannelTag, Field, Flash, Inpu
 import { changeOwnLoginId, changeOwnPassword } from "@/lib/actions/auth";
 import { accountEditLocked, avatarUrl, credentialStatus, PASSWORD_LOCK_MESSAGE } from "@/lib/account-rules";
 import { AvatarUploader } from "@/components/settings/AvatarUploader";
+import { avatarPhotoViews } from "@/lib/avatar-photos";
 import { updateOwnNotify } from "@/lib/actions/settings-ops";
 import { approvalSettings } from "@/lib/approval-rules";
 import { NotifyPrefsForm } from "@/components/settings/NotifyPrefsForm";
@@ -269,8 +270,8 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
 
       <div className="mb-6 grid grid-cols-1 gap-4 @3xl:grid-cols-2">
         <Card>
-          <CardHeader title="顔写真" description="社内の画面で、あなたの名前の横に表示されます" icon={<Camera />} />
-          <AvatarUploader name={user.name} id={user.id} src={avatarUrl(user)} />
+          <CardHeader title="顔写真" description="社内の画面で、あなたの名前の横に表示されます (写真は削除されず、表示しない・以前の写真に戻すができます)" icon={<Camera />} />
+          <AvatarUploader name={user.name} id={user.id} hidden={Boolean(user.avatarHidden)} {...avatarPhotoViews(user, fmtDateTime, (id) => db.users.find((x) => x.id === id)?.name)} />
         </Card>
         <Card>
           <CardHeader title="ログイン ID (メールアドレス) の変更" description="次回のログインから新しい ID を使います。確認のため現在のパスワードを入力してください" icon={<AtSign />} />

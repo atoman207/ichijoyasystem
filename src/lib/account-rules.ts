@@ -68,8 +68,11 @@ export function reservedLoginId(id: string): boolean {
   return id.toLowerCase().endsWith(DEMO_EMAIL_DOMAIN);
 }
 
-/** 顔写真の URL (登録していなければ undefined。変更したら URL が変わり、ブラウザーのキャッシュを使わない) */
-export function avatarUrl(u: Pick<User, "id" | "avatarKey" | "avatarUpdatedAt">): string | undefined {
-  if (!u.avatarKey) return undefined;
+/**
+ * 顔写真の URL (登録していない・「表示しない」にしているときは undefined = 名前の 1 文字の丸。
+ * 変更したら URL が変わり、ブラウザーのキャッシュを使わない)
+ */
+export function avatarUrl(u: Pick<User, "id" | "avatarKey" | "avatarUpdatedAt"> & { avatarHidden?: boolean }): string | undefined {
+  if (!u.avatarKey || u.avatarHidden) return undefined;
   return `/api/avatars/${encodeURIComponent(u.id)}?v=${encodeURIComponent(u.avatarUpdatedAt ?? "")}`;
 }

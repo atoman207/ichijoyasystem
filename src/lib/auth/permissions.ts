@@ -270,6 +270,15 @@ export function canChangeUserRole(user: User): boolean {
   return user.role === "admin";
 }
 
+/**
+ * 顔写真の登録・「表示しない / 表示する」・以前の写真に戻す、と非表示・以前の写真の確認ができるか: 本人と管理者
+ * (お客様のご要望 2026-11-26「顔写真は非表示にできても元の写真データは削除できない」。写真を消す操作はない。
+ * テスト期間中のアカウントの変更の停止の対象外 = 本人の顔写真と同じ)
+ */
+export function canManageUserAvatar(user: User, target: { id: string }): boolean {
+  return user.id === target.id || user.role === "admin";
+}
+
 /** 店舗のロール (店長・店舗スタッフ) は本部ではなく店舗に所属させる (店舗の範囲で権限を判定するため) */
 export function roleStoreProblem(role: Role, store: { id: string; kind?: string } | undefined): string | undefined {
   if ((role === "store_manager" || role === "store_staff") && (!store || store.kind === "hq" || store.id === "hq")) return "店長・店舗スタッフは、所属する店舗 (本部以外) を選んでください。";

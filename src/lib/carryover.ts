@@ -23,7 +23,7 @@ export const NO_LINK = new Set(["stores", "users", "settings", "products", "holi
 /** 行ごとには引き継がず、別の扱いにする表 */
 export const SPECIAL = new Set(["users", "settings", "stores"]);
 /** 社員の行で引き継ぐ項目 (本人のプロフィール・パスワード。アカウントの変更は期間中は止めている) */
-export const USER_FIELDS = ["email", "passwordHash", "avatarKey", "avatarUpdatedAt", "kana", "phone", "notifyEmail", "notifyByEmail", "chatworkAccountId"];
+export const USER_FIELDS = ["email", "passwordHash", "avatarKey", "avatarUpdatedAt", "avatarHidden", "avatarPhotos", "kana", "phone", "notifyEmail", "notifyByEmail", "chatworkAccountId"];
 /** 画面の引き継ぎの判断を持つ設定 (テスト用のデータベースにだけ置く。本番には引き継がない) */
 export const CARRYOVER_REVIEW_ID = "carryover_review";
 /** 引き継がない設定 (サーバーの動きの記録・引き継ぎの判断。本番の側の値を残す) */

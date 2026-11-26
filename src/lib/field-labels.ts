@@ -50,7 +50,7 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   /** 施工店舗の変更の申請 (承認の画面の変更内容) */
   store_change: { storeId: "施工店舗" },
   schedule: { kind: "種別", startTime: "開始時刻", endTime: "終了時刻", endDate: "終了日", assigneeIds: "担当者", location: "場所", memo: "メモ", work: "仕事内容", storeId: "店舗" },
-  user: { role: "ロール", title: "役職", active: "有効", notifyEmail: "通知用メール", notifyByEmail: "メール通知", chatworkAccountId: "Chatwork アカウント ID", email: "ログイン ID", kana: "フリガナ", phone: "電話", avatarKey: "顔写真", signupStatus: "新規登録の申請" },
+  user: { role: "ロール", title: "役職", active: "有効", notifyEmail: "通知用メール", notifyByEmail: "メール通知", chatworkAccountId: "Chatwork アカウント ID", email: "ログイン ID", kana: "フリガナ", phone: "電話", avatarKey: "顔写真", avatarHidden: "顔写真を表示しない", signupStatus: "新規登録の申請" },
   thread: { assigneeIds: "依頼先", dueDate: "期限", taskStatus: "依頼の状態" },
   purchase_order: { supplierId: "仕入先", issuedOn: "発注日", desiredDate: "希望納期", deliveryPlace: "納品先", deliveryAddress: "納品先の住所", faxTo: "送信先の FAX", showCustomer: "お客様の情報を載せる", lines: "明細", version: "版" },
   fax: { triage: "仕分け", supplierId: "仕入先", customerId: "顧客", purchaseOrderId: "発注書", orderIds: "案件", assignedUserId: "担当者" },

@@ -17,6 +17,9 @@ import { DAY_LOAD_ID, dayLoadChanges, readDayLoadSettings, writeDayLoadSettings,
 import { DOCUMENT_SETTINGS_ID, documentSettings, validRegistrationNumber } from "@/lib/doc-settings";
 import { ADOPTED_KIND, adoptionAudit, isAdoptedVisit, sameDayVisit } from "@/lib/visit-adopt";
 import { parseHandoverRef } from "@/lib/handover";
+import { addAvatarPhoto } from "@/lib/avatar-photos";
+import { putObject, readObject } from "@/lib/storage";
+import { createHash } from "node:crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,6 +54,9 @@ export const maxDuration = 60;
  *   task = visit-merge: 見積の訪問がその場で現見になったのに、受注の登録で同じ日に作業の予定がもう 1 件できた案件 (お客様のご連絡 2026-11-25。
  *     この日より前の版の受注の登録) を 1 件にまとめる: 訪問の予定を受注の「現見」の予定に切り替え (時間・担当者・メモは訪問のまま)、受注の作業の予定を消す
  *     (src/lib/visit-adopt.ts と同じ判定)。from = この日以降に登録した受注 (既定 2026-11-23)。既定は確認だけ、apply=1 で書き込み、予定ごとに変更履歴
+ *   task = avatars: 社員の顔写真を登録する (お客様のご要望 2026-11-26「顔写真は弊社ホームページのスタッフ紹介から」)。写真と社員はコードに書かず、
+ *     本文 (JSON) = { photos: [{ userId, name (確かめ用。社員の名前と同じ), image (JPEG・PNG・WebP の base64。512 KB まで), note? }] } で受け取る。
+ *     今の写真と同じ中身なら何もしない。前の写真は以前の写真に残し、ファイルは消さない (src/lib/avatar-photos.ts)。既定は確認だけ、apply=1 で書き込み、社員ごとに変更履歴
  */
 export async function POST(req: Request) {
   const secret = (process.env.CRON_SECRET ?? "").trim();
@@ -67,6 +73,7 @@ export async function POST(req: Request) {
   if (task === "day-load") return dayLoadFix(url, req);
   if (task === "doc-bank") return docBankFix(url, req);
   if (task === "visit-merge") return visitMerge(url);
+  if (task === "avatars") return avatarsFix(url, req);
   if (task !== "quote-line-units") return NextResponse.json({ error: "unknown task" }, { status: 400 });
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? from;
@@ -399,4 +406,57 @@ async function visitMerge(url: URL) {
     return out;
   });
   return NextResponse.json({ ok: true, applied: true, from, pairs: done });
+}
+
+/** 社員の顔写真を登録する (前の写真は以前の写真に残す) */
+async function avatarsFix(url: URL, req: Request) {
+  const apply = url.searchParams.get("apply") === "1";
+  const body = (await req.json().catch(() => null)) as { photos?: { userId?: unknown; name?: unknown; image?: unknown; note?: unknown }[] } | null;
+  if (!Array.isArray(body?.photos) || !body.photos.length || body.photos.length > 50) return NextResponse.json({ error: "photos (1〜50 件) を JSON で送ってください" }, { status: 400 });
+  const db0 = await syncDb();
+  const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
+  const kind = (b: Buffer): "jpg" | "png" | "webp" | undefined =>
+    b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff ? "jpg" : b.length > 8 && b.subarray(1, 4).toString("ascii") === "PNG" ? "png" : b.length > 12 && b.subarray(0, 4).toString("ascii") === "RIFF" && b.subarray(8, 12).toString("ascii") === "WEBP" ? "webp" : undefined;
+  type Row = { userId: string; name: string; status: "same" | "set" | "error"; error?: string; from?: string; hidden?: boolean; buf?: Buffer; ext?: string; note?: string };
+  const rows: Row[] = [];
+  for (const p of body.photos) {
+    const userId = typeof p.userId === "string" ? p.userId : "";
+    const name = typeof p.name === "string" ? p.name : "";
+    const u = db0.users.find((x) => x.id === userId);
+    if (!u) { rows.push({ userId, name, status: "error", error: "社員が見つかりません" }); continue; }
+    if (u.name !== name) { rows.push({ userId, name, status: "error", error: `名前が違います (登録: ${u.name})` }); continue; }
+    const buf = typeof p.image === "string" ? Buffer.from(p.image, "base64") : Buffer.alloc(0);
+    const ext = kind(buf);
+    if (!ext || buf.length > 512 * 1024) { rows.push({ userId, name, status: "error", error: "写真は JPEG・PNG・WebP の 512 KB まで" }); continue; }
+    const cur = u.avatarKey ? await readObject(u.avatarKey).catch(() => null) : null;
+    const note = typeof p.note === "string" ? p.note.trim().slice(0, 120) : undefined;
+    if (cur && sha(cur) === sha(buf) && !u.avatarHidden) rows.push({ userId, name, status: "same" });
+    else rows.push({ userId, name, status: "set", from: u.avatarKey ? `${u.avatarKey}${cur ? "" : " (ファイルなし)"}` : "(写真なし)", hidden: u.avatarHidden || undefined, buf, ext, note });
+  }
+  const view = rows.map((r) => ({ userId: r.userId, name: r.name, status: r.status, error: r.error, from: r.from, hidden: r.hidden, note: r.note }));
+  if (!apply || rows.some((r) => r.status === "error") || !rows.some((r) => r.status === "set")) return NextResponse.json({ ok: !rows.some((r) => r.status === "error"), applied: false, photos: view });
+  const keys = new Map<string, string>();
+  for (const r of rows) {
+    if (r.status !== "set" || !r.buf) continue;
+    const key = `avatars/${r.userId.replace(/[^\w-]/g, "")}/${Date.now()}.${r.ext}`;
+    await putObject(key, r.buf);
+    keys.set(r.userId, key);
+    await new Promise((res) => setTimeout(res, 2));
+  }
+  await mutate((db) => {
+    const at = nowIso();
+    for (const r of rows) {
+      const key = keys.get(r.userId);
+      const u = db.users.find((x) => x.id === r.userId);
+      if (!key || !u) continue;
+      const before = { avatarHidden: u.avatarHidden };
+      addAvatarPhoto(u, { key, at, by: SYSTEM_USER, note: r.note });
+      addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "user", entityId: u.id, entityLabel: u.name, summary: `顔写真を登録${r.note ? ` (${r.note})` : ""}。前の写真は以前の写真に残す`, storeId: u.storeId, changes: diffChangesHidden(before, u.avatarHidden) });
+    }
+  });
+  return NextResponse.json({ ok: true, applied: true, photos: view, at: nowIso() });
+}
+
+function diffChangesHidden(before: { avatarHidden?: boolean }, after: boolean | undefined) {
+  return Boolean(before.avatarHidden) === Boolean(after) ? [] : [{ field: "avatarHidden", before: before.avatarHidden ? "はい" : "", after: after ? "はい" : "" }];
 }
