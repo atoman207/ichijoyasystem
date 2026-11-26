@@ -4,8 +4,8 @@ import { addAudit, getDb, mutate, newId, nowIso } from "@/lib/db/store";
 import type { Database, User } from "@/lib/db/types";
 import { canCreateChatChannel, canDeleteChatMessage, canSendImportantChat, canViewThread, isChatLead } from "@/lib/auth/permissions";
 import { removeObjects } from "@/lib/storage";
-import { canAddMembers, canManage, canPost, canView, directId, dmName, findChannel, newChannelId, storeChannelName, viewersOf, type ChannelDef } from "@/lib/chat/channels";
-import { ack, archiveChannel, ensureChannel, findGroupDm, findUploads, getMessage, insertMessage, markRead, markUnreadFrom, notifyFor, prefsOf, setChannelNotify, setMembers, setPin, setPrefs, setReminded, setSaved, setStar, setTyping, softDelete, toViews, toggleReaction, updateBody, upsertChannel, type RawMessage, channelNotify } from "@/lib/chat/repo";
+import { canAddMembers, canDelete, canManage, canPost, canRemoveMembers, canView, directId, dmName, findChannel, isSystemChannel, newChannelId, storeChannelName, viewersOf, type ChannelDef } from "@/lib/chat/channels";
+import { ack, archiveChannel, channelUsage, deleteChannelData, ensureChannel, findGroupDm, findUploads, getMessage, insertMessage, markRead, markUnreadFrom, notifyFor, prefsOf, setChannelNotify, setChannelTopic, setMemberOverrides, setMembers, setPin, setPrefs, setReminded, setSaved, setStar, setTyping, softDelete, toViews, toggleReaction, updateBody, upsertChannel, type RawMessage, channelNotify } from "@/lib/chat/repo";
 import { ALL_EMOJI } from "@/lib/chat/emoji";
 import { caseNumbers, encodeMentions, parseMentions, preview, type MentionCtx } from "@/lib/chat/text";
 import { createChatTask, ChatTaskError } from "@/lib/chat/tasks";
@@ -378,21 +378,54 @@ export async function createChatChannel(input: { name: string; topic?: string; m
   return { ok: true, data: { channelId: id } };
 }
 
+/** 全社・店舗・店長のチャンネルのメンバーの変更 (自動のメンバーは外す印、それ以外は足す印。自動に戻すときは印を消す) */
+function systemMemberChanges(ch: ChannelDef, add: string[], remove: string[]): { userId: string; op: "add" | "remove" | null }[] {
+  const auto = new Set(ch.autoIds ?? []);
+  return [...add.map((id) => ({ userId: id, op: auto.has(id) ? null : ("add" as const) })), ...remove.map((id) => ({ userId: id, op: auto.has(id) ? ("remove" as const) : null }))];
+}
+
+const auditFail = (err: unknown) => console.warn("[chat] audit failed:", (err as Error).message);
+
+/**
+ * チャンネルの設定を変える
+ * - 追加したチャンネル: 名前・説明・公開範囲・メンバー (作成した人・管理者。管理者はメンバーでなくても「チャンネルの管理」から)
+ * - 全社・店舗・店長のチャンネル: 説明 (空 = 既定の説明) と、店舗・店長のチャンネルのメンバー (管理者)。名前は店舗の名前のまま
+ */
 export async function updateChatChannel(id: string, input: { name: string; topic?: string; memberIds: string[]; visibility?: "public" | "private" }): Promise<ActionResult> {
   const user = await requireActionUser();
   const db = getDb();
   const ch = findChannel(db, String(id));
-  if (!ch || ch.kind !== "custom" || !canView(user, ch) || !canManage(user, ch)) return fail("このチャンネルを変更する権限がありません。");
+  if (!ch || ch.kind === "dm" || !canManage(user, ch)) return fail("このチャンネルを変更する権限がありません。");
+  const nameOf = (x: string) => db.users.find((u) => u.id === x)?.name ?? x;
+  const topic = String(input?.topic ?? "").trim().slice(0, 200);
+  if (isSystemChannel(ch)) {
+    const at = nowIso();
+    const changes: { field: string; before: string; after: string }[] = [];
+    if ((ch.topic ?? "") !== topic) {
+      setChannelTopic(ch.id, topic, at);
+      changes.push({ field: "topic", before: ch.topic ?? "", after: topic || "(既定の説明)" });
+    }
+    if (ch.kind !== "all" && Array.isArray(input?.memberIds)) {
+      const want = cleanMembers(db, input.memberIds);
+      const added = want.filter((x) => !ch.memberIds.includes(x));
+      const removed = ch.memberIds.filter((x) => !want.includes(x));
+      if (added.length || removed.length) {
+        setMemberOverrides(ch.id, systemMemberChanges(ch, added, removed), user.id, at);
+        changes.push({ field: "members", before: removed.length ? `外した: ${removed.map(nameOf).join("・")}` : "", after: added.length ? `追加: ${added.map(nameOf).join("・")}` : "" });
+      }
+    }
+    if (changes.length) await mutate((d) => addAudit(d, { userId: user.id, action: "update", entity: "chat_channel", entityId: ch.id, entityLabel: `#${ch.name}`, summary: `チャットのチャンネルを変更 (#${ch.name})`, changes })).catch(auditFail);
+    return { ok: true };
+  }
   const name = String(input?.name ?? "").replace(/^#/, "").trim();
   if (!name) return fail("チャンネルの名前を入力してください。");
   if (name.length > NAME_MAX) return fail(`名前は ${NAME_MAX} 文字までです。`);
-  // 変更した人と作成した人はメンバーに残す (抜けるときは「チャンネルから抜ける」)
-  const members = [...new Set([user.id, ...cleanMembers(db, [...(ch.createdBy ? [ch.createdBy] : []), ...(input.memberIds ?? [])])])];
+  // 作成した人はメンバーに残す。変更した人もメンバーなら残す (抜けるときは「チャンネルから抜ける」。管理者がメンバーでないチャンネルを直してもメンバーにはならない)
+  const keep = [...(ch.createdBy ? [ch.createdBy] : []), ...(ch.memberIds.includes(user.id) ? [user.id] : [])];
+  const members = cleanMembers(db, [...keep, ...(input.memberIds ?? [])]);
   const visibility = input.visibility === "public" || (input.visibility === undefined && ch.visibility === "public") ? "public" : "private";
   if (visibility === "private" && members.length < 2) return fail("非公開のチャンネルはメンバーを 1 人以上選んでください。");
-  const topic = String(input.topic ?? "").trim().slice(0, 200);
   upsertChannel({ id: ch.id, kind: "custom", name, topic, members, createdBy: ch.createdBy ?? user.id, at: nowIso(), visibility });
-  const nameOf = (x: string) => db.users.find((u) => u.id === x)?.name ?? x;
   const added = members.filter((x) => !ch.memberIds.includes(x)).map(nameOf);
   const removed = ch.memberIds.filter((x) => !members.includes(x)).map(nameOf);
   await mutate((d) =>
@@ -410,7 +443,29 @@ export async function updateChatChannel(id: string, input: { name: string; topic
         ...(added.length || removed.length ? [{ field: "members", before: removed.length ? `外した: ${removed.join("・")}` : "", after: added.length ? `追加: ${added.join("・")}` : "" }] : []),
       ],
     }),
-  ).catch((err) => console.warn("[chat] audit failed:", (err as Error).message));
+  ).catch(auditFail);
+  return { ok: true };
+}
+
+/** チャンネルを削除する (管理者。追加したチャンネルだけ。メッセージ・資料・写真もすべて消え、元に戻せない) */
+export async function deleteChatChannel(id: string): Promise<ActionResult> {
+  const user = await requireActionUser();
+  const db = getDb();
+  const ch = findChannel(db, String(id));
+  if (!ch || !canDelete(user, ch)) return fail(ch && isSystemChannel(ch) ? "全社・店舗・店長のチャンネルは削除できません。" : "チャンネルを削除できるのは管理者です。");
+  const usage = channelUsage([ch.id]).get(ch.id);
+  const keys = deleteChannelData(ch.id);
+  await removeObjects(keys).catch((err) => console.warn("[chat] remove files failed:", (err as Error).message));
+  await mutate((d) =>
+    addAudit(d, {
+      userId: user.id,
+      action: "delete",
+      entity: "chat_channel",
+      entityId: ch.id,
+      entityLabel: `#${ch.name}`,
+      summary: `チャットのチャンネルを削除 (#${ch.name} / ${ch.visibility === "public" ? "公開" : "非公開"} / メンバー ${ch.memberIds.length} 人 / メッセージ ${usage?.messages ?? 0} 件)`,
+    }),
+  ).catch(auditFail);
   return { ok: true };
 }
 
@@ -447,32 +502,34 @@ export async function joinChatChannel(id: string): Promise<ActionResult> {
   return { ok: true };
 }
 
-/** メンバーを追加する (そのチャンネルのメンバーなら誰でも) */
+/** メンバーを追加する (追加したチャンネルはメンバーなら誰でも・管理者。店舗・店長のチャンネルは管理者) */
 export async function addChatMembers(id: string, memberIds: string[]): Promise<ActionResult<{ added: number }>> {
   const user = await requireActionUser();
   const db = getDb();
   const ch = findChannel(db, String(id));
-  if (!ch || !canAddMembers(user, ch)) return fail("このチャンネルにメンバーを追加する権限がありません (メンバーになってから追加できます)。");
+  if (!ch || !canAddMembers(user, ch)) return fail(ch && isSystemChannel(ch) ? "全社・店舗・店長のチャンネルのメンバーを変えられるのは管理者です。" : "このチャンネルにメンバーを追加する権限がありません (メンバーになってから追加できます)。");
   if (ch.archivedAt) return fail("アーカイブしたチャンネルです。");
   const add = cleanMembers(db, memberIds ?? []).filter((x) => !ch.memberIds.includes(x));
   if (!add.length) return fail("追加する社員を選んでください。");
-  setMembers(ch.id, [...ch.memberIds, ...add], nowIso());
+  if (isSystemChannel(ch)) setMemberOverrides(ch.id, systemMemberChanges(ch, add, []), user.id, nowIso());
+  else setMembers(ch.id, [...ch.memberIds, ...add], nowIso());
   const names = add.map((x) => db.users.find((u) => u.id === x)?.name ?? x);
-  await mutate((d) => addAudit(d, { userId: user.id, action: "update", entity: "chat_channel", entityId: ch.id, entityLabel: `#${ch.name}`, summary: `チャットのチャンネルにメンバーを追加 (#${ch.name})`, changes: [{ field: "members", before: "", after: `追加: ${names.join("・")}` }] })).catch((err) => console.warn("[chat] audit failed:", (err as Error).message));
+  await mutate((d) => addAudit(d, { userId: user.id, action: "update", entity: "chat_channel", entityId: ch.id, entityLabel: `#${ch.name}`, summary: `チャットのチャンネルにメンバーを追加 (#${ch.name})`, changes: [{ field: "members", before: "", after: `追加: ${names.join("・")}` }] })).catch(auditFail);
   return { ok: true, data: { added: add.length } };
 }
 
-/** メンバーを外す (作成した人・管理者。作成した人は外せない) */
+/** メンバーを外す (追加したチャンネルは作成した人・管理者。作成した人は外せない。店舗・店長のチャンネルは管理者) */
 export async function removeChatMember(id: string, memberId: string): Promise<ActionResult> {
   const user = await requireActionUser();
   const db = getDb();
   const ch = findChannel(db, String(id));
-  if (!ch || ch.kind !== "custom" || !canManage(user, ch)) return fail("メンバーを外せるのは、チャンネルを作成した人と管理者です。");
-  if (memberId === ch.createdBy) return fail("チャンネルを作成した人は外せません。");
+  if (!ch || !canRemoveMembers(user, ch)) return fail(ch && isSystemChannel(ch) ? "全社・店舗・店長のチャンネルのメンバーを変えられるのは管理者です。" : "メンバーを外せるのは、チャンネルを作成した人と管理者です。");
+  if (ch.kind === "custom" && memberId === ch.createdBy) return fail("チャンネルを作成した人は外せません。");
   if (!ch.memberIds.includes(memberId)) return fail("メンバーではありません。");
-  setMembers(ch.id, ch.memberIds.filter((x) => x !== memberId), nowIso());
+  if (isSystemChannel(ch)) setMemberOverrides(ch.id, systemMemberChanges(ch, [], [memberId]), user.id, nowIso());
+  else setMembers(ch.id, ch.memberIds.filter((x) => x !== memberId), nowIso());
   const name = db.users.find((u) => u.id === memberId)?.name ?? memberId;
-  await mutate((d) => addAudit(d, { userId: user.id, action: "update", entity: "chat_channel", entityId: ch.id, entityLabel: `#${ch.name}`, summary: `チャットのチャンネルのメンバーを外した (#${ch.name})`, changes: [{ field: "members", before: `外した: ${name}`, after: "" }] })).catch((err) => console.warn("[chat] audit failed:", (err as Error).message));
+  await mutate((d) => addAudit(d, { userId: user.id, action: "update", entity: "chat_channel", entityId: ch.id, entityLabel: `#${ch.name}`, summary: `チャットのチャンネルのメンバーを外した (#${ch.name})`, changes: [{ field: "members", before: `外した: ${name}`, after: "" }] })).catch(auditFail);
   return { ok: true };
 }
 

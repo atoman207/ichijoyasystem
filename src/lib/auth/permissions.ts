@@ -391,7 +391,7 @@ export function canViewExpense(user: User, e: Pick<Expense, "storeId" | "submitt
 
 /* ---------------- チャット (チャンネル・DM。src/lib/chat。お客様のご要望 2026-11-25) ---------------- */
 
-/** 店長以上 (店長・本部・管理者): 重要メッセージ・@全員・「店長以上だけ」の資料・店長のチャンネル・チャンネルの追加 */
+/** 店長以上 (店長・本部・管理者): 重要メッセージ・@全員・「店長以上だけ」の資料 (店長のチャンネルのメンバーは channels.ts の自動のメンバー + 管理者の変更) */
 export function isChatLead(user: Pick<User, "role">): boolean {
   return user.role === "admin" || user.role === "hq_staff" || user.role === "store_manager";
 }
@@ -401,47 +401,72 @@ export function canSendImportantChat(user: Pick<User, "role">): boolean {
   return isChatLead(user);
 }
 
-/** チャンネルを追加できる: 有効な社員なら誰でも (Slack と同じ。2026-11-26 のご要望) */
+/** チャンネルを追加できる: 有効な社員なら誰でも。公開・非公開のどちらも (Slack と同じ。2026-11-26 のご要望) */
 export function canCreateChatChannel(user: Pick<User, "role"> & { active?: boolean }): boolean {
   return user.active !== false;
 }
 
+/** チャンネルの形 (権限の判定に使う項目だけ) */
+type ChatChannelRef = { kind: string; storeId?: string; memberIds: string[]; visibility?: string; createdBy?: string; ownerIds?: string[] };
+const isSystemChat = (ch: { kind: string }) => ch.kind === "all" || ch.kind === "store" || ch.kind === "managers";
+
 /**
- * チャンネル・DM を見られるか
- * - 全社: 有効な社員全員 / 店舗: その店舗の社員と本部・管理者 / 店長: 店長以上
+ * チャンネル・DM を見られるか: 自分が所属している (メンバーの) チャンネルと、公開のチャンネルだけ
+ * (お客様のご要望 2026-11-26「店長チャンネルは他の人には見えないように。ユーザーは自分が所属しているチャンネルと公開チャンネルだけを見られる」)
+ * - 全社: 有効な社員全員 / 店舗: その店舗の社員と店長 / 店長: 店長 (どちらも管理者がメンバーを足す・外す)
  * - 追加したチャンネル: 公開 (public) は社員なら誰でも見て参加できる、非公開はメンバーだけ
  * - DM: 参加している本人だけ。管理者も見られない (お客様の決定 2026-11-25「■5」)
+ * 管理者もメンバーでないチャンネルのメッセージは見られない (チャンネルの管理の一覧で名前・メンバーを見て、変更・削除はできる)
  */
-export function canViewChatChannel(user: Pick<User, "id" | "role" | "storeId" | "active">, ch: { kind: string; storeId?: string; memberIds: string[]; visibility?: string }): boolean {
+export function canViewChatChannel(user: Pick<User, "id" | "role" | "storeId" | "active">, ch: ChatChannelRef): boolean {
   if (!user.active) return false;
-  switch (ch.kind) {
-    case "all":
-      return true;
-    case "store":
-      return user.storeId === ch.storeId || user.role === "admin" || user.role === "hq_staff";
-    case "managers":
-      return isChatLead(user);
-    case "custom":
-      return ch.visibility === "public" || ch.memberIds.includes(user.id);
-    default:
-      return ch.memberIds.includes(user.id);
-  }
+  return ch.memberIds.includes(user.id) || (ch.kind === "custom" && ch.visibility === "public");
 }
 
-/** チャンネル・DM に送れるか (追加したチャンネルはメンバーだけ。公開のチャンネルは参加してから) */
-export function canPostChatChannel(user: Pick<User, "id" | "role" | "storeId" | "active">, ch: { kind: string; storeId?: string; memberIds: string[]; visibility?: string }): boolean {
-  if (!canViewChatChannel(user, ch)) return false;
-  return ch.kind === "custom" || ch.kind === "dm" ? ch.memberIds.includes(user.id) : true;
+/** チャンネル・DM に送れるか: メンバーだけ (公開のチャンネルは参加してから) */
+export function canPostChatChannel(user: Pick<User, "id" | "role" | "storeId" | "active">, ch: ChatChannelRef): boolean {
+  return canViewChatChannel(user, ch) && ch.memberIds.includes(user.id);
 }
 
-/** 追加したチャンネルにメンバーを足せる: そのチャンネルのメンバー (Slack と同じ。外すのは作成した人・管理者) */
-export function canAddChatMembers(user: Pick<User, "id">, ch: { kind: string; memberIds: string[] }): boolean {
-  return ch.kind === "custom" && ch.memberIds.includes(user.id);
+/** チャンネルを管理する (管理の一覧ですべてのチャンネルを見て、追加・変更・削除する): 管理者 (お客様のご要望 2026-11-26) */
+export function canAdministerChatChannels(user: Pick<User, "role" | "active">): boolean {
+  return user.active !== false && user.role === "admin";
 }
 
-/** 追加したチャンネルの名前・説明・公開範囲の変更、メンバーを外す、アーカイブ: 作成した人・管理者 */
+/** メンバーを足せる: 追加したチャンネルはそのメンバー (Slack と同じ) と管理者 / 店舗・店長のチャンネルは管理者 (全社は全員なので足さない) */
+export function canAddChatMembers(user: Pick<User, "id" | "role">, ch: ChatChannelRef): boolean {
+  if (ch.kind === "custom") return ch.memberIds.includes(user.id) || user.role === "admin";
+  return (ch.kind === "store" || ch.kind === "managers") && user.role === "admin";
+}
+
+/** メンバーを外せる: 追加したチャンネルは作成した人と管理者 / 店舗・店長のチャンネルは管理者 */
+export function canRemoveChatMembers(user: Pick<User, "id" | "role">, ch: ChatChannelRef): boolean {
+  if (ch.kind === "custom") return ch.createdBy === user.id || user.role === "admin";
+  return (ch.kind === "store" || ch.kind === "managers") && user.role === "admin";
+}
+
+/**
+ * チャンネルの設定を変える: 追加したチャンネル (名前・説明・公開範囲・メンバー・アーカイブ) は作成した人と管理者 /
+ * 全社・店舗・店長のチャンネル (説明・メンバー。名前は店舗の名前) は管理者
+ */
 export function canManageChatChannel(user: Pick<User, "id" | "role">, ch: { kind: string; createdBy?: string }): boolean {
-  return ch.kind === "custom" && (ch.createdBy === user.id || user.role === "admin");
+  if (ch.kind === "custom") return ch.createdBy === user.id || user.role === "admin";
+  return isSystemChat(ch) && user.role === "admin";
+}
+
+/** チャンネルを削除する (メッセージ・資料もすべて消える。元に戻せない): 管理者。追加したチャンネルだけ (全社・店舗・店長のチャンネルは消さない) */
+export function canDeleteChatChannel(user: Pick<User, "role">, ch: { kind: string }): boolean {
+  return ch.kind === "custom" && user.role === "admin";
+}
+
+/**
+ * チャンネルの画像を変える: 管理者・追加したチャンネルを作成した人 / 店舗のチャンネルはその店舗の店長 / 店長のチャンネルは本部の店長
+ * (お客様のご要望 2026-11-26「各店舗チャンネルにはその店舗の画像、店長チャンネルには本部の画像」)
+ */
+export function canEditChatChannelImage(user: Pick<User, "id" | "role">, ch: ChatChannelRef): boolean {
+  if (user.role === "admin") return ch.kind !== "dm";
+  if (ch.kind === "custom") return ch.createdBy === user.id;
+  return isSystemChat(ch) && (ch.ownerIds ?? []).includes(user.id);
 }
 
 /** チャットの資料・写真を見られるか (公開範囲が「店長以上」の資料は店長以上だけ。チャンネルを見られることが前提) */

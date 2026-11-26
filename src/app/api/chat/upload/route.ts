@@ -2,7 +2,7 @@ import { getDb, newId, nowIso } from "@/lib/db/store";
 import { isChatLead } from "@/lib/auth/permissions";
 import { detectType } from "@/lib/attachments";
 import { putObject, removeObjects } from "@/lib/storage";
-import { canView, findChannel } from "@/lib/chat/channels";
+import { canPost, findChannel } from "@/lib/chat/channels";
 import { dropUploads, saveUpload, staleUploads, type StoredFile } from "@/lib/chat/repo";
 import { chatUser, json, jsonError, sameOrigin } from "@/lib/chat/api";
 import { CHAT_MAX_FILE_BYTES, type ChatFile, type ChatFileAccess } from "@/lib/chat/types";
@@ -49,7 +49,7 @@ export async function POST(req: Request) {
     return jsonError(400, "ファイルを受け取れませんでした。ファイルが大きすぎる可能性があります (1 ファイル 9 MB まで)。");
   }
   const ch = findChannel(getDb(), String(form.get("channelId") ?? ""));
-  if (!canView(user, ch)) return jsonError(403, "このチャンネルに送る権限がありません。");
+  if (!canPost(user, ch)) return jsonError(403, "このチャンネルに送る権限がありません (メンバーになってから送れます)。");
   if (ch.archivedAt) return jsonError(400, "アーカイブしたチャンネルには送れません。");
   const f = form.get("file");
   if (!(f instanceof File) || f.size === 0) return jsonError(400, "ファイルを選んでください。");

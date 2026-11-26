@@ -631,3 +631,130 @@ export function markUnreadFrom(userId: string, key: string, messageAt: string): 
   const before = new Date(Date.parse(messageAt) - 1).toISOString();
   chatDb().prepare("insert into reads (user_id, key, at) values (?, ?, ?) on conflict (user_id, key) do update set at = excluded.at").run(userId, key, before);
 }
+
+/* ---------------- 全社・店舗・店長のチャンネルのメンバーの変更 (管理者) ---------------- */
+
+export interface MemberOverrides {
+  add: Set<string>;
+  remove: Set<string>;
+}
+
+/** チャンネルごとの足した・外したメンバー (自動のメンバーに重ねる) */
+export function memberOverrides(): Map<string, MemberOverrides> {
+  const out = new Map<string, MemberOverrides>();
+  for (const r of chatDb().prepare("select channel_id, user_id, op from channel_members").all()) {
+    const id = String(r.channel_id);
+    const o = out.get(id) ?? { add: new Set<string>(), remove: new Set<string>() };
+    (r.op === "remove" ? o.remove : o.add).add(String(r.user_id));
+    out.set(id, o);
+  }
+  return out;
+}
+
+/** メンバーを足す・外す・自動に戻す (op = null で行を消す) */
+export function setMemberOverrides(channelId: string, changes: { userId: string; op: "add" | "remove" | null }[], by: string, at: string): void {
+  if (!changes.length) return;
+  tx((db) => {
+    nextRev(db);
+    const put = db.prepare("insert into channel_members (channel_id, user_id, op, changed_by, at) values (?, ?, ?, ?, ?) on conflict (channel_id, user_id) do update set op = excluded.op, changed_by = excluded.changed_by, at = excluded.at");
+    const del = db.prepare("delete from channel_members where channel_id = ? and user_id = ?");
+    for (const c of changes) {
+      if (c.op) put.run(channelId, c.userId, c.op, by, at);
+      else del.run(channelId, c.userId);
+    }
+  });
+}
+
+/* ---------------- チャンネルの画像・説明 ---------------- */
+
+export interface ChannelMeta {
+  topic?: string;
+  imageKey?: string;
+  imageType?: string;
+  imageAt?: string;
+  imageBy?: string;
+}
+
+export function channelMetaAll(): Map<string, ChannelMeta> {
+  return new Map(
+    chatDb()
+      .prepare("select * from channel_meta")
+      .all()
+      .map((r) => [String(r.channel_id), { topic: typeof r.topic === "string" ? r.topic : undefined, imageKey: str(r.image_key), imageType: str(r.image_type), imageAt: str(r.image_at), imageBy: str(r.image_by) }]),
+  );
+}
+
+export function channelMeta(channelId: string): ChannelMeta | undefined {
+  return channelMetaAll().get(channelId);
+}
+
+/** 画像を入れ替える (key = undefined で外す)。前の画像の key を返す (ファイルを消すため) */
+export function setChannelImage(channelId: string, image: { key: string; type: string } | undefined, by: string, at: string): string | undefined {
+  return tx((db) => {
+    nextRev(db);
+    const prev = str(db.prepare("select image_key from channel_meta where channel_id = ?").get(channelId)?.image_key);
+    db.prepare(
+      `insert into channel_meta (channel_id, image_key, image_type, image_at, image_by, updated_at) values (?, ?, ?, ?, ?, ?)
+       on conflict (channel_id) do update set image_key = excluded.image_key, image_type = excluded.image_type, image_at = excluded.image_at, image_by = excluded.image_by, updated_at = excluded.updated_at`,
+    ).run(channelId, image?.key ?? null, image?.type ?? null, image ? at : null, image ? by : null, at);
+    return prev && prev !== image?.key ? prev : undefined;
+  });
+}
+
+/** 全社・店舗・店長のチャンネルの説明 (空 = 既定の説明に戻す) */
+export function setChannelTopic(channelId: string, topic: string, at: string): void {
+  tx((db) => {
+    nextRev(db);
+    db.prepare("insert into channel_meta (channel_id, topic, updated_at) values (?, ?, ?) on conflict (channel_id) do update set topic = excluded.topic, updated_at = excluded.updated_at").run(channelId, topic || null, at);
+  });
+}
+
+/* ---------------- チャンネルの削除 (管理者。元に戻せない) ---------------- */
+
+export interface ChannelUsage {
+  messages: number;
+  files: number;
+  lastAt?: string;
+}
+
+/** チャンネルのメッセージ・資料の数と最後の投稿 (管理の一覧・削除の確認) */
+export function channelUsage(channelIds: string[]): Map<string, ChannelUsage> {
+  const q = chatDb().prepare("select count(*) n, max(at) last, sum(case when files != '[]' then 1 else 0 end) f from messages where channel_id = ? and deleted_at is null");
+  return new Map(channelIds.map((id) => {
+    const r = q.get(id);
+    return [id, { messages: Number(r?.n ?? 0), files: Number(r?.f ?? 0), lastAt: str(r?.last) }];
+  }));
+}
+
+/**
+ * チャンネルとそのメッセージ・リアクション・確認・既読・ピン留め・後で見る・資料をすべて消す。
+ * 消すファイル (資料・写真・縮小画像・チャンネルの画像) の key を返す。ほかのチャンネルに共有したメッセージの写しは残る
+ */
+export function deleteChannelData(channelId: string): string[] {
+  return tx((db) => {
+    nextRev(db);
+    const msgs = db.prepare("select id, parent_id, files from messages where channel_id = ?").all(channelId);
+    const keys: string[] = [];
+    for (const r of msgs) for (const f of jsonArr<{ key?: string; thumbKey?: string }>(r.files)) keys.push(...[f.key, f.thumbKey].filter((k): k is string => Boolean(k)));
+    for (const r of db.prepare("select key, thumb_key from uploads where channel_id = ?").all(channelId)) keys.push(...[str(r.key), str(r.thumb_key)].filter((k): k is string => Boolean(k)));
+    const img = str(db.prepare("select image_key from channel_meta where channel_id = ?").get(channelId)?.image_key);
+    if (img) keys.push(img);
+    const ofMsgs = "(select id from messages where channel_id = ?)";
+    db.prepare(`delete from reactions where message_id in ${ofMsgs}`).run(channelId);
+    db.prepare(`delete from acks where message_id in ${ofMsgs}`).run(channelId);
+    db.prepare(`delete from saves where message_id in ${ofMsgs}`).run(channelId);
+    db.prepare(`delete from reads where key in (select 't:' || id from messages where channel_id = ? and parent_id is null)`).run(channelId);
+    for (const t of ["mentions", "pins", "task_links", "uploads"]) db.prepare(`delete from ${t} where channel_id = ?`).run(channelId);
+    db.prepare("delete from reads where key = ?").run(channelId);
+    db.prepare("delete from typing where key = ?").run(channelId);
+    for (const t of ["channel_prefs", "stars", "channel_members", "channel_meta"]) db.prepare(`delete from ${t} where channel_id = ?`).run(channelId);
+    db.prepare("delete from messages where channel_id = ?").run(channelId);
+    db.prepare("delete from channels where id = ?").run(channelId);
+    return [...new Set(keys)];
+  });
+}
+
+/** 管理者の一覧: 追加したチャンネルすべて (非公開・アーカイブしたものを含む。DM は含めない) */
+export function allCustomChannelRows(): Record<string, unknown>[] {
+  return chatDb().prepare("select * from channels where kind = 'custom' order by archived_at is not null, name").all();
+}

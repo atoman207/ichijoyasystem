@@ -43,10 +43,14 @@ export interface ChatChannelView {
   topic?: string;
   storeId?: string;
   color?: string;
-  /** 宛先のメンバー (重要メッセージの確認・@全員 の範囲) */
+  /** メンバー (見られる人。重要メッセージの確認・@全員 の範囲) */
   memberIds: string[];
-  /** 自分がメンバーでなく、本部・管理者として見ている (店舗のチャンネル) */
-  viewer?: boolean;
+  /** 管理者が足したメンバー (全社・店舗・店長のチャンネル。自動のメンバーではない人) */
+  addedIds?: string[];
+  /** チャンネルの画像の URL (なければアイコン) */
+  image?: string;
+  /** 画像は本部のチャンネルのもの (店長のチャンネルに画像を登録していないとき) */
+  imageInherited?: boolean;
   /** 未読のメッセージ (自分以外が送った、スレッドの返信を除く) */
   unread: number;
   /** 未読のメンション・未確認の重要メッセージ (赤) */
@@ -55,8 +59,14 @@ export interface ChatChannelView {
   lastUserId?: string;
   lastPreview?: string;
   notify: NotifyLevel;
-  /** 名前・メンバーを変えられる (追加したチャンネルの作成者・管理者) */
+  /** 設定を変えられる (追加したチャンネルの作成者・管理者。全社・店舗・店長のチャンネルは管理者が説明・メンバー) */
   canManage: boolean;
+  /** メンバーを外せる (追加したチャンネルの作成者・管理者。店舗・店長のチャンネルは管理者) */
+  canRemoveMembers: boolean;
+  /** 画像を変えられる */
+  canEditImage: boolean;
+  /** 削除できる (管理者。追加したチャンネルだけ) */
+  canDelete: boolean;
   archived?: boolean;
   createdBy?: string;
   createdAt?: string;
@@ -66,7 +76,7 @@ export interface ChatChannelView {
   joined: boolean;
   /** 送れる (追加したチャンネルはメンバーだけ) */
   canPost: boolean;
-  /** メンバーを追加できる (追加したチャンネルのメンバー) */
+  /** メンバーを追加できる (追加したチャンネルのメンバーと管理者。店舗・店長のチャンネルは管理者) */
   canAddMembers: boolean;
   /** スター付き (自分の一覧の上に出す) */
   starred: boolean;
@@ -247,6 +257,8 @@ export interface ChatBootstrap {
   /** 重要メッセージを送れる・@全員を使える・店長以上の資料を登録できる (管理者・本部・店長) */
   canImportant: boolean;
   canCreateChannel: boolean;
+  /** 管理者: すべてのチャンネル (非公開・アーカイブを含む) を管理の一覧で見て、追加・変更・削除できる */
+  canAdminChannels: boolean;
   /** プッシュ通知の公開鍵 (VAPID)。使えないときは空 */
   vapidKey: string;
   maxFileBytes: number;
@@ -270,6 +282,8 @@ export interface ChatTaskInput {
 
 /** 1 回に選べる DM の相手 (自分を除く) */
 export const DM_MAX_MEMBERS = 8;
+/** チャンネルの画像 (画面で 512 px に縮小してから送る) */
+export const CHAT_CHANNEL_IMAGE_BYTES = 2 * 1024 * 1024;
 /** 1 つのメッセージの資料・写真 */
 export const CHAT_MAX_FILES = 10;
 /** 1 ファイルの大きさ (nginx の 1 回の送信の上限 10 MB に収める) */

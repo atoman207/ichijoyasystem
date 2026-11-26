@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
-import { AlertTriangle, ArrowDown, AtSign, Bell, BellOff, Bookmark, Check, ChevronDown, ChevronLeft, FolderOpen, Hash, Inbox, ListTodo, Lock, LogOut, Megaphone, MessageSquare, Pin, Plus, Search, Settings2, SquarePen, Star, Store, UserMinus, UserPlus, UsersRound, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, AtSign, Bell, BellOff, Bookmark, Check, ChevronDown, ChevronLeft, FolderOpen, Hash, Inbox, ListTodo, Lock, LogOut, MessageSquare, Pin, Plus, Search, Settings2, SquarePen, Star, UserMinus, UserPlus, UsersRound, X } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { Badge } from "@/components/ui";
 import { ackChatMessage, addChatMembers, deleteChatMessage, editChatMessage, joinChatChannel, leaveChatChannel, markChatRead, markChatUnread, openDirect, pinChatMessage, reactChatMessage, removeChatMember, saveChatMessage, setChatChannelNotify, starChatChannel } from "@/lib/actions/chat";
@@ -13,8 +13,9 @@ import type { ChatBootstrap, ChatChannelView, ChatCounts, ChatFile, ChatMessageV
 import { CHAT_COUNTS_EVENT } from "./ChatBadge";
 import { dayKey, dayLabel, dueLabel, fileUrl, fullWhen, getJson, shortWhen, signalChatRefresh, sizeLabel, timeLabel } from "./client";
 import { Composer, type ComposerHandle } from "./Composer";
-import { AckDialog, BrowseDialog, ChannelDialog, NewDmDialog, PeoplePicker, PrefsDialog, QuickSwitcher, ShareDialog, TaskDialog } from "./dialogs";
-import { DayDivider, Lightbox, MessageBody, MessageItem, nameOf, ProfileCard, UnreadDivider, UserAvatar, type Dir, type MessageHandlers } from "./parts";
+import { AckDialog, BrowseDialog, NewDmDialog, PeoplePicker, PrefsDialog, QuickSwitcher, ShareDialog, TaskDialog } from "./dialogs";
+import { ChannelDialog, ManageDialog, type ManageRow } from "./channel-settings";
+import { ChannelIcon, DayDivider, Lightbox, MessageBody, MessageItem, nameOf, ProfileCard, UnreadDivider, UserAvatar, type Dir, type MessageHandlers } from "./parts";
 
 /* ================================================================== */
 /* 型                                                                   */
@@ -132,7 +133,8 @@ export function ChatApp({ boot, initial }: { boot: ChatBootstrap; initial: ChatI
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [dialog, setDialog] = useState<
     | { kind: "dm" }
-    | { kind: "channel"; channel?: ChatChannelView }
+    | { kind: "channel"; channel?: ChatChannelView; back?: "manage"; messages?: number }
+    | { kind: "manage" }
     | { kind: "task"; m: ChatMessageView }
     | { kind: "share"; m: ChatMessageView }
     | { kind: "browse" }
@@ -666,6 +668,18 @@ export function ChatApp({ boot, initial }: { boot: ChatBootstrap; initial: ChatI
     await loadChannel(id);
   };
 
+  /** チャンネルを削除したあと (開いていたら一覧に戻る) */
+  const afterDelete = (id: string) => {
+    if (cidRef.current === id) {
+      setShowList(true);
+      setDetails(null);
+      setThread(null);
+      setPreview(null);
+      go({ kind: "inbox" });
+    }
+    void sync();
+  };
+
   /** 最後に送った自分のメッセージを編集 (入力欄が空のときの ↑) */
   const editLast = () => {
     const mine = [...msgs].reverse().find((m) => m.userId === dir.me.id && !m.deleted);
@@ -800,7 +814,23 @@ export function ChatApp({ boot, initial }: { boot: ChatBootstrap; initial: ChatI
             ))}
           </>
         )}
-        <SectionTitle label="チャンネル" onAdd={() => setDialog({ kind: "channel" })} addLabel="チャンネルを作成" extra={<button type="button" onClick={() => setDialog({ kind: "browse" })} className="rounded-md p-1 text-ink-3 hover:bg-panel hover:text-ink" aria-label="チャンネルを探す" title="チャンネルを探す" data-testid="chat-browse"><Search className="h-3.5 w-3.5" /></button>} />
+        <SectionTitle
+          label="チャンネル"
+          onAdd={() => setDialog({ kind: "channel" })}
+          addLabel="チャンネルを作成"
+          extra={
+            <>
+              {boot.canAdminChannels && (
+                <button type="button" onClick={() => setDialog({ kind: "manage" })} className="rounded-md p-1 text-ink-3 hover:bg-panel hover:text-ink" aria-label="チャンネルの管理 (管理者)" title="チャンネルの管理 (管理者): すべてのチャンネルの追加・変更・削除" data-testid="chat-manage">
+                  <Settings2 className="h-3.5 w-3.5" />
+                </button>
+              )}
+              <button type="button" onClick={() => setDialog({ kind: "browse" })} className="rounded-md p-1 text-ink-3 hover:bg-panel hover:text-ink" aria-label="チャンネルを探す" title="チャンネルを探す" data-testid="chat-browse">
+                <Search className="h-3.5 w-3.5" />
+              </button>
+            </>
+          }
+        />
         {ordered.filter((c) => !c.starred).map((c) => (
           <ChannelRow key={c.id} c={c} dir={dir} active={activeId === c.id} onClick={() => void openChannel(c.id)} />
         ))}
@@ -1069,19 +1099,42 @@ export function ChatApp({ boot, initial }: { boot: ChatBootstrap; initial: ChatI
       {dialog?.kind === "dm" && <NewDmDialog dir={dir} onClose={() => setDialog(null)} onOpen={(id) => (setDialog(null), void sync().then(() => openChannel(id)))} />}
       {dialog?.kind === "channel" && (
         <ChannelDialog
+          key={dialog.channel?.id ?? "new"}
           dir={dir}
           channel={dialog.channel}
-          onClose={() => setDialog(null)}
-          onSaved={(id, gone) => {
-            setDialog(null);
+          messages={dialog.messages}
+          onClose={() => setDialog(dialog.back === "manage" ? { kind: "manage" } : null)}
+          onSaved={(id, info) => {
+            const back = dialog.back;
+            setDialog(back === "manage" ? { kind: "manage" } : null);
             void sync().then(() => {
-              if (gone) {
+              if (info?.archived && cidRef.current === id) {
                 setShowList(true);
                 setDetails(null);
                 go({ kind: "inbox" });
-              } else void openChannel(id);
+              } else if (!info?.archived && back !== "manage") void openChannel(id);
+              else if (cidRef.current === id) void loadChannel(id);
             });
-            showToast(gone ? "チャンネルをアーカイブしました。" : "チャンネルを保存しました。");
+            showToast(info?.note ?? (info?.archived ? "チャンネルをアーカイブしました。" : dialog.channel ? "チャンネルを保存しました。" : "チャンネルを作成しました。"), info?.note ? "bad" : "good");
+          }}
+          onDeleted={(id) => {
+            setDialog(dialog.back === "manage" ? { kind: "manage" } : null);
+            showToast("チャンネルを削除しました。");
+            afterDelete(id);
+          }}
+        />
+      )}
+      {dialog?.kind === "manage" && (
+        <ManageDialog
+          dir={dir}
+          onClose={() => setDialog(null)}
+          onOpen={(id) => (setDialog(null), void openChannel(id))}
+          onEdit={(row: ManageRow) => setDialog({ kind: "channel", channel: row, back: "manage", messages: row.messages })}
+          onCreate={() => setDialog({ kind: "channel" })}
+          onChanged={(text, deletedId) => {
+            showToast(text);
+            if (deletedId) afterDelete(deletedId);
+            else void sync();
           }}
         />
       )}
@@ -1089,6 +1142,7 @@ export function ChatApp({ boot, initial }: { boot: ChatBootstrap; initial: ChatI
         <BrowseDialog
           onClose={() => setDialog(null)}
           onCreate={() => setDialog({ kind: "channel" })}
+          onManage={boot.canAdminChannels ? () => setDialog({ kind: "manage" }) : undefined}
           onOpen={(id, doJoin) => {
             setDialog(null);
             if (doJoin) void joinChatChannel(id).then(async (r) => {
@@ -1197,8 +1251,8 @@ function DetailsPanel({
   const onlineCount = channel.memberIds.filter((id) => dir.online.has(id)).length;
   const kindNote: Record<string, string> = {
     all: "全社員が自動で参加しています (異動・退職で自動で入れ替わります)。",
-    store: "この店舗に所属する社員が自動で参加しています (異動・退職で自動で入れ替わります)。本部・管理者も見られます。",
-    managers: "店長・本部・管理者が自動で参加しています。",
+    store: "この店舗に所属する社員と店長が自動で参加しています (異動・退職で自動で入れ替わります)。管理者がメンバーを足す・外すことができます。メンバー以外には見えません。",
+    managers: "各店舗の店長が自動で参加しています。管理者がメンバーを足す・外すことができます。メンバー以外には見えません。",
     custom: channel.visibility === "public" ? "公開のチャンネルです。社員なら誰でも「チャンネルを探す」から参加できます。" : "非公開のチャンネルです。メンバーだけが見られます。",
     dm: "参加している本人同士だけが見られます (管理者も見られません)。",
   };
@@ -1227,6 +1281,20 @@ function DetailsPanel({
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {tab === "about" ? (
           <div className="space-y-3 text-sm">
+            {channel.kind !== "dm" && (
+              <div className="flex items-center gap-3 rounded-xl border border-line p-3">
+                <ChannelIcon c={channel} dir={dir} size={56} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[15px] font-bold text-ink"># {channel.name}</div>
+                  <div className="text-[11px] text-ink-3">{channel.image ? (channel.imageInherited ? "本部のチャンネルの画像" : "チャンネルの画像") : "画像は登録されていません"}</div>
+                </div>
+                {channel.canEditImage && (
+                  <button type="button" onClick={onEdit} className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs text-ink hover:bg-subtle" data-testid="chat-details-image">
+                    {channel.image && !channel.imageInherited ? "画像を変える" : "画像を登録"}
+                  </button>
+                )}
+              </div>
+            )}
             <div className="rounded-xl border border-line p-3">
               <div className="text-[11px] font-semibold text-ink-3">説明</div>
               <p className="mt-0.5 whitespace-pre-wrap text-ink">{channel.topic || "(説明はありません)"}</p>
@@ -1252,10 +1320,10 @@ function DetailsPanel({
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              {channel.canManage && (
-                <button type="button" onClick={onEdit} className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-line px-3 text-[13px] text-ink hover:bg-subtle">
+              {(channel.canManage || channel.canEditImage) && (
+                <button type="button" onClick={onEdit} className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-line px-3 text-[13px] text-ink hover:bg-subtle" data-testid="chat-details-settings">
                   <Settings2 className="h-4 w-4" />
-                  名前・説明・公開範囲を変える
+                  {!channel.canManage ? "画像を変える" : channel.kind === "custom" ? "名前・説明・画像・公開範囲を変える" : channel.kind === "all" ? "説明・画像を変える" : "説明・画像・メンバーを変える"}
                 </button>
               )}
               {channel.kind === "custom" && !channel.joined && channel.visibility === "public" && (
@@ -1309,7 +1377,8 @@ function DetailsPanel({
                     <span className="flex items-center gap-1.5">
                       <span className="truncate text-sm font-semibold text-ink">{u.name}</span>
                       {u.id === dir.me.id && <span className="text-[10px] text-ink-3">(自分)</span>}
-                      {channel.createdBy === u.id && <span className="rounded bg-neutral-soft px-1 text-[10px] text-ink-2">作成者</span>}
+                      {channel.createdBy === u.id && channel.kind === "custom" && <span className="rounded bg-neutral-soft px-1 text-[10px] text-ink-2">作成者</span>}
+                      {channel.addedIds?.includes(u.id) && <span className="rounded bg-neutral-soft px-1 text-[10px] text-ink-2" title="管理者が追加したメンバー">追加</span>}
                       {ROLE[u.role] && <span className="rounded bg-accent-soft px-1 text-[10px] text-accent-ink">{ROLE[u.role]}</span>}
                     </span>
                     <span className="block truncate text-[11px] text-ink-3">{[dir.stores.find((s) => s.id === u.storeId)?.name, u.title].filter(Boolean).join(" · ")}</span>
@@ -1319,7 +1388,7 @@ function DetailsPanel({
                       <MessageSquare className="h-4 w-4" />
                     </button>
                   )}
-                  {channel.canManage && u.id !== channel.createdBy && (
+                  {channel.canRemoveMembers && !(channel.kind === "custom" && u.id === channel.createdBy) && (
                     <button type="button" onClick={() => onRemove(u.id)} className="rounded-lg p-1.5 text-ink-3 opacity-70 hover:bg-critical-soft hover:text-critical-ink group-hover:opacity-100" aria-label={`${u.name} さんを外す`} title="チャンネルから外す">
                       <UserMinus className="h-4 w-4" />
                     </button>
@@ -1367,24 +1436,6 @@ function SectionTitle({ label, onAdd, addLabel, extra }: { label: string; onAdd?
   );
 }
 
-function ChannelIcon({ c, dir, size = 20 }: { c: ChatChannelView; dir: Dir; size?: number }) {
-  if (c.kind === "dm") {
-    const others = c.memberIds.filter((id) => id !== dir.me.id);
-    if (others.length <= 1) return <UserAvatar dir={dir} id={others[0] ?? dir.me.id} size={size} presence={size <= 24} />;
-    return (
-      <span className="flex shrink-0 items-center justify-center rounded-full bg-neutral-soft text-[10px] font-semibold text-ink-2" style={{ width: size, height: size }}>
-        {others.length}
-      </span>
-    );
-  }
-  const Icon = c.kind === "all" ? Megaphone : c.kind === "store" ? Store : c.kind === "managers" ? Lock : c.visibility === "public" ? Hash : Lock;
-  return (
-    <span className="flex shrink-0 items-center justify-center rounded-lg text-white" style={{ width: size, height: size, background: c.color ?? (c.kind === "all" ? "#4a5ae8" : c.kind === "managers" ? "#8a5a00" : "#64748b") }}>
-      <Icon className="h-[58%] w-[58%]" />
-    </span>
-  );
-}
-
 function ChannelRow({ c, dir, active, onClick }: { c: ChatChannelView; dir: Dir; active: boolean; onClick: () => void }) {
   const unread = c.unread > 0;
   return (
@@ -1403,8 +1454,8 @@ function ChannelRow({ c, dir, active, onClick }: { c: ChatChannelView; dir: Dir;
 function ChannelIntro({ c, dir, onMembers }: { c: ChatChannelView; dir: Dir; onMembers: () => void }) {
   const text: Record<string, string> = {
     all: "全社員が参加するチャンネルです。全員へのお知らせ・全店舗で共有したい内容をここで公開します。",
-    store: "この店舗の社員が自動で参加するチャンネルです。店舗の中の連絡・相談・写真の共有に使います (本部・管理者も見られます)。",
-    managers: "店長・本部・管理者だけが参加するチャンネルです。店長への指示や店長会議の資料に使います。",
+    store: "この店舗の社員と店長が参加するチャンネルです。店舗の中の連絡・相談・写真の共有に使います (メンバーだけが見られます)。",
+    managers: "各店舗の店長が参加するチャンネルです。店長への指示や店長会議の資料に使います (メンバーだけが見られます)。",
     custom: c.visibility === "public" ? "公開のチャンネルです。社員なら誰でも参加できます。" : "非公開のチャンネルです。メンバーだけが見られます。",
     dm: "参加している本人同士だけが見られる個別のメッセージです (管理者も見られません)。",
   };

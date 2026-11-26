@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
-import { Bell, BellOff, Check, CircleAlert, Hash, Lock, MessageSquare, Plus, Search, Smartphone, Volume2, VolumeX, X } from "lucide-react";
+import { Bell, BellOff, Check, CircleAlert, Hash, Lock, MessageSquare, Plus, Search, Settings2, Smartphone, Volume2, VolumeX, X } from "lucide-react";
 import { Button, Badge } from "@/components/ui";
-import { archiveChatChannel, createChatChannel, makeChatTask, openDirect, remindChatMessage, setChatChannelNotify, setChatPrefs, shareChatMessage, testChatPush, updateChatChannel } from "@/lib/actions/chat";
+import { makeChatTask, openDirect, remindChatMessage, setChatChannelNotify, setChatPrefs, shareChatMessage, testChatPush } from "@/lib/actions/chat";
 import { matchName } from "@/lib/chat/text";
 import { DM_MAX_MEMBERS, type ChatChannelView, type ChatDueChoice, type ChatMessageView, type ChatPrefs, type ChatTaskInput } from "@/lib/chat/types";
 import { disablePush, enablePush, isIos, isStandalone, playChime, pushState, type PushState } from "./client";
@@ -212,111 +212,6 @@ export function NewDmDialog({ dir, onClose, onOpen }: { dir: Dir; onClose: () =>
   );
 }
 
-export function ChannelDialog({ dir, channel, onClose, onSaved }: { dir: Dir; channel?: ChatChannelView; onClose: () => void; onSaved: (channelId: string, archived?: boolean) => void }) {
-  const [name, setName] = useState(channel?.name ?? "");
-  const [topic, setTopic] = useState(channel?.topic ?? "");
-  const [visibility, setVisibility] = useState<"public" | "private">(channel?.visibility ?? "public");
-  const [ids, setIds] = useState<string[]>(channel ? channel.memberIds.filter((x) => x !== dir.me.id) : []);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const editing = Boolean(channel);
-  const run = async (fn: () => Promise<{ ok: boolean; error?: string; data?: { channelId: string } }>, after: (r: { data?: { channelId: string } }) => void) => {
-    setBusy(true);
-    setErr("");
-    try {
-      const r = await fn();
-      if (!r.ok) setErr(r.error ?? "保存できませんでした。");
-      else after(r);
-    } catch {
-      setErr("通信に失敗しました。もう一度お試しください。");
-    } finally {
-      setBusy(false);
-    }
-  };
-  const save = () =>
-    run(
-      () => (channel ? updateChatChannel(channel.id, { name, topic, memberIds: ids, visibility }).then((r) => ({ ...r, data: { channelId: channel.id } })) : createChatChannel({ name, topic, memberIds: ids, visibility })),
-      (r) => onSaved(r.data!.channelId),
-    );
-  const addStore = (storeId: string) => setIds((x) => [...new Set([...x, ...[...dir.users.values()].filter((u) => u.storeId === storeId && u.id !== dir.me.id).map((u) => u.id)])]);
-  const needMembers = visibility === "private" && !ids.length;
-  return (
-    <Modal
-      title={editing ? `#${channel!.name} の設定` : "チャンネルを作成"}
-      wide
-      onClose={onClose}
-      footer={
-        <>
-          {editing && (
-            <Button type="button" variant="danger" onClick={() => confirm(`#${channel!.name} をアーカイブしますか？\nメッセージは残りますが、一覧に出なくなり、送れなくなります。`) && run(() => archiveChatChannel(channel!.id, true), () => onSaved(channel!.id, true))} disabled={busy}>
-              アーカイブ
-            </Button>
-          )}
-          <span className="flex-1" />
-          <Button type="button" variant="secondary" onClick={onClose}>
-            やめる
-          </Button>
-          <Button type="button" onClick={save} disabled={busy || !name.trim() || needMembers} data-testid="chat-channel-save">
-            {editing ? "保存する" : "作成する"}
-          </Button>
-        </>
-      }
-    >
-      {err && <ErrorLine text={err} />}
-      <div className="space-y-3">
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-ink-2">
-            名前 <span className="text-critical">*</span>
-          </span>
-          <span className="relative block">
-            <Hash className="pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-ink-3" />
-            <input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="例: 新商品の勉強会" className="h-9 w-full rounded-xl border border-line bg-panel pr-3 pl-8 text-sm outline-none focus:border-accent focus:ring-4 focus:ring-accent/15" />
-          </span>
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-ink-2">説明 (任意)</span>
-          <input value={topic} onChange={(e) => setTopic(e.target.value)} maxLength={200} placeholder="何のためのチャンネルか" className="h-9 w-full rounded-xl border border-line bg-panel px-3 text-sm outline-none focus:border-accent focus:ring-4 focus:ring-accent/15" />
-        </label>
-        <fieldset>
-          <legend className="mb-1 text-xs font-medium text-ink-2">公開範囲</legend>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {(
-              [
-                ["public", "公開", "社員なら誰でも「チャンネルを探す」から見つけて参加できます", Hash],
-                ["private", "非公開", "メンバーだけが見られます (招待した人だけ)", Lock],
-              ] as const
-            ).map(([v, label, desc, Icon]) => (
-              <label key={v} className={clsx("flex cursor-pointer items-start gap-2.5 rounded-xl border p-3", visibility === v ? "border-accent bg-accent-soft/50" : "border-line hover:bg-subtle")}>
-                <input type="radio" name="visibility" value={v} checked={visibility === v} onChange={() => setVisibility(v)} className="mt-1 accent-accent" />
-                <span>
-                  <span className="flex items-center gap-1 text-sm font-semibold text-ink">
-                    <Icon className="h-3.5 w-3.5" />
-                    {label}
-                  </span>
-                  <span className="block text-[11px] text-ink-3">{desc}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-        <div>
-          <div className="mb-1 flex flex-wrap items-center gap-1.5 text-xs font-medium text-ink-2">
-            メンバー {visibility === "private" ? <span className="text-critical">*</span> : <span className="font-normal text-ink-3">(任意。公開のチャンネルはあとから参加できます)</span>}
-            <span className="font-normal text-ink-3">店舗の全員を追加:</span>
-            {dir.stores.map((s) => (
-              <button key={s.id} type="button" onClick={() => addStore(s.id)} className="rounded-full border border-line px-2 py-0.5 text-[11px] font-normal hover:bg-subtle">
-                + {s.name}
-              </button>
-            ))}
-          </div>
-          <PeoplePicker dir={dir} value={ids} onChange={setIds} exclude={[dir.me.id]} />
-          <p className="mt-1.5 text-[11px] text-ink-3">あなたも自動でメンバーになります。メンバーはあとから「メンバー」の画面で追加できます。</p>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
 /* ================================================================== */
 /* チャンネルを探す・共有・すばやく移動                                   */
 /* ================================================================== */
@@ -327,6 +222,7 @@ export interface BrowseRow {
   name: string;
   topic: string;
   color?: string;
+  image?: string;
   visibility?: "public" | "private";
   memberCount: number;
   joined: boolean;
@@ -334,8 +230,8 @@ export interface BrowseRow {
   messages: number;
 }
 
-/** チャンネルを探す (全社・店舗・店長・公開のチャンネル。参加する・開く) */
-export function BrowseDialog({ onClose, onOpen, onCreate }: { onClose: () => void; onOpen: (id: string, join: boolean) => void; onCreate: () => void }) {
+/** チャンネルを探す (所属している全社・店舗・店長のチャンネルと公開のチャンネル。参加する・開く。管理者は「チャンネルの管理」へ) */
+export function BrowseDialog({ onClose, onOpen, onCreate, onManage }: { onClose: () => void; onOpen: (id: string, join: boolean) => void; onCreate: () => void; onManage?: () => void }) {
   const [list, setList] = useState<BrowseRow[] | null>(null);
   const [q, setQ] = useState("");
   const [err, setErr] = useState("");
@@ -352,10 +248,18 @@ export function BrowseDialog({ onClose, onOpen, onCreate }: { onClose: () => voi
       wide
       onClose={onClose}
       footer={
-        <Button type="button" onClick={onCreate}>
-          <Plus className="h-4 w-4" />
-          チャンネルを作成
-        </Button>
+        <>
+          {onManage && (
+            <Button type="button" variant="secondary" onClick={onManage} className="mr-auto" data-testid="chat-open-manage">
+              <Settings2 className="h-4 w-4" />
+              チャンネルの管理 (管理者)
+            </Button>
+          )}
+          <Button type="button" onClick={onCreate}>
+            <Plus className="h-4 w-4" />
+            チャンネルを作成
+          </Button>
+        </>
       }
     >
       <label className="relative mb-3 block">
@@ -368,9 +272,14 @@ export function BrowseDialog({ onClose, onOpen, onCreate }: { onClose: () => voi
         {list && shown.length === 0 && <li className="px-3 py-6 text-center text-xs text-ink-3">見つかりません</li>}
         {shown.map((c) => (
           <li key={c.id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-subtle/60">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-white" style={{ background: c.color ?? (c.kind === "custom" ? "#64748b" : "#4a5ae8") }}>
-              <Hash className="h-4 w-4" />
-            </span>
+            {c.image ? (
+              // eslint-disable-next-line @next/next/no-img-element -- ログインした社員だけが読める画像
+              <img src={c.image} alt="" width={32} height={32} className="h-8 w-8 shrink-0 rounded-lg bg-subtle object-cover" loading="lazy" />
+            ) : (
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-white" style={{ background: c.color ?? (c.kind === "custom" ? "#64748b" : "#4a5ae8") }}>
+                {c.kind === "custom" && c.visibility !== "public" ? <Lock className="h-4 w-4" /> : <Hash className="h-4 w-4" />}
+              </span>
+            )}
             <button type="button" onClick={() => onOpen(c.id, false)} className="min-w-0 flex-1 text-left">
               <span className="flex items-center gap-1.5 text-sm font-semibold text-ink">
                 {c.name}

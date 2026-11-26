@@ -3,7 +3,8 @@
  *   node scripts/tests/chat/chat.test.mjs   (npm run test:chat)
  * 1. プッシュ通知の暗号 (RFC 8291 の付録の値)・VAPID の署名・手元の偽の配信サーバーで復号できるか・無効な端末の削除
  * 2. 本文 (メンションの印・URL・案件の番号・入力中の @)
- * 3. 見られる人 (全社・店舗・店長・追加したチャンネル・DM。DM は管理者も見られない)
+ * 3. 見られる人 (所属しているチャンネルと公開のチャンネルだけ。管理者のメンバーの変更・画像。DM は管理者も見られない)
+ * 7c. 管理者のチャンネルの管理 (メンバーでないチャンネルの変更・削除・アーカイブを元に戻す)
  * 4. 送る・重要 (確認・再通知)・@全員・DM・グループ・チャンネルの追加・資料の公開範囲・業務依頼・スレッド・編集・削除・既読・要対応の数
  * AI・外部への送信は使わない。データは一時フォルダーの JSON (サンプルデータ) とチャットの SQLite。名前は架空
  */
@@ -199,12 +200,61 @@ section("3. 見られる人");
   const st = sys.find((c) => c.id === `store:${S}`);
   ok(st.memberIds.includes(a.id) && st.memberIds.includes(mgr.id) && !st.memberIds.includes(x2.id) && !st.memberIds.includes("u_ct_gone"), "店舗のチャンネル: その店舗の有効な社員 (退職した社員・ほかの店舗は入らない)");
   const mg = sys.find((c) => c.id === "managers");
-  ok(mg.memberIds.includes(mgr.id) && mg.memberIds.includes(hq.id) && mg.memberIds.includes(admin.id) && !mg.memberIds.includes(a.id), "店長のチャンネル: 店長・本部・管理者 (店舗スタッフは入らない)");
+  ok(mg.memberIds.includes(mgr.id) && !mg.memberIds.includes(hq.id) && !mg.memberIds.includes(admin.id) && !mg.memberIds.includes(a.id), "店長のチャンネル: 店長だけ (店舗スタッフ・本部・店長でない管理者は入らない)");
+  const storeMgrs = stores.filter((s) => s.managerUserId && db().users.find((u) => u.id === s.managerUserId)?.active).map((s) => s.managerUserId);
+  ok(storeMgrs.every((id) => mg.memberIds.includes(id)), "店長のチャンネル: 各店舗の店長 (設定 → 店舗 の店長。管理者のロールでも) は自動で入る");
+  ok(stores.filter((s) => s.managerUserId && sys.some((c) => c.storeId === s.id) && db().users.find((u) => u.id === s.managerUserId)?.active).every((s) => sys.find((c) => c.storeId === s.id).memberIds.includes(s.managerUserId)), "店舗のチャンネル: その店舗の店長は所属が別の店舗でも入る");
   ok(sys[0].id === "all" && sys[sys.length - 1].id === "managers", "並び: 全社 → 店舗 → 店長");
   const hqStore = stores.find((s) => s.kind === "hq");
   if (hqStore) eq(sys.find((c) => c.storeId === hqStore.id)?.name, hqStore.shortName?.trim() || "本部", "本部・ショールームのチャンネルの名前は「本部」");
-  ok(P.canViewChatChannel(x2, st) === false && P.canViewChatChannel(hq, st) && P.canViewChatChannel(admin, st), "店舗のチャンネル: ほかの店舗の社員は見られない・本部と管理者は見られる");
-  ok(!P.canViewChatChannel(a, mg) && P.canViewChatChannel(mgr, mg), "店長のチャンネル: 店舗スタッフは見られない");
+  ok(P.canViewChatChannel(x2, st) === false && !P.canViewChatChannel(hq, st) && !P.canViewChatChannel(admin, st) && P.canViewChatChannel(a, st), "店舗のチャンネル: メンバーだけ (ほかの店舗の社員・本部・管理者もメンバーでなければ見られない)");
+  ok(!P.canViewChatChannel(a, mg) && !P.canViewChatChannel(hq, mg) && !P.canViewChatChannel(admin, mg) && P.canViewChatChannel(mgr, mg), "店長のチャンネル: メンバー以外 (店舗スタッフ・本部・管理者) には見えない");
+  ok(!C.visibleChannels(db(), admin).some((c) => c.id === st.id || c.id === "managers") && !I.chatState(db(), hq).channels.some((c) => c.id === "managers"), "一覧に出るのも所属しているチャンネルだけ");
+
+  // 管理者がメンバーを足す・外す (全社・店舗・店長のチャンネル)
+  const nonAdmin = await as(mgr, () => A.addChatMembers(st.id, [x2.id]));
+  ok(!nonAdmin.ok && /管理者/.test(nonAdmin.error), "店舗・店長のチャンネルのメンバーを変えられるのは管理者だけ");
+  const add1 = await as(admin, () => A.addChatMembers(st.id, [admin.id]));
+  const add2 = await as(admin, () => A.addChatMembers("managers", [admin.id]));
+  ok(add1.ok && add2.ok && P.canViewChatChannel(admin, C.findChannel(db(), st.id)) && P.canViewChatChannel(admin, C.findChannel(db(), "managers")), "管理者は自分 (や社員) を店舗・店長のチャンネルに足せる (足すと見られる)");
+  const vAdmin = I.chatState(db(), admin).channels.find((c) => c.id === st.id);
+  ok(vAdmin && vAdmin.addedIds?.includes(admin.id) && vAdmin.canAddMembers && vAdmin.canRemoveMembers && vAdmin.canManage && !vAdmin.canDelete, "足したメンバーは「追加」と分かる・管理者は変更できるが削除はできない");
+  const rmAuto = await as(admin, () => A.removeChatMember(st.id, b.id));
+  ok(rmAuto.ok && !C.findChannel(db(), st.id).memberIds.includes(b.id) && !P.canViewChatChannel(b, C.findChannel(db(), st.id)), "自動のメンバーも外せる (外すと見られない)");
+  await as(admin, () => A.addChatMembers(st.id, [b.id]));
+  ok(C.findChannel(db(), st.id).memberIds.includes(b.id) && !C.findChannel(db(), st.id).addedIds.includes(b.id), "外した自動のメンバーを戻すと自動のメンバーに戻る (「追加」にならない)");
+  const allAdd = await as(admin, () => A.addChatMembers("all", [a.id]));
+  ok(!allAdd.ok, "全社のチャンネルはメンバーを変えない (全社員)");
+  const sysDel = await as(admin, () => A.deleteChatChannel(st.id));
+  ok(!sysDel.ok, "全社・店舗・店長のチャンネルは削除できない");
+  ok(db().auditLogs.some((l) => l.entity === "chat_channel" && l.entityId === st.id && l.changes?.some((c) => c.field === "members")), "メンバーの変更は変更履歴に残す");
+  const topic = await as(admin, () => A.updateChatChannel(st.id, { name: "無視", topic: "店舗の連絡 (試験)", memberIds: C.findChannel(db(), st.id).memberIds }));
+  ok(topic.ok && C.findChannel(db(), st.id).topic === "店舗の連絡 (試験)" && C.findChannel(db(), st.id).name === st.name, "管理者は店舗のチャンネルの説明を変えられる (名前は店舗の名前のまま)");
+  await as(admin, () => A.updateChatChannel(st.id, { name: "", topic: "", memberIds: C.findChannel(db(), st.id).memberIds }));
+  ok(C.findChannel(db(), st.id).topic === st.topic, "説明を空にすると既定の説明に戻る");
+  const mgrTopic = await as(mgr, () => A.updateChatChannel(st.id, { name: "", topic: "x", memberIds: [] }));
+  ok(!mgrTopic.ok, "店長は店舗のチャンネルの説明・メンバーを変えられない");
+
+  // 画像を変えられる人
+  const hqStore2 = stores.find((s) => s.kind === "hq");
+  const stOwn = C.findChannel(db(), st.id);
+  ok(P.canEditChatChannelImage(admin, stOwn) && !P.canEditChatChannelImage(a, stOwn) && !P.canEditChatChannelImage({ id: "u_ct_x", role: "store_manager" }, stOwn), "店舗のチャンネルの画像: 管理者・その店舗の店長 (店舗スタッフ・ほかの店長はできない)");
+  if (stOwn.ownerIds?.length) ok(P.canEditChatChannelImage(U(stOwn.ownerIds[0]) ?? { id: stOwn.ownerIds[0], role: "store_manager" }, stOwn), "その店舗の店長は店舗の画像を変えられる");
+  ok(!P.canEditChatChannelImage(admin, { kind: "dm", memberIds: [admin.id] }), "DM には画像を付けない");
+  if (hqStore2) {
+    const hqCh = `store:${hqStore2.id}`;
+    R.setChannelImage(hqCh, { key: "chat/channel-images/hq-test.jpg", type: "image/jpeg" }, admin.id, new Date().toISOString());
+    const mg2 = C.findChannel(db(), "managers");
+    ok(mg2.image?.key === "chat/channel-images/hq-test.jpg" && mg2.image.inherited, "店長のチャンネルに画像がなければ本部のチャンネルの画像を使う");
+    ok(C.channelImageUrl(mg2).startsWith("/api/chat/channel-image?c=managers&v="), "画像の URL (画像が変わると URL も変わる)");
+    R.setChannelImage("managers", { key: "chat/channel-images/managers-own.jpg", type: "image/jpeg" }, admin.id, new Date().toISOString());
+    ok(C.findChannel(db(), "managers").image?.key === "chat/channel-images/managers-own.jpg" && !C.findChannel(db(), "managers").image.inherited, "店長のチャンネルに画像を登録すると、その画像");
+    const prev = R.setChannelImage("managers", undefined, admin.id, new Date().toISOString());
+    ok(prev === "chat/channel-images/managers-own.jpg" && C.findChannel(db(), "managers").image?.inherited, "画像を外すと前の画像のファイルを消す・本部の画像に戻る");
+    R.setChannelImage(hqCh, undefined, admin.id, new Date().toISOString());
+    const hqOwner = C.findChannel(db(), "managers").ownerIds ?? [];
+    ok(hqOwner.every((id) => P.canEditChatChannelImage({ id, role: "store_manager" }, C.findChannel(db(), "managers"))), "店長のチャンネルの画像は本部の店長も変えられる");
+  }
   const dm = { kind: "dm", memberIds: [a.id, b.id] };
   ok(P.canViewChatChannel(a, dm) && !P.canViewChatChannel(admin, dm) && !P.canViewChatChannel(hq, dm), "DM: 参加している本人だけ (管理者・本部も見られない)");
   ok(!P.canViewChatChannel({ ...a, active: false }, { kind: "all", memberIds: [] }), "退職した社員はどのチャンネルも見られない");
@@ -405,8 +455,8 @@ section("7b. 公開のチャンネル・メンバー・ピン留め・後で見�
   ok(j.ok && ch().memberIds.includes(x2.id) && I.chatState(db(), x2).channels.some((c) => c.id === pub && c.joined && c.canPost), "「チャンネルに参加」でメンバーになり送れる");
   const add = await as(b, () => A.addChatMembers(pub, [hq.id]));
   ok(add.ok && ch().memberIds.includes(hq.id), "メンバーなら誰でもメンバーを追加できる");
-  const addX = await as(admin, () => A.addChatMembers(pub, [mgr.id]));
-  ok(!addX.ok, "メンバーでない人は追加できない");
+  const addOut = await as(mgr, () => A.addChatMembers(pub, [hq.id]));
+  ok(!addOut.ok, "メンバーでない社員は追加できない (店長も)");
   const rmB = await as(b, () => A.removeChatMember(pub, hq.id));
   ok(!rmB.ok, "メンバーを外せるのは作成した人・管理者だけ");
   const rmCreator = await as(admin, () => A.removeChatMember(pub, a.id));
@@ -474,6 +524,46 @@ section("7b. 公開のチャンネル・メンバー・ピン留め・後で見�
   // 検索の絞り込み (送った人)
   const found = R.searchMessages([pub], "", 50, b.id);
   ok(found.length > 0 && found.every((m) => m.userId === b.id), "検索を送った人で絞れる");
+}
+
+/* ================================================================== */
+section("7c. 管理者のチャンネルの管理 (追加・変更・削除)");
+{
+  const priv = (await as(a, () => A.createChatChannel({ name: "店舗の内緒話", memberIds: [b.id], visibility: "private" }))).data.channelId;
+  const ch = () => C.findChannel(db(), priv);
+  ok(!P.canViewChatChannel(admin, ch()) && P.canAdministerChatChannels(admin) && !P.canAdministerChatChannels(mgr), "管理者もメンバーでない非公開のチャンネルは見られない (管理の一覧で名前・メンバーだけ)");
+  ok(C.allCustomChannels(db()).some((c) => c.id === priv) && !C.allCustomChannels(db()).some((c) => c.kind === "dm"), "管理の一覧: 追加したチャンネルはすべて (非公開を含む)・DM は含めない");
+  const up = await as(admin, () => A.updateChatChannel(priv, { name: "店舗の相談", topic: "管理者が変更", memberIds: [b.id, mgr.id], visibility: "private" }));
+  ok(up.ok && ch().name === "店舗の相談" && ch().memberIds.includes(mgr.id) && ch().memberIds.includes(a.id) && !ch().memberIds.includes(admin.id), "管理者はメンバーでなくても設定を変えられる (作成した人は残り、管理者はメンバーにならない)");
+  const addA = await as(admin, () => A.addChatMembers(priv, [x2.id]));
+  ok(addA.ok && ch().memberIds.includes(x2.id), "管理者はメンバーでないチャンネルにもメンバーを足せる");
+  const rmA = await as(admin, () => A.removeChatMember(priv, x2.id));
+  ok(rmA.ok && !ch().memberIds.includes(x2.id), "管理者はメンバーを外せる");
+  ok(P.canEditChatChannelImage(a, ch()) && P.canEditChatChannelImage(admin, ch()) && !P.canEditChatChannelImage(b, ch()), "追加したチャンネルの画像: 作成した人・管理者");
+  const m = (await send(a, { channelId: priv, body: "消える予定のメッセージ @試験次郎" })).data.message;
+  await as(b, () => A.reactChatMessage(m.id, "👍"));
+  await as(b, () => A.saveChatMessage(m.id, true));
+  await as(b, () => A.pinChatMessage(m.id, true));
+  await as(b, () => A.starChatChannel(priv, true));
+  R.setChannelImage(priv, { key: "chat/channel-images/priv.jpg", type: "image/jpeg" }, a.id, new Date().toISOString());
+  ok(C.findChannel(db(), priv).image?.key === "chat/channel-images/priv.jpg" && I.chatState(db(), a).channels.find((c) => c.id === priv)?.image?.startsWith("/api/chat/channel-image?c="), "追加したチャンネルの画像の URL を一覧に出す");
+  const delA = await as(a, () => A.deleteChatChannel(priv));
+  ok(!delA.ok, "作成した人も削除はできない (アーカイブする。削除は管理者だけ)");
+  eq(R.channelUsage([priv]).get(priv).messages, 1, "削除の前にメッセージの数を出す");
+  const del = await as(admin, () => A.deleteChatChannel(priv));
+  ok(del.ok && !C.findChannel(db(), priv) && !R.getMessage(m.id), "管理者はチャンネルを削除できる (メッセージも消える)");
+  const n = (sql, v) => Number(DB.chatDb().prepare(sql).get(v).n);
+  eq(
+    [n("select count(*) n from reactions where message_id = ?", m.id), n("select count(*) n from saves where message_id = ?", m.id), n("select count(*) n from pins where channel_id = ?", priv), n("select count(*) n from stars where channel_id = ?", priv), n("select count(*) n from channel_meta where channel_id = ?", priv), n("select count(*) n from mentions where channel_id = ?", priv)],
+    [0, 0, 0, 0, 0, 0],
+    "リアクション・後で見る・ピン留め・スター・画像・メンションの記録も消す",
+  );
+  ok(!R.savedMessages(b.id).some((x) => x.id === m.id) && !I.chatState(db(), b).channels.some((c) => c.id === priv) && !I.chatState(db(), b).inbox.some((i) => i.messageId === m.id), "一覧・後で見る・要対応からも消える");
+  ok(db().auditLogs.some((l) => l.entity === "chat_channel" && l.entityId === priv && l.action === "delete"), "削除は変更履歴に残す (名前・メンバーの数・メッセージの数)");
+  const arch = (await as(a, () => A.createChatChannel({ name: "使い終わり", memberIds: [], visibility: "public" }))).data.channelId;
+  await as(a, () => A.archiveChatChannel(arch, true));
+  ok(C.allCustomChannels(db()).find((c) => c.id === arch)?.archivedAt && !C.visibleChannels(db(), a).some((c) => c.id === arch), "アーカイブしたチャンネルは管理の一覧にだけ出る");
+  ok((await as(admin, () => A.archiveChatChannel(arch, false))).ok && C.visibleChannels(db(), a).some((c) => c.id === arch), "管理者はアーカイブを元に戻せる");
 }
 
 section("8. 業務依頼 (チャットから)・スレッド・編集・削除");

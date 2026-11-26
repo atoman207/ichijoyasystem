@@ -1,7 +1,7 @@
 import "server-only";
 import type { Database, User } from "@/lib/db/types";
 import { canViewThread } from "@/lib/auth/permissions";
-import { canAddMembers, canManage, canPost, dmName, isJoined, isViewer, visibleChannels, type ChannelDef } from "./channels";
+import { canAddMembers, canDelete, canEditImage, canManage, canPost, canRemoveMembers, channelImageUrl, dmName, isJoined, visibleChannels, type ChannelDef } from "./channels";
 import { channelNotify, channelStats, mentionRows, notifyFor, pendingImportant, pinCounts, readsOf, starsOf, type ChannelStat, type RawMessage } from "./repo";
 import { preview } from "./text";
 import type { ChatChannelView, ChatCounts, InboxItem, WaitingItem } from "./types";
@@ -161,7 +161,9 @@ export function channelView(
     storeId: d.storeId,
     color: d.color,
     memberIds: d.memberIds,
-    viewer: isViewer(user, d) || undefined,
+    addedIds: d.addedIds?.length ? d.addedIds : undefined,
+    image: channelImageUrl(d),
+    imageInherited: d.image?.inherited || undefined,
     unread: joined ? s.unread : 0,
     mentions: joined ? Math.max(s.mentions, 0) + (extra.pending ?? 0) : 0,
     lastAt: s.lastAt,
@@ -169,6 +171,9 @@ export function channelView(
     lastPreview: last,
     notify: extra.notify ?? (d.kind === "dm" ? "all" : "priority"),
     canManage: canManage(user, d),
+    canRemoveMembers: canRemoveMembers(user, d),
+    canEditImage: canEditImage(user, d),
+    canDelete: canDelete(user, d),
     archived: Boolean(d.archivedAt) || undefined,
     createdBy: d.createdBy,
     createdAt: d.createdAt,

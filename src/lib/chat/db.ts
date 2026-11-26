@@ -24,6 +24,8 @@ import path from "node:path";
  *   uploads (送る前に預かった資料・写真)、task_links (業務依頼 → メッセージ)
  *   pins (チャンネルのピン留め)、saves (自分の「後で見る」)、stars (スター付きのチャンネル)、presence (最後に画面を開いていた時刻 = オンライン)、
  *   typing (入力中。数秒で消える)
+ *   channel_members (全社・店舗・店長のチャンネルのメンバーを管理者が変えたもの: add = 足す / remove = 外す。自動のメンバーに重ねる)
+ *   channel_meta (チャンネルの画像 (本体は storage.ts の chat/channel-images/) と、全社・店舗・店長のチャンネルの説明)
  */
 
 export interface Statement {
@@ -186,6 +188,23 @@ const SCHEMA = `
     key text not null,
     at text not null,
     primary key (user_id, key)
+  );
+  create table if not exists channel_members (
+    channel_id text not null,
+    user_id text not null,
+    op text not null check (op in ('add', 'remove')),
+    changed_by text not null,
+    at text not null,
+    primary key (channel_id, user_id)
+  );
+  create table if not exists channel_meta (
+    channel_id text primary key,
+    topic text,
+    image_key text,
+    image_type text,
+    image_at text,
+    image_by text,
+    updated_at text not null
   );
 `;
 

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canCreateChatChannel, canSendImportantChat } from "@/lib/auth/permissions";
+import { canAdministerChatChannels, canCreateChatChannel, canSendImportantChat } from "@/lib/auth/permissions";
 import { avatarUrl } from "@/lib/account-rules";
 import { chatState } from "@/lib/chat/inbox";
 import { ALL_CHANNEL, canView, findChannel, storeChannelId } from "@/lib/chat/channels";
@@ -58,6 +58,7 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
     stores: db.stores.filter((s) => !s.mergedInto).map((s) => ({ id: s.id, name: s.name, color: s.color })),
     canImportant: canSendImportantChat(user),
     canCreateChannel: canCreateChatChannel(user),
+    canAdminChannels: canAdministerChatChannels(user),
     vapidKey: vapidKeys()?.publicKey ?? "",
     maxFileBytes: CHAT_MAX_FILE_BYTES,
   };
