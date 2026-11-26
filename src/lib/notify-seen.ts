@@ -76,3 +76,26 @@ export function unseenCount(keys: readonly string[] | undefined, seen: ReadonlyS
   for (const k of keys) if (!seen.has(k)) n++;
   return n;
 }
+
+/* ------------------------------------------------------------------ */
+/* 新しく届いた通知のトースト (画面の右上。2026-11-26)                    */
+/* ------------------------------------------------------------------ */
+
+/** トーストで知らせたキーの保存の、最初の 1 回の印 (この印がない = このブラウザーで初めて → 今ある通知は知らせずに覚えるだけ) */
+export const ANNOUNCE_INIT = "__announce_init__";
+/** 一度にトーストで出す通知の数 (残りは「ほかに新しい通知が n 件」) */
+export const MAX_NOTICE_TOASTS = 3;
+
+/**
+ * 新しく届いた通知: キーのどれかが、まだトーストで知らせておらず (announced)、確認もしていない (seen) もの。
+ * announced が空 (このブラウザーで初めて) のときは何も知らせない (ログインした直後に今までの通知を並べない)
+ */
+export function freshNotices<T extends { keys: readonly string[] }>(items: readonly T[], announced: ReadonlySet<string>, seen: ReadonlySet<string>): T[] {
+  if (!announced.has(ANNOUNCE_INIT)) return [];
+  return items.filter((n) => n.keys.some((k) => !announced.has(k) && !seen.has(k)));
+}
+
+/** トーストで出す通知 (上から MAX 件) と残りの件数 */
+export function noticeToasts<T>(fresh: readonly T[], max = MAX_NOTICE_TOASTS): { show: T[]; more: number } {
+  return { show: fresh.slice(0, max), more: Math.max(0, fresh.length - max) };
+}

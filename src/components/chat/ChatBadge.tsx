@@ -6,6 +6,7 @@ import clsx from "clsx";
 import { MessagesSquare } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { ICON_BUTTON } from "@/components/layout/header-parts";
+import { toast } from "@/components/ui/toast";
 import type { ChatCounts, ChatSummary } from "@/lib/chat/types";
 import { CHAT_REFRESH_EVENT, playChime, pushState, setAppBadge, swRegistration, unlockAudioOnce } from "./client";
 
@@ -78,6 +79,14 @@ export function ChatLive({ initial }: { initial: ChatSummary }) {
       if (sound.current && !quiet) {
         if (newAction) playChime("priority");
         else if (newUnread) playChime("normal");
+      }
+      // 画面を見ているとき (チャットの画面の外) は、右上のトーストでも知らせる (新しいものだけ。group = 前のチャットの知らせを置き換える)
+      if ((newAction || newUnread) && document.visibilityState === "visible" && !window.location.pathname.startsWith("/chat")) {
+        toast.notice(newAction ? "チャットにあなたへのメンション・依頼が届きました" : "チャットに新しいメッセージが届きました", {
+          detail: newAction ? `要対応 ${c.action} 件${c.unread ? ` · 未読 ${c.unread} 件` : ""}` : `未読 ${c.unread} 件`,
+          group: "chat",
+          action: { label: "チャットを開く", href: newAction ? "/chat?view=inbox" : "/chat" },
+        });
       }
       prev.current = c;
       const base = live.summary ?? initial;

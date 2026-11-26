@@ -3,16 +3,17 @@
 import { Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import clsx from "clsx";
-import { CircleAlert, CircleCheck, Info, TriangleAlert, X, type LucideIcon } from "lucide-react";
+import { Bell, CircleAlert, CircleCheck, Info, TriangleAlert, X, type LucideIcon } from "lucide-react";
 import Link from "@/components/ui/Link";
 import { closeStickyElsewhere, getServerToasts, getToasts, showResult, subscribeToasts, toast, TOAST_LABEL, type ToastItem, type ToastTone } from "./toast";
 
 /**
  * トーストの表示 (AppShell に 1 つだけ。仕組みは ./toast.ts)
- * - 位置: ヘッダーのすぐ下の中央 (スマートフォンは左右 12px の余白で横いっぱい。下は「質問する」・予定表のボタンと重ならない)
+ * - 位置: 画面の右上 = ヘッダーのすぐ下の右端 (ベルの下。新しいものが上)。スマートフォンは上に左右 12px の余白で横いっぱい
+ *   (下は「質問する」・予定表のボタンと重ならない)
  * - 画面の操作の結果 (?msg= / ?err=) を URL から読んで出し、URL から外す (ToastFromUrl)
  * - 閉じる: × / 横にはらう (タッチ) / 時間 (完了・お知らせ・注意)。マウスを乗せる・押さえる・別のタブのあいだは止める
- * - 読み上げ: 完了・お知らせは status (polite)、エラー・注意は alert
+ * - 読み上げ: 完了・お知らせ・通知は status (polite)、エラー・注意は alert
  */
 
 const TONE: Record<ToastTone, { icon: LucideIcon; bar: string; chip: string; label: string }> = {
@@ -20,6 +21,7 @@ const TONE: Record<ToastTone, { icon: LucideIcon; bar: string; chip: string; lab
   error: { icon: CircleAlert, bar: "bg-critical", chip: "bg-critical-soft text-critical-ink", label: "text-critical-ink" },
   info: { icon: Info, bar: "bg-info", chip: "bg-info-soft text-info-ink", label: "text-info-ink" },
   warn: { icon: TriangleAlert, bar: "bg-warn", chip: "bg-warn-soft text-warn-ink", label: "text-warn-ink" },
+  notice: { icon: Bell, bar: "bg-accent", chip: "bg-accent-soft text-accent-ink", label: "text-accent-ink" },
 };
 
 const subscribeVisibility = (cb: () => void) => {
@@ -39,14 +41,13 @@ export function Toaster() {
       <Suspense fallback={null}>
         <ToastFromUrl />
       </Suspense>
-      <section
-        aria-label="お知らせ"
-        className="pointer-events-none fixed inset-x-0 top-[calc(env(safe-area-inset-top)+5.25rem)] z-[100] flex flex-col items-center gap-2 px-3 sm:px-4"
-        data-testid="toaster"
-      >
-        {list.map((t) => (
-          <ToastCard key={t.id} item={t} hidden={hidden} />
-        ))}
+      {/* 右端はヘッダーのカードの右端にそろえる (ヘッダーと同じ左右の余白・最大の幅) */}
+      <section aria-label="お知らせ" className="pointer-events-none fixed inset-x-0 top-[calc(env(safe-area-inset-top)+5.25rem)] z-[100] px-3 sm:px-4 lg:px-6" data-testid="toaster">
+        <div className="mx-auto flex max-w-[1680px] flex-col items-stretch gap-2 sm:items-end">
+          {list.map((t) => (
+            <ToastCard key={t.id} item={t} hidden={hidden} />
+          ))}
+        </div>
       </section>
     </>
   );
@@ -151,7 +152,7 @@ function ToastCard({ item, hidden }: { item: ToastItem; hidden: boolean }) {
       onPointerCancel={onPointerEnd}
       style={dx ? { transform: `translateX(${dx}px)`, opacity: Math.max(0.2, 1 - Math.abs(dx) / 220) } : undefined}
       className={clsx(
-        "pointer-events-auto relative w-full max-w-md touch-pan-y overflow-hidden rounded-xl border border-line bg-panel shadow-pop transition-opacity duration-150 animate-drop",
+        "pointer-events-auto relative w-full touch-pan-y overflow-hidden rounded-xl border border-line bg-panel shadow-pop transition-opacity duration-150 animate-drop sm:w-[400px]",
         leaving && "opacity-0",
       )}
     >
@@ -165,7 +166,8 @@ function ToastCard({ item, hidden }: { item: ToastItem; hidden: boolean }) {
             {item.title ?? TOAST_LABEL[item.tone]}
             {item.count > 1 && <span className="rounded-full bg-neutral-soft px-1.5 text-[11px] font-medium text-ink-2 tnum">×{item.count}</span>}
           </div>
-          <p className="mt-0.5 max-h-[40vh] overflow-y-auto text-sm leading-relaxed break-words whitespace-pre-line text-ink">{item.text}</p>
+          <p className={clsx("mt-0.5 max-h-[40vh] overflow-y-auto text-sm leading-relaxed break-words whitespace-pre-line text-ink", item.tone === "notice" && "font-semibold")}>{item.text}</p>
+          {item.detail && <p className="mt-0.5 line-clamp-3 text-xs leading-snug break-words text-ink-2">{item.detail}</p>}
           {item.action &&
             (item.action.href ? (
               <Link href={item.action.href} onClick={() => { item.action?.onClick?.(); close(); }} className="mt-1.5 inline-flex rounded-lg px-2 py-1 text-sm font-medium text-accent-ink hover:bg-accent-soft">

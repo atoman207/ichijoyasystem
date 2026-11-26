@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import Link from "@/components/ui/Link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { keysViewedAt, unseenCount } from "@/lib/notify-seen";
+import { ANNOUNCE_INIT, freshNotices, keysViewedAt, noticeToasts, unseenCount } from "@/lib/notify-seen";
 import { addSeen, dropLegacyRead, seenSnapshot, subscribeSeen } from "./seen-store";
 import clsx from "clsx";
 import {
@@ -31,6 +31,7 @@ import { IchijoyaLogo } from "@/components/brand/Logo";
 import { ChatbotWidget } from "@/components/chatbot/ChatbotWidget";
 import { ChatIconButton, ChatLive, ChatPinnedButton } from "@/components/chat/ChatBadge";
 import { Toaster } from "@/components/ui/Toaster";
+import { toast } from "@/components/ui/toast";
 import type { ChatSummary } from "@/lib/chat/types";
 import { ScrollTopButton } from "./ScrollTopButton";
 
@@ -423,6 +424,31 @@ export function AppShell({
   }, [nav, notifications, counts.approvalKeys, counts.signupKeys]);
   const markSeen = useCallback((keys: readonly string[]) => addSeen(storageKey, keys), [storageKey]);
   useEffect(() => dropLegacyRead(user.id), [user.id]);
+
+  // 新しく届いた通知を画面の右上にトーストで知らせる (1 つの通知は 1 回だけ。知らせたキーはブラウザーに覚える。
+  // 確認済みの記録は知らせない。このブラウザーで初めてのときは、今ある通知を覚えるだけ。src/lib/notify-seen.ts の freshNotices)
+  const announceKey = `ichijoya:announced:${user.id}`;
+  useEffect(() => {
+    if (!seenReady) return;
+    const items = notifications.map((n) => ({ ...n, keys: n.keys ?? [`n:${n.kind}|${n.href}|${n.title}`] }));
+    const all = items.flatMap((n) => n.keys);
+    const announced = seenSnapshot(announceKey);
+    if (!announced.has(ANNOUNCE_INIT)) {
+      addSeen(announceKey, [ANNOUNCE_INIT, ...all]);
+      return;
+    }
+    const { show, more } = noticeToasts(freshNotices(items, announced, seen));
+    addSeen(announceKey, all);
+    // 新しいものが上に並ぶので、いちばん上の通知を最後に出す
+    for (const n of [...show].reverse()) {
+      toast.notice(n.title, { detail: n.detail, tag: "bell", action: { label: "開く", href: n.href, onClick: () => markSeen(n.keys) } });
+    }
+    if (more > 0) toast.notice(`ほかに新しい通知が ${more} 件あります`, { detail: "右上のベルで確認できます", tag: "bell" });
+  }, [notifications, seenReady, seen, announceKey, markSeen]);
+  // ベルを開いたら、ベルの通知のトーストは閉じる (同じ内容が一覧に出るため)
+  useEffect(() => {
+    if (menu === "notif") toast.dismissTag("bell");
+  }, [menu]);
 
   const unseenOf = (keys: readonly string[] | undefined, fallback: number) => (!seenReady ? 0 : keys ? unseenCount(keys, seen) : fallback);
   const isUnread = (n: NotificationItem) => seenReady && notifKeys(n).some((k) => !seen.has(k));

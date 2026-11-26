@@ -1,7 +1,8 @@
 /**
  * トースト (src/components/ui/toast.ts) のテスト (2026-11-26)
  *   node scripts/tests/notify/toast.test.mjs   (npm run test:notify)
- * - 消えるまでの時間・同じ知らせのまとめ・4 つまで・group・画面の操作の結果 (showResult)・別の画面への移動・閉じる
+ * - 消えるまでの時間・同じ知らせのまとめ・4 つまで・group・tag・画面の操作の結果 (showResult)・別の画面への移動・閉じる
+ * - 新しく届いた通知 (src/lib/notify-seen.ts の freshNotices・noticeToasts): 1 回だけ・確認済みは出さない・初めてのブラウザーは覚えるだけ
  * - 画面の部品のつなぎ (AppShell に Toaster・Flash は URL の結果を出さない・チャットと予定の小さな画面は共通のトースト) をソースで確かめる
  * React・ブラウザーは使わない
  */
@@ -37,7 +38,9 @@ eq(T.toastDuration("success", "保存しました。"), 4000 + 7 * 80, "完了: 
 eq(T.toastDuration("info", "あ"), 6080, "お知らせ: 6 秒から");
 eq(T.toastDuration("success", "あ".repeat(500)), 12000, "長い文でも 12 秒まで");
 eq(T.toastDuration("error", "できませんでした"), "sticky", "エラーは閉じるまで残す");
-eq(T.TOAST_LABEL, { success: "完了", error: "エラー", info: "お知らせ", warn: "注意" }, "色だけでなくラベルで表す");
+eq(T.toastDuration("notice", "あ"), 8080, "通知: 8 秒から");
+eq(T.toastDuration("notice", "あ".repeat(500)), 15000, "通知は 15 秒まで");
+eq(T.TOAST_LABEL, { success: "完了", error: "エラー", info: "お知らせ", warn: "注意", notice: "通知" }, "色だけでなくラベルで表す");
 
 // ---------------------------------------------------------------------------
 section("出す・まとめる・閉じる");
@@ -82,6 +85,37 @@ T.toast.success("アップロードしました", { group: "up" });
 eq(texts(), ["アップロードしました", "ほかの知らせ"], "同じ group の前の知らせを閉じる");
 
 // ---------------------------------------------------------------------------
+section("通知のトースト (tone = notice・詳しい内容・tag)");
+T.resetToasts();
+T.toast.notice("承認依頼: 見積の確定", { detail: "Q-0001 (¥10,000)", tag: "bell", action: { label: "開く", href: "/approvals?tab=mine" } });
+T.toast.notice("予定の担当になりました: 引き取り", { detail: "11/27 午前", tag: "bell" });
+T.toast.notice("チャットに新しいメッセージが届きました", { group: "chat" });
+eq([list()[2].tone, list()[2].detail, list()[2].action?.href], ["notice", "Q-0001 (¥10,000)", "/approvals?tab=mine"], "通知は詳しい内容と開くボタンを持つ");
+ok(list()[2].duration === T.toastDuration("notice", "承認依頼: 見積の確定Q-0001 (¥10,000)"), "時間は本文と詳しい内容の長さで決める");
+eq(list().length, 3, "tag は前の知らせを閉じない (同じ回の通知を並べる)");
+T.toast.notice("チャットにあなたへのメンション・依頼が届きました", { group: "chat" });
+eq(list().filter((t) => t.group === "chat").length, 1, "チャットの知らせは新しいものに置き換える (group)");
+T.toast.dismissTag("bell");
+eq(texts(), ["チャットにあなたへのメンション・依頼が届きました"], "ベルを開いたらベルの通知だけ閉じる (dismissTag)");
+
+// ---------------------------------------------------------------------------
+section("新しく届いた通知 (notify-seen.ts の freshNotices)");
+const N = await jiti.import(path.join(root, "src/lib/notify-seen.ts"));
+const items = [
+  { title: "承認依頼 A", keys: ["apv:a1"] },
+  { title: "未対応の問い合わせ 2 件", keys: ["inq:i1", "inq:i2"] },
+  { title: "予定が変更されました", keys: ["ev:e1@2026-11-26T01:00:00Z"] },
+];
+eq(N.freshNotices(items, new Set(), new Set()), [], "このブラウザーで初めて (印なし) は知らせない (覚えるだけ)");
+const announced = new Set([N.ANNOUNCE_INIT, "apv:a1", "inq:i1"]);
+eq(N.freshNotices(items, announced, new Set()).map((n) => n.title), ["未対応の問い合わせ 2 件", "予定が変更されました"], "知らせていないキーのある通知だけ (まとめた通知は 1 件増えたら知らせる)");
+eq(N.freshNotices(items, announced, new Set(["inq:i2"])).map((n) => n.title), ["予定が変更されました"], "確認済みの記録は知らせない");
+eq(N.freshNotices(items, new Set([N.ANNOUNCE_INIT, "apv:a1", "inq:i1", "inq:i2", "ev:e1@2026-11-26T01:00:00Z"]), new Set()), [], "知らせた通知は二度出さない");
+eq(N.freshNotices([{ title: "予定が変更されました", keys: ["ev:e1@2026-11-26T02:00:00Z"] }], announced, new Set()).length, 1, "記録が変わって印が変われば改めて知らせる");
+eq(N.noticeToasts([1, 2, 3, 4, 5]), { show: [1, 2, 3], more: 2 }, "一度に 3 件まで + 「ほかに n 件」");
+eq(N.noticeToasts([1]), { show: [1], more: 0 }, "3 件以下はそのまま");
+
+// ---------------------------------------------------------------------------
 section("画面の操作の結果 (URL の ?msg= / ?err=)");
 T.resetToasts();
 T.toast.info("部品の知らせ");
@@ -118,6 +152,11 @@ const toaster = src("components/ui/Toaster.tsx");
 ok(/params\.get\("msg"\)/.test(toaster) && /params\.get\("err"\)/.test(toaster) && /showResult\(msg, err\)/.test(toaster), "Toaster が URL の msg・err を読む");
 ok(/searchParams\.delete\("msg"\)/.test(toaster) && /history\.replaceState\(null,/.test(toaster), "読んだら URL から外す (状態は null)");
 ok(/z-\[100\]/.test(toaster) && /pointer-events-none fixed/.test(toaster), "ほかの画面の上・下の画面の操作を邪魔しない");
+ok(/max-w-\[1680px\] flex-col items-stretch gap-2 sm:items-end/.test(toaster) && /sm:w-\[400px\]/.test(toaster), "画面の右上 (ヘッダーの右端にそろえる。スマートフォンは横いっぱい)");
+ok(/freshNotices\(items, announced, seen\)/.test(shell) && /toast\.notice\(n\.title/.test(shell) && /markSeen\(n\.keys\)/.test(shell), "AppShell: 新しく届いたベルの通知をトーストに (開いたら確認済み)");
+ok(/if \(menu === "notif"\) toast\.dismissTag\("bell"\)/.test(shell), "ベルを開いたらベルの通知のトーストを閉じる");
+const badge = src("components/chat/ChatBadge.tsx");
+ok(/toast\.notice\(newAction/.test(badge) && /startsWith\("\/chat"\)/.test(badge), "チャットの新着もトーストに (チャットの画面の外だけ)");
 ok(/role=\{item\.tone === "error" \|\| item\.tone === "warn" \? "alert" : "status"\}/.test(toaster), "エラー・注意は alert、ほかは status (読み上げ)");
 ok(/aria-label="この知らせを閉じる"/.test(toaster), "閉じるボタン");
 const flash = src("components/ui/Flash.tsx");
