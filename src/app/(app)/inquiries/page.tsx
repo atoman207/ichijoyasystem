@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui";
 import { canDeleteInquiryDirect, canRequestInquiryDelete } from "@/lib/auth/permissions";
 import { deletedLabel, inquiryDeleteBlocker, inquiryOnlyEvents, isDeletedInquiry, isLiveInquiry, pendingInquiryDelete } from "@/lib/inquiry-delete";
 import { DeleteInquiryButton } from "@/components/inquiries/DeleteInquiry";
+import { buildCaseMap } from "@/lib/case-group";
 
 export default async function InquiriesPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -60,9 +61,23 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
   const fromParam = isDateKey(sp.from) ? sp.from : "";
   const toParam = isDateKey(sp.to) ? sp.to : "";
   if (mediaParam || fromParam || toParam) rows = filterInquiries(db, rows, { media: mediaParam, from: fromParam, to: toParam });
+  // 販促と媒体の分析から (lead=1): 新しい案件の問い合わせだけ (既存の案件に追加した問い合わせは反響に数えない。件数を分析とそろえる)
+  const leadOnly = sp.lead === "1";
+  if (leadOnly) rows = rows.filter((i) => !i.caseId);
   rows = [...rows].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
   const paged = paginate(rows, sp.page);
   const mediaOf = inquiryMediaMap(db, paged.items);
+  // 案件 (新規案件 / 進行中の案件に追加 / 完了済みの案件に追加。お客様のご要望 2026-11-26「■5」。src/lib/case-group.ts)
+  const caseMap = buildCaseMap(db);
+  const caseOfRow = (i: (typeof rows)[number]) => {
+    const id = caseMap.caseOf(i.id);
+    const m = id ? caseMap.members(id) : undefined;
+    if (!id || !m) return undefined;
+    const first = m.kind === "order" ? m.orders.find((o) => o.id === id) : m.kind === "quote" ? m.quotes.find((x) => x.id === id) : m.inquiries.find((x) => x.id === id);
+    const done = m.orders.length > 0 && m.orders.every((o) => ["completed", "invoiced", "paid", "cancelled"].includes(o.status));
+    const kind = id === i.id ? "new" : done ? "done" : "open";
+    return { id, number: first?.number ?? "", kind, others: m.inquiries.length - 1, quotes: m.quotes.length, orders: m.orders.length } as const;
+  };
   const storeMap = new Map(db.stores.map((s) => [s.id, s]));
   const base = "/inquiries";
   const pendingReceptions = pendingReceptionCount(db, user);
@@ -75,6 +90,11 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
     <div>
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader title="問い合わせ" actions={<>{canImportData(user) && <LinkButton href="/data" variant="secondary">CSV 取込・書き出し</LinkButton>}<LinkButton href="/inquiries/new" variant="secondary">+ 手入力で登録</LinkButton><LinkButton href="/inquiries/reception">+ 問合せ登録 (メモを撮影)</LinkButton></>} />
+      {leadOnly && (
+        <div className="mb-4">
+          <Note tone="accent">販促と媒体の分析と同じ数え方で、新しい案件の問い合わせだけを表示しています (既存の案件に追加した問い合わせ = 追加工事・クレームのご連絡などは除く)。<Link href="/inquiries" className="font-medium underline">すべての問い合わせを表示</Link></Note>
+        </div>
+      )}
       {pendingReceptions > 0 && (
         <div className="mb-4">
           <Note tone="warn">
@@ -199,7 +219,26 @@ export default async function InquiriesPage({ searchParams }: { searchParams: Pr
                 </Td>
                 <Td className="max-w-[14rem] text-xs text-ink-2">{ct.address ? <span className="line-clamp-2">{ct.address}</span> : <span className="text-ink-3">-</span>}</Td>
                 <Td className="text-xs whitespace-nowrap text-ink-2 tnum">{ct.phone ? <a href={`tel:${ct.phone.replace(/[^0-9+]/g, "")}`} className="hover:text-accent">{ct.phone}</a> : <span className="text-ink-3">-</span>}</Td>
-                <Td className="min-w-[10rem]"><Link href={`/inquiries/${i.id}`} className="font-medium text-ink hover:text-accent">{i.summary}</Link><div className="text-[10px] text-ink-3">{CATEGORY_LABEL[i.category]}</div></Td>
+                <Td className="min-w-[10rem]">
+                  <Link href={`/inquiries/${i.id}`} className="font-medium text-ink hover:text-accent">{i.summary}</Link>
+                  <div className="text-[10px] text-ink-3">{CATEGORY_LABEL[i.category]}</div>
+                  {(() => {
+                    const k = caseOfRow(i);
+                    if (!k) return null;
+                    return (
+                      <Link href={`/cases/${k.id}`} className="mt-0.5 inline-flex flex-wrap items-center gap-1 text-[11px] hover:underline" data-testid="inquiry-case" title="案件の画面を開く (この案件の見積・受注・予定・請求・写真)">
+                        <Badge tone={k.kind === "new" ? "accent" : k.kind === "done" ? "warn" : "info"} dot={false}>
+                          {k.kind === "new" ? "新規案件" : k.kind === "done" ? "完了済みの案件に追加" : "進行中の案件に追加"}
+                        </Badge>
+                        <span className="text-ink-3">
+                          {k.kind === "new" ? "" : `案件 ${k.number}`}
+                          {k.quotes || k.orders ? `${k.kind === "new" ? "" : " · "}見積 ${k.quotes} · 受注 ${k.orders}` : ""}
+                          {k.kind === "new" && k.others > 0 ? ` · ほかの問い合わせ ${k.others}` : ""}
+                        </span>
+                      </Link>
+                    );
+                  })()}
+                </Td>
                 <Td><StoreTag store={storeMap.get(i.storeId)} short /></Td>
                 <Td className="text-xs text-ink-2">{userName(i.assignedUserId)}</Td>
                 <Td><ChannelTag channel={i.channel} /></Td>

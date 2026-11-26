@@ -137,8 +137,8 @@ await store.mutate((d) => {
   d.customers.push({ ...base, id: "cust_rc2", code: "C-RC2", name: "受付 次子", phone: "090-8102-0002", storeId: "nishi" });
   d.customers.push({ ...base, id: "cust_rc3", code: "C-RC3", name: "停止 三郎", phone: "090-8103-0003", storeId: "koshi", tradeStopped: true });
   const order = { quoteId: undefined, category: "tatami", contractDate: "2026-11-01", total: 66000, workerIds: [], siteAddress: "熊本県合志市須屋 1-1", progressNotes: [], createdBy: koshiManager.id, createdAt: nowIso, updatedAt: nowIso };
-  d.orders.push({ ...order, id: "ord_rc1", number: "O-2099-8101", customerId: "cust_rc1", storeId: "koshi", title: "和室6畳 表替え", status: "scheduled", scheduledStart: "2099-12-01T09:00:00+09:00" });
-  d.orders.push({ ...order, id: "ord_rc2", number: "O-2099-8102", customerId: "cust_rc1", storeId: "koshi", title: "襖 4枚", status: "paid", completedAt: "2020-01-01", updatedAt: "2020-01-01T00:00:00Z" });
+  d.orders.push({ ...order, id: "o_rc1", number: "O-2099-8101", customerId: "cust_rc1", storeId: "koshi", title: "和室6畳 表替え", status: "scheduled", scheduledStart: "2099-12-01T09:00:00+09:00" });
+  d.orders.push({ ...order, id: "o_rc2", number: "O-2099-8102", customerId: "cust_rc1", storeId: "koshi", title: "襖 4枚", status: "paid", completedAt: "2020-01-01", updatedAt: "2020-01-01T00:00:00Z" });
   d.suppliers.push({ id: "sup_rc1", name: "九州テスト畳材", category: "材料", phone: "096-810-9999" });
 });
 
@@ -169,13 +169,13 @@ section("2. 照合と登録先の提案");
   eq(m1.customers.map((c) => [c.customer.id, c.level]), [["cust_rc1", "phone"], ["cust_rc2", "name"]], "電話番号 (ハイフンなし) でお客様を見つける (電話の一致が先、名字の一致はそのあと)");
   eq(m1.suggestion.action, "inquiry", "新しい問い合わせ → 問い合わせとして登録");
   eq(m1.suggestion.customerId, "cust_rc1", "登録済みのお客様を選ぶ");
-  ok(m1.cases.some((c) => c.id === "ord_rc1" && c.open) && !m1.cases.some((c) => c.id === "ord_rc2"), "進行中の受注は候補、半年より前に終わった受注は出さない");
+  ok(m1.cases.some((c) => c.id === "o_rc1" && c.open) && !m1.cases.some((c) => c.id === "o_rc2"), "進行中の受注は候補、半年より前に終わった受注は出さない");
 
   const m2 = R.matchReception(db(), koshiStaff, f({ callType: "existing_case", phone: "090-8101-0001", summary: "引取の日を変えたい" }));
-  eq([m2.suggestion.action, m2.suggestion.caseKey], ["case", "order:ord_rc1"], "案件の連絡 → 進行中の受注に追加");
+  eq([m2.suggestion.action, m2.suggestion.caseKey], ["case", "order:o_rc1"], "案件の連絡 → 進行中の受注に追加");
 
   const m3 = R.matchReception(db(), koshiStaff, f({ callType: "existing_case", caseHint: "o-2099-8101 の件", phone: "" }));
-  eq(m3.suggestion.caseKey, "order:ord_rc1", "案件番号 (小文字) で案件を見つける");
+  eq(m3.suggestion.caseKey, "order:o_rc1", "案件番号 (小文字) で案件を見つける");
 
   const m4 = R.matchReception(db(), koshiStaff, f({ callType: "existing_case", phone: "090-0000-0000" }));
   ok(m4.suggestion.action === "inquiry" && m4.warnings.some((w) => w.includes("該当する案件が見つかりません")), "案件が見つからないときは問い合わせを提案して知らせる");
@@ -279,26 +279,35 @@ let docId = "";
   ok(db().auditLogs.some((l) => l.entity === "inquiry" && l.entityId === inq.id && l.summary.includes("受付から問い合わせを登録")), "変更履歴に残す");
 }
 {
-  // 案件の連絡 → 受注のやりとりに追加・担当者に知らせる
+  // 案件の連絡 → 問い合わせを作って既存の案件 (受注) に追加・受注の経過メモ・担当者に知らせる (お客様のご要望 2026-11-26「■5」)
   const c = await act(koshiStaff, () => actions.createReception(form({ source: "text", channel: "phone", text: "受付一郎様 090-8101-0001 から、12月1日の引取を3日に変えてほしいと電話" })));
   const id = c.path.split("/").pop();
-  const notes = db().orders.find((o) => o.id === "ord_rc1").progressNotes.length;
-  const r = await act(koshiStaff, () => actions.registerReception(form({ id, intent: "case", caseKey: "order:ord_rc1", summary: "引取を12/3に変更したい", confirmedUncertain: "on", notifyOwner: "on" })));
-  eq(r.path, "/orders/ord_rc1", "案件に追加 → 受注の画面へ");
-  const o = db().orders.find((x) => x.id === "ord_rc1");
-  ok(o.progressNotes.length === notes + 1 && o.progressNotes.at(-1).body.includes("引取を12/3に変更したい"), "受注の経過メモに残す");
-  ok(db().commLogs.some((l) => l.relatedType === "order" && l.relatedId === "ord_rc1" && l.customerId === "cust_rc1" && l.channel === "phone"), "お客様・受注のやりとりに残す");
-  const t = db().threads.find((x) => x.relatedType === "order" && x.relatedId === "ord_rc1" && x.kind === "request");
-  ok(t && t.assigneeIds?.[0] === koshiManager.id, "案件の担当者 (受注の作成者) に業務依頼で知らせる");
+  const notes = db().orders.find((o) => o.id === "o_rc1").progressNotes.length;
+  const noMedia = await act(koshiStaff, () => actions.registerReception(form({ id, intent: "case", caseKey: "order:o_rc1", summary: "引取を12/3に変更したい", confirmedUncertain: "on", notifyOwner: "on" })));
+  ok(noMedia.err?.includes("媒体"), "案件に追加するときも媒体は必須 (案件に媒体がなければ選ぶ)");
+  const before = db().inquiries.length;
+  const r = await act(koshiStaff, () => actions.registerReception(form({ id, intent: "case", caseKey: "order:o_rc1", summary: "引取を12/3に変更したい", media: "repeat", confirmedUncertain: "on", notifyOwner: "on" })));
+  eq(r.path, "/cases/o_rc1", "案件に追加 → 案件の画面へ");
+  const inq = db().inquiries.find((i) => i.sourceRef === `reception:${id}`);
+  ok(db().inquiries.length === before + 1 && inq?.caseId === "o_rc1" && inq.customerId === "cust_rc1" && inq.storeId === "koshi" && inq.media === "repeat" && inq.category === "tatami", "案件に追加しても問い合わせを作る (caseId = 案件・お客様・店舗 = 案件の店舗・媒体・種別 = 案件の種別)");
+  ok(r.msg?.includes(inq?.number ?? "-") && r.msg.includes("O-2099-8101"), "知らせに問い合わせ番号と案件番号");
+  const o = db().orders.find((x) => x.id === "o_rc1");
+  ok(o.progressNotes.length === notes + 1 && o.progressNotes.at(-1).body.includes("引取を12/3に変更したい") && o.progressNotes.at(-1).body.includes(inq.number), "受注の経過メモにも残す (問い合わせ番号つき)");
+  ok(db().commLogs.some((l) => l.relatedType === "inquiry" && l.relatedId === inq.id && l.customerId === "cust_rc1" && l.channel === "phone"), "やりとりは問い合わせの記録 (お客様の履歴・案件の画面に出る)");
+  const t = db().threads.find((x) => x.relatedType === "inquiry" && x.relatedId === inq.id && x.kind === "request");
+  ok(t && t.assigneeIds?.[0] === koshiManager.id && inq.assignedUserId === koshiManager.id, "案件の担当者 (受注の作成者) が問い合わせの担当・業務依頼で知らせる");
   const d = db().documents.find((x) => x.id === id);
-  eq([d.linkedType, d.linkedId], ["order", "ord_rc1"], "受付の登録先 = 受注");
+  eq([d.linkedType, d.linkedId, R.receptionMetaOf(d).decision?.action], ["inquiry", inq.id, "case"], "受付の登録先 = 問い合わせ (案件に追加)");
+  ok(db().changeNotices?.some((n) => n.targetId === "o_rc1" && n.topic === "問い合わせの追加"), "案件の担当店舗に「変更のお知らせ」");
 
   // 案件番号の入力・見つからない番号
   const c2 = await act(koshiStaff, () => actions.createReception(form({ source: "text", text: "O-2099-8101 の件で確認の電話。到着時間を知りたい" })));
-  const bad = await act(koshiStaff, () => actions.registerReception(form({ id: c2.path.split("/").pop(), intent: "case", caseRef: "O-2099-0000", summary: "確認", confirmedUncertain: "on" })));
+  const bad = await act(koshiStaff, () => actions.registerReception(form({ id: c2.path.split("/").pop(), intent: "case", caseRef: "O-2099-0000", summary: "確認", media: "repeat", confirmedUncertain: "on" })));
   ok(bad.err?.includes("見つかりません"), "見つからない案件番号は断る");
-  const good = await act(koshiStaff, () => actions.registerReception(form({ id: c2.path.split("/").pop(), intent: "case", caseRef: "o-2099-8101", summary: "到着時間の確認", confirmedUncertain: "on" })));
-  eq(good.path, "/orders/ord_rc1", "案件番号の入力で追加できる");
+  const good = await act(koshiStaff, () => actions.registerReception(form({ id: c2.path.split("/").pop(), intent: "case", caseRef: "o-2099-8101", summary: "到着時間の確認", media: "repeat", confirmedUncertain: "on" })));
+  eq(good.path, "/cases/o_rc1", "案件番号の入力で追加できる");
+  // 同じ案件の 2 回目の問い合わせもそれぞれ残る
+  eq(db().inquiries.filter((i) => i.caseId === "o_rc1").length, 2, "同じ案件の問い合わせは 1 件ずつ (一覧に 2 件)");
 }
 {
   // 仕入先のやりとり・記録しない・修正の保存

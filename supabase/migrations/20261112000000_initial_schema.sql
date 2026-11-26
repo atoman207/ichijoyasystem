@@ -127,7 +127,8 @@ create table if not exists inquiries (
   intake jsonb,
   deleted jsonb,
   schedule_hold jsonb,
-  site_address text
+  site_address text,
+  case_id text
 );
 comment on table inquiries is '問い合わせ';
 
@@ -186,7 +187,8 @@ create table if not exists quotes (
   estimator_id text,
   site_address text,
   receipt_name text,
-  tatami_rooms jsonb
+  tatami_rooms jsonb,
+  case_id text
 );
 comment on table quotes is '見積';
 
@@ -195,6 +197,7 @@ create table if not exists orders (
   id text primary key,
   number text not null unique,
   quote_id text references quotes(id) on delete set null,
+  case_id text,
   customer_id text not null references customers(id),
   store_id text not null references stores(id),
   title text not null,
@@ -1804,6 +1807,7 @@ alter table inquiries add column if not exists intake jsonb;
 alter table inquiries add column if not exists deleted jsonb;
 alter table inquiries add column if not exists schedule_hold jsonb;
 alter table inquiries add column if not exists site_address text;
+alter table inquiries add column if not exists case_id text;
 alter table products add column if not exists category text not null;
 alter table products add column if not exists name text not null;
 alter table products add column if not exists grade text;
@@ -1851,8 +1855,10 @@ alter table quotes add column if not exists estimator_id text;
 alter table quotes add column if not exists site_address text;
 alter table quotes add column if not exists receipt_name text;
 alter table quotes add column if not exists tatami_rooms jsonb;
+alter table quotes add column if not exists case_id text;
 alter table orders add column if not exists number text not null unique;
 alter table orders add column if not exists quote_id text references quotes(id) on delete set null;
+alter table orders add column if not exists case_id text;
 alter table orders add column if not exists customer_id text not null references customers(id);
 alter table orders add column if not exists store_id text not null references stores(id);
 alter table orders add column if not exists title text not null;

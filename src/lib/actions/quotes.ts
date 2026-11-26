@@ -26,6 +26,19 @@ import { assertCaseStore, choice, fail, requireActionUser, resolveStoreId, safeR
 import { propagateOrderSite } from "@/lib/maps/store";
 import { quoteCompletedLock, completedLockMessage } from "@/lib/case-access";
 import { autoUnit } from "@/lib/line-kind";
+import { buildCaseMap, quoteLinkForCase } from "@/lib/case-group";
+import { scheduleCheckLink } from "@/lib/msg-link";
+
+/**
+ * 案件に見積を足すときのつながり (お客様のご要望 2026-11-26「■4」「■6」: 1 つの案件に見積を複数)。
+ * 案件のどの記録の ID でも受け取り、案件の最初の記録にそろえてから src/lib/case-group.ts の quoteLinkForCase で決める
+ * (問い合わせのある案件 → その問い合わせ (inquiryId)、ない案件 → 案件の ID (Quote.caseId))
+ */
+function caseQuoteLink(db: Database, id: string) {
+  const map = buildCaseMap(db);
+  const root = map.caseOf(id);
+  return root ? quoteLinkForCase(db, root, map) : undefined;
+}
 
 function parseItems(formData: FormData, back: string): QuoteItem[] {
   let raw: unknown;
@@ -154,7 +167,7 @@ const submittedText = (r: { role: string; auto: boolean }) => (r.auto ? `${AUTO_
  */
 function newQuoteBack(formData: FormData): string {
   const qs = new URLSearchParams();
-  for (const k of ["documentId", "inquiryId", "customerId", "returnTo"]) {
+  for (const k of ["documentId", "inquiryId", "caseId", "customerId", "returnTo"]) {
     const v = str(formData, k);
     if (v) qs.set(k, v);
   }
@@ -186,10 +199,20 @@ export async function createQuote(formData: FormData) {
     if (!customer) fail(back, "お客様が見つかりません。");
     // 店舗のロールは自店舗のお客様だけ (一覧で見えないお客様の見積を作らない)。店長は全店舗のお客様 (permissions.ts の canEditCaseStore)
     assertCaseStore(user, customer.storeId, back);
-    // 店舗のロールの見積は自店舗。ただし、ほかの店舗の問い合わせから作る見積 (店長) は、その問い合わせの店舗の見積にする
-    const fromInquiry = db.inquiries.find((i) => i.id === str(formData, "inquiryId"));
+    // 案件から作る見積 (caseId): 問い合わせのある案件はその問い合わせ、ない案件は案件の ID でつなぐ
+    const caseIdIn = str(formData, "caseId");
+    const caseLink = caseIdIn ? caseQuoteLink(db, caseIdIn) : undefined;
+    if (caseIdIn && !caseLink) fail(back, "見積を足す案件が見つかりません。案件の画面から開き直してください。");
+    if (caseLink?.customerId && caseLink.customerId !== customerId) fail(back, "案件のお客様と違うお客様が選ばれています。案件のお客様を選ぶか、お客様の画面から見積を作成してください。");
+    const inquiryId = str(formData, "inquiryId") || caseLink?.inquiryId || "";
+    // 店舗のロールの見積は自店舗。ただし、ほかの店舗の問い合わせ・案件から作る見積 (店長) は、その問い合わせ・案件の店舗の見積にする
+    const fromInquiry = inquiryId ? db.inquiries.find((i) => i.id === inquiryId) : undefined;
     if (fromInquiry) assertCaseStore(user, fromInquiry.storeId, back);
-    const storeId = fromInquiry && !canSeeAllStores(user) ? fromInquiry.storeId : resolveStoreId(user, str(formData, "storeId"), customer.storeId);
+    const caseStore = !fromInquiry && caseLink?.storeId ? caseLink.storeId : undefined;
+    if (caseStore) assertCaseStore(user, caseStore, back);
+    const contextStore = fromInquiry?.storeId ?? caseStore;
+    // 全店舗のロール: 選んだ店舗 (画面は問い合わせ・案件の店舗を初めから選んでいる。「お客様の担当店舗」= 空ならお客様の店舗)。店舗の欄がない呼び出しは問い合わせ・案件の店舗
+    const storeId = contextStore && !canSeeAllStores(user) ? contextStore : resolveStoreId(user, str(formData, "storeId"), formData.has("storeId") ? customer.storeId : (contextStore ?? customer.storeId));
     assertCaseStore(user, storeId, back);
     const today = toDateKey(new Date());
     const now = nowIso();
@@ -204,7 +227,9 @@ export async function createQuote(formData: FormData) {
       number: nextNumber(db, "Q", db.quotes, today),
       version: 1,
       customerId,
-      inquiryId: str(formData, "inquiryId") || undefined,
+      inquiryId: inquiryId || undefined,
+      // 問い合わせのない案件 (見積・受注から始まった案件) に足した見積は、その案件の ID (src/lib/case-group.ts)
+      ...(!inquiryId && caseLink?.caseId ? { caseId: caseLink.caseId } : {}),
       storeId,
       title,
       category: choice(formData, "category", CATEGORY_LABEL, "tatami"),
@@ -422,7 +447,10 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
   let approvalId = "";
   let quoteNote = "";
   let visitNote = "";
+  let scheduleLink: ReturnType<typeof scheduleCheckLink>;
   const approvalIds: string[] = [];
+  // 1 つの案件の見積が複数あるとき、どれか 1 つ・いくつかを受注にできる (お客様のご要望 2026-11-26「■6」)。
+  // ほかの見積 (同じ問い合わせ・案件) は変えない (失注にも期限切れにもしない。受注にならなかった見積は履歴として残る)
   await mutate((db) => {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) fail("/quotes", "見積が見つかりません。");
@@ -496,6 +524,10 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
     }
     if (created.scheduledStart) syncOrderEvent(db, created, user.id);
     syncHandoverMemo(db, created);
+    // 引取・納品の日程を入れたときは「予定表で確認」のボタン (引き取りの日の週・受注の店舗。src/lib/msg-link.ts)
+    const dates = (created.handovers ?? []).flatMap((h) => [{ date: h.pickupDate, pickup: true }, { date: h.deliveryDate }]);
+    if (!dates.some((d) => d.date) && created.scheduledStart) dates.push({ date: created.scheduledStart, pickup: true });
+    scheduleLink = scheduleCheckLink(dates, created.storeId);
     // 同じ日の訪問 (見積・現調・現見) の予定は、新しい予定を足さずに「現見」に切り替えた (src/lib/visit-adopt.ts)
     const switched = db.schedule.filter((e) => e.orderId === orderId && isAdoptedVisit(e));
     if (switched.length) visitNote = ` ${switched.map((e) => `${Number(e.date.slice(5, 7))}/${Number(e.date.slice(8, 10))}`).join("・")} の訪問の予定を「現見」に切り替えました (新しい予定は足していません)。`;
@@ -511,7 +543,7 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
   revalidatePath("/orders");
   revalidatePath("/schedule");
   const msg = (auto ? `受注を登録しました。${AUTO_APPROVAL_NOTE}し、契約を確定しました。施工手配へ進めます。` : `受注を登録しました。${role === "admin" ? "管理者" : "店長"}の契約承認後に施工手配へ進めます。`) + quoteNote + visitNote;
-  redirect(withMsg(ret || `/orders/${orderId}`, msg));
+  redirect(withMsg(ret || `/orders/${orderId}`, msg, scheduleLink));
 }
 
 export async function markQuoteLost(id: string, formData: FormData) {
@@ -525,7 +557,9 @@ export async function markQuoteLost(id: string, formData: FormData) {
     q.status = "rejected";
     q.updatedAt = nowIso();
     const inq = db.inquiries.find((i) => i.id === q.inquiryId);
-    if (inq) inq.status = "lost";
+    // 同じ問い合わせのほかの見積が受注・進行中なら、問い合わせ (案件) は失注にしない (1 つの案件に見積が複数。お客様のご要望 2026-11-26「■6」)
+    const siblingAlive = Boolean(inq) && db.quotes.some((x) => x.id !== q.id && x.inquiryId === inq!.id && (Boolean(x.orderId) || !["rejected", "expired"].includes(x.status)));
+    if (inq && !siblingAlive) inq.status = "lost";
     addAudit(db, { userId: user.id, action: "status", entity: "quote", entityId: id, entityLabel: q.number, summary: `失注として登録${str(formData, "reason") ? ` (${str(formData, "reason")})` : ""}`, storeId: q.storeId });
   });
   revalidatePath(back);
@@ -557,8 +591,10 @@ export async function deleteQuote(id: string) {
     }
     const inq = db.inquiries.find((i) => i.quoteId === id);
     if (inq) {
-      inq.quoteId = undefined;
-      if (inq.status === "quoted") inq.status = "in_progress";
+      // 同じ問い合わせのほかの見積が残っていれば、いちばん新しい見積を問い合わせの見積にする (1 つの案件に見積が複数)
+      const rest = db.quotes.filter((x) => x.inquiryId === inq.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      inq.quoteId = rest?.id;
+      if (!rest && inq.status === "quoted") inq.status = "in_progress";
     }
     addAudit(db, { userId: user.id, action: "delete", entity: "quote", entityId: id, entityLabel: q.number, summary: `見積 (下書き) を削除`, storeId: q.storeId });
   });

@@ -160,8 +160,10 @@ eq([r.err, inq?.customerId, db().customers.length], [null, nc?.id, before + 1], 
 const order = db().orders.find((o) => o.customerId === real.id && o.status !== "cancelled") ?? null;
 if (order) {
   ({ doc } = await newReception(manager, `${real.name}様より電話。${real.phone}。来週の引き取りの時間を変えたい。`));
-  r = await act(manager, () => RA.registerReception(form({ id: doc.id, quick: `case:order:${order.id}`, confirmedUncertain: "on" })));
-  ok(!r.err && db().commLogs.some((c) => c.relatedType === "order" && c.relatedId === order.id && /受付/.test(c.subject)), `既存の案件 (${order.number}) のやりとりにワンタッチで追加`);
+  r = await act(manager, () => RA.registerReception(form({ id: doc.id, quick: `case:order:${order.id}`, media: "repeat", confirmedUncertain: "on" })));
+  // 既存の案件への追加も問い合わせを作る (お客様のご要望 2026-11-26「■5」: 問い合わせ一覧に、同じ案件の問い合わせもそれぞれ出す)
+  const added = db().inquiries.find((i) => i.sourceRef === `reception:${doc.id}`);
+  ok(!r.err && added?.caseId && db().commLogs.some((c) => c.relatedType === "inquiry" && c.relatedId === added.id && /受付/.test(c.subject)), `既存の案件 (${order.number}) にワンタッチで問い合わせを追加 (${r.msg ?? r.err})`);
 }
 if (staff) {
   await store.mutate((x) => {
@@ -185,6 +187,7 @@ if (staff) {
 /* ================================================================== */
 section("3. 既存の案件にまとめる");
 const IA = await imp("lib/actions/inquiries.ts");
+const CG = await imp("lib/case-group.ts");
 const nowIso = new Date().toISOString();
 const target = db().orders.find((o) => o.customerId === real.id && !["cancelled", "paid"].includes(o.status)) ?? db().orders.find((o) => o.customerId === real.id);
 await store.mutate((x) => {
@@ -194,7 +197,10 @@ await store.mutate((x) => {
 if (target) {
   r = await act(manager, () => IA.mergeInquiryIntoCase("inq_merge", form({ caseKey: `order:${target.id}` })));
   const merged = db().inquiries.find((i) => i.id === "inq_merge");
-  eq([r.err, r.path, merged.status, /まとめました/.test(merged.result ?? "")], [null, `/orders/${target.id}`, "closed", true], "問い合わせを既存の受注にまとめる → 問い合わせは完了・受注の画面へ");
+  // 2026-11-26「■4」「■5」: 問い合わせは消さず (完了にもせず) 案件の問い合わせにする (caseId)。問い合わせ一覧と案件の画面のどちらにも出る
+  const caseOfTarget = CG.caseIdOf(db(), target.id);
+  eq([r.err, r.path, merged.status, merged.caseId], [null, `/cases/${caseOfTarget}`, "in_progress", caseOfTarget], "問い合わせを既存の受注の案件に追加する → 問い合わせは対応中のまま案件の問い合わせに・案件の画面へ");
+  ok(CG.buildCaseMap(db()).members(caseOfTarget)?.inquiries.some((i) => i.id === "inq_merge"), "案件の記録に問い合わせが入る");
   ok(db().commLogs.some((c) => c.relatedType === "order" && c.relatedId === target.id && /INQ-M-1/.test(c.subject)) && target.progressNotes.length >= 0 && db().orders.find((o) => o.id === target.id).progressNotes.some((n) => /INQ-M-1/.test(n.body)), "内容は受注のやりとり・経過メモに残る");
   eq(db().schedule.find((e) => e.id === "ev_merge").orderId, target.id, "問い合わせの予定は受注の予定に");
 }

@@ -52,6 +52,7 @@ import { countsFromText, hasWork, stripKindWords } from "@/lib/work-summary";
 import { sendAndRecord } from "@/lib/notify/send";
 import { addChangeNotice, eventTarget } from "@/lib/change-notices";
 import { fail, requireActionUser, resolveStoreId, str, withMsg } from "./guards";
+import { scheduleCheckLink } from "@/lib/msg-link";
 
 /**
  * 予定表 (全社カレンダー) の業務ロジック
@@ -354,7 +355,8 @@ export async function createScheduleEvent(formData: FormData) {
     autoStarted ? "問い合わせを「対応中」にしました。" : "",
     hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : "",
   ].join("");
-  redirect(withMsg(returnTo ?? `/schedule/${firstId}`, msg));
+  // 登録した日程を含む週の予定表 (施工店舗だけ・引き取りの日を基準。お客様のご要望 2026-11-26「■8」)
+  redirect(withMsg(returnTo ?? `/schedule/${firstId}`, msg, scheduleCheckLink([{ date: p.fields.date, pickup: p.fields.kind === "pickup" }], p.fields.companyWide ? undefined : p.fields.storeId)));
 }
 
 /** 受注の施工予定と連動する予定の変更を、受注 (施工期間・担当・現場住所) へ反映 */
@@ -640,11 +642,11 @@ export async function updateScheduleEvent(id: string, formData: FormData) {
       : hvRequest.applied
         ? "受注の引取・納品の日程に反映しました。"
         : "日時は変わりませんでした (受注の日程にこの予定の品目が見つかりません。受注の画面の「引取・納品の日程」で確かめてください)。";
-    redirect(withMsg(returnTo ?? `/schedule/${id}`, `${hvMsg}${changed ? " 担当・メモなどの変更は保存しました。" : ""}${pair ? pairMsg(pair, pairApplied, pairApproval) : ""}${followUps.join("")}`));
+    redirect(withMsg(returnTo ?? `/schedule/${id}`, `${hvMsg}${changed ? " 担当・メモなどの変更は保存しました。" : ""}${pair ? pairMsg(pair, pairApplied, pairApproval) : ""}${followUps.join("")}`, scheduleCheckLink([{ date: p.fields.date, pickup: p.fields.kind === "pickup" }], p.fields.storeId)));
   }
   const freed = changed && p.fields.date > current.date && SUGGEST_KINDS.includes(current.kind) ? ` 空いた ${shortDate(current.date)} に入れられる予定は 予定表 →「計画」で確かめられます。` : "";
   const msg = `${changed ? "予定を更新しました。" : pairApplied ? "" : "変更はありませんでした。"}${pair ? pairMsg(pair, pairApplied, pairApproval) : ""}${synced && changed ? "受注の施工予定にも反映しました。" : ""}${hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : ""}${followUps.join("")}${changed && impacts.length ? ` 注意: ${impacts.join(" / ")}。` : ""}${freed}`;
-  redirect(withMsg(returnTo ?? `/schedule/${id}`, msg));
+  redirect(withMsg(returnTo ?? `/schedule/${id}`, msg, changed || pairApplied ? scheduleCheckLink([{ date: p.fields.date, pickup: p.fields.kind === "pickup" }], p.fields.companyWide ? undefined : p.fields.storeId) : undefined));
 }
 
 /**
@@ -753,7 +755,7 @@ export async function addPairedDelivery(id: string, formData: FormData) {
       }
     });
     revalidateSchedule(o0);
-    redirect(withMsg(returnTo, `受注の引取・納品の日程に納品日 (${when}) を入れ、予定表に納品の予定を登録しました (担当: ${names(getDb(), assigneeIds)})。${followUps.join("")}`));
+    redirect(withMsg(returnTo, `受注の引取・納品の日程に納品日 (${when}) を入れ、予定表に納品の予定を登録しました (担当: ${names(getDb(), assigneeIds)})。${followUps.join("")}`, scheduleCheckLink([{ date: origin.date, pickup: true }, { date }], origin.storeId)));
   }
 
   if (info.events.length > 0) fail(returnTo, "この案件にはもう納品の予定があります。納品の予定を開いて日時・担当者を変えてください。");
@@ -798,7 +800,7 @@ export async function addPairedDelivery(id: string, formData: FormData) {
     addChangeNotice(db, user.id, eventTarget(db, ev), "予定の追加", [{ label: "納品の予定", before: "(なし)", after: `${periodLabel(ev)} (担当: ${names(db, ev.assigneeIds)})` }]);
   });
   revalidateSchedule(p.fields);
-  redirect(withMsg(returnTo, `納品の予定 (${when}) を登録しました (担当: ${names(getDb(), assigneeIds)})。${hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : ""}`));
+  redirect(withMsg(returnTo, `納品の予定 (${when}) を登録しました (担当: ${names(getDb(), assigneeIds)})。${hits.length ? "担当者の予定と重複しているため、予定表で調整してください。" : ""}`, scheduleCheckLink([{ date: origin.date, pickup: true }, { date }], origin.storeId)));
 }
 
 /** 予定の削除のお知らせの行 (種類・日時・担当) */

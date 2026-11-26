@@ -7,6 +7,8 @@ import type { DocumentKind } from "@/lib/db/types";
 import { CAPTURE_LAYOUT, FITTING_KINDS, REGISTER_LABEL, type FieldSpec, type RegisterTarget, type TableSpec } from "@/lib/capture-fields";
 import { DOCUMENT_KIND_LABEL, EXPENSE_ACCOUNTS, EXPENSE_METHOD_LABEL } from "@/lib/constants";
 import { SCORE_LABEL } from "@/lib/survey";
+import { insertRow, moveRow, removeRowAt } from "./line-order";
+import { RowInlineControls, RowMenu } from "./LineRowControls";
 
 type Row = Record<string, string>;
 type Target = RegisterTarget;
@@ -33,11 +35,15 @@ function num(v: string | undefined): number | null {
   return Number.isFinite(x) ? x : null;
 }
 
-/** 表の列の幅 (広い欄のとき。TableSpec の width、なければ種類から) + 削除の列 */
+/** 表の列の幅 (広い欄のとき。TableSpec の width、なければ種類から) + 行の操作 (挿入・移動のメニューと削除) の列 */
 function colTemplate(t: TableSpec): string {
   const w = (c: TableSpec["columns"][number]) => c.width ?? (c.type === "text" ? "minmax(6rem,1fr)" : c.type === "flag" ? "3.5rem" : c.type === "fittingKind" ? "5.5rem" : "5.5rem");
-  return [...t.columns.map(w), "2rem"].join(" ");
+  return [...t.columns.map(w), "4rem"].join(" ");
 }
+
+/** 行の印 (画面の中だけ。保存の値には入れない。挿入・移動しても入力中の欄がずれないように) */
+let rowSeq = 0;
+const rowKey = () => `dr${(rowSeq++).toString(36)}`;
 /** カード (狭い欄) で 2 マス使う列 (品名・規格など幅の決まっていない文字の列)。カードは 2 列 (スマートフォン) か 4 列 (448px 以上) */
 const wideCol = (c: TableSpec["columns"][number]) => c.type === "text" && (!c.width || c.width.startsWith("minmax"));
 
@@ -112,6 +118,7 @@ export function DocumentReview({
       layout.tables.map((t) => [
         t.key,
         (Array.isArray(initial[t.key]) ? (initial[t.key] as Record<string, unknown>[]) : []).map((r) => ({
+          _key: rowKey(),
           ...Object.fromEntries(t.columns.map((c) => [c.key, c.type === "flag" ? (r?.[c.key] === true ? "true" : "") : toText(r?.[c.key])])),
           ...(t.key === "items" && typeof r?.productId === "string" ? { _productId: r.productId, _origName: toText(r.name) } : {}),
         })),
@@ -135,8 +142,12 @@ export function DocumentReview({
       return { ...s, [table]: rows };
     });
   }
-  const addRow = (t: TableSpec) => setTables((s) => ({ ...s, [t.key]: [...(s[t.key] ?? []), Object.fromEntries(t.columns.map((c) => [c.key, c.type === "fittingKind" ? "襖" : ""]))] }));
-  const removeRow = (table: string, index: number) => setTables((s) => ({ ...s, [table]: (s[table] ?? []).filter((_, i) => i !== index) }));
+  const blankRow = (t: TableSpec): Row => ({ _key: rowKey(), ...Object.fromEntries(t.columns.map((c) => [c.key, c.type === "fittingKind" ? "襖" : ""])) });
+  const addRow = (t: TableSpec) => setTables((s) => ({ ...s, [t.key]: [...(s[t.key] ?? []), blankRow(t)] }));
+  /** 行と行の間に空の行を入れる・順番を変える (お客様のご要望 2026-11-26「■1」: 手書きの見積書と明細の順番を同じにする) */
+  const insertRowAt = (t: TableSpec, index: number) => setTables((s) => ({ ...s, [t.key]: insertRow(s[t.key] ?? [], index, blankRow(t)) }));
+  const moveRowBy = (table: string, index: number, delta: -1 | 1) => setTables((s) => ({ ...s, [table]: moveRow(s[table] ?? [], index, delta) }));
+  const removeRow = (table: string, index: number) => setTables((s) => ({ ...s, [table]: removeRowAt(s[table] ?? [], index) }));
 
   const itemsSum = (tables.items ?? []).reduce((a, r) => a + (num(r.amount) ?? (num(r.qty) ?? 0) * (num(r.unitPrice) ?? 0)), 0);
   const hasField = (k: string) => scalarFields.some((f) => f.key === k);
@@ -172,7 +183,8 @@ export function DocumentReview({
     for (const t of layout.tables) {
       out[t.key] = (tables[t.key] ?? [])
         .map((r) => Object.fromEntries(t.columns.map((c) => [c.key, c.type === "number" || c.type === "money" ? num(r[c.key]) : c.type === "flag" ? r[c.key] === "true" : (r[c.key] ?? "").trim()])))
-        .filter((r) => Object.entries(r).some(([k, v]) => k !== "uncertain" && v !== null && v !== ""));
+        // 何も入っていない行は送らない。ただし「要確認」の印の行は、品名・数字が空でも残す (読み取れなかった行。見積で入力する)
+        .filter((r) => Object.values(r).some((v) => v === true || (v !== null && v !== "" && v !== false)));
     }
     return JSON.stringify(out);
   }, [values, tables, scalarFields, layout.tables]);
@@ -287,57 +299,60 @@ export function DocumentReview({
           <span className="label mb-0">{t.label}</span>
           {editable && (
             <button type="button" onClick={() => addRow(t)} className="inline-flex items-center gap-1 rounded-lg border border-line px-2.5 py-1 text-xs text-ink-2 hover:bg-subtle">
-              <Plus className="h-3.5 w-3.5" /> 行を追加
+              <Plus className="h-3.5 w-3.5" /> 行を追加 (最後に)
             </button>
           )}
         </div>
         {/* 広い欄は表 (列の幅は TableSpec の width)、狭い欄 (スマートフォン) は 1 行ずつのカード。入力欄は 1 組だけ (送る値は data の JSON) */}
         <div className="@container">
           <div className="overflow-hidden rounded-xl border border-line text-sm" style={{ "--cols": colTemplate(t) } as React.CSSProperties}>
-            <div className="hidden gap-x-1.5 bg-subtle px-1.5 py-1.5 text-xs font-medium text-ink-2 @2xl:grid @2xl:grid-cols-(--cols)" aria-hidden>
+            <div className="hidden gap-x-1.5 bg-subtle px-1.5 py-1.5 text-xs font-medium text-ink-2 @3xl:grid @3xl:grid-cols-(--cols)" aria-hidden>
               {t.columns.map((c) => <span key={c.key} className={`px-0.5 ${c.type === "text" || c.type === "fittingKind" ? "text-left" : c.type === "flag" ? "text-center" : "text-right"}`}>{c.label}</span>)}
               <span />
             </div>
-            <div className="divide-y divide-line border-line @2xl:border-t">
+            <div className="divide-y divide-line border-line @3xl:border-t">
             {rows.length === 0 && (
               <p className="px-3 py-3 text-center text-xs text-ink-3">読み取った行はありません{editable ? " (「行を追加」で入力できます)" : ""}</p>
             )}
             {rows.map((r, i) => (
               <div
-                key={i}
+                key={r._key ?? i}
                 role="group"
                 aria-label={`${i + 1} 行目`}
-                className={`grid grid-cols-2 gap-x-2 gap-y-2 p-3 @md:grid-cols-4 @2xl:grid-cols-(--cols) @2xl:items-start @2xl:gap-x-1.5 @2xl:gap-y-0 @2xl:px-1.5 @2xl:py-1 ${r.uncertain === "true" ? "bg-warn-soft/70" : ""}`}
+                className={`grid grid-cols-2 gap-x-2 gap-y-2 p-3 @md:grid-cols-4 @3xl:grid-cols-(--cols) @3xl:items-start @3xl:gap-x-1.5 @3xl:gap-y-0 @3xl:px-1.5 @3xl:py-1 ${r.uncertain === "true" ? "bg-warn-soft/70" : ""}`}
               >
-                <div className="col-span-2 flex items-center justify-between gap-2 @md:col-span-4 @2xl:hidden">
+                <div className="col-span-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 @md:col-span-4 @3xl:hidden">
                   <span className="text-xs font-medium text-ink-2">{i + 1} 行目</span>
                   {/* 要確認などの印はカードの見出しの行に (広い欄では表の列) */}
                   {t.columns.filter((c) => c.type === "flag").map((c) => (
-                    <label key={c.key} className="ml-auto flex items-center gap-1.5 text-xs text-ink-2" title="読みにくい・判断が難しい行">
+                    <label key={c.key} className="flex items-center gap-1.5 text-xs text-ink-2 pointer-coarse:min-h-11" title="読みにくい・判断が難しい行">
                       <input type="checkbox" checked={r[c.key] === "true"} onChange={(e) => setCell(t.key, i, c.key, e.target.checked ? "true" : "")} className="h-4 w-4" />
                       {c.label}
                     </label>
                   ))}
                   {editable && (
-                    <button type="button" onClick={() => removeRow(t.key, i)} className="rounded p-1.5 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label={`${i + 1} 行目を削除`}>
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                    <span className="ml-auto flex flex-wrap items-center gap-1">
+                      <RowInlineControls label={`${i + 1} 行目`} first={i === 0} last={i === rows.length - 1} onInsert={(w) => insertRowAt(t, w === "above" ? i : i + 1)} onMove={(d) => moveRowBy(t.key, i, d)} />
+                      <button type="button" onClick={() => removeRow(t.key, i)} className="inline-flex h-8 min-w-8 items-center justify-center rounded p-1.5 text-critical hover:bg-critical-soft hover:text-critical-ink pointer-coarse:h-11 pointer-coarse:min-w-11" aria-label={`${i + 1} 行目を削除`}>
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </span>
                   )}
                 </div>
                 {t.columns.map((c) => (
-                  <div key={c.key} className={`min-w-0 ${c.type === "flag" ? "hidden @2xl:block" : wideCol(c) ? "col-span-2" : ""} @2xl:col-span-1`}>
-                    {c.type !== "flag" && <span className="mb-0.5 block text-[11px] text-ink-3 @2xl:hidden">{c.label}</span>}
+                  <div key={c.key} className={`min-w-0 ${c.type === "flag" ? "hidden @3xl:block" : wideCol(c) ? "col-span-2" : ""} @3xl:col-span-1`}>
+                    {c.type !== "flag" && <span className="mb-0.5 block text-[11px] text-ink-3 @3xl:hidden">{c.label}</span>}
                     {c.type === "flag" ? (
                       <label className="flex h-8 items-center justify-center" title="読みにくい・判断が難しい行">
                         <input type="checkbox" checked={r[c.key] === "true"} onChange={(e) => setCell(t.key, i, c.key, e.target.checked ? "true" : "")} className="h-4 w-4" aria-label={c.label} />
                       </label>
                     ) : c.type === "fittingKind" ? (
-                      <select className="field h-9 py-1 text-sm @2xl:h-8 @2xl:text-xs" value={r[c.key] ?? ""} onChange={(e) => setCell(t.key, i, c.key, e.target.value)} aria-label={c.label}>
+                      <select className="field h-9 py-1 text-sm @3xl:h-8 @3xl:text-xs" value={r[c.key] ?? ""} onChange={(e) => setCell(t.key, i, c.key, e.target.value)} aria-label={c.label}>
                         {FITTING_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
                       </select>
                     ) : (
                       <input
-                        className={`field h-9 py-1 text-sm @2xl:h-8 @2xl:text-xs ${c.type === "text" ? "" : "text-right tnum"}`}
+                        className={`field h-9 py-1 text-sm @3xl:h-8 @3xl:text-xs ${c.type === "text" ? "" : "text-right tnum"}`}
                         inputMode={c.type === "text" ? undefined : "decimal"}
                         value={r[c.key] ?? ""}
                         onChange={(e) => setCell(t.key, i, c.key, e.target.value)}
@@ -349,11 +364,14 @@ export function DocumentReview({
                     )}
                   </div>
                 ))}
-                <div className="hidden justify-end @2xl:flex">
+                <div className="hidden items-start justify-end gap-0.5 @3xl:flex pointer-coarse:flex-col pointer-coarse:items-end">
                   {editable && (
-                    <button type="button" onClick={() => removeRow(t.key, i)} className="rounded p-1.5 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label={`${i + 1} 行目を削除`}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <>
+                      <RowMenu label={`${i + 1} 行目`} first={i === 0} last={i === rows.length - 1} onInsert={(w) => insertRowAt(t, w === "above" ? i : i + 1)} onMove={(d) => moveRowBy(t.key, i, d)} />
+                      <button type="button" onClick={() => removeRow(t.key, i)} className="inline-flex h-7 w-7 items-center justify-center rounded text-critical hover:bg-critical-soft hover:text-critical-ink pointer-coarse:h-11 pointer-coarse:w-11" aria-label={`${i + 1} 行目を削除`}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </>
                   )}
                 </div>
               </div>

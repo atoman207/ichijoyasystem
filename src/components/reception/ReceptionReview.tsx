@@ -3,8 +3,12 @@
 import { useMemo, useState } from "react";
 import type { Channel, MediaKey, StoreId } from "@/lib/db/types";
 import { CATEGORY_LABEL, CHANNEL_LABEL } from "@/lib/constants";
-import { MediaSelect } from "@/components/ops-reports/MediaFields";
+import { MEDIA, MEDIA_KEYS } from "@/lib/media";
+import type { CaseOption } from "@/lib/case-choice";
+import type { AreaStore } from "@/lib/store-area";
 import { ReceptionCustomerSearch } from "@/components/features/LinkSearch";
+import { AutoStoreSelect } from "@/components/features/AutoStoreSelect";
+import { CaseChoice } from "@/components/inquiries/CaseChoice";
 import { MemoPhoto } from "./MemoPhoto";
 import {
   APPOINTMENT_KINDS,
@@ -45,6 +49,7 @@ export interface ChosenCustomer {
   fromCustomer: boolean;
 }
 
+/** 「登録先 (詳しく選ぶ)」の「既存の案件に問い合わせを追加する」の候補 (お客様を決める前。記録ごと) */
 export interface ReviewCase {
   key: string;
   number: string;
@@ -58,13 +63,30 @@ export interface ReviewCase {
   customerId?: string;
   customerName?: string;
   ownerId?: string;
+  /** 案件の店舗・媒体 (担当店舗・媒体の初期値) */
+  storeId?: StoreId;
+  storeName?: string;
+  media?: MediaKey;
 }
 
-const ACTIONS: ReceptionAction[] = ["inquiry", "case", "record", "dismiss"];
+/** 担当店舗の欄の初期値 (src/components/features/AutoStoreSelect.tsx) */
+export interface ReviewStore {
+  /** 住所で決まらないときの店舗 (お客様の店舗・受付の店舗) */
+  fallbackStoreId: StoreId;
+  /** 全店舗から選べない人が選べる店舗 */
+  choices: StoreId[];
+  /** 開いたときの住所 (施工現場 → 住所) と、その担当エリア */
+  initialAddress: string;
+  initialArea: AreaStore | null;
+  /** 住所の欄が空のときのお客様の住所 */
+  fallbackAddress: string;
+  /** 前に手で選んだ店舗 */
+  pickedStoreId?: StoreId;
+}
 
 const ACTION_NOTE: Record<ReceptionAction, string> = {
-  inquiry: "受付一覧 (問い合わせ) に新しい問い合わせを登録し、店舗・担当者に知らせます",
-  case: "進行中の見積・受注のやりとりに追加し、案件の担当者に知らせます (日程の変更・確認・手直しの連絡など)",
+  inquiry: "問い合わせを登録し、店舗・担当者に知らせます (お客様を決めてから。新規案件か既存の案件かは「② 案件」で選びます)",
+  case: "すでにある案件 (問い合わせ・見積・受注) に問い合わせを追加します (日程の変更・確認・手直しの連絡など)。問い合わせ一覧と案件の画面の両方に出ます",
   record: "仕入先・協力業者、またはお客様とのやりとりとして残します (問い合わせにはしません)",
   dismiss: "営業電話・間違い電話など、記録しなくてよいもの",
 };
@@ -82,16 +104,22 @@ export function ReceptionReview({
   suppliers,
   users,
   stores,
-  storeId,
   canChooseStore,
-  storeChoices,
-  areaStore,
+  store,
   currentUserId,
+  userStoreId,
+  managers = {},
   defaultAssigneeId,
+  assigneeChosen,
   mediaDefault,
+  mediaChosen,
   canCreateCustomer = true,
   photo,
   chosen,
+  caseOptions,
+  caseChoice: initialChoice = "new",
+  suggestedCaseId,
+  handoffDefault = true,
 }: {
   action: (formData: FormData) => Promise<void>;
   id: string;
@@ -103,31 +131,59 @@ export function ReceptionReview({
   suppliers: { id: string; name: string; matched: boolean }[];
   users: { id: string; label: string }[];
   stores: { id: StoreId; name: string }[];
-  storeId: StoreId;
   canChooseStore: boolean;
-  /** 選べる店舗 (全店舗のロールはすべて。ほかの人は自店舗と住所の担当エリアの店舗) */
-  storeChoices?: StoreId[];
-  /** 住所の担当エリアの店舗 (お客様のご要望 2026-11-24「③」) */
-  areaStore?: { id: StoreId; name: string; town: string };
+  /** 担当店舗の欄 (住所の担当エリア・お客様の店舗・前に選んだ店舗) */
+  store: ReviewStore;
   currentUserId: string;
+  /** 登録する人の店舗と、店舗ごとの店長 (担当店舗をほかの店舗にしたときの担当者の初期値) */
+  userStoreId?: StoreId;
+  managers?: Partial<Record<string, string>>;
   defaultAssigneeId: string;
+  /** 前に選んだ担当者 (紐付け・保存のあとも選び直さない) */
+  assigneeChosen?: string;
+  /** 媒体の初期値 (メモの言葉・入口から。案件に追加するときは案件の媒体が先) */
   mediaDefault?: MediaKey;
+  /** 前に選んだ媒体 (紐付け・保存のあとも選び直さない) */
+  mediaChosen?: MediaKey;
   /** 顧客の新規登録ができる (「新しいお客様として登録」で顧客も登録する) */
   canCreateCustomer?: boolean;
   /** 受付メモの写真 (狭い画面では欄の上に出し、見比べながら直す。お客様のご要望 2026-11-25「⑧」) */
   photo?: { src: string; fullSrc: string };
   /** 紐付けたお客様・この画面で登録した新規顧客 (選んだあとは選び直さない。お客様のご要望 2026-11-25「問い合わせ登録時の顧客登録・紐付け」) */
   chosen?: ChosenCustomer;
+  /** 紐付けたお客様の案件 (進行中・最近の完了。src/lib/case-choice.ts) */
+  caseOptions?: { open: CaseOption[]; past: CaseOption[]; pastTotal: number };
+  /** 初めに選んでおく案件 ("new" = 新規案件) */
+  caseChoice?: string;
+  suggestedCaseId?: string;
+  handoffDefault?: boolean;
 }) {
-  const [act, setAct] = useState<ReceptionAction>(suggestion.action);
+  // お客様を決めたあとは「問い合わせとして登録」(新規案件か既存の案件かは ② 案件で選ぶ)
+  const [act, setAct] = useState<ReceptionAction>(chosen ? "inquiry" : suggestion.action);
   const [customerId, setCustomerId] = useState(suggestion.customerId ?? "");
   const [caseKey, setCaseKey] = useState(suggestion.caseKey ?? "");
-  const [assignee, setAssignee] = useState(defaultAssigneeId);
-  const [notifyUser, setNotifyUser] = useState("");
+  const [caseChoice, setCaseChoice] = useState(initialChoice);
+  const [assigneePicked, setAssigneePicked] = useState<string | null>(assigneeChosen ?? null);
+  const [media, setMedia] = useState<string | null>(mediaChosen ?? null);
   const uncertain = new Set(fields.uncertainFields);
   const shownCases = useMemo(() => (customerId ? cases.filter((c) => c.customerId === customerId || c.key === suggestion.caseKey) : cases), [cases, customerId, suggestion.caseKey]);
-  const selectedCase = cases.find((c) => c.key === caseKey);
-  const owner = notifyUser || selectedCase?.ownerId || "";
+  const actions: ReceptionAction[] = chosen ? ["inquiry", "record", "dismiss"] : ["inquiry", "case", "record", "dismiss"];
+
+  // 追加する案件 (② 案件で選んだ案件 / 「登録先 (詳しく選ぶ)」で選んだ案件)
+  const option = chosen && act === "inquiry" && caseChoice !== "new" ? [...(caseOptions?.open ?? []), ...(caseOptions?.past ?? [])].find((c) => c.id === caseChoice) : undefined;
+  const legacyCase = !chosen && act === "case" ? cases.find((c) => c.key === caseKey) : undefined;
+  const caseStore = option
+    ? { id: option.storeId, name: option.storeName, number: option.number }
+    : legacyCase?.storeId
+      ? { id: legacyCase.storeId, name: legacyCase.storeName ?? legacyCase.storeId, number: legacyCase.number }
+      : undefined;
+  const ownerOf = option?.ownerId ?? legacyCase?.ownerId;
+  // 担当者の初期値: 案件の担当 → (担当店舗をほかの店舗にしたとき) その店舗の店長 → 既定 (自分・受付の店舗の店長)
+  const [storeValue, setStoreValue] = useState<StoreId | undefined>(undefined);
+  const storeManager = storeValue && userStoreId && storeValue !== userStoreId ? managers[storeValue] : undefined;
+  const assignee = assigneePicked ?? (ownerOf && users.some((u) => u.id === ownerOf) ? ownerOf : storeManager && users.some((u) => u.id === storeManager) ? storeManager : defaultAssigneeId);
+  const mediaValue = media ?? option?.media ?? legacyCase?.media ?? mediaDefault ?? "";
+  const registering = act === "inquiry" || act === "case";
 
   const field = (k: keyof ReceptionFields, opts: { wide?: boolean; textarea?: boolean; placeholder?: string; type?: string } = {}) => (
     <label className={`block ${opts.wide ? "@xl:col-span-2" : ""}`}>
@@ -143,6 +199,9 @@ export function ReceptionReview({
     </label>
   );
 
+  const registerLabel = option ? `案件 ${option.number} に問い合わせを追加して登録する` : act === "case" ? "案件に問い合わせを追加して登録する" : chosen ? "新しい案件として問い合わせを登録する" : "問い合わせとして登録する";
+  const btn = "inline-flex min-h-10 items-center justify-center rounded-lg px-3 py-2 text-sm font-medium";
+
   return (
     <form action={action} className="space-y-5">
       <input type="hidden" name="id" value={id} />
@@ -154,7 +213,94 @@ export function ReceptionReview({
           </div>
         </details>
       )}
-      <MatchPanel customers={customers} cases={cases} canCreateCustomer={canCreateCustomer} mediaDefault={mediaDefault} fields={fields} chosen={chosen} />
+      <MatchPanel customers={customers} canCreateCustomer={canCreateCustomer} fields={fields} chosen={chosen} />
+      {chosen && act === "inquiry" && caseOptions && (
+        <CaseChoice value={caseChoice} onChange={setCaseChoice} open={caseOptions.open} past={caseOptions.past} pastTotal={caseOptions.pastTotal} customerName={chosen.name} suggestedId={suggestedCaseId} step="②" />
+      )}
+
+      {/* 受付の情報: 入口・媒体・担当店舗・担当者は、この画面で 1 回だけ選ぶ (お客様のご要望 2026-11-26「■2」)。問い合わせ・引き継ぎ・見積に引き継ぐ */}
+      <section className="space-y-3 rounded-xl border border-line bg-panel p-4" data-testid="reception-basics">
+        <div>
+          <h3 className="text-sm font-semibold text-ink">{chosen ? "③" : "②"} 受付の情報 (ここで 1 回だけ選びます)</h3>
+          <p className="text-[11px] text-ink-3">選んだ媒体・担当店舗・担当者は、登録する問い合わせと、そのあとの依頼・見積にそのまま引き継ぎます。お客様の紐付け・「修正を保存」のあとも選び直す必要はありません。</p>
+        </div>
+        <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+          <label className="block">
+            <span className="label">入口 (どこで受けたか)</span>
+            <select name="channel" defaultValue={channel} className="field" data-testid="reception-channel">
+              {[...new Set([...RECEPTION_CHANNELS, channel])].map((c) => <option key={c} value={c}>{c === "phone" ? "電話 (会社・店舗の電話)" : c === "referral" ? "紹介 (現場・知人など)" : CHANNEL_LABEL[c]}</option>)}
+            </select>
+          </label>
+          {registering && (
+            <label className="block">
+              <span className="label">媒体 (当社を知ったきっかけ) <span className="text-critical">*</span></span>
+              {/* mediaPicked = 手で選んだ (画面を読み直しても選び直さない。選んでいなければ案件の媒体・メモの言葉から) */}
+              <input type="hidden" name="mediaPicked" value={media !== null ? "1" : ""} />
+              <select name="media" value={mediaValue} onChange={(e) => setMedia(e.target.value)} required className="field" data-testid="reception-media">
+                <option value="">選んでください</option>
+                {MEDIA_KEYS.map((k) => (
+                  <option key={k} value={k} title={MEDIA[k].hint}>
+                    {MEDIA[k].label}
+                  </option>
+                ))}
+              </select>
+              <input type="hidden" name="mediaText" value={fields.mediaText} />
+              <span className="mt-1 block text-[11px] text-ink-3">
+                {fields.mediaText ? `メモ・会話の言葉: 「${fields.mediaText}」から選びました。` : "お客様に聞けなかったときは「不明」を選びます。"}
+                {media === null && (option?.media || legacyCase?.media) ? " 追加する案件の媒体にしています。" : ""}
+              </span>
+            </label>
+          )}
+          {registering && (
+            <AutoStoreSelect
+              stores={stores}
+              canChooseAny={canChooseStore}
+              fallbackStoreId={store.fallbackStoreId}
+              choices={store.choices}
+              watch={["siteAddress", "address"]}
+              initialAddress={store.initialAddress}
+              fallbackAddress={store.fallbackAddress}
+              initialArea={store.initialArea}
+              caseStore={caseStore}
+              initialStoreId={store.pickedStoreId}
+              initialManual={Boolean(store.pickedStoreId)}
+              testId="reception-store"
+              onValue={setStoreValue}
+            />
+          )}
+          {registering && (
+            <label className="block">
+              <span className="label">担当者</span>
+              <input type="hidden" name="assigneePicked" value={assigneePicked !== null ? "1" : ""} />
+              <select name="assignedUserId" value={assignee} onChange={(e) => setAssigneePicked(e.target.value)} className="field" data-testid="reception-assignee">
+                {users.map((u) => <option key={u.id} value={u.id}>{u.label}{u.id === ownerOf ? " (案件の担当)" : ""}</option>)}
+              </select>
+            </label>
+          )}
+          {registering && assignee !== currentUserId && (
+            <label className="flex items-start gap-2 text-sm @xl:col-span-2">
+              <input type="hidden" name="handoffSent" value="1" />
+              <input type="checkbox" name="handoff" defaultChecked={handoffDefault} className="mt-1" />
+              <span>担当者に引き継ぐ (業務依頼を作って知らせる。確認・報告の状況が問い合わせに出ます)</span>
+            </label>
+          )}
+          {fields.uncertainFields.length > 0 && (
+            <label className="flex items-start gap-2 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn-ink @xl:col-span-2">
+              <input type="checkbox" name="confirmedUncertain" className="mt-0.5" />
+              <span>黄色の項目 ({fields.uncertainFields.map((k) => RECEPTION_FIELD_LABEL[k as keyof ReceptionFields] ?? k).join("・")}) を下の欄でメモと見比べて確認しました</span>
+            </label>
+          )}
+        </div>
+        {chosen && act === "inquiry" && (
+          <>
+            <p className="text-[11px] text-ink-3">下の内容 (お名前・住所・用件・日程) を確かめてから押してください。問い合わせは {chosen.name} 様の履歴として残ります (見積・受注に進まなくても残ります)。</p>
+            <button type="submit" name="intent" value="inquiry" className={`${btn} w-full bg-accent text-white hover:bg-accent-hover`} data-testid="reception-register-chosen">
+              {registerLabel}
+            </button>
+          </>
+        )}
+      </section>
+
       <section className="space-y-3">
         <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
           <label className="block">
@@ -165,9 +311,10 @@ export function ReceptionReview({
             </select>
           </label>
           <label className="block">
-            <span className="label">入口</span>
-            <select name="channel" defaultValue={channel} className="field">
-              {[...new Set([...RECEPTION_CHANNELS, channel])].map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}
+            <span className="label">{RECEPTION_FIELD_LABEL.category}</span>
+            <select name="category" defaultValue={fields.category} className="field">
+              <option value="">(未選択)</option>
+              {Object.values(CATEGORY_LABEL).map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </label>
           {field("customerName", { placeholder: "例: 山田 花子" })}
@@ -178,16 +325,9 @@ export function ReceptionReview({
           {field("address")}
           {field("siteAddress", { placeholder: "依頼主の住所と違うとき (業者の現場・ご実家など)" })}
           {field("email")}
-          <label className="block">
-            <span className="label">{RECEPTION_FIELD_LABEL.category}</span>
-            <select name="category" defaultValue={fields.category} className="field">
-              <option value="">(未選択)</option>
-              {Object.values(CATEGORY_LABEL).map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </label>
           {field("summary", { wide: true, placeholder: "例: 和室6畳の表替えの見積依頼" })}
           {field("detail", { wide: true, textarea: true })}
-          <AppointmentsEditor initial={fields.appointments} users={users} defaultAssigneeId={defaultAssigneeId} uncertain={uncertain.has("appointments")} />
+          <AppointmentsEditor initial={fields.appointments} users={users} defaultAssigneeId={assignee} uncertain={uncertain.has("appointments")} />
           {field("desiredDate", { placeholder: "例: 来週土曜の午前 (まだ決まっていない希望)" })}
           <label className="block">
             <span className="label">{RECEPTION_FIELD_LABEL.urgency}</span>
@@ -203,7 +343,6 @@ export function ReceptionReview({
               <option value="不要">不要</option>
             </select>
           </label>
-          {field("mediaText", { placeholder: "例: チラシ・紹介・ホームページ" })}
           {field("caseHint", { placeholder: "例: 来週の引取の件 / O-2026-0123" })}
           {field("companyName")}
           {field("staffName")}
@@ -215,12 +354,12 @@ export function ReceptionReview({
         <h3 className="text-sm font-semibold text-ink">登録先 (詳しく選ぶ)</h3>
         <p className="text-xs text-ink-2">提案: {suggestion.reason}</p>
         <div className="grid grid-cols-1 gap-2 @xl:grid-cols-2">
-          {ACTIONS.map((a) => (
+          {actions.map((a) => (
             <label key={a} className={`flex cursor-pointer gap-2 rounded-lg border px-3 py-2 text-sm ${act === a ? "border-accent bg-accent-soft" : "border-line bg-panel"}`}>
               <input type="radio" name="_action" checked={act === a} onChange={() => setAct(a)} className="mt-1" />
               <span>
                 <span className="font-medium text-ink">{RECEPTION_ACTION_LABEL[a]}</span>
-                {suggestion.action === a && <span className="ml-1 rounded bg-accent px-1.5 text-[10px] text-white">提案</span>}
+                {(suggestion.action === a || (chosen && a === "inquiry" && suggestion.action === "case")) && <span className="ml-1 rounded bg-accent px-1.5 text-[10px] text-white">提案</span>}
                 <span className="block text-[11px] text-ink-3">{ACTION_NOTE[a]}</span>
               </span>
             </label>
@@ -230,14 +369,14 @@ export function ReceptionReview({
         {act === "inquiry" &&
           (chosen ? (
             <p className="rounded-lg bg-good-soft px-3 py-2 text-sm text-good-ink" data-testid="reception-chosen-inline">
-              お客様: <span className="font-semibold">{chosen.name} 様</span> ({chosen.code}){chosen.created ? " · この画面で新規顧客として登録済み" : " · 紐付け済み"}。この問い合わせはこのお客様の履歴として保存します。
+              お客様: <span className="font-semibold">{chosen.name} 様</span> ({chosen.code}){chosen.created ? " · この画面で新規顧客として登録済み" : " · 紐付け済み"}。{option ? `案件 ${option.number} に問い合わせを追加します。` : "新しい案件として登録します。"}
             </p>
           ) : (
             <p className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn-ink" data-testid="reception-no-customer">
               お客様がまだ決まっていません。上の「お客様・案件の確認」で既存のお客様に紐付けるか、「新規顧客として登録」を押してください (問い合わせは必ずお客様に紐付けて保存します)。
             </p>
           ))}
-        {act === "case" && customers.length > 0 && !chosen && (
+        {act === "case" && customers.length > 0 && (
           <label className="block">
             <span className="label">お客様 (案件の候補を絞る)</span>
             <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="field">
@@ -245,38 +384,6 @@ export function ReceptionReview({
               {customers.map((c) => <option key={c.id} value={c.id}>{c.level === "address" ? "【住所】" : c.level === "phone" ? "【電話】" : "【名前】"} {c.label} — {c.reason}</option>)}
             </select>
           </label>
-        )}
-
-        {act === "inquiry" && (
-          <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
-            <label className="block">
-              <span className="label">担当店舗 (施工・売上計上の店舗)</span>
-              {(() => {
-                const list = stores.filter((s) => canChooseStore || !storeChoices || storeChoices.includes(s.id));
-                return (
-                  <>
-                    <select name="storeId" defaultValue={storeId} disabled={list.length < 2} className="field" data-testid="reception-store">
-                      {list.map((s) => <option key={s.id} value={s.id}>{s.name}{s.id === areaStore?.id ? " (住所の担当エリア)" : ""}</option>)}
-                    </select>
-                    {list.length < 2 && <input type="hidden" name="storeId" value={storeId} />}
-                  </>
-                );
-              })()}
-              <span className="mt-1 block text-[11px] text-ink-3">{areaStore ? `住所から自動: ${areaStore.name} (「${areaStore.town}」の地域)。案件ごとに変えられます` : "住所から担当店舗を決められませんでした (住所が未入力・地域一覧にない地域)。必要なら選んでください"}</span>
-            </label>
-            <label className="block">
-              <span className="label">担当者</span>
-              <select name="assignedUserId" value={assignee} onChange={(e) => setAssignee(e.target.value)} className="field">
-                {users.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}
-              </select>
-            </label>
-            {assignee !== currentUserId && (
-              <label className="flex items-start gap-2 pt-6 text-sm">
-                <input type="checkbox" name="handoff" defaultChecked className="mt-1" />
-                <span>担当者に引き継ぐ (業務依頼を作って知らせる。確認・報告の状況が問い合わせに出ます)</span>
-              </label>
-            )}
-          </div>
         )}
 
         {act === "case" && (
@@ -288,7 +395,7 @@ export function ReceptionReview({
                     <input type="radio" name="caseKey" value={c.key} checked={caseKey === c.key} onChange={() => setCaseKey(c.key)} className="mt-1" />
                     <span className="min-w-0">
                       <span className="font-medium text-ink">{c.kindLabel} {c.number}</span> <span className="text-ink-2">{c.title}</span>
-                      <span className="block text-[11px] text-ink-3">{c.customerName ? `${c.customerName} 様 · ` : ""}{c.statusLabel}{c.open ? "" : " (完了)"} · {c.date} · {c.reason} · <a href={c.href} target="_blank" rel="noreferrer" className="text-accent hover:underline">開く</a></span>
+                      <span className="block text-[11px] text-ink-3">{c.customerName ? `${c.customerName} 様 · ` : ""}{c.statusLabel}{c.open ? "" : " (完了)"} · {c.date} · {c.reason}{c.storeName ? ` · ${c.storeName}` : ""} · <a href={c.href} target="_blank" rel="noreferrer" className="text-accent hover:underline">開く</a></span>
                     </span>
                   </label>
                 ))}
@@ -300,17 +407,7 @@ export function ReceptionReview({
               <span className="label">または案件番号 (INQ-・Q-・O- など。入力するとこちらを使います)</span>
               <input name="caseRef" placeholder="例: O-2026-0123" className="field" />
             </label>
-            <label className="flex items-start gap-2 text-sm">
-              <input type="checkbox" name="notifyOwner" defaultChecked={Boolean(owner && owner !== currentUserId)} className="mt-1" />
-              <span>案件の担当者に知らせる (業務依頼)</span>
-            </label>
-            <label className="block">
-              <span className="label">知らせる担当者</span>
-              <select name="notifyUserId" value={owner} onChange={(e) => setNotifyUser(e.target.value)} className="field">
-                <option value="">(案件の担当者)</option>
-                {users.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}
-              </select>
-            </label>
+            <p className="text-[11px] text-ink-3">選んだ案件のお客様の問い合わせとして登録し、案件の担当者を上の「担当者」にします (引き継ぐと業務依頼で知らせます)。</p>
           </div>
         )}
 
@@ -340,11 +437,10 @@ export function ReceptionReview({
           </label>
         )}
 
-
         <div className="flex flex-wrap justify-end gap-2 pt-1">
           <button type="submit" name="intent" value="save" formNoValidate className="inline-flex h-10 items-center rounded-lg border border-line bg-panel px-4 text-sm text-ink-2 hover:bg-subtle">修正を保存</button>
-          <button type="submit" name="intent" value={act} formNoValidate={act !== "inquiry"} disabled={act === "inquiry" && !chosen} className={`inline-flex h-10 items-center rounded-lg px-5 text-sm font-medium text-white disabled:opacity-40 ${act === "dismiss" ? "bg-ink-2 hover:bg-ink" : "bg-accent hover:bg-accent-hover"}`}>
-            {act === "inquiry" ? "問い合わせとして登録する" : act === "case" ? "案件のやりとりに追加する" : act === "record" ? "やりとりとして記録する" : "記録せずに閉じる"}
+          <button type="submit" name="intent" value={act} formNoValidate={!registering} disabled={act === "inquiry" && !chosen} className={`inline-flex h-10 items-center rounded-lg px-5 text-sm font-medium text-white disabled:opacity-40 ${act === "dismiss" ? "bg-ink-2 hover:bg-ink" : "bg-accent hover:bg-accent-hover"}`}>
+            {registering ? registerLabel : act === "record" ? "やりとりとして記録する" : "記録せずに閉じる"}
           </button>
         </div>
       </section>
@@ -353,32 +449,19 @@ export function ReceptionReview({
 }
 
 /**
- * お客様・案件の確認 (お客様のご要望 2026-11-24「追加 ③」、2026-11-25「問い合わせ登録時の顧客登録・紐付け」①②)。
+ * ① お客様の確認 (お客様のご要望 2026-11-24「追加 ③」、2026-11-25「問い合わせ登録時の顧客登録・紐付け」①②)。
  * 最初にお客様を決める: 候補・検索のお客様の「このお客様に紐付ける」(quick = link:<顧客>) か「新規顧客として登録」(quick = new。その場で顧客を保存)。
- * 決めたお客様は受付に残り、そのあとは選び直さない (「別のお客様にする」= unlink で外す)。既存の案件の連絡なら「この案件のやりとりに追加」(case:<案件>)。
+ * 決めたお客様は受付に残り、そのあとは選び直さない (「別のお客様にする」= unlink で外す)。
+ * お客様を決めたら、そのお客様の案件から「新規案件 / この案件に問い合わせを追加」を選ぶ (CaseChoice。お客様のご要望 2026-11-26「■5」)。
  * 問い合わせの登録は、お客様が決まってから (actions/reception.ts の registerReception)
  */
-function MatchPanel({ customers, cases, mediaDefault, fields, chosen }: { customers: ReviewCustomer[]; cases: ReviewCase[]; canCreateCustomer: boolean; mediaDefault?: MediaKey; fields: ReceptionFields; chosen?: ChosenCustomer }) {
+function MatchPanel({ customers, fields, chosen }: { customers: ReviewCustomer[]; canCreateCustomer: boolean; fields: ReceptionFields; chosen?: ChosenCustomer }) {
   // 候補の順 (お客様のご要望 2026-11-24): ① 住所の一致 → ② 電話番号の一致 → ③ 名字の一致
   const byAddress = customers.filter((c) => c.level === "address");
   const byPhone = customers.filter((c) => c.level === "phone");
   const byName = customers.filter((c) => c.level === "name");
   const strong = [...byAddress, ...byPhone];
   const btn = "inline-flex min-h-10 items-center justify-center rounded-lg px-3 py-2 text-sm font-medium";
-  const caseButtons = (cid: string) => {
-    const list = cases.filter((k) => k.customerId === cid && k.open).slice(0, 3);
-    if (!list.length) return null;
-    return (
-      <div className="mt-2 space-y-1">
-        <p className="text-[11px] text-ink-3">すでにある案件の連絡なら:</p>
-        {list.map((k) => (
-          <button key={k.key} type="submit" name="quick" value={`case:${k.key}`} formNoValidate className={`${btn} w-full justify-start border border-line bg-panel text-left text-ink hover:border-accent/50`}>
-            この案件のやりとりに追加: {k.kindLabel} {k.number} {k.title} ({k.statusLabel})
-          </button>
-        ))}
-      </div>
-    );
-  };
   const LEVEL: Record<ReviewCustomer["level"], { label: string; cls: string }> = {
     preset: { label: "このお客様", cls: "bg-accent text-white" },
     address: { label: "住所が一致", cls: "bg-good-soft text-good-ink" },
@@ -398,20 +481,7 @@ function MatchPanel({ customers, cases, mediaDefault, fields, chosen }: { custom
       <button type="submit" name="quick" value={`link:${c.id}`} formNoValidate className={`${btn} mt-2 w-full ${primary ? "bg-accent text-white hover:bg-accent-hover" : "border border-accent/50 bg-panel text-accent-ink hover:bg-accent-soft"}`}>
         このお客様に紐付ける
       </button>
-      {caseButtons(c.id)}
     </li>
-  );
-  const media = (
-    <label className="block">
-      <span className="label">媒体 (当社を知ったきっかけ) <span className="text-critical">*</span></span>
-      <MediaSelect name="media" defaultValue={mediaDefault ?? ""} required />
-    </label>
-  );
-  const uncertainBox = fields.uncertainFields.length > 0 && (
-    <label className="flex items-start gap-2 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn-ink">
-      <input type="checkbox" name="confirmedUncertain" className="mt-0.5" />
-      <span>黄色の項目 ({fields.uncertainFields.map((k) => RECEPTION_FIELD_LABEL[k as keyof ReceptionFields] ?? k).join("・")}) を下の欄でメモと見比べて確認しました</span>
-    </label>
   );
 
   // お客様が決まったあと: 選び直さない (変えるときだけ「別のお客様にする」)
@@ -427,19 +497,10 @@ function MatchPanel({ customers, cases, mediaDefault, fields, chosen }: { custom
           </div>
           <div className="mt-1 text-sm text-ink">{chosen.address || <span className="text-ink-3">住所未登録</span>}</div>
           {chosen.phone && <div className="text-xs text-ink-2 tnum">{chosen.phone}</div>}
-          {caseButtons(chosen.id)}
           <button type="submit" name="quick" value="unlink" formNoValidate className="mt-2 text-xs text-ink-2 hover:underline">
             別のお客様にする (紐付けをやめる)
           </button>
         </div>
-        <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
-          {media}
-          {uncertainBox}
-        </div>
-        <p className="text-[11px] text-ink-3">② 下の内容を確かめて「問い合わせとして登録する」を押してください。問い合わせはこのお客様の履歴として残ります (見積・受注に進まなくても残ります)。</p>
-        <button type="submit" name="intent" value="inquiry" className={`${btn} w-full bg-accent text-white hover:bg-accent-hover`} data-testid="reception-register-chosen">
-          この内容で問い合わせを登録する
-        </button>
       </section>
     );
   }
@@ -447,7 +508,7 @@ function MatchPanel({ customers, cases, mediaDefault, fields, chosen }: { custom
   const memoName = fields.customerName.split(/[\s　]/)[0]?.replace(/(様|さま|さん)$/, "") ?? "";
   return (
     <section className="space-y-3 rounded-xl border-2 border-accent/40 bg-accent-soft/25 p-4" data-testid="reception-match">
-      <h3 className="text-sm font-semibold text-ink">① お客様・案件の確認 (最初にお客様を決めてください)</h3>
+      <h3 className="text-sm font-semibold text-ink">① お客様の確認 (最初にお客様を決めてください)</h3>
       {byAddress.length ? (
         <p className="text-sm font-medium text-ink">住所が一致するお客様がいます。このお客様に紐付けますか？ (お名前と住所を確かめてください)</p>
       ) : byPhone.length ? (
@@ -457,6 +518,7 @@ function MatchPanel({ customers, cases, mediaDefault, fields, chosen }: { custom
       ) : (
         <p className="text-sm text-ink">既存のお客様は見つかりませんでした{fields.address ? "" : " (住所が読み取れていません。住所を直して「修正を保存」すると探し直します)"}。新しいお客様なら「新規顧客として登録」を押してください。</p>
       )}
+      <p className="text-[11px] text-ink-3">お客様を決めると、そのお客様の進行中の案件・完了した案件が出ます。新しいご依頼か、すでにある案件のご連絡 (日程の変更・クレーム・手直しなど) かを、そこで選びます。</p>
       {byAddress.length > 0 && (
         <div>
           <p className="mb-1 text-xs font-semibold text-good-ink">① 住所が一致</p>
@@ -504,10 +566,6 @@ function MatchPanel({ customers, cases, mediaDefault, fields, chosen }: { custom
           新規顧客として登録 (顧客情報を保存)
         </button>
         <p className="mt-1 text-[11px] text-ink-3">下の欄のお名前・ふりがな・電話・住所で、この時点で顧客を登録します。登録したあとは、続けて問い合わせを登録します (お客様を選び直す必要はありません)。</p>
-      </div>
-      <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
-        {media}
-        {uncertainBox}
       </div>
     </section>
   );

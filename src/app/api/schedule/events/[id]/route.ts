@@ -12,6 +12,7 @@ import { workDescription, workText } from "@/lib/work-summary";
 import type { EventQuickData, QuickCase, QuickMap, QuickPair, QuickRemove, QuickRequest, QuickStoreChange } from "@/components/schedule/quick-types";
 import { approverRole, skipsApproval } from "@/lib/auth/permissions";
 import { caseChainOf } from "@/lib/case-store";
+import { caseIdOf } from "@/lib/case-group";
 import { caseStoreChangeInfo } from "@/lib/case-store-view";
 import type { Order } from "@/lib/db/types";
 import type { Database, ScheduleEvent, User } from "@/lib/db/types";
@@ -302,6 +303,8 @@ function quickWork(db: Database, user: User, e: ScheduleEvent): QuickWork | unde
   const o = chain?.order && chain.order.status !== "cancelled" ? chain.order : undefined;
   // ② 見積書の撮影 (見積のない案件。案件がなければお客様の新しい見積)
   if (!q && !o && canCase) out.capture = { inquiryId: chain?.inquiry?.id, customerId: customer?.id };
+  // 見積・受注のある案件にも、別の見積 (追加工事・仕様や金額の違う案) を作れる (1 つの案件に複数の見積。src/lib/case-group.ts)
+  else if (chain && canCase) out.capture = { caseId: caseIdOf(db, chain.head.id), customerId: customer?.id, additional: true };
   if (q) out.quote = { id: q.id, number: q.number, status: QUOTE_STATUS[q.status]?.label ?? q.status, href: `/quotes/${q.id}` };
   if (o) out.order = { id: o.id, number: o.number, status: ORDER_STATUS[o.status]?.label ?? o.status, href: `/orders/${o.id}` };
   // ③④ 受注にする (品目ごとの日程つき)

@@ -4,6 +4,7 @@ import { getSessionUser } from "@/lib/auth/session";
 import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import type { StoreId, User } from "@/lib/db/types";
 import { getDb } from "@/lib/db/store";
+import { msgWithLink } from "@/lib/msg-link";
 
 /** サーバーアクション共通: ログインユーザー必須 */
 export async function requireActionUser(): Promise<User> {
@@ -21,8 +22,8 @@ function withParam(path: string, key: string, value: string): string {
   return `${base}${sep}${key}=${encodeURIComponent(value)}${hash}`;
 }
 
-export function withMsg(path: string, msg: string): string {
-  return withParam(path, "msg", msg);
+export function withMsg(path: string, msg: string, link?: { href: string; label: string }): string {
+  return withParam(path, "msg", msgWithLink(msg, link));
 }
 
 export function withErr(path: string, err: string): string {

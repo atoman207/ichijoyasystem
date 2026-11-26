@@ -51,7 +51,8 @@ section("権限: 事務改善は全員が見る・事務担当/本部/管理者�
   ok(!P.canViewCondolences({ ...koshiStaff, active: false }, everyone), "「全社員」でも無効の社員は見られない");
   const scope = MODEL.scopeStatements(koshiMgr).join("\n");
   ok(/create temp view condolences as select \* from main\.condolences where 0/.test(scope), "AI の SQL でも店舗ロールには慶弔リストを見せない");
-  eq(MODEL.scopeStatements(hq), [], "全店舗ロールは SQL の範囲の制限なし (慶弔も見られる)");
+  // 削除した問い合わせを外すビュー (2026-11-25。全員) だけ
+  eq(MODEL.scopeStatements(hq).filter((x) => !x.includes("view inquiries as")), [], "全店舗ロールは SQL の範囲の制限なし (慶弔も見られる)");
 }
 
 section("権限: 縁在庫");

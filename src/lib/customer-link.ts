@@ -6,6 +6,7 @@ import { customerHasPhone, phoneDigits } from "@/lib/customer-contacts";
 import { linkInquiryLogs } from "@/lib/ai-intake";
 import { caseChainOf, type CaseChain } from "@/lib/case-store";
 import { invoiceCoversOrder, liveInvoicesOfOrder } from "@/lib/billing";
+import { buildCaseMap } from "@/lib/case-group";
 
 /**
  * 問い合わせ (受付) を紐付けられるお客様: 顧客の一覧で見られるお客様 (閲覧の範囲の設定。初期設定は全社員が全店舗) と、変更できる店舗のお客様。
@@ -175,4 +176,19 @@ export function moveInquiryToCustomer(db: Database, inq: Inquiry, to: Customer, 
     });
   }
   return { from, events, removed };
+}
+
+/**
+ * 既存の案件に追加した問い合わせ (Inquiry.caseId。src/lib/case-group.ts) をほかのお客様に付け替えるときは、
+ * その案件の最初の記録のお客様が付け替え先と違えば案件から外す (問い合わせ (と見積・受注) は自分の案件になる)。外した案件の番号を返す (mutate の中で呼ぶ)
+ */
+export function detachFromOtherCustomerCase(db: Pick<Database, "inquiries" | "quotes" | "orders">, inq: Inquiry, toCustomerId: string): string | undefined {
+  if (!inq.caseId) return undefined;
+  const map = buildCaseMap(db);
+  const root = map.caseOf(inq.caseId);
+  const rec = root ? (db.orders.find((o) => o.id === root) ?? db.quotes.find((q) => q.id === root) ?? db.inquiries.find((i) => i.id === root)) : undefined;
+  if (rec && rec.id !== inq.id && rec.customerId === toCustomerId) return undefined;
+  const number = rec?.number ?? inq.caseId;
+  delete inq.caseId;
+  return number;
 }

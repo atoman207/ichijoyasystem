@@ -15,7 +15,8 @@ import { areaStoreOf } from "@/lib/store-area";
 import { canAccessStore, canDeleteInquiryDirect, canEditCaseStore, canRequestInquiryDelete, canRestoreInquiry, canSeeAllStores, canViewAuditEntry } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
 import { clearInquiryScheduleHold, linkInquiryFromForm, mergeInquiryIntoCase, registerCustomerFromInquiry, requestInquiry, restoreDeletedInquiry, setInquiryScheduleHold, setInquiryStatus, updateInquiry } from "@/lib/actions/inquiries";
-import { customerCases } from "@/lib/reception";
+import { caseOptionsForCustomer, type CaseOption } from "@/lib/case-choice";
+import { caseIdOf } from "@/lib/case-group";
 import { taskStep } from "@/lib/actions/messages";
 import { caseFlow } from "@/lib/case-flow";
 import { CaseFlowBar } from "@/components/features/CaseFlowBar";
@@ -136,7 +137,10 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   // 同じお客様の進行中の案件 (この問い合わせ以外)。既存の案件の連絡なら「この案件にまとめる」(お客様のご要望 2026-11-24「追加 ④」)
   // 問い合わせのお客様の登録は誰でも (問い合わせは必ずお客様に紐付けて残す。お客様のご要望 2026-11-25。二重登録は重複の確認で防ぐ)
   const canCreateCustomer = true;
-  const otherCases = customer && canLink && !quote ? customerCases(db, customer.id).filter((c) => c.open && !(c.type === "inquiry" && c.id === inq.id) && canEditCaseStore(user, c.storeId)).slice(0, 5) : [];
+  // 案件 = src/lib/case-group.ts。この問い合わせの案件は除き、進行中の案件と最近の完了した案件 (クレーム・手直し) を出す (お客様のご要望 2026-11-26「■5」)
+  const caseOpts = customer && canLink && !quote && !inq.caseId ? caseOptionsForCustomer(db, user, customer.id, toDateKey(new Date()), { excludeCaseId: caseIdOf(db, inq.id) }) : undefined;
+  const otherCases = caseOpts?.open ?? [];
+  const pastCases = caseOpts?.past ?? [];
   const scheduleKinds: ScheduleKind[] = order ? ["pickup", "delivery", "install", "site", "visit", "measure"] : ["survey", "onsite_quote", "site_survey", "measure", "visit", "pickup", "delivery", "install", "site"];
 
   return (
@@ -149,7 +153,8 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
         back={{ href: "/inquiries", label: "問い合わせ一覧" }}
         actions={
           viewOnly ? undefined : <>
-            {!quote && customer && <LinkButton href={`/quotes/new?customerId=${customer.id}&inquiryId=${inq.id}&category=${inq.category}`} size="sm">見積を作成</LinkButton>}
+            {/* 見積がすでにあっても、別の見積 (仕様・金額の違う案・追加工事) を作れる (お客様のご要望 2026-11-26「■6」) */}
+            {customer && <LinkButton href={`/quotes/new?customerId=${customer.id}&inquiryId=${inq.id}&category=${inq.category}`} size="sm" variant={quote ? "secondary" : "primary"}>{quote ? "別の見積を作成" : "見積を作成"}</LinkButton>}
             {quote && <LinkButton href={`/quotes/${quote.id}`} size="sm" variant="secondary">見積 {quote.number} を開く</LinkButton>}
             {delMode && !delBlocked && !delPending && <DeleteInquiryButton inquiryId={inq.id} number={inq.number} summary={inq.summary} customer={customer?.name ?? inq.contactName} mode={delMode} events={inquiryOnlyEvents(db, inq).length} returnTo="/inquiries" />}
           </>
@@ -180,11 +185,17 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
 
       <div className="mt-4 grid grid-cols-1 gap-4 @3xl:grid-cols-3">
         <div className="space-y-4 @3xl:col-span-2">
-          {open && !quote && canLink && (!customer || otherCases.length > 0) && (
+          {open && !quote && canLink && (!customer || otherCases.length > 0 || pastCases.length > 0) && (
             <Card id="customer-choice" className="border-accent/40">
               <CardHeader
                 title={customer ? "既存の案件の連絡ですか？" : "お客様の確認: 既存のお客様に紐づける / 新しいお客様として登録"}
-                description={customer ? `${customer.name} 様の進行中の案件があります。同じ件の連絡なら、案件にまとめると二重の案件になりません (この問い合わせの内容は案件のやりとりに残ります)` : "顧客の二重登録を防ぐため、先に確かめてください。住所・電話番号が同じお客様が候補に出ます"}
+                description={
+                  customer
+                    ? otherCases.length
+                      ? `${customer.name} 様の進行中の案件があります。同じ件の連絡なら、この問い合わせを案件に追加すると二重の案件になりません (問い合わせは一覧にも案件の画面にも残り、内容は案件のやりとりにも残ります)`
+                      : `${customer.name} 様の完了した案件へのクレーム・手直しのご連絡なら、下の「完了した案件」に追加できます。新しいご依頼なら、そのまま下の「次にやること」へ進んでください`
+                    : "顧客の二重登録を防ぐため、先に確かめてください。住所・電話番号が同じお客様が候補に出ます"
+                }
               />
               {!customer && (
                 <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
@@ -227,17 +238,21 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                   </div>
                 </div>
               )}
-              {customer && otherCases.length > 0 && (
-                <form action={mergeInquiryIntoCase.bind(null, inq.id)} className="space-y-1.5">
+              {customer && (otherCases.length > 0 || pastCases.length > 0) && (
+                <form action={mergeInquiryIntoCase.bind(null, inq.id)} className="space-y-1.5" data-testid="inquiry-case-merge">
                   {otherCases.map((c) => (
-                    <div key={`${c.type}:${c.id}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm">
-                      <span className="min-w-0 flex-1">
-                        <Link href={c.href} className="font-medium text-accent hover:underline">{c.type === "order" ? "受注" : c.type === "quote" ? "見積" : "問い合わせ"} {c.number}</Link> <span className="text-ink-2">{c.title}</span>
-                        <span className="block text-[11px] text-ink-3">{c.statusLabel} · {c.date}</span>
-                      </span>
-                      <Button type="submit" name="caseKey" value={`${c.type}:${c.id}`} size="sm" variant="secondary">この案件にまとめる</Button>
-                    </div>
+                    <MergeRow key={c.id} c={c} />
                   ))}
+                  {pastCases.length > 0 && (
+                    <details className="rounded-lg border border-line bg-subtle/50 p-2" open={!otherCases.length}>
+                      <summary className="cursor-pointer text-xs font-semibold text-ink-2">完了した案件 (クレーム・手直しのご連絡) {pastCases.length} 件</summary>
+                      <div className="mt-2 space-y-1.5">
+                        {pastCases.map((c) => (
+                          <MergeRow key={c.id} c={c} />
+                        ))}
+                      </div>
+                    </details>
+                  )}
                   <p className="text-[11px] text-ink-3">新しいご依頼なら、そのまま下の「次にやること」へ進んでください。</p>
                 </form>
               )}
@@ -538,6 +553,28 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
         </div>
       </div>
       </ReadOnlyArea>
+    </div>
+  );
+}
+
+/** 「既存の案件の連絡ですか？」の案件の行 (この案件に追加 = mergeInquiryIntoCase の caseId) */
+function MergeRow({ c }: { c: CaseOption }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-sm">
+      <span className="min-w-0 flex-1">
+        <Link href={c.href} className="font-medium text-accent hover:underline">
+          案件 {c.number}
+        </Link>{" "}
+        <span className="text-ink-2">{c.title}</span>
+        <span className="block text-[11px] text-ink-3">{[c.stageLabel, c.detail, c.lastAt ? `最後の動き ${fmtDate(c.lastAt)}` : "", c.storeName].filter(Boolean).join(" · ")}</span>
+      </span>
+      {c.canAdd ? (
+        <Button type="submit" name="caseId" value={c.id} size="sm" variant="secondary">
+          この案件に追加
+        </Button>
+      ) : (
+        <span className="text-[11px] text-ink-3">ほかの店舗の案件 (店舗に依頼)</span>
+      )}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import type { Database, ScheduleEvent, ScheduleKind } from "@/lib/db/types";
+import { buildCaseMap } from "@/lib/case-group";
 
 /**
  * 同じ案件・同じ日の予定の二重登録を防ぐ (お客様のご連絡 2026-11-26「問い合わせから顧客・日程を登録すると予定表に二重に表示される」)
@@ -7,7 +8,7 @@ import type { Database, ScheduleEvent, ScheduleKind } from "@/lib/db/types";
  * 問い合わせの画面からもう一度同じ日の予定を足すと、予定表に二重に出ていた。
  * ここでは、登録しようとしている予定と 同じ案件 (問い合わせ ⇄ 見積 ⇄ 受注、案件のつながっていないそのお客様の予定) ・同じ日・同じ種類のまとまり
  * (見積・現調・現見・採寸・顧客訪問は 1 つのまとまり、ほかは同じ種類) の予定を探す。見つかったら、登録の画面で
- * 「既存の予定をこの内容に直す」か「別の予定として追加する」を選ばせる (サーバーでも選ぶまで登録しない)。import は型だけ
+ * 「既存の予定をこの内容に直す」か「別の予定として追加する」を選ばせる (サーバーでも選ぶまで登録しない)。案件は case-group.ts (ほかの案件に追加した問い合わせ・見積も同じ案件)
  */
 
 export const VISIT_GROUP: readonly ScheduleKind[] = ["survey", "site_survey", "onsite_quote", "measure", "visit"];
@@ -22,24 +23,18 @@ export interface DuplicateCandidate {
   customerId?: string;
 }
 
-/** 案件のつながり (問い合わせ ⇄ 見積 ⇄ 受注) の ID */
-function chainIds(db: Pick<Database, "quotes" | "orders">, c: DuplicateCandidate): Set<string> {
+/** 案件の記録の ID (問い合わせ ⇄ 見積 ⇄ 受注 + ほかの案件に追加した問い合わせ・見積。src/lib/case-group.ts) */
+function chainIds(db: Pick<Database, "quotes" | "orders" | "inquiries">, c: DuplicateCandidate): Set<string> {
   const ids = new Set<string>([c.inquiryId, c.quoteId, c.orderId].filter((x): x is string => Boolean(x)));
-  const order = c.orderId ? db.orders.find((o) => o.id === c.orderId) : undefined;
-  if (order?.quoteId) ids.add(order.quoteId);
-  for (const q of db.quotes) {
-    if (ids.has(q.id) || (q.inquiryId && ids.has(q.inquiryId))) {
-      ids.add(q.id);
-      if (q.inquiryId) ids.add(q.inquiryId);
-      if (q.orderId) ids.add(q.orderId);
-    }
-  }
-  for (const o of db.orders) if (o.quoteId && ids.has(o.quoteId)) ids.add(o.id);
+  const map = buildCaseMap({ inquiries: db.inquiries ?? [], quotes: db.quotes, orders: db.orders });
+  const caseId = map.caseOf(c.orderId ?? c.quoteId ?? c.inquiryId);
+  const m = caseId ? map.members(caseId) : undefined;
+  if (m) for (const r of [...m.inquiries, ...m.quotes, ...m.orders]) ids.add(r.id);
   return ids;
 }
 
 /** 同じ案件・同じ日・同じ種類のまとまりの予定 (excludeId = 変更中の予定) */
-export function sameCaseSameDay(db: Pick<Database, "schedule" | "quotes" | "orders">, c: DuplicateCandidate, excludeId?: string): ScheduleEvent[] {
+export function sameCaseSameDay(db: Pick<Database, "schedule" | "quotes" | "orders" | "inquiries">, c: DuplicateCandidate, excludeId?: string): ScheduleEvent[] {
   const ids = chainIds(db, c);
   if (!ids.size && !c.customerId) return [];
   const group = groupOf(c.kind);

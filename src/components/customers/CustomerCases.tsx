@@ -1,10 +1,11 @@
 import Link from "@/components/ui/Link";
 import { INQUIRY_STATUS, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
 import { yen } from "@/lib/format";
-import type { CaseRow } from "@/lib/customer-cases";
-export { customerCaseRows } from "@/lib/customer-cases";
-import { Card, CardHeader, StatusBadge } from "@/components/ui";
-import { ChevronDown, ClipboardList } from "lucide-react";
+import type { CaseGroupRow, CaseRow } from "@/lib/customer-cases";
+export { customerCaseGroups, customerCaseRows } from "@/lib/customer-cases";
+import { STAGE_TONE } from "@/lib/case-status";
+import { Badge, Card, CardHeader, StatusBadge } from "@/components/ui";
+import { ChevronDown, ClipboardList, FolderOpen } from "lucide-react";
 
 /**
  * 顧客の画面の「案件の一覧」(お客様のご要望 2026-11-25「① 顧客情報画面の表示優先順位」):
@@ -133,6 +134,91 @@ export function CustomerCasesCard({ rows, all, allHref }: { rows: CaseRow[]; all
           <ul className="space-y-1.5">
             {shown.map((r) => (
               <CaseItem key={r.key} r={r} />
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-ink-3">過去の案件はありません</p>
+        )}
+        {shown.length < past.length && (
+          <Link href={allHref} className="mt-2 inline-flex text-xs font-medium text-accent hover:underline">
+            すべての案件を表示 (ほか {past.length - shown.length} 件)
+          </Link>
+        )}
+      </section>
+    </Card>
+  );
+}
+
+/**
+ * 顧客の画面の案件の一覧 (案件ごと。お客様のご要望 2026-11-26「■7 顧客詳細画面」): 進行中の案件 / 過去の案件履歴。
+ * 1 つの案件 (src/lib/case-group.ts) に問い合わせ・見積・受注がいくつあっても 1 行。押すと案件の記録 (受注・見積・問い合わせ) と明細が開き、
+ * 「案件の画面を開く」で見積・施工内容・金額・やりとり・写真・資料をすべて確認できる
+ */
+function CaseGroupItem({ g }: { g: CaseGroupRow }) {
+  return (
+    <li className="rounded-xl border border-line" data-testid="customer-case-group">
+      <details className="group/c">
+        <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2.5 hover:bg-subtle/60 [&::-webkit-details-marker]:hidden">
+          <ChevronDown className="h-4 w-4 shrink-0 text-ink-3 transition-transform group-open/c:rotate-180" aria-hidden />
+          <span className="text-xs text-ink-3 tnum">{g.dateLabel}</span>
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{g.title || "(件名なし)"}</span>
+          <Badge tone={g.open ? STAGE_TONE[g.stage] : "neutral"}>{g.stageLabel}</Badge>
+          {g.amount !== undefined && (
+            <span className="text-sm font-semibold text-ink tnum" title={g.amountLabel}>
+              {yen(g.amount)}
+            </span>
+          )}
+        </summary>
+        <div className="space-y-2 border-t border-line px-3 py-2.5 text-xs">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-2">
+            <span>
+              案件 <span className="font-mono text-ink">{g.number}</span>
+            </span>
+            <span>{g.detail}</span>
+            <span className="text-ink-3">
+              問い合わせ {g.counts.inquiries} · 見積 {g.counts.quotes} · 受注 {g.counts.orders}
+            </span>
+            <Link href={g.href} className="ml-auto inline-flex items-center gap-1 rounded-lg border border-accent/30 bg-accent-soft px-2.5 py-1 font-medium text-accent-ink hover:bg-accent-soft/70" data-testid="customer-case-open">
+              <FolderOpen className="h-3.5 w-3.5" aria-hidden />
+              案件の画面を開く
+            </Link>
+          </div>
+          <ul className="space-y-1.5">
+            {g.records.map((r) => (
+              <CaseItem key={r.key} r={r} />
+            ))}
+          </ul>
+        </div>
+      </details>
+    </li>
+  );
+}
+
+export function CustomerCaseGroupsCard({ groups, all, allHref }: { groups: CaseGroupRow[]; all: boolean; allHref: string }) {
+  const open = groups.filter((g) => g.open);
+  const past = groups.filter((g) => !g.open);
+  const shown = all ? past : past.slice(0, 30);
+  return (
+    <Card id="cases">
+      <CardHeader title="案件" icon={<ClipboardList />} description="案件 = お問い合わせごとの箱 (見積・受注・予定・請求・写真をまとめる)。行を押すと見積・受注・明細が開き、「案件の画面を開く」でその案件のすべてを確認・操作できます" />
+      <section id="cases-open" className="scroll-mt-24">
+        <h3 className="mb-1.5 text-xs font-semibold text-ink-2">進行中の案件 ({open.length} 件)</h3>
+        {open.length ? (
+          <ul className="space-y-1.5">
+            {open.map((g) => (
+              <CaseGroupItem key={g.key} g={g} />
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-ink-3">進行中の案件はありません</p>
+        )}
+      </section>
+      <section id="cases-past" className="mt-4 scroll-mt-24">
+        <h3 className="mb-1.5 text-xs font-semibold text-ink-2">過去の案件 ({past.length} 件)</h3>
+        {past.length ? (
+          <ul className="space-y-1.5">
+            {shown.map((g) => (
+              <CaseGroupItem key={g.key} g={g} />
             ))}
           </ul>
         ) : (

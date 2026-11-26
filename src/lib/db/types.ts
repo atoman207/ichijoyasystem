@@ -227,6 +227,8 @@ export interface Inquiry {
   nextAction?: string;
   nextActionDue?: string;
   quoteId?: string;
+  /** 案件 (お客様のご要望 2026-11-26「■4」)。ほかの案件に追加した記録だけ、その案件の最初の記録 (問い合わせ・見積・受注) の ID。空 = つながり (問い合わせ ← 見積 ← 受注) で決める。src/lib/case-group.ts */
+  caseId?: string;
   createdBy: string;
   updatedAt: string;
   area?: string;
@@ -433,6 +435,8 @@ export interface Quote {
   version: number;
   customerId: string;
   inquiryId?: string;
+  /** 案件 (お客様のご要望 2026-11-26「■4」)。ほかの案件に追加した記録だけ、その案件の最初の記録 (問い合わせ・見積・受注) の ID。空 = つながり (問い合わせ ← 見積 ← 受注) で決める。src/lib/case-group.ts */
+  caseId?: string;
   storeId: StoreId;
   title: string;
   category: ServiceCategory;
@@ -528,6 +532,8 @@ export interface Order {
   number: string;
   /** 見積から受注した場合の見積 ID (売上台帳から移行した過去の受注にはない) */
   quoteId?: string;
+  /** 案件 (お客様のご要望 2026-11-26「■4」)。ほかの案件に追加した記録だけ、その案件の最初の記録 (問い合わせ・見積・受注) の ID。空 = つながり (問い合わせ ← 見積 ← 受注) で決める。src/lib/case-group.ts */
+  caseId?: string;
   customerId: string;
   storeId: StoreId;
   title: string;

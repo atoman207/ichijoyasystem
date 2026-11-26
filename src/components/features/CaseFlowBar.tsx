@@ -1,6 +1,6 @@
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
-import { ArrowRight, Check, CircleDot, Minus } from "lucide-react";
+import { ArrowRight, Check, CircleDot, FolderOpen, Minus } from "lucide-react";
 import { Badge } from "@/components/ui";
 import type { CaseFlowView, StepState } from "@/lib/case-flow";
 
@@ -28,6 +28,19 @@ export function CaseFlowBar({ flow }: { flow: CaseFlowView }) {
   const next = flow.next;
   return (
     <section aria-label="案件の流れと次にやること" className="mb-4 rounded-2xl border border-line/70 bg-panel p-3 shadow-card" data-testid="case-flow">
+      {/* 案件の画面 (この案件の問い合わせ・見積・受注・予定・請求・資料をまとめて見て、そこから操作する) */}
+      {flow.caseRef && (
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-line/70 pb-2">
+          <span className="text-xs text-ink-2">
+            案件 <span className="font-mono font-medium text-ink">{flow.caseRef.number}</span>
+            <span className="ml-2 text-ink-3">問い合わせ {flow.caseRef.inquiries} · 見積 {flow.caseRef.quotes} · 受注 {flow.caseRef.orders}</span>
+          </span>
+          <Link href={flow.caseRef.href} className="inline-flex items-center gap-1 rounded-lg border border-accent/30 bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent-ink hover:bg-accent-soft/70" data-testid="case-flow-case">
+            <FolderOpen className="h-3.5 w-3.5" aria-hidden />
+            案件の画面を開く
+          </Link>
+        </div>
+      )}
       <ol className="flex flex-wrap items-stretch gap-1.5">
         {steps.map((s, i) => {
           const body = (

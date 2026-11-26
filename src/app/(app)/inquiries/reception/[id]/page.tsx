@@ -30,12 +30,15 @@ import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { ReceptionReview, type ChosenCustomer, type ReviewCase, type ReviewCustomer } from "@/components/reception/ReceptionReview";
 import { MemoPhoto } from "@/components/reception/MemoPhoto";
 import { areaStoreOf } from "@/lib/store-area";
+import { buildCaseMap } from "@/lib/case-group";
+import { caseMedia, caseOptionsForCustomer, caseOwnerId, initialCaseChoice } from "@/lib/case-choice";
+import { toDateKey } from "@/lib/format";
 import { isCommonStaff } from "@/lib/staff-choices";
 import { Badge, Card, CardHeader, Dl, Flash, Note, PageHeader } from "@/components/ui";
 
 const KIND_LABEL: Record<CaseCandidate["type"], string> = { inquiry: "問い合わせ", quote: "見積", order: "受注" };
 
-export default async function ReceptionDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
+export default async function ReceptionDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string; caseId?: string }> }) {
   const { id } = await params;
   const sp = await searchParams;
   const user = await requireUser();
@@ -54,6 +57,7 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
 
   let review: ReactNode = null;
   let chosen: ChosenCustomer | undefined;
+  let caseOptions: ReturnType<typeof caseOptionsForCustomer> | undefined;
   let matchWarnings: string[] = [];
   if (pending) {
     const m = matchReception(db, user, f);
@@ -61,6 +65,8 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
     const custLabel = (c: { name: string; code: string; storeId: string; address: string; area?: string }) => `${c.name} (${c.code} · ${storeName(c.storeId)})${c.address ? ` ${c.address.slice(0, 28)}` : c.area ? ` 地区 ${c.area}` : ""}`;
     // 顧客の画面から取り込んだ受付: お客様が決まっている → 問い合わせとして登録・そのお客様を選んだ状態で開く (お客様のご要望 2026-11-24「■6」)
     const preset = meta.customerId ? db.customers.find((c) => c.id === meta.customerId) : undefined;
+    // AI が案件の連絡と判定して選んだ案件 (番号の一致・進行中の案件。お客様を決めたあとの「② 案件」の提案に使う)
+    const aiCaseKey = m.suggestion.action === "case" ? m.suggestion.caseKey : undefined;
     if (preset) {
       m.suggestion = { action: "inquiry", customerId: preset.id, reason: `お客様は ${preset.name} 様に決まっています。読み取った内容を確かめて「問い合わせとして登録」してください` };
       m.customers = m.customers.filter((c) => c.customer.id !== preset.id);
@@ -81,22 +87,46 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
     if (preset) for (const k of customerCases(db, preset.id)) if (!list.some((x) => caseKey(x) === caseKey(k)) && canAccessStore(user, k.storeId)) list.unshift(k);
     for (const c of m.customers.filter((x) => x.level === "name").slice(0, 3)) for (const k of customerCases(db, c.customer.id)) if (!list.some((x) => caseKey(x) === caseKey(k)) && canAccessStore(user, k.storeId)) list.push(k);
     const custName = (cid?: string) => (cid ? db.customers.find((c) => c.id === cid)?.name : undefined);
-    const cases: ReviewCase[] = list.slice(0, 20).map((c) => ({ key: caseKey(c), number: c.number, kindLabel: KIND_LABEL[c.type], title: c.title, statusLabel: c.statusLabel, date: c.date, href: c.href, open: c.open, reason: c.reason, customerId: c.customerId, customerName: custName(c.customerId), ownerId: c.ownerId }));
+    const storeOf = (sid: string) => db.stores.find((s) => s.id === sid);
+    const caseMap = buildCaseMap(db);
+    const cases: ReviewCase[] = list.slice(0, 20).map((c) => {
+      // 案件の店舗・媒体 (担当店舗・媒体の初期値。案件 = src/lib/case-group.ts)
+      const members = caseMap.members(caseMap.caseOf(c.id) ?? c.id);
+      const media = members ? caseMedia(members) : undefined;
+      return { key: caseKey(c), number: c.number, kindLabel: KIND_LABEL[c.type], title: c.title, statusLabel: c.statusLabel, date: c.date, href: c.href, open: c.open, reason: c.reason, customerId: c.customerId, customerName: custName(c.customerId), ownerId: (members ? caseOwnerId(db, members) : undefined) ?? c.ownerId, storeId: c.storeId, storeName: storeName(c.storeId), ...(media ? { media } : {}) };
+    });
     const matchedSuppliers = new Set(m.suppliers.map((s) => s.id));
     const suppliers = [...m.suppliers, ...db.suppliers.filter((s) => !matchedSuppliers.has(s.id))].slice(0, 400).map((s) => ({ id: s.id, name: s.name, matched: matchedSuppliers.has(s.id) }));
-    // 担当店舗: 住所 (読み取った住所 → 候補のお客様の住所) の担当エリア > お客様の店舗 > 受付の店舗 (お客様のご要望 2026-11-24「③」。src/lib/store-area.ts)
-    const suggested = m.customers.find((c) => c.customer.id === m.suggestion.customerId)?.customer;
-    const custStore = suggested?.storeId;
-    const area = areaStoreOf(db, f.address || suggested?.address);
-    const target = area?.storeId ?? custStore ?? doc.storeId;
-    const storeChoices = allStores ? db.stores.map((s) => s.id) : [...new Set([user.storeId, target, ...(area ? [area.storeId] : [])])];
-    // 担当者の選択肢: 自店舗・担当店舗の社員 + 本部の社員 (全店舗共通。お客様のご要望 2026-11-24「④」)
+    // 紐付けたお客様の案件 (新規案件か、既存の案件に問い合わせを追加か。お客様のご要望 2026-11-26「■5」。src/lib/case-choice.ts)
+    const today = toDateKey(new Date());
+    caseOptions = preset ? caseOptionsForCustomer(db, user, preset.id, today, { map: caseMap }) : undefined;
+    // 初めに選んでおく案件: 前に選んだ案件 → URL の caseId (案件の画面から) → AI が番号・内容で選んだ案件 → 進行中が 1 件だけならその案件 → 新規案件
+    const hinted = aiCaseKey ? caseMap.caseOf(aiCaseKey.split(":")[1]) : undefined;
+    const urlCase = sp.caseId ? caseMap.caseOf(sp.caseId) : undefined;
+    const choice = caseOptions ? initialCaseChoice(caseOptions, meta.reg.caseId ?? urlCase ?? hinted) : "new";
+    const suggestedCaseId = caseOptions ? initialCaseChoice(caseOptions, hinted) : undefined;
+    // 担当店舗 (確認の画面で 1 回だけ選ぶ。お客様のご要望 2026-11-26「■2」): 前に手で選んだ店舗 > 案件の店舗 (案件に追加するとき) > 住所 (施工現場 → 読み取った住所 → お客様の住所) の担当エリア > お客様の店舗 > 受付の店舗
+    const suggested = preset ?? m.customers.find((c) => c.customer.id === m.suggestion.customerId)?.customer;
+    const initialAddress = f.siteAddress || f.address;
+    const area = areaStoreOf(db, initialAddress || suggested?.address) ?? null;
+    const custStore = suggested && (allStores || canAccessStore(user, suggested.storeId)) ? suggested.storeId : undefined;
+    const fallbackStoreId = custStore ?? doc.storeId;
+    const target = area?.storeId ?? fallbackStoreId;
+    const caseStores = [...(caseOptions?.open ?? []), ...(caseOptions?.past ?? [])].filter((c) => c.canAdd).map((c) => c.storeId);
+    const storeChoices = [...new Set([user.storeId, doc.storeId, fallbackStoreId])];
+    const picked = meta.reg.storeManual && meta.reg.storeId && db.stores.some((s) => s.id === meta.reg.storeId) ? meta.reg.storeId : undefined;
+    // 担当者の選択肢: 自店舗・担当店舗・案件の店舗の社員 + 本部の社員 (全店舗共通。お客様のご要望 2026-11-24「④」)
+    const near = new Set([user.storeId, target, ...caseStores, ...(picked ? [picked] : [])]);
+    // 店舗の店長 (住所の担当エリアがほかの店舗のとき、その店舗の店長を担当者の初期値にする)
+    const managers = Object.fromEntries(db.stores.filter((s) => s.managerUserId && db.users.some((u) => u.id === s.managerUserId && u.active)).map((s) => [s.id, s.managerUserId!]));
+    const managerIds = new Set(Object.values(managers));
     const users = db.users
-      .filter((u) => u.active && (allStores || u.storeId === user.storeId || u.storeId === target || u.role === "admin" || u.role === "hq_staff" || isCommonStaff(db, u)))
+      .filter((u) => u.active && (allStores || near.has(u.storeId) || managerIds.has(u.id) || u.role === "admin" || u.role === "hq_staff" || isCommonStaff(db, u)))
       .map((u) => ({ id: u.id, label: `${u.name} (${storeName(u.storeId)}${u.title ? `・${u.title}` : ""})` }));
-    // 担当者の初期値: 自分の店舗の受付は自分。本部などがほかの店舗の受付を登録するときは、その店舗の店長
-    const manager = db.stores.find((s) => s.id === target)?.managerUserId;
+    // 担当者の初期値: 前に選んだ人 → 自分の店舗の受付は自分。本部などがほかの店舗の受付を登録するときは、その店舗の店長 (案件に追加するときは案件の担当)
+    const manager = storeOf(target)?.managerUserId;
     const defaultAssigneeId = target !== user.storeId && manager && db.users.some((u) => u.id === manager && u.active) ? manager : user.id;
+    const assigneeChosen = meta.reg.assigneeId && users.some((u) => u.id === meta.reg.assigneeId) ? meta.reg.assigneeId : undefined;
     const mapped = mapMediaText(readMediaRules(db).rules, f.mediaText);
     const byChannel: Partial<Record<string, MediaKey>> = { referral: "referral", event: "event" };
     const mediaDefault = mapped ?? (isMediaKey(byChannel[meta.channel]) ? byChannel[meta.channel] : undefined);
@@ -113,16 +143,22 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
         suppliers={suppliers}
         users={users}
         stores={db.stores.map((s) => ({ id: s.id, name: s.name }))}
-        storeId={target}
         canChooseStore={allStores}
-        storeChoices={storeChoices}
-        areaStore={area ? { id: area.storeId, name: area.storeName, town: area.town } : undefined}
+        store={{ fallbackStoreId, choices: storeChoices, initialAddress, initialArea: area, fallbackAddress: suggested?.address ?? "", pickedStoreId: picked }}
         currentUserId={user.id}
+        userStoreId={user.storeId}
+        managers={managers}
         defaultAssigneeId={defaultAssigneeId}
+        assigneeChosen={assigneeChosen}
         mediaDefault={mediaDefault}
+        mediaChosen={meta.reg.media}
         canCreateCustomer={userCanCreateCustomer(db, user)}
         photo={photo?.kind === "photo" ? { src: `/api/attachments/${photo.id}`, fullSrc: `/api/attachments/${photo.id}` } : undefined}
         chosen={chosen}
+        caseOptions={caseOptions}
+        caseChoice={choice}
+        suggestedCaseId={suggestedCaseId}
+        handoffDefault={meta.reg.handoff ?? true}
       />
     );
   }

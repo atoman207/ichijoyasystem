@@ -15,9 +15,29 @@ import { findOrderByPostcard, storeFromPostcard, surveyFromExtracted } from "@/l
 import { assertCaseStore, assertStore, choice, fail, requireActionUser, resolveStoreId, safeReturn, str, withErr, withMsg } from "./guards";
 import { canEditCaseStore } from "@/lib/auth/permissions";
 import { customerHasPhone } from "@/lib/customer-contacts";
+import { buildCaseMap, quoteLinkForCase } from "@/lib/case-group";
 
-// 写真は画面側で縮小してから送る。PDF などは 4 MB まで (Vercel の 1 回の送信の上限 4.5 MB)
+// 写真は画面側で縮小してから送る (image-prep.ts)。PDF などは 4 MB まで (Server Action の 1 回の送信の上限 4.5 MB = next.config.ts)
 const MAX_BYTES = 4 * 1024 * 1024;
+
+/** 案件のどの記録の ID でも、案件に見積を足すときのつながり (src/lib/case-group.ts の quoteLinkForCase) */
+function caseQuoteLink(db: Database, id: string) {
+  const map = buildCaseMap(db);
+  const root = map.caseOf(id);
+  return root ? quoteLinkForCase(db, root, map) : undefined;
+}
+
+/**
+ * 読み取った見積書のお客様を、見積の作成の画面の検索に入れる (案件から撮影したときは使わない):
+ * 電話番号が 1 人のお客様と一致すればそのお客様を選び、なければ氏名で検索する
+ */
+function setQuoteCustomer(qs: URLSearchParams, user: User, extracted: Record<string, unknown>) {
+  const cq = customerQuery(extracted.customerName ?? extracted.siteName);
+  const digits = typeof extracted.phone === "string" ? extracted.phone.replace(/\D/g, "") : "";
+  const byPhone = digits.length >= 9 ? getDb().customers.filter((c) => customerHasPhone(c, digits) && canEditCaseStore(user, c.storeId)) : [];
+  if (byPhone.length === 1) qs.set("customerId", byPhone[0].id);
+  else if (cq) qs.set("cq", cq);
+}
 
 const PROVIDER_LABEL: Record<OcrResult["provider"], string> = { claude: "Claude", openai: "OpenAI", mock: "サンプル", error: "読取失敗" };
 
@@ -114,41 +134,55 @@ export async function uploadDocument(formData: FormData) {
 }
 
 /**
- * 予定表の小さな画面から手書きの見積書を撮影 → AI で読み取り → その案件 (問い合わせ・お客様) の見積の作成の画面へ
- * (お客様のご要望 2026-11-25「② 予定表からの見積書登録」: 案件を探し直さない)。見積の作成の画面は読み取った明細・手書きの日時が入った状態で開き、
- * 保存すると予定表の小さな画面 (returnTo) に戻る。読み取りに失敗したときは書類取込の確認の画面 (手入力・読み直し)
+ * 手書きの見積書を撮影 → AI で読み取り → 見積の作成の画面 (読み取った明細・手書きの日時が入った状態) へ。
+ * - 予定表の小さな画面 (お客様のご要望 2026-11-25「② 予定表からの見積書登録」: 案件を探し直さない) と、
+ *   見積の作成の画面の「手書きの見積書を撮影して AI で読み取る」(お客様のご要望 2026-11-26「■1」: どこから見積作成に入っても 2 通り) で共通
+ * - 案件 (inquiryId・customerId・caseId) があればその案件の見積に、なければ読み取ったお客様 (電話番号・氏名) で探す
+ * - returnTo があれば、見積を保存したあとその画面に戻る。back は読み取りの前に断るときの戻り先 (見積の作成の画面)
+ * - 1 つの案件に見積を複数作れる (お客様のご要望 2026-11-26「■6」。すでに見積がある案件でも撮影できる)
+ * 読み取りに失敗したときは書類取込の確認の画面 (手入力・読み直し。「見積を作成」で同じ案件の見積の画面へ)
  */
 export async function captureCaseQuote(formData: FormData) {
   const user = await requireActionUser();
-  const ret = safeReturn(str(formData, "returnTo"), "/schedule");
+  const ret = safeReturn(str(formData, "returnTo"), "");
+  const back = safeReturn(str(formData, "back"), "") || ret || "/schedule";
   const db0 = getDb();
-  const inq = db0.inquiries.find((i) => i.id === str(formData, "inquiryId"));
-  const customer = db0.customers.find((c) => c.id === (str(formData, "customerId") || inq?.customerId));
-  if (!inq && !customer) fail(ret, "見積を作る案件 (お客様) が見つかりません。");
-  const storeId = inq?.storeId ?? customer!.storeId;
-  if (!canEditCaseStore(user, storeId)) fail(ret, "この案件の見積を作る権限がありません (担当店舗の社員・店長が作れます)。");
-  if (inq?.quoteId && db0.quotes.some((q) => q.id === inq.quoteId && q.status !== "rejected" && q.status !== "expired")) fail(ret, "この案件にはすでに見積があります。見積の画面で直してください。");
-  const up = await readUpload(formData, ret);
-  if (!up && aiEnabled()) fail(ret, "見積書を撮影してください。");
+  const caseIdIn = str(formData, "caseId");
+  const caseLink = caseIdIn ? caseQuoteLink(db0, caseIdIn) : undefined;
+  if (caseIdIn && !caseLink) fail(back, "見積を作る案件が見つかりません。");
+  const inq = db0.inquiries.find((i) => i.id === (str(formData, "inquiryId") || caseLink?.inquiryId) && !i.deleted);
+  const customer = db0.customers.find((c) => c.id === (str(formData, "customerId") || inq?.customerId || caseLink?.customerId));
+  const contextual = Boolean(inq || customer || caseLink);
+  const storeId = inq?.storeId ?? (caseLink?.storeId || undefined) ?? customer?.storeId ?? resolveStoreId(user, str(formData, "storeId"));
+  if (!canEditCaseStore(user, storeId)) fail(back, contextual ? "この案件の見積を作る権限がありません (担当店舗の社員・店長が作れます)。" : "この店舗の見積を作る権限がありません。");
+  const up = await readUpload(formData, back);
+  if (!up && aiEnabled()) fail(back, "見積書を撮影してください。");
   const fileName = up?.fileName ?? "sample.jpg";
   const result = await extractDocument({ kind: "handwritten_quote", fileName, mimeType: up?.mimeType ?? "image/jpeg", base64: up?.base64, products: db0.products, storeId });
   const id = newId("doc");
   const original = up ? await storeOriginal(user, formData, { id, storeId, fileName }, up) : undefined;
   const failed = result.provider === "error";
-  const extracted = { ...toExtracted(result, !up), _case: { inquiryId: inq?.id, customerId: customer?.id, eventId: str(formData, "eventId") || undefined, returnTo: ret } };
+  // 問い合わせのない案件 (見積・受注から始まった案件) は案件の ID でつなぐ
+  const caseId = !inq && caseLink?.caseId ? caseLink.caseId : undefined;
+  const ctx = { inquiryId: inq?.id, customerId: customer?.id, caseId, eventId: str(formData, "eventId") || undefined, returnTo: ret || undefined };
+  const extracted = { ...toExtracted(result, !up), ...(contextual || ret ? { _case: ctx } : {}) };
+  const where = str(formData, "eventId") ? "予定表の案件から" : "見積の作成の画面から";
   await mutate((d) => {
     if (original) d.attachments.push(original!);
     d.documents.push({ id, kind: "handwritten_quote", fileName, uploadedBy: user.id, storeId, uploadedAt: nowIso(), status: failed ? "failed" : "extracted", extracted, confidence: result.confidence });
-    addAudit(d, { userId: user.id, action: "create", entity: "document", entityId: id, entityLabel: fileName, summary: `予定表の案件から手書きの見積書を撮影・AI読取 (${inq ? `問い合わせ ${inq.number}` : `${customer?.name ?? ""} 様`} / ${PROVIDER_LABEL[result.provider]}${failed ? `: ${result.error}` : ""})`, storeId });
+    addAudit(d, { userId: user.id, action: "create", entity: "document", entityId: id, entityLabel: fileName, summary: `${where}手書きの見積書を撮影・AI読取 (${inq ? `問い合わせ ${inq.number}` : customer ? `${customer.name} 様` : "お客様は読み取りから"} / ${PROVIDER_LABEL[result.provider]}${failed ? `: ${result.error}` : ""})`, storeId });
   }).catch(async (err) => {
     if (original) await discardStored(original);
     throw err;
   });
   revalidatePath("/capture");
   if (failed) redirect(withErr(docPath(id), failMessage(result)));
-  const qs = new URLSearchParams({ documentId: id, returnTo: ret });
+  const qs = new URLSearchParams({ documentId: id });
+  if (ret) qs.set("returnTo", ret);
   if (customer) qs.set("customerId", customer.id);
+  else setQuoteCustomer(qs, user, result.extracted);
   if (inq) qs.set("inquiryId", inq.id);
+  if (caseId) qs.set("caseId", caseId);
   redirect(withMsg(`/quotes/new?${qs.toString()}`, readMessage(result)));
 }
 
@@ -328,22 +362,19 @@ export async function saveExtraction(formData: FormData) {
   const customerId = str(formData, "customerId");
   switch (intent) {
     case "quote": {
-      const cq = customerQuery(extracted.customerName ?? extracted.siteName);
       const qs = new URLSearchParams({ documentId: id });
-      // 予定表の案件から撮影した見積書: その案件 (お客様・問い合わせ) の見積にして、予定表に戻る (captureCaseQuote)
-      const ctx = doc0.extracted?._case as { inquiryId?: string; customerId?: string; returnTo?: string } | undefined;
-      if (ctx?.customerId || ctx?.inquiryId) {
+      // 案件から撮影した見積書 (予定表の小さな画面・見積の作成の画面。captureCaseQuote): その案件 (お客様・問い合わせ・案件) の見積にして、元の画面に戻る
+      const ctx = doc0.extracted?._case as { inquiryId?: string; customerId?: string; caseId?: string; returnTo?: string } | undefined;
+      if (ctx?.returnTo) qs.set("returnTo", safeReturn(ctx.returnTo, "/schedule"));
+      if (ctx?.customerId || ctx?.inquiryId || ctx?.caseId) {
         if (ctx.customerId) qs.set("customerId", ctx.customerId);
         if (ctx.inquiryId) qs.set("inquiryId", ctx.inquiryId);
-        if (ctx.returnTo) qs.set("returnTo", safeReturn(ctx.returnTo, "/schedule"));
+        if (ctx.caseId) qs.set("caseId", ctx.caseId);
         redirect(`/quotes/new?${qs.toString()}`);
       }
-      // 電話番号が 1 人のお客様と一致すれば、そのお客様を選ぶ
-      const digits = typeof extracted.phone === "string" ? extracted.phone.replace(/\D/g, "") : "";
-      const byPhone = !customerId && digits.length >= 9 ? getDb().customers.filter((c) => customerHasPhone(c, digits) && canEditCaseStore(user, c.storeId)) : [];
+      // 選んだお客様、なければ電話番号が 1 人のお客様と一致すればそのお客様、なければ氏名で検索
       if (customerId) qs.set("customerId", customerId);
-      else if (byPhone.length === 1) qs.set("customerId", byPhone[0].id);
-      else if (cq) qs.set("cq", cq);
+      else setQuoteCustomer(qs, user, extracted);
       redirect(`/quotes/new?${qs.toString()}`);
     }
     case "expense":

@@ -1,9 +1,10 @@
-import type { CapturedDocument, Channel, Customer, Database, ServiceCategory, StoreId, Supplier, User } from "@/lib/db/types";
+import type { CapturedDocument, Channel, Customer, Database, MediaKey, ServiceCategory, StoreId, Supplier, User } from "@/lib/db/types";
 import { CATEGORY_LABEL, INQUIRY_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
 import { customerHasPhone, phoneDigits } from "@/lib/customer-contacts";
 import { canAccessStore, canEditCaseStore, canReadStoreRecords } from "@/lib/auth/permissions";
 import { policyReader } from "@/lib/access-policy";
 import { addressMatch, areaInAddress, nameMatch } from "@/lib/customer-match";
+import { isMediaKey } from "@/lib/media";
 
 /**
  * 受付 (すべての問い合わせの共通の入口)
@@ -13,7 +14,8 @@ import { addressMatch, areaInAddress, nameMatch } from "@/lib/customer-match";
  * 1. AI が項目 (お名前・住所・電話・内容など) を読み取り、内容の種類を判定する (src/lib/ai/reception.ts)
  *    新しい問い合わせ / 進行中の案件の連絡 / 仕入先・協力業者 / 営業・勧誘 / 社内の連絡 / その他
  * 2. このファイルの matchReception が、電話番号・お名前で登録済みのお客様と仕入先を探し、そのお客様の進行中の案件を並べ、
- *    登録先の候補 (問い合わせとして登録 / 案件に履歴を追加 / 記録だけ / 記録しない) を出す
+ *    登録先の候補 (問い合わせとして登録 / 既存の案件に問い合わせを追加 / 記録だけ / 記録しない) を出す。
+ *    お客様を決めたあとは、そのお客様の案件 (src/lib/case-choice.ts) から「新規案件 / この案件に問い合わせを追加」を選ぶ。どちらも問い合わせを作る (案件に追加 = Inquiry.caseId)
  * 3. 担当者が画面 (/inquiries/reception/[id]) で確かめて直し、登録する (src/lib/actions/reception.ts)。AI の判定だけでは何も登録しない
  * 受付は取込書類 (documents。kind = reception) に持つ (元の写真は書類の添付ファイル → 登録先に付け替える)。録音の本体は保存せず、文字起こしだけを残す
  */
@@ -333,7 +335,7 @@ export type ReceptionAction = "inquiry" | "case" | "record" | "dismiss";
 
 export const RECEPTION_ACTION_LABEL: Record<ReceptionAction, string> = {
   inquiry: "問い合わせとして登録する",
-  case: "案件のやりとりに追加する",
+  case: "既存の案件に問い合わせを追加する",
   record: "やりとりの記録だけ残す",
   dismiss: "記録しない (営業電話など)",
 };
@@ -509,7 +511,7 @@ export function matchReception(db: MatchDb, user: User, f: ReceptionFields, toda
     };
     // 同じお客様の対応中の問い合わせがあれば知らせる (同じ件の再度の連絡のことがある)
     const sameOpen = openCases.find((c) => c.type === "inquiry" && today.getTime() - Date.parse(c.date) < 30 * DAY);
-    if (sameOpen) warnings.push(`このお客様には対応中の問い合わせ ${sameOpen.number} (${sameOpen.title}) があります。同じ件の連絡なら「案件のやりとりに追加する」を選んでください。`);
+    if (sameOpen) warnings.push(`このお客様には対応中の問い合わせ ${sameOpen.number} (${sameOpen.title}) があります。同じ件の連絡なら、お客様を紐付けたあとの「案件」で「この案件に問い合わせを追加」を選んでください。`);
   }
   if (addressHits.length > 1) warnings.push(`住所が近いお客様が ${addressHits.length} 人います。どの住所のお客様か確かめてください。`);
   const phoneMatchCount = byPhone.filter(visible).length;
@@ -559,6 +561,38 @@ export interface ReceptionMeta {
   decision?: { action: ReceptionAction; at: string; by: string; targetType?: string; targetId?: string; label?: string; href?: string; note?: string };
   /** 顧客の画面から取り込んだ受付のお客様 (お客様が決まっている。お客様のご要望 2026-11-24「■6」) */
   customerId?: string;
+  /** 確認の画面で選んだ登録の値 (媒体・担当店舗・担当者・案件)。紐付け・保存のあとも選び直さない */
+  reg: ReceptionReg;
+}
+
+/**
+ * 確認の画面で選んだ登録の値 (documents.extracted._reg。お客様のご要望 2026-11-26「■2 同じ情報は一度の入力で」):
+ * 「このお客様に紐付ける」「新規顧客として登録」「修正を保存」で画面を読み直しても、選んだ媒体・担当店舗・担当者・案件をそのまま出す
+ */
+export interface ReceptionReg {
+  media?: MediaKey;
+  storeId?: StoreId;
+  /** 担当店舗を手で選んだ (住所の担当エリア・案件の店舗で決め直さない) */
+  storeManual?: boolean;
+  assigneeId?: string;
+  handoff?: boolean;
+  /** "new" = 新規案件 / 案件の ID = この案件に問い合わせを追加 */
+  caseId?: string;
+}
+
+/** _reg の値を読む (知らない値は捨てる) */
+export function receptionRegOf(raw: unknown): ReceptionReg {
+  if (!raw || typeof raw !== "object") return {};
+  const r = raw as Record<string, unknown>;
+  const s = (v: unknown, max = 80) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
+  return {
+    ...(isMediaKey(r.media) ? { media: r.media } : {}),
+    ...(s(r.storeId) ? { storeId: s(r.storeId) as StoreId } : {}),
+    ...(typeof r.storeManual === "boolean" ? { storeManual: r.storeManual } : {}),
+    ...(s(r.assigneeId) ? { assigneeId: s(r.assigneeId) } : {}),
+    ...(typeof r.handoff === "boolean" ? { handoff: r.handoff } : {}),
+    ...(s(r.caseId) ? { caseId: s(r.caseId) } : {}),
+  };
 }
 
 export function receptionMetaOf(doc: Pick<CapturedDocument, "extracted">): ReceptionMeta {
@@ -571,6 +605,7 @@ export function receptionMetaOf(doc: Pick<CapturedDocument, "extracted">): Recep
     call: x._call && typeof x._call === "object" ? (x._call as ReceptionMeta["call"]) : undefined,
     decision: x._decision && typeof x._decision === "object" ? (x._decision as ReceptionMeta["decision"]) : undefined,
     customerId: typeof x._customerId === "string" && x._customerId ? x._customerId : undefined,
+    reg: receptionRegOf(x._reg),
   };
 }
 

@@ -13,7 +13,7 @@ import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib
 import { linkInquiryLogs } from "@/lib/ai-intake";
 import { DUE_CHOICES, REQUEST_PURPOSE, dueAtFrom, dueLabel, type DueChoice } from "@/lib/inquiry-flow";
 import { closeScheduleRequests, createInquiryRequest } from "@/lib/inquiry-requests";
-import { addInquiryPhone, canLinkToCustomer, moveCaseToCustomer, moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
+import { addInquiryPhone, canLinkToCustomer, detachFromOtherCustomerCase, moveCaseToCustomer, moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
 import { caseChainOf } from "@/lib/case-store";
 import { addChangeNotice, caseTarget, noticeLines } from "@/lib/change-notices";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
@@ -24,19 +24,33 @@ import { assertCaseStore, choice, fail, isKeyOf, requireActionUser, safeReturn, 
 import { MEDIA_LABEL, isMediaKey, mapMediaText, readMediaRules } from "@/lib/media";
 import { isCommonStaff } from "@/lib/staff-choices";
 import { newCaseStore } from "@/lib/store-area";
+import { caseForAdd, caseOptionsForCustomer, noteInquiryOnCase, type CaseAdd, type CaseOption } from "@/lib/case-choice";
+import { buildCaseMap } from "@/lib/case-group";
 import { withPostal } from "@/lib/postal/lookup";
 import type { MediaKey } from "@/lib/db/types";
 
 /** 媒体 (当社を知ったきっかけ) は必須。選択肢に「不明」がある */
 const MEDIA_REQUIRED = "媒体 (当社を知ったきっかけ) を選んでください。お客様に聞けなかったときは「不明」を選びます。";
 
-/** 媒体の値 (分類のコード。AI アシスタントなどから「チラシ」「紹介」のような言葉で届いたときは対応表で読み替える)。なければ断る */
-function readMedia(formData: FormData, back: string): MediaKey {
+/** 媒体の値 (分類のコード。AI アシスタントなどから「チラシ」「紹介」のような言葉で届いたときは対応表で読み替える)。なければ fallback (既存の案件の媒体)、それもなければ断る */
+function readMedia(formData: FormData, back: string, fallback?: MediaKey): MediaKey {
   const v = str(formData, "media");
   if (isMediaKey(v)) return v;
-  const mapped = v ? mapMediaText(readMediaRules(getDb()).rules, v) : null;
+  const mapped = (v ? mapMediaText(readMediaRules(getDb()).rules, v) : null) ?? fallback;
   if (!mapped) fail(back, MEDIA_REQUIRED);
   return mapped;
+}
+
+/**
+ * 手入力の問い合わせの画面で選んだお客様の案件 (進行中・最近の完了。「新規案件 / この案件に問い合わせを追加」の候補。お客様のご要望 2026-11-26「■5」)。
+ * 見られないお客様は null
+ */
+export async function loadCustomerCases(customerId: string): Promise<{ open: CaseOption[]; past: CaseOption[]; pastTotal: number } | null> {
+  const user = await requireActionUser();
+  const db = getDb();
+  const c = db.customers.find((x) => x.id === String(customerId ?? ""));
+  if (!c || !canLinkToCustomer(db, user, c)) return null;
+  return caseOptionsForCustomer(db, user, c.id, toDateKey(new Date()));
 }
 
 /** 店舗の LINE グループ (店舗別・問い合わせを知らせる) に新しい問い合わせを送る。送れなくても問い合わせの登録は取り消さない */
@@ -49,7 +63,9 @@ async function notifyStoreGroup(id: string, userId: string) {
 
 export async function createInquiry(formData: FormData) {
   const user = await requireActionUser();
-  const back = "/inquiries/new";
+  const caseChoice = str(formData, "caseId");
+  const addTo = caseChoice && caseChoice !== "new" ? caseChoice : "";
+  const back = `/inquiries/new${str(formData, "customerId") ? `?customerId=${encodeURIComponent(str(formData, "customerId"))}${addTo ? `&caseId=${encodeURIComponent(addTo)}` : ""}` : ""}`;
   const summary = str(formData, "summary");
   if (!summary) fail(back, "問い合わせ内容 (要約) は必須です。");
   // 受付日時 (郵送で届いた日・後から入力する電話の時刻など)。省略時は現在
@@ -57,13 +73,22 @@ export async function createInquiry(formData: FormData) {
   const receivedAt = atRaw ? new Date(`${atRaw.length === 16 ? `${atRaw}:00` : atRaw}+09:00`) : new Date();
   if (Number.isNaN(receivedAt.getTime())) fail(back, "受付日時を正しく入力してください。");
   if (receivedAt.getTime() > Date.now() + 5 * 60 * 1000) fail(back, "受付日時に未来の日時は入力できません。");
-  const media = readMedia(formData, back);
+  // 既存の案件に問い合わせを追加する (お客様のご要望 2026-11-26「■5」。問い合わせは必ず作り、caseId = 案件)
+  const add0 = addTo ? caseForAdd(getDb(), user, addTo) : undefined;
+  if (add0 && "error" in add0) fail(back, add0.error);
+  const media = readMedia(formData, back, add0?.media);
   const promotionId = str(formData, "promotionId") || undefined;
   const id = newId("inq");
   let areaNote = "";
   let createdCode = "";
+  let caseDone: { href: string; number: string; customer: string; open: boolean } | undefined;
   await mutate((db) => {
     let customer = db.customers.find((c) => c.id === str(formData, "customerId"));
+    const found = addTo ? caseForAdd(db, user, addTo) : undefined;
+    if (found && "error" in found) fail(back, found.error);
+    const add: CaseAdd | undefined = found;
+    if (add && !customer) fail(back, "既存の案件に追加するときは、その案件のお客様を「既存顧客を選択」で選んでください。");
+    if (add && customer && add.customerId && add.customerId !== customer.id) fail(back, `案件 ${add.number} は、選んだお客様の案件ではありません。案件を選び直してください。`);
     // 紐付けられるお客様 = 顧客の一覧で見られるお客様 (ほかの店舗・本部で登録したお客様も。src/lib/customer-link.ts)
     if (customer && !canLinkToCustomer(db, user, customer)) fail(back, "このお客様は閲覧の範囲の外のため選べません。店舗または本部に依頼してください。");
     // 既存のお客様を選ばなかったときは、新規顧客として登録する (問い合わせは必ずお客様に紐付けて保存する。お客様のご要望 2026-11-25「問い合わせ登録時の顧客登録・紐付け」③)
@@ -103,9 +128,12 @@ export async function createInquiry(formData: FormData) {
     const address = str(formData, "address").slice(0, 200);
     // 施工現場の住所 (依頼主の住所と違うとき)。担当店舗の担当エリアは現場の住所で決める
     const siteAddress = str(formData, "siteAddress").replace(/\s+/g, " ").trim().slice(0, 200);
-    const pick = newCaseStore(db, user, { requested: str(formData, "storeId"), auto: str(formData, "storeAuto") === "1", address: siteAddress || address, customer });
-    const storeId = pick.storeId;
-    if (pick.byArea && pick.area && storeId !== user.storeId) areaNote = ` 住所の担当エリアのため${pick.area.storeName}の担当にしました (${pick.area.storeName}に知らせます)。`;
+    // 既存の案件に追加: 案件の店舗 (手で選んだときは、その店舗の記録を変更できれば選んだ店舗)
+    const requested = str(formData, "storeId");
+    const auto = str(formData, "storeAuto") === "1";
+    const pick = add ? undefined : newCaseStore(db, user, { requested, auto, address: siteAddress || address, customer });
+    const storeId: Inquiry["storeId"] = add ? (!auto && requested && db.stores.some((s) => s.id === requested) && canEditCaseStore(user, requested) ? requested : add.storeId) : pick!.storeId;
+    if (pick?.byArea && pick.area && storeId !== user.storeId) areaNote = ` 住所の担当エリアのため${pick.area.storeName}の担当にしました (${pick.area.storeName}に知らせます)。`;
     const contactName = customer?.name ?? str(formData, "contactName");
     if (!contactName) fail(back, "お客様名を入力するか、既存顧客を選択してください。");
     const now = nowIso();
@@ -131,6 +159,8 @@ export async function createInquiry(formData: FormData) {
       // 新規のお客様の住所 (問い合わせ一覧の住所・「顧客として登録する」に使う)
       intake: address && !customer ? { address } : undefined,
       siteAddress: siteAddress && siteAddress !== (customer?.address ?? address) ? siteAddress : undefined,
+      // 既存の案件に追加した問い合わせ (src/lib/case-group.ts)。問い合わせ一覧・案件の画面のどちらにも出る
+      ...(add ? { caseId: add.caseId } : {}),
     };
     if (promotionId) {
       const promo = (db.promotions ?? []).find((p) => p.id === promotionId);
@@ -138,14 +168,24 @@ export async function createInquiry(formData: FormData) {
       inq.promotionId = promo.id;
     }
     db.inquiries.push(inq);
-    addAudit(db, { userId: user.id, action: "create", entity: "inquiry", entityId: id, entityLabel: inq.number, summary: `問い合わせを登録 (${contactName} / ${summary} / 媒体: ${MEDIA_LABEL[media]})`, storeId });
+    addAudit(db, { userId: user.id, action: "create", entity: "inquiry", entityId: id, entityLabel: inq.number, summary: `問い合わせを登録 (${contactName} / ${summary} / 媒体: ${MEDIA_LABEL[media]}${add ? ` / 既存の案件 ${add.number} に追加` : ""})`, storeId });
     if (customer) {
       db.commLogs.push({ id: newId("cl"), customerId: customer.id, channel: inq.channel, direction: "inbound", subject: summary, body: inq.detail || summary, at: inq.receivedAt, userId: user.id, relatedType: "inquiry", relatedId: id });
       customer.updatedAt = now;
     }
+    if (add) {
+      noteInquiryOnCase(db, user.id, add, inq, { body: inq.detail, via: "手入力の問い合わせ" });
+      caseDone = { href: add.href, number: add.number, customer: customer?.name ?? contactName, open: add.open };
+    }
   });
   await notifyStoreGroup(id, user.id);
   revalidatePath("/inquiries");
+  const inqNo = getDb().inquiries.find((x) => x.id === id)?.number ?? "";
+  // 既存の案件に追加したときは案件の画面へ (案件の問い合わせ・見積・受注・予定がまとめて見える)
+  if (caseDone) {
+    revalidatePath(caseDone.href);
+    redirect(withMsg(caseDone.href, `問い合わせ ${inqNo} を ${caseDone.customer} 様の案件 ${caseDone.number}${caseDone.open ? "" : " (完了した案件)"} に追加しました。`));
+  }
   redirect(withMsg(`/inquiries/${id}`, `問い合わせを登録しました${createdCode ? ` (新規顧客 ${createdCode} も登録し、このお客様の履歴として保存しました)` : ""}。${areaNote}届いた書類・写真は下の「資料・写真」から添付できます。`));
 }
 
@@ -300,6 +340,10 @@ export async function linkInquiryToCustomer(id: string, customerId: string, retu
       const blocker = relinkBlocker(db, inq);
       if (blocker) fail(back, blocker);
     }
+    // ほかのお客様の案件に追加してあった問い合わせは、その案件から外す (付け替え先のお客様の案件ではないため。src/lib/customer-link.ts)
+    const caseBefore = inq.caseId ?? null;
+    const detached = detachFromOtherCustomerCase(db, inq, c.id);
+    const detachNote = detached ? `既存の案件 ${detached} (前のお客様の案件) からは外しました。` : "";
     // 見積・受注のあとの案件: 見積・受注・予定もまとめて付け替える (お客様のご要望 2026-11-25「⑤」)
     // scope = inquiry: 問い合わせだけを付け替える (見積・受注は今のお客様のまま。お客様のご要望 2026-11-25「④ 問い合わせ内容だけを正しい顧客へ」)
     const chain = inq.quoteId && scope === "case" ? caseChainOf(db, inq.id) : undefined;
@@ -311,7 +355,8 @@ export async function linkInquiryToCustomer(id: string, customerId: string, retu
       const fromC = db.customers.find((x) => x.id === inq.customerId);
       const rc = moveCaseToCustomer(db, chain, c, user.id);
       addChangeNotice(db, user.id, caseTarget(db, inq.id), "お客様の付け替え", [{ label: "お客様", before: fromC ? `${fromC.name} 様 (${fromC.code})` : "(未登録)", after: `${c.name} 様 (${c.code})` }]);
-      message = `案件 ${chain.head.number} (問い合わせ・見積・受注) を ${c.name} 様に付け替えました。${rc.events ? `予定 ${rc.events} 件も移しました。` : ""}${rc.removed ? `仮の顧客 (${rc.removed.code}) は記録がなくなったため削除しました。` : ""}`;
+      if (detached) addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `お客様の付け替えで既存の案件 ${detached} から外しました`, storeId: inq.storeId, changes: [{ field: "caseId", before: caseBefore, after: null }] });
+      message = `案件 ${chain.head.number} (問い合わせ・見積・受注) を ${c.name} 様に付け替えました。${rc.events ? `予定 ${rc.events} 件も移しました。` : ""}${rc.removed ? `仮の顧客 (${rc.removed.code}) は記録がなくなったため削除しました。` : ""}${detachNote}`;
       return;
     }
     const before = inq.customerId ?? null;
@@ -327,11 +372,11 @@ export async function linkInquiryToCustomer(id: string, customerId: string, retu
       entityLabel: inq.number,
       summary: `${r.from ? `顧客を付け替え (${r.from.code} ${r.from.name} → ${c.code} ${c.name})` : `既存の顧客 ${c.code} ${c.name} に紐づけ`}${r.events ? ` · 予定 ${r.events} 件も移す` : ""}${r.removed ? ` · 仮の顧客 ${r.removed.code} を削除` : ""}`,
       storeId: inq.storeId,
-      changes: [{ field: "customerId", before, after: c.id }],
+      changes: [{ field: "customerId", before, after: c.id }, ...(detached ? [{ field: "caseId", before: caseBefore, after: null }] : [])],
     });
     // 問い合わせで聞いた電話番号が登録にないなら「ほかの電話番号」に足す (次からその番号でも照合できる。お客様のご要望 2026-11-24「②」)
     const added = [inq.contactPhone, inq.intake?.phone, inq.intake?.callbackPhone].map((p) => addInquiryPhone(db, user, c, p, `問い合わせ ${inq.number} で聞いた番号`)).filter(Boolean);
-    message = `問い合わせ ${inq.number} を ${c.name} 様に紐づけました。${added.length ? `電話番号 ${added.join("・")} をお客様の「ほかの電話番号」に追加しました。` : ""}${r.events ? `予定 ${r.events} 件もこのお客様の予定にしました。` : ""}${r.removed ? `予定表の取込で仮に作った顧客 (${r.removed.code}) は記録がなくなったため削除しました。` : ""}これまでの履歴とあわせて表示されます。`;
+    message = `問い合わせ ${inq.number} を ${c.name} 様に紐づけました。${added.length ? `電話番号 ${added.join("・")} をお客様の「ほかの電話番号」に追加しました。` : ""}${r.events ? `予定 ${r.events} 件もこのお客様の予定にしました。` : ""}${r.removed ? `予定表の取込で仮に作った顧客 (${r.removed.code}) は記録がなくなったため削除しました。` : ""}これまでの履歴とあわせて表示されます。${detachNote}`;
   });
   revalidatePath(`/inquiries/${id}`);
   revalidatePath(`/customers/${customerId}`);
@@ -499,64 +544,70 @@ export async function clearInquiryScheduleHold(id: string, formData: FormData) {
 }
 
 /**
- * 既存の案件にまとめる (お客様のご要望 2026-11-24「追加 ④」: AI 相談などの問い合わせが、すでにある案件 (問い合わせ・見積・受注) の連絡だったとき)。
- * 問い合わせの内容を案件のやりとり (受注は経過メモにも) に残し、問い合わせの予定は案件の予定にして、問い合わせは「完了」(結果 = まとめた案件) にする。
- * 同じお客様の案件だけ。見積を作った問い合わせはまとめない
+ * 既存の案件に追加する (お客様のご要望 2026-11-24「追加 ④」: AI 相談などの問い合わせが、すでにある案件 (問い合わせ・見積・受注) の連絡だったとき)。
+ * 2026-11-26「■4」「■5」から: 問い合わせは消さず (完了にもせず) 案件の問い合わせにする (Inquiry.caseId = 案件の ID。src/lib/case-group.ts)。
+ * 問い合わせ一覧と案件の画面のどちらにも出る。内容は案件のやりとり (受注は経過メモにも) に残し、問い合わせの予定は案件の受注・見積の予定にもする (問い合わせのつながりは残す)。
+ * 同じお客様の案件だけ。見積を作った問い合わせ・ほかの記録が追加されている案件の最初の問い合わせは追加しない。
+ * caseKey = <種類>:<ID> (以前の形) か caseId = 案件の ID (どちらもその案件のどれかの記録の ID でよい)
  */
 export async function mergeInquiryIntoCase(id: string, formData: FormData) {
   const user = await requireActionUser();
   const back = `/inquiries/${id}`;
   const key = str(formData, "caseKey");
-  const [type, targetId] = key.split(":");
-  if (!targetId || (type !== "inquiry" && type !== "quote" && type !== "order")) fail(back, "まとめる案件を選んでください。");
+  const targetRef = str(formData, "caseId") || key.split(":")[1] || "";
+  if (!targetRef) fail(back, "追加する案件を選んでください。");
   let href = back;
   let label = "";
   await mutate((db) => {
     const inq = db.inquiries.find((x) => x.id === id);
     if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
     assertCaseStore(user, inq.storeId, back);
-    if (!inq.customerId) fail(back, "先にお客様を紐づけてください (同じお客様の案件にまとめます)。");
-    if (inq.quoteId) fail(back, "見積を作成した問い合わせは、ほかの案件にまとめられません。");
-    if (type === "inquiry" && targetId === inq.id) fail(back, "同じ問い合わせです。");
-    const target = type === "order" ? db.orders.find((x) => x.id === targetId) : type === "quote" ? db.quotes.find((x) => x.id === targetId) : db.inquiries.find((x) => x.id === targetId);
-    if (!target) fail(back, "まとめる案件が見つかりません。");
-    if (target.customerId !== inq.customerId) fail(back, "同じお客様の案件にだけまとめられます。");
-    if (!canEditCaseStore(user, target.storeId)) fail(back, "この案件の店舗の記録を変更する権限がありません。");
+    if (!inq.customerId) fail(back, "先にお客様を紐づけてください (同じお客様の案件に追加します)。");
+    if (inq.quoteId) fail(back, "見積を作成した問い合わせは、ほかの案件に追加できません。");
+    const map = buildCaseMap(db);
+    const own = map.caseOf(inq.id);
+    // caseKey (<種類>:<ID>) で記録を選んだときは、その記録に内容を書き残す
+    const found = caseForAdd(db, user, targetRef, map, { record: !str(formData, "caseId") && key.includes(":") });
+    if ("error" in found) fail(back, found.error);
+    const add: CaseAdd = found;
+    if (add.caseId === own) fail(back, "この問い合わせの案件です。");
+    if (add.customerId !== inq.customerId) fail(back, "同じお客様の案件にだけ追加できます。");
+    // この問い合わせから始まった案件にほかの記録 (追加した問い合わせ・見積・受注) があるときは、案件ごと動いてしまうので断る
+    const ownMembers = own === inq.id ? map.members(own) : undefined;
+    if (ownMembers && ownMembers.inquiries.length + ownMembers.quotes.length + ownMembers.orders.length > 1) fail(back, "この問い合わせの案件には、ほかの問い合わせ・見積・受注があるため、別の案件に追加できません。");
     const now = nowIso();
-    label = `${type === "order" ? "受注" : type === "quote" ? "見積" : "問い合わせ"} ${target.number}`;
-    href = `/${type === "order" ? "orders" : type === "quote" ? "quotes" : "inquiries"}/${target.id}`;
-    // 問い合わせの内容を案件のやりとりに残す
-    db.commLogs.push({ id: newId("cl"), customerId: inq.customerId, storeId: target.storeId, channel: inq.channel, direction: "inbound", subject: `問い合わせ ${inq.number}: ${inq.summary}`.slice(0, 120), body: inq.detail || inq.summary, at: inq.receivedAt, userId: user.id, relatedType: type, relatedId: target.id, contactName: inq.contactName });
-    if (type === "order") {
-      const o = db.orders.find((x) => x.id === targetId)!;
-      o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "note", body: `問い合わせ ${inq.number} (${CHANNEL_LABEL[inq.channel] ?? inq.channel}) をこの案件にまとめました: ${inq.summary}${inq.detail && inq.detail !== inq.summary ? `\n${inq.detail.slice(0, 1500)}` : ""}` });
+    label = `案件 ${add.number}`;
+    href = add.href;
+    // 問い合わせの内容を案件のやりとりに残す (案件のいちばん進んだ記録)
+    const target = add.target;
+    if (target) db.commLogs.push({ id: newId("cl"), customerId: inq.customerId, storeId: target.storeId, channel: inq.channel, direction: "inbound", subject: `問い合わせ ${inq.number}: ${inq.summary}`.slice(0, 120), body: inq.detail || inq.summary, at: inq.receivedAt, userId: user.id, relatedType: target.type, relatedId: target.id, contactName: inq.contactName });
+    if (target?.type === "order") {
+      const o = db.orders.find((x) => x.id === target.id)!;
+      o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "note", body: `問い合わせ ${inq.number} (${CHANNEL_LABEL[inq.channel] ?? inq.channel}) をこの案件に追加しました: ${inq.summary}${inq.detail && inq.detail !== inq.summary ? `\n${inq.detail.slice(0, 1500)}` : ""}` });
       o.updatedAt = now;
     }
-    // 問い合わせの予定は、まとめた案件の予定にする
-    const order = type === "order" ? db.orders.find((x) => x.id === targetId) : undefined;
-    const quote = type === "quote" ? db.quotes.find((x) => x.id === targetId) : order?.quoteId ? db.quotes.find((x) => x.id === order.quoteId) : undefined;
-    const caseIds = { orderId: order?.id, quoteId: quote?.id, inquiryId: type === "inquiry" ? targetId : quote?.inquiryId };
+    // 問い合わせの予定は、案件の受注・見積の予定にもする (受注・見積の画面に出す。問い合わせのつながり inquiryId は残す)
+    const order = target?.type === "order" ? db.orders.find((x) => x.id === target.id) : undefined;
+    const quote = target?.type === "quote" ? db.quotes.find((x) => x.id === target.id) : order?.quoteId ? db.quotes.find((x) => x.id === order.quoteId) : undefined;
     for (const e of db.schedule) {
-      if (e.inquiryId !== inq.id) continue;
-      e.orderId = caseIds.orderId;
-      e.quoteId = caseIds.quoteId;
-      e.inquiryId = caseIds.inquiryId;
-      e.updatedAt = now;
+      if (e.inquiryId !== inq.id || e.orderId || e.quoteId) continue;
+      if (order) e.orderId = order.id;
+      if (quote) e.quoteId = quote.id;
+      if (order || quote) e.updatedAt = now;
     }
-    closeScheduleRequests(db, inq.id, user.id, `既存の案件 ${label} にまとめました`);
-    const before = { status: inq.status, result: inq.result ?? null };
-    inq.status = "closed";
-    inq.result = `既存の案件 ${label} にまとめました`;
-    inq.nextAction = undefined;
-    inq.nextActionDue = undefined;
-    inq.scheduleHold = undefined;
+    const before = { caseId: inq.caseId ?? null, status: inq.status };
+    inq.caseId = add.caseId;
+    // 案件に入れたので「対応中」(新規のままにしない)。完了・失注は変えない
+    if (inq.status === "new") inq.status = "in_progress";
     inq.updatedAt = now;
-    addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `既存の案件 ${label} にまとめました`, storeId: inq.storeId, changes: [{ field: "status", before: before.status, after: "closed" }, { field: "result", before: before.result, after: inq.result }] });
+    addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `既存の${label} (${add.title}) に追加しました`, storeId: inq.storeId, changes: [{ field: "caseId", before: before.caseId, after: add.caseId }, ...(before.status !== inq.status ? [{ field: "status", before: before.status, after: inq.status }] : [])] });
+    if (target) addChangeNotice(db, user.id, caseTarget(db, target.id), "問い合わせの追加", [{ label: "問い合わせ", before: "(なし)", after: `${inq.number} ${inq.summary}`.slice(0, 200) }]);
   });
   revalidatePath(back);
   revalidatePath(href);
   revalidatePath("/inquiries");
-  redirect(withMsg(href, `問い合わせを ${label} にまとめました (内容はこの案件のやりとりに残しました)。`));
+  revalidatePath("/schedule");
+  redirect(withMsg(href, `問い合わせを${label}に追加しました (問い合わせは一覧にも案件の画面にも残ります。内容はこの案件のやりとりにも残しました)。`));
 }
 
 /**

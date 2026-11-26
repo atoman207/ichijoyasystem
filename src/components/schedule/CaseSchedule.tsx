@@ -26,6 +26,7 @@ export function CaseScheduleCard({
   emptyText = "まだ予定はありません",
   quickAdd,
   id = "case-schedule",
+  upcomingOnly = false,
 }: {
   title?: string;
   description?: string;
@@ -45,6 +46,8 @@ export function CaseScheduleCard({
   /** この画面で日程を登録する (案件の画面。お客様のご要望 2026-11-24「業務フロー ③」)。なければ予定の登録の画面へのリンク */
   quickAdd?: ScheduleQuickAddProps;
   id?: string;
+  /** これからの予定 (終わっていない予定) だけ出す (顧客の画面。終わった予定は各案件の画面で見る。お客様のご要望 2026-11-26「■7」) */
+  upcomingOnly?: boolean;
 }) {
   const upcoming = events.filter((e) => lastDay(e) >= today).sort(compareEvents);
   const past = events.filter((e) => lastDay(e) < today).sort((a, b) => compareEvents(b, a));
@@ -105,9 +108,10 @@ export function CaseScheduleCard({
           ))}
         </div>
       )}
-      {events.length === 0 && <p className="py-3 text-sm text-ink-3">{emptyText}</p>}
+      {(upcomingOnly ? upcoming.length === 0 : events.length === 0) && <p className="py-3 text-sm text-ink-3">{emptyText}</p>}
       {upcoming.length > 0 && <ul className="divide-y divide-line">{upcoming.map((e) => row(e, false))}</ul>}
-      {past.length > 0 && (
+      {upcomingOnly && past.length > 0 && <p className="mt-2 border-t border-line pt-2 text-[11px] text-ink-3">終わった予定 ({past.length} 件) は、それぞれの案件の画面で確認できます。</p>}
+      {!upcomingOnly && past.length > 0 && (
         <details className="group mt-2 border-t border-line pt-2" open={upcoming.length === 0}>
           <summary className="cursor-pointer text-xs font-medium text-ink-3 hover:text-ink">過去の予定 ({past.length} 件)</summary>
           <ul className="divide-y divide-line">{past.map((e) => row(e, true))}</ul>

@@ -1,6 +1,7 @@
 import type { Database, Inquiry, Invoice, Order, Quote } from "@/lib/db/types";
 import { SCHEDULE_KIND } from "@/lib/constants";
 import { caseIndex, orderCase } from "@/lib/case-status";
+import { buildCaseMap, caseHref } from "@/lib/case-group";
 import { invoiceOrderIds } from "@/lib/billing";
 import { flowIndex, inquiryFlow, requestTargetLabel, dueLabel, jstDate, type InquiryFlow } from "@/lib/inquiry-flow";
 
@@ -27,6 +28,8 @@ export interface CaseFlowView {
   inquiryFlow?: InquiryFlow;
   /** 状況の札 (期限超過・日程未定など) */
   badge?: { label: string; tone: "neutral" | "info" | "accent" | "warn" | "good" | "critical" };
+  /** この記録の案件 (案件の画面へのリンク。src/lib/case-group.ts) */
+  caseRef?: { id: string; number: string; href: string; inquiries: number; quotes: number; orders: number };
 }
 
 const md = (d?: string) => (d ? `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}` : "");
@@ -150,5 +153,11 @@ export function caseFlow(db: FlowDb, from: { inquiryId?: string; quoteId?: strin
         next = flow.next ? { text: flow.next, who: flow.who.join("・") || undefined } : undefined;
     }
   }
-  return { steps, next, inquiryFlow: flow, badge };
+  // 案件 (問い合わせ・見積・受注をまとめた箱) の画面へのリンク (お客様のご要望 2026-11-26「■4」)
+  const map = buildCaseMap(db);
+  const caseId = map.caseOf(from.orderId ?? from.quoteId ?? from.inquiryId);
+  const m = caseId ? map.members(caseId) : undefined;
+  const first = m ? (m.kind === "order" ? m.orders.find((o) => o.id === m.id) : m.kind === "quote" ? m.quotes.find((q) => q.id === m.id) : m.inquiries.find((i) => i.id === m.id)) : undefined;
+  const caseRef = m && caseId ? { id: caseId, number: first?.number ?? "", href: caseHref(caseId), inquiries: m.inquiries.length, quotes: m.quotes.length, orders: m.orders.length } : undefined;
+  return { steps, next, inquiryFlow: flow, badge, caseRef };
 }

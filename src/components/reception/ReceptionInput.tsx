@@ -3,7 +3,6 @@
 import { useRef, useState, useSyncExternalStore, useTransition, type FormEvent } from "react";
 import { Camera, FileAudio, Mic, PenLine, Square } from "lucide-react";
 import type { Channel, StoreId } from "@/lib/db/types";
-import { CHANNEL_LABEL, RECEPTION_CHANNELS } from "@/lib/constants";
 import { CaptureUploader } from "@/components/features/CaptureUploader";
 import { browserCanListen, canRecord, useRecorder, type VoiceMode } from "@/components/chatbot/voice";
 
@@ -27,9 +26,12 @@ export function ReceptionInput({
   aiEnabled,
   voice,
   customer,
+  caseId,
+  defaultChannel = "phone",
 }: {
   action: (formData: FormData) => Promise<void>;
   stores: { id: StoreId; name: string }[];
+  /** 受付の店舗 (受付を見られる店舗。担当店舗は読み取りのあとの確認の画面で選ぶ) */
   defaultStoreId: StoreId;
   canChooseStore: boolean;
   aiEnabled: boolean;
@@ -37,21 +39,19 @@ export function ReceptionInput({
   voice: boolean;
   /** 顧客の画面から開いたときのお客様 (お客様が決まっている。お客様のご要望 2026-11-24「■6」) */
   customer?: { id: string; name: string };
+  /** 案件の画面の「この案件に問い合わせを追加」から開いたときの案件 (確認の画面で「この案件に問い合わせを追加」を選んだ状態にする) */
+  caseId?: string;
+  /** 入口の初期値 (URL の channel。確認の画面で選び直せる) */
+  defaultChannel?: Channel;
 }) {
   const [tab, setTab] = useState<Tab>("photo");
-  // 入口の初期値は「電話」(お客様のご要望 2026-11-24「⑤」。問い合わせの多くは電話のため)。来店・AI 受付などは選び直す
-  const [channel, setChannel] = useState<Channel>("phone");
-  const [storeId, setStoreId] = useState<StoreId>(defaultStoreId);
   const choose = (t: Tab) => setTab(t);
-  const channelSelect = (
-    <label className="block">
-      <span className="label">入口 (どこで受けたか)</span>
-      <select value={channel} onChange={(e) => setChannel(e.target.value as Channel)} className="field">
-        {RECEPTION_CHANNELS.map((c) => (
-          <option key={c} value={c}>{c === "phone" ? "電話 (会社・店舗の電話)" : c === "referral" ? "紹介 (現場・知人など)" : CHANNEL_LABEL[c]}</option>
-        ))}
-      </select>
-    </label>
+  // 入口・媒体・担当店舗は読み取りのあとの確認の画面で 1 回だけ選ぶ (お客様のご要望 2026-11-26「■2」)。ここでは初期値だけ送る
+  const preset = { channel: defaultChannel, storeId: defaultStoreId, ...(customer ? { customerId: customer.id } : {}), ...(caseId ? { caseId } : {}) };
+  const later = (
+    <p className="text-[11px] leading-relaxed text-ink-3" data-testid="reception-later-note">
+      入口・媒体 (当社を知ったきっかけ)・担当店舗は、読み取ったあとの確認の画面で選びます (住所から担当店舗を自動で選びます)。
+    </p>
   );
   return (
     <div className="space-y-3">
@@ -73,13 +73,14 @@ export function ReceptionInput({
           action={action}
           defaultKind="reception"
           fixedKind
+          hideStore
           stores={stores}
           defaultStoreId={defaultStoreId}
           canChooseStore={canChooseStore}
           aiEnabled={aiEnabled}
-          hidden={{ source: "photo", channel, ...(customer ? { customerId: customer.id } : {}) }}
+          hidden={{ source: "photo", ...preset }}
           zoneFirst
-          extra={channelSelect}
+          extra={later}
           labels={{
             submit: "読み取って登録へ進む",
             pending: "AI がメモを読み取り中… (10〜20 秒)",
@@ -93,24 +94,18 @@ export function ReceptionInput({
       {tab !== "photo" && (
         <>
           <p className="text-xs leading-relaxed text-ink-3">{TABS.find((t) => t.key === tab)?.note}</p>
-          <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
-            {channelSelect}
-            <label className="block">
-              <span className="label">受付の店舗</span>
-              <select value={storeId} onChange={(e) => setStoreId(e.target.value as StoreId)} disabled={!canChooseStore} className="field">
-                {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </label>
-          </div>
+          {later}
         </>
       )}
-      {tab === "text" && <TextInput action={action} channel={channel} storeId={storeId} voice={voice} customerId={customer?.id} />}
-      {tab === "audio" && <AudioInput channel={channel} storeId={storeId} voice={voice} customerId={customer?.id} />}
+      {tab === "text" && <TextInput action={action} preset={preset} voice={voice} />}
+      {tab === "audio" && <AudioInput preset={preset} voice={voice} />}
     </div>
   );
 }
 
-function TextInput({ action, channel, storeId, voice, customerId }: { action: (formData: FormData) => Promise<void>; channel: Channel; storeId: StoreId; voice: boolean; customerId?: string }) {
+type Preset = { channel: Channel; storeId: StoreId; customerId?: string; caseId?: string };
+
+function TextInput({ action, preset, voice }: { action: (formData: FormData) => Promise<void>; preset: Preset; voice: boolean }) {
   const [text, setText] = useState("");
   const [spoken, setSpoken] = useState(false);
   const [pending, start] = useTransition();
@@ -141,9 +136,7 @@ function TextInput({ action, channel, storeId, voice, customerId }: { action: (f
   return (
     <form onSubmit={onSubmit} className="space-y-3">
       <input type="hidden" name="source" value={spoken ? "voice" : "text"} />
-      <input type="hidden" name="channel" value={channel} />
-      <input type="hidden" name="storeId" value={storeId} />
-      {customerId && <input type="hidden" name="customerId" value={customerId} />}
+      {Object.entries(preset).map(([k, v]) => (v ? <input key={k} type="hidden" name={k} value={v} /> : null))}
       {mode !== "none" && (
         <div className="flex flex-wrap items-center gap-3">
           {recording ? (
@@ -169,7 +162,7 @@ function TextInput({ action, channel, storeId, voice, customerId }: { action: (f
   );
 }
 
-function AudioInput({ channel, storeId, voice, customerId }: { channel: Channel; storeId: StoreId; voice: boolean; customerId?: string }) {
+function AudioInput({ preset, voice }: { preset: Preset; voice: boolean }) {
   const ref = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -183,13 +176,14 @@ function AudioInput({ channel, storeId, voice, customerId }: { channel: Channel;
     try {
       const fd = new FormData();
       fd.set("file", f, f.name);
-      fd.set("channel", channel);
-      fd.set("storeId", storeId);
-      if (customerId) fd.set("customerId", customerId);
+      fd.set("channel", preset.channel);
+      fd.set("storeId", preset.storeId);
+      if (preset.customerId) fd.set("customerId", preset.customerId);
       const res = await fetch("/api/reception/audio", { method: "POST", body: fd });
       const body = (await res.json().catch(() => null)) as { href?: string; error?: string } | null;
       if (!res.ok || !body?.href) throw new Error(body?.error ?? "録音を読み取れませんでした。");
-      window.location.assign(body.href);
+      // 案件の画面から開いたときは、確認の画面で「この案件に問い合わせを追加」を選んだ状態にする
+      window.location.assign(preset.caseId ? `${body.href}${body.href.includes("?") ? "&" : "?"}caseId=${encodeURIComponent(preset.caseId)}` : body.href);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);

@@ -132,6 +132,12 @@ T.showResult("保存しました。", "ただし写真は登録できません�
 eq(texts().slice(0, 2).sort(), ["ただし写真は登録できませんでした。", "保存しました。"].sort(), "同じ回の msg と err は両方出す");
 T.showResult(undefined, undefined);
 ok(list().length === 3, "msg も err もなければ何もしない");
+T.resetToasts();
+T.showResult("予定を登録しました。 [[予定表で確認]](/schedule?view=week&date=2026-11-27&store=koshi)", null);
+eq([list()[0].text, list()[0].action?.label, list()[0].action?.href], ["予定を登録しました。", "予定表で確認", "/schedule?view=week&date=2026-11-27&store=koshi"], "結果の文の最後の印はボタン (日程の登録のあとの「予定表で確認」)");
+ok(Number(list()[0].duration) >= 12000, "ボタンのある知らせは長めに出す");
+ok(T.shownFromUrl("予定を登録しました。 [[予定表で確認]](/schedule?view=week&date=2026-11-27&store=koshi)"), "印つきの文も Flash に重ねない");
+
 
 // ---------------------------------------------------------------------------
 section("別の画面へ移ったら閉じるまで残る知らせを閉じる");

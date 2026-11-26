@@ -5,8 +5,10 @@ import { canAccessStore, canEditCaseStore, canSeeAllStores, scopeByStore } from 
 import { userName } from "@/lib/db/queries";
 import { aiStatus, voiceEnabled } from "@/lib/ai/provider";
 import { createReception } from "@/lib/actions/reception";
-import { fmtDateTime } from "@/lib/format";
-import { CHANNEL_LABEL } from "@/lib/constants";
+import { CHANNEL_LABEL, RECEPTION_CHANNELS } from "@/lib/constants";
+import { caseSummary } from "@/lib/case-group";
+import { fmtDateTime, toDateKey } from "@/lib/format";
+import type { Channel } from "@/lib/db/types";
 import { RECEPTION_SOURCE_LABEL, RECEPTION_TYPE_SHORT, RECEPTION_TYPE_TONE, RECEPTION_ACTION_LABEL, isPendingReception, receptionFieldsOf, receptionHref, receptionMetaOf, receptionTitle } from "@/lib/reception";
 import { ReceptionInput } from "@/components/reception/ReceptionInput";
 import { Badge, Card, CardHeader, ChannelTag, EmptyRow, Flash, LinkButton, LinkTabs, Note, PageHeader, StoreTag, Table, Td, Th, Tr } from "@/components/ui";
@@ -17,7 +19,7 @@ export const maxDuration = 60;
  * 受付 (すべての問い合わせの共通の入口): 手書きメモの写真・話して入力・通話の録音 → AI の読み取り → 確認待ち → 問い合わせ・案件へ
  * 電話のシステムからの通話 (/api/integrations/phone-call) もここの確認待ちに入る
  */
-export default async function ReceptionPage({ searchParams }: { searchParams: Promise<{ msg?: string; err?: string; tab?: string; customer?: string }> }) {
+export default async function ReceptionPage({ searchParams }: { searchParams: Promise<{ msg?: string; err?: string; tab?: string; customer?: string; caseId?: string; channel?: string }> }) {
   const sp = await searchParams;
   const user = await requireUser();
   const db = getDb();
@@ -29,17 +31,22 @@ export default async function ReceptionPage({ searchParams }: { searchParams: Pr
   const tab = sp.tab === "done" ? "done" : "pending";
   const rows = tab === "done" ? done : pending;
   const storeMap = new Map(db.stores.map((s) => [s.id, s]));
+  // 案件の画面の「この案件に問い合わせを追加」から開いたとき: 案件とお客様が決まっている (お客様のご要望 2026-11-26「■5」)
+  const presetCase = sp.caseId ? caseSummary(db, sp.caseId, toDateKey(new Date())) : undefined;
   // 顧客の画面の「メモを撮影して問い合わせ」から開いたとき: お客様が決まっている (お客様のご要望 2026-11-24「■6」)
-  const preset = sp.customer ? db.customers.find((c) => c.id === sp.customer && canEditCaseStore(user, c.storeId)) : undefined;
+  const presetCustomerId = sp.customer ?? presetCase?.customerId;
+  const preset = presetCustomerId ? db.customers.find((c) => c.id === presetCustomerId && canEditCaseStore(user, c.storeId)) : undefined;
+  const caseForInput = presetCase && preset && presetCase.customerId === preset.id ? presetCase : undefined;
+  const defaultChannel = sp.channel && (RECEPTION_CHANNELS as readonly string[]).includes(sp.channel) ? (sp.channel as Channel) : "phone";
 
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
       <PageHeader
         title="問合せ登録"
-        description={preset ? `${preset.name} 様の新しい問い合わせを、手書きのメモの写真・話した内容から登録します。お客様は決まっているので、AI が読み取った内容を確かめて直すだけで登録できます` : "手書きのメモを撮影すると、AI がお名前・住所・電話・用件を読み取ります (話して入力・通話の録音もここから)"}
+        description={caseForInput && preset ? `${preset.name} 様の案件 ${caseForInput.number} (${caseForInput.title}) への問い合わせを、手書きのメモの写真・話した内容から登録します。読み取ったあとの確認の画面で、この案件に追加するか新しい案件にするかを確かめられます` : preset ? `${preset.name} 様の新しい問い合わせを、手書きのメモの写真・話した内容から登録します。お客様は決まっているので、AI が読み取った内容を確かめて直すだけで登録できます` : "手書きのメモを撮影すると、AI がお名前・住所・電話・用件を読み取ります (話して入力・通話の録音もここから)"}
         back={preset ? { href: `/customers/${preset.id}`, label: `${preset.name} 様` } : { href: "/inquiries", label: "問い合わせ一覧" }}
-        actions={<LinkButton href={preset ? `/inquiries/new?customerId=${preset.id}` : "/inquiries/new"} variant="secondary" size="sm">手入力で登録</LinkButton>}
+        actions={<LinkButton href={preset ? `/inquiries/new?customerId=${preset.id}${caseForInput ? `&caseId=${caseForInput.id}` : ""}` : "/inquiries/new"} variant="secondary" size="sm">手入力で登録</LinkButton>}
       />
       <div className="grid grid-cols-1 gap-5 @4xl:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
         <Card>
@@ -47,6 +54,7 @@ export default async function ReceptionPage({ searchParams }: { searchParams: Pr
           {preset && (
             <div className="mb-3 rounded-lg bg-accent-soft px-3 py-2 text-xs text-accent-ink" data-testid="reception-preset">
               お客様: <span className="font-semibold">{preset.name} 様</span> ({preset.code}{preset.address ? ` · ${preset.address}` : ""})。この画面から登録する受付は、このお客様の問い合わせになります。
+              {caseForInput && <> 案件 <span className="font-semibold">{caseForInput.number}</span> ({caseForInput.title}) に追加する問い合わせとして開きます。</>}
             </div>
           )}
           <ReceptionInput
@@ -57,6 +65,8 @@ export default async function ReceptionPage({ searchParams }: { searchParams: Pr
             aiEnabled={ai.enabled}
             voice={voiceEnabled()}
             customer={preset ? { id: preset.id, name: preset.name } : undefined}
+            caseId={caseForInput?.id}
+            defaultChannel={defaultChannel}
           />
         </Card>
         <div className="min-w-0">

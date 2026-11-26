@@ -31,7 +31,8 @@ export function AnalysisTab({ db, user, report: r, periodValue, periodLabel, sta
   const csv = (section: PromoCsvSection) => `/api/promotions?section=${section}${qs.toString() ? `&${qs.toString()}` : ""}`;
   // 問い合わせ一覧の同じ条件 (件数が一致する)
   const inquiriesHref = (media?: string) => {
-    const p = new URLSearchParams({ from, to });
+    // lead=1: 新しい案件の問い合わせだけ (既存の案件に追加した問い合わせは反響に数えない。promo-analysis.ts の inquiryFacts)
+    const p = new URLSearchParams({ from, to, lead: "1" });
     if (media) p.set("media", media);
     if (store) p.set("store", store);
     return `/inquiries?${p.toString()}`;

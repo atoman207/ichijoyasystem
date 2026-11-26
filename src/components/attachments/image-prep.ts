@@ -1,15 +1,32 @@
 /**
  * ブラウザ側の写真の前処理 (送信前に縮小する)
  * ------------------------------------------------------------
- * - Vercel の 1 回の送信は 4.5 MB まで。スマートフォンの写真 (3〜8 MB) は長辺 2048px の JPEG に縮小して送る
+ * - スマートフォンの写真 (3〜8 MB・1,200 万画素など) は、長い辺 2,576px かつ 375 万画素までの JPEG に縮小して送る。
+ *   手書きの見積書の細い字・小さな数字を AI が読めるように、AI (Claude) が縮小せずに読む上限の大きさにそろえる
+ *   (以前は長い辺 2,048px。お客様のご要望 2026-11-26「■1」で手書き見積書の読み取りの精度を上げるため)
+ * - 送信の上限 (書類取込は 1 回 4 MB) に収まるように、縮小した写真が 3.5 MB を超えたら画質を下げて作り直す
  * - 一覧用の縮小画像 (長辺 480px) も作る
  * - 撮影日時は Exif の DateTimeOriginal (なければファイルの更新日時)。縮小すると Exif (位置情報を含む) は消える
  */
 
-const MAX_EDGE = 2048;
+/** 長い辺の上限 (px) */
+export const MAX_EDGE = 2576;
+/** 画素数の上限 (375 万画素。4:3 の写真なら 2,236 × 1,677) */
+export const MAX_PIXELS = 3_750_000;
+/** 縮小した写真の大きさの上限 (送信の上限 4 MB より小さく) */
+export const MAX_OUT_BYTES = 3.5 * 1024 * 1024;
 const THUMB_EDGE = 480;
-/** これより小さい写真は縮小せずにそのまま送る */
+/** これより小さく、大きさ (長い辺・画素数) が上限の中の写真は縮小せずにそのまま送る */
 const KEEP_BYTES = 1.5 * 1024 * 1024;
+/** 画質 (大きすぎたら順に下げる) */
+const QUALITIES = [0.88, 0.8, 0.72];
+
+/** 送る写真の大きさ (長い辺と画素数の上限に収める。縦横比はそのまま。大きくはしない) */
+export function fitSize(width: number, height: number, maxEdge = MAX_EDGE, maxPixels = MAX_PIXELS): { width: number; height: number; scale: number } {
+  if (!(width > 0 && height > 0)) return { width: Math.max(1, Math.round(width) || 1), height: Math.max(1, Math.round(height) || 1), scale: 1 };
+  const scale = Math.min(1, maxEdge / Math.max(width, height), Math.sqrt(maxPixels / (width * height)));
+  return { width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)), scale };
+}
 
 export interface PreparedFile {
   file: File;
@@ -33,24 +50,29 @@ export async function prepareFile(file: File): Promise<PreparedFile> {
   }
   const { width, height } = bmp;
   try {
-    const thumb = await draw(bmp, THUMB_EDGE, 0.72);
-    const long = Math.max(width, height);
-    if (!RESIZABLE.includes(file.type) || (file.size <= KEEP_BYTES && long <= 2560)) {
+    const thumb = await draw(bmp, fitSize(width, height, THUMB_EDGE, Infinity), 0.72);
+    const size = fitSize(width, height);
+    if (!RESIZABLE.includes(file.type) || (file.size <= KEEP_BYTES && size.scale === 1)) {
       return { file, thumb, width, height, takenAt };
     }
-    const blob = await draw(bmp, MAX_EDGE, 0.85);
-    const scale = Math.min(1, MAX_EDGE / long);
+    // 大きすぎたら画質を下げ、それでも大きければ 8 割の大きさにして作り直す
+    let target = size;
+    let blob = await draw(bmp, target, QUALITIES[0]);
+    for (let i = 1; blob.size > MAX_OUT_BYTES && i < QUALITIES.length; i++) blob = await draw(bmp, target, QUALITIES[i]);
+    for (let n = 0; blob.size > MAX_OUT_BYTES && n < 3; n++) {
+      target = fitSize(target.width * 0.8, target.height * 0.8, Infinity, Infinity);
+      blob = await draw(bmp, target, QUALITIES[QUALITIES.length - 1]);
+    }
     const name = file.name.replace(/\.[^.]+$/, "") + ".jpg";
-    return { file: new File([blob], name, { type: "image/jpeg", lastModified: file.lastModified }), thumb, width: Math.round(width * scale), height: Math.round(height * scale), takenAt };
+    return { file: new File([blob], name, { type: "image/jpeg", lastModified: file.lastModified }), thumb, width: target.width, height: target.height, takenAt };
   } finally {
     bmp.close();
   }
 }
 
-async function draw(bmp: ImageBitmap, edge: number, quality: number): Promise<Blob> {
-  const scale = Math.min(1, edge / Math.max(bmp.width, bmp.height));
-  const w = Math.max(1, Math.round(bmp.width * scale));
-  const h = Math.max(1, Math.round(bmp.height * scale));
+async function draw(bmp: ImageBitmap, size: { width: number; height: number }, quality: number): Promise<Blob> {
+  const w = Math.max(1, Math.round(size.width));
+  const h = Math.max(1, Math.round(size.height));
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;

@@ -7,6 +7,7 @@ import { addProgress } from "@/lib/actions/orders";
 import { createThread } from "@/lib/actions/messages";
 import { decideApproval } from "@/lib/actions/approvals";
 import { ACTION_LABEL, verifyPayload, type ActionPayload } from "./actions";
+import { splitMsgLink } from "@/lib/msg-link";
 
 /**
  * AI アシスタントの確認のカードの「実行する」(/api/assistant/action から呼ぶ)
@@ -82,7 +83,8 @@ export function resultOf(url: string): ActionResult {
   const href = u.pathname.startsWith("/") && !u.pathname.startsWith("//") ? `${u.pathname}${u.search}` : undefined;
   if (err) return { ok: false, message: err, href: href === "/login" ? undefined : href };
   if (u.pathname === "/login") return { ok: false, message: "ログインの期限が切れています。もう一度ログインしてください。" };
-  return { ok: true, message: msg || "実行しました。", href };
+  // 文の最後の「[[予定表で確認]](/schedule?…)」(src/lib/msg-link.ts) は文から外す
+  return { ok: true, message: (msg ? splitMsgLink(msg).text : "") || "実行しました。", href };
 }
 
 function formOf(p: ActionPayload): FormData {

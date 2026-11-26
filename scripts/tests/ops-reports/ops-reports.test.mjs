@@ -175,8 +175,9 @@ section("媒体: 全社共通の分類と、選ばない問い合わせは保存
   const upd2 = await act(A, () => AI.updateInquiry(created.id, form({ status: "new", category: "tatami", media: "referral" })));
   ok(upd2.msg && find(created.id).media === "referral", "更新で媒体を変えられる");
   ok(db.auditLogs.some((l) => l.entity === "inquiry" && l.entityId === created.id && l.changes?.some((c) => c.field === "media" && c.before === "unknown" && c.after === "referral")), "媒体の変更は変更履歴に changes つきで残る");
-  const page = fs.readFileSync(path.join(root, "src/app/(app)/inquiries/new/page.tsx"), "utf8");
-  ok(/<MediaSelect name="media" required/.test(page), "登録の画面の媒体の欄は必須 (required)");
+  // 2026-11-26: 登録の画面の入力欄は InquiryForm (既存のお客様・案件を選ぶと媒体の初期値は案件から)
+  const page = fs.readFileSync(path.join(root, "src/components/inquiries/InquiryForm.tsx"), "utf8");
+  ok(/<Select name="media"[\s\S]{0,200}?required/.test(page), "登録の画面の媒体の欄は必須 (required)");
   const detail = fs.readFileSync(path.join(root, "src/app/(app)/inquiries/[id]/page.tsx"), "utf8");
   ok(/<MediaSelect name="media" defaultValue=\{inq\.media \?\? ""\} required/.test(detail), "更新の画面の媒体の欄も必須");
   // テストで作った 2019 年の問い合わせは分析のテストの前に消す

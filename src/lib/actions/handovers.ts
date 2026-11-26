@@ -12,6 +12,7 @@ import { AUTO_APPROVAL_NOTE } from "@/lib/approval-decide";
 import { cleanHandovers } from "@/lib/handover";
 import { planConflicts, savePlan } from "@/lib/handover-save";
 import { assertCaseStore, fail, requireActionUser, str, withMsg } from "./guards";
+import { scheduleCheckLink } from "@/lib/msg-link";
 
 /**
  * 受注の画面の「引取・納品の日程」(品目ごとの引取日・納品日。src/lib/handover.ts)
@@ -77,5 +78,7 @@ export async function saveOrderHandovers(id: string, formData: FormData) {
   ]
     .filter(Boolean)
     .join("");
-  redirect(withMsg(back, msg || "変更はありませんでした。"));
+  // 保存した日程の週の予定表 (施工店舗・引き取りの日を基準。お客様のご要望 2026-11-26「■8」)
+  const link = r.registered.length || r.applied ? scheduleCheckLink(parsed.rows.flatMap((h) => [{ date: h.pickupDate, pickup: true }, { date: h.deliveryDate }]), getDb().orders.find((x) => x.id === id)?.storeId) : undefined;
+  redirect(withMsg(back, msg || "変更はありませんでした。", link));
 }

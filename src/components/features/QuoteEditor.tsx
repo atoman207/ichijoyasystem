@@ -1,11 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Trash, Plus } from "lucide-react";
 import type { Product, QuoteItem, ServiceCategory } from "@/lib/db/types";
 import { CATEGORY_LABEL } from "@/lib/constants";
 import { quoteTotals, TAX_MODE_LABEL, type TaxMode } from "@/lib/quote-calc";
 import { autoItemCategory, autoUnit, UNIT_OPTIONS } from "@/lib/line-kind";
+import { insertRow, moveRow } from "./line-order";
+import { RowInlineControls, RowMenu, type InsertWhere } from "./LineRowControls";
 
 interface Row {
   key: string;
@@ -25,7 +27,12 @@ interface Row {
   catTouched: boolean;
   /** 単位を一覧にない値で入力する */
   unitFree: boolean;
+  /** 読み取りに自信がない行 (手書き見積書の AI の読取で要確認・品名が読めなかった行)。黄色にして写真と見比べてもらう */
+  flag: boolean;
 }
+
+/** 見積の明細の初期値 (書類取込の読取結果は要確認の印を持つ) */
+export type EditorItem = QuoteItem & { uncertain?: boolean };
 
 const UNIT_SET = new Set<string>(UNIT_OPTIONS);
 /** 数を数える単位 (品名・仕様から選び直してよい単位) */
@@ -34,9 +41,12 @@ const SOFT_UNITS = new Set(["", "式", "一式", "面", "枚", "畳", "帖", "�
 const squash = (s: string) => s.replace(/[\s　]/g, "");
 
 const yen = (n: number) => `¥${Math.round(n).toLocaleString("ja-JP")}`;
-/** 明細の列 (広い欄のとき): 商品・品名・仕様・(品目)・数量・単位・単価・金額・削除 */
-const QCOLS = "minmax(9rem,1.4fr) minmax(7rem,1fr) minmax(7rem,1fr) 4.5rem 5rem 6.5rem 6rem 2rem";
-const QCOLS_CAT = "minmax(8rem,1.4fr) minmax(6rem,1fr) minmax(6rem,1fr) 8rem 4.5rem 5rem 6.5rem 6rem 2rem";
+/**
+ * 明細の列 (広い欄のとき): 商品・品名・仕様・(品目)・数量・単位・単価・金額・行の操作 (挿入・移動のメニューと削除)。
+ * 品目のある表は 896px (表にする幅) に収まるよう、最小の幅の合計を 52rem にしている
+ */
+const QCOLS = "minmax(9rem,1.4fr) minmax(7rem,1fr) minmax(7rem,1fr) 4.5rem 5rem 6.5rem 6rem 4rem";
+const QCOLS_CAT = "minmax(7rem,1.4fr) minmax(6rem,1fr) minmax(6rem,1fr) 7rem 4.5rem 5rem 6.5rem 6rem 4rem";
 /**
  * 入力欄: 狭い欄 (カード) は指で押しやすい高さ、広い欄 (表) は詰める。
  * 数量・単価・値引きの数字の欄は step="any" (刻みを付けると 10,560 円・1,650 円・値引き 5,300 円などを
@@ -65,7 +75,7 @@ export function QuoteEditor({
   autoOnLoad = false,
 }: {
   products: Product[];
-  initialItems?: QuoteItem[];
+  initialItems?: EditorItem[];
   initialDiscount?: number;
   defaultCategory?: ServiceCategory;
   /** 単価を税込で入力する (手書き見積書の「税込」)。initialTaxMode があればそちらを使う */
@@ -127,6 +137,7 @@ export function QuoteEditor({
           unitTouched: autoOnLoad ? !SOFT_UNITS.has(unit) : Boolean(unit) && unit !== "式" && unit !== auto,
           catTouched: Boolean(i.itemCategory) && i.itemCategory !== autoCat,
           unitFree: Boolean(unit) && !UNIT_SET.has(unit),
+          flag: i.uncertain === true || !i.name.trim(),
         };
         // 書類取込・コピーから作る新しい見積は、読み込んだときに単位・品目を選ぶ (保存済みの見積の編集は、直した行だけ)
         return autoOnLoad || !unit ? withAuto(row) : row;
@@ -134,8 +145,8 @@ export function QuoteEditor({
     }
     const first = products.find((p) => p.category === (defaultCategory ?? "tatami")) ?? products[0];
     const misc = products.find((p) => p.id === "p_misc");
-    const base: Row[] = [{ key: nextKey(), productId: first?.id, name: first?.name ?? "", spec: [first?.grade, first?.sizeLabel].filter(Boolean).join(" / "), qty: 6, unit: first?.unit ?? "式", unitPrice: first?.unitPrice ?? 0, itemCategory: "", dokoMaterialId: "", unitTouched: false, catTouched: false, unitFree: !UNIT_SET.has(first?.unit ?? "式") }];
-    if (misc) base.push({ key: nextKey(), productId: misc.id, name: misc.name, spec: "", qty: 1, unit: misc.unit, unitPrice: misc.unitPrice, itemCategory: "", dokoMaterialId: "", unitTouched: true, catTouched: false, unitFree: !UNIT_SET.has(misc.unit) });
+    const base: Row[] = [{ key: nextKey(), productId: first?.id, name: first?.name ?? "", spec: [first?.grade, first?.sizeLabel].filter(Boolean).join(" / "), qty: 6, unit: first?.unit ?? "式", unitPrice: first?.unitPrice ?? 0, itemCategory: "", dokoMaterialId: "", unitTouched: false, catTouched: false, unitFree: !UNIT_SET.has(first?.unit ?? "式"), flag: false }];
+    if (misc) base.push({ key: nextKey(), productId: misc.id, name: misc.name, spec: "", qty: 1, unit: misc.unit, unitPrice: misc.unitPrice, itemCategory: "", dokoMaterialId: "", unitTouched: true, catTouched: false, unitFree: !UNIT_SET.has(misc.unit), flag: false });
     return base;
   });
   const [discount, setDiscount] = useState(initialDiscount);
@@ -166,8 +177,31 @@ export function QuoteEditor({
     // 品目は「自動」に戻す (商品の品目を使う)。単位は商品マスタの単位
     update(key, { productId: p.id, name: p.name, spec: [p.grade, p.sizeLabel].filter(Boolean).join(" / "), unit: p.unit, unitPrice: p.unitPrice, itemCategory: "", dokoMaterialId: "", unitTouched: false, catTouched: false, unitFree: !UNIT_SET.has(p.unit) });
   }
+  const blankRow = (): Row => ({ key: nextKey(), name: "", spec: "", qty: 1, unit: "式", unitPrice: 0, itemCategory: "", dokoMaterialId: "", unitTouched: false, catTouched: false, unitFree: false, flag: false });
+  /** 入れた行の品名の欄に移る (行の操作のあと、描き終わってから) */
+  const focusNext = useRef<string | null>(null);
+  useEffect(() => {
+    const k = focusNext.current;
+    if (!k) return;
+    focusNext.current = null;
+    document.querySelector<HTMLInputElement>(`[data-row-key="${k}"] input[data-row-name]`)?.focus();
+  });
   function add() {
-    setRows((rs) => [...rs, { key: nextKey(), name: "", spec: "", qty: 1, unit: "式", unitPrice: 0, itemCategory: "", dokoMaterialId: "", unitTouched: false, catTouched: false, unitFree: false }]);
+    const r = blankRow();
+    focusNext.current = r.key;
+    setRows((rs) => [...rs, r]);
+  }
+  /** 行と行の間に空の行を入れる (お客様のご要望 2026-11-26「■1」: 手書きの見積書と明細の順番を同じにする) */
+  function insert(key: string, where: InsertWhere) {
+    const r = blankRow();
+    focusNext.current = r.key;
+    setRows((rs) => {
+      const i = rs.findIndex((x) => x.key === key);
+      return insertRow(rs, i < 0 ? rs.length : where === "above" ? i : i + 1, r);
+    });
+  }
+  function move(key: string, delta: -1 | 1) {
+    setRows((rs) => moveRow(rs, rs.findIndex((x) => x.key === key), delta));
   }
   function remove(key: string) {
     setRows((rs) => rs.filter((r) => r.key !== key));
@@ -221,12 +255,16 @@ export function QuoteEditor({
           </div>
           <div className="divide-y divide-line border-line @4xl:border-t">
             {rows.map((r, i) => (
-              <div key={r.key} role="group" aria-label={`明細 ${i + 1} 行目`} className="grid grid-cols-2 gap-x-2 gap-y-2 p-3 @md:grid-cols-4 @4xl:grid-cols-(--qcols) @4xl:items-start @4xl:gap-x-1.5 @4xl:gap-y-0 @4xl:px-2 @4xl:py-1.5">
-                <div className="col-span-2 flex items-center justify-between @md:col-span-4 @4xl:hidden">
+              <div key={r.key} data-row-key={r.key} role="group" aria-label={`明細 ${i + 1} 行目${r.flag ? " (要確認)" : ""}`} className={`grid grid-cols-2 gap-x-2 gap-y-2 p-3 @md:grid-cols-4 @4xl:grid-cols-(--qcols) @4xl:items-start @4xl:gap-x-1.5 @4xl:gap-y-0 @4xl:px-2 @4xl:py-1.5 ${r.flag ? "bg-warn-soft/60" : ""}`}>
+                <div className="col-span-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 @md:col-span-4 @4xl:hidden">
                   <span className="text-xs font-medium text-ink-2">明細 {i + 1}</span>
-                  <button type="button" onClick={() => remove(r.key)} className="rounded p-1.5 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label={`明細 ${i + 1} 行目を削除`}>
-                    <Trash className="h-4 w-4" />
-                  </button>
+                  {r.flag && <span className="rounded bg-warn px-1 text-[10px] font-medium text-white">要確認</span>}
+                  <span className="ml-auto flex flex-wrap items-center gap-1">
+                    <RowInlineControls label={`明細 ${i + 1} 行目`} first={i === 0} last={i === rows.length - 1} onInsert={(w) => insert(r.key, w)} onMove={(delta) => move(r.key, delta)} />
+                    <button type="button" onClick={() => remove(r.key)} className="inline-flex h-8 min-w-8 items-center justify-center rounded p-1.5 text-critical hover:bg-critical-soft hover:text-critical-ink pointer-coarse:h-11 pointer-coarse:min-w-11" aria-label={`明細 ${i + 1} 行目を削除`}>
+                      <Trash className="h-4 w-4" />
+                    </button>
+                  </span>
                 </div>
                 <div className="col-span-2 min-w-0 @4xl:col-span-1">
                   <span className={CELL_LABEL}>商品 (マスタから選択)</span>
@@ -245,7 +283,7 @@ export function QuoteEditor({
                 </div>
                 <div className="col-span-2 min-w-0 @4xl:col-span-1">
                   <span className={CELL_LABEL}>品名</span>
-                  <input className={FIELD} value={r.name} onChange={(e) => updateText(r.key, { name: e.target.value })} placeholder="品名" required aria-label="品名" />
+                  <input className={FIELD} data-row-name value={r.name} onChange={(e) => updateText(r.key, { name: e.target.value })} placeholder={r.flag && !r.name ? "読み取れなかった行: 品名を入力" : "品名"} required aria-label="品名" title={r.flag ? "読み取りに自信がない行です。撮影した見積書と見比べてください" : undefined} />
                 </div>
                 <div className="col-span-2 min-w-0 @4xl:col-span-1">
                   <span className={CELL_LABEL}>仕様・備考</span>
@@ -301,8 +339,9 @@ export function QuoteEditor({
                   <span className={CELL_LABEL}>金額</span>
                   <span className="block py-2 text-base font-semibold tnum @4xl:py-1.5 @4xl:text-sm @4xl:font-normal">{yen(r.qty * r.unitPrice)}</span>
                 </div>
-                <div className="hidden justify-end @4xl:flex">
-                  <button type="button" onClick={() => remove(r.key)} className="rounded p-1 text-critical hover:bg-critical-soft hover:text-critical-ink" aria-label={`明細 ${i + 1} 行目を削除`}>
+                <div className="hidden items-start justify-end gap-0.5 @4xl:flex pointer-coarse:flex-col pointer-coarse:items-end">
+                  <RowMenu label={`明細 ${i + 1} 行目`} first={i === 0} last={i === rows.length - 1} onInsert={(w) => insert(r.key, w)} onMove={(delta) => move(r.key, delta)} />
+                  <button type="button" onClick={() => remove(r.key)} className="inline-flex h-7 w-7 items-center justify-center rounded text-critical hover:bg-critical-soft hover:text-critical-ink pointer-coarse:h-11 pointer-coarse:w-11" aria-label={`明細 ${i + 1} 行目を削除`}>
                     <Trash className="h-4 w-4" />
                   </button>
                 </div>
@@ -312,9 +351,12 @@ export function QuoteEditor({
         </div>
       </div>
       <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
-        <button type="button" onClick={add} className="inline-flex items-center gap-1 rounded-lg border border-line px-3 py-1.5 text-xs text-ink-2 hover:bg-subtle">
-          <Plus className="h-3.5 w-3.5" /> 行を追加
-        </button>
+        <div className="space-y-1">
+          <button type="button" onClick={add} className="inline-flex items-center gap-1 rounded-lg border border-line px-3 py-1.5 text-xs text-ink-2 hover:bg-subtle pointer-coarse:min-h-11">
+            <Plus className="h-3.5 w-3.5" /> 行を追加 (最後に)
+          </button>
+          <p className="max-w-xs text-[11px] leading-relaxed text-ink-3">行と行の間に入れるときは、各行の「上に挿入」「下に挿入」(表では「⋯」) を押します。「↑」「↓」で順番を変えられます (見積書はこの順番で印字します)。</p>
+        </div>
         <div className="w-full max-w-xs space-y-1.5 text-sm">
           <div className="flex items-center justify-between"><span className="text-ink-2">小計{taxMode === "exempt" ? "" : taxIncluded ? " (税込)" : " (税抜)"}</span><span className="tnum">{yen(subtotal)}</span></div>
           <div className="flex items-center justify-between gap-3">

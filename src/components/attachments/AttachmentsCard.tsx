@@ -16,6 +16,7 @@ export function AttachmentsCard({
   user,
   parent,
   customerId,
+  extraParents,
   returnTo,
   title = "資料・写真",
   description,
@@ -24,6 +25,8 @@ export function AttachmentsCard({
   user: User;
   parent: { type: AttachmentParent; id: string };
   customerId?: string;
+  /** ほかの記録の資料もあわせて出す (案件の画面: 同じ案件の問い合わせ・見積・受注。登録は parent に) */
+  extraParents?: { type: AttachmentParent; id: string }[];
   returnTo: string;
   title?: string;
   description?: string;
@@ -32,7 +35,9 @@ export function AttachmentsCard({
   if (!p) return null;
   const rows = customerId
     ? db.attachments.filter((a) => a.customerId === customerId || (a.parentType === parent.type && a.parentId === parent.id)).sort((a, b) => (b.takenAt ?? b.uploadedAt).localeCompare(a.takenAt ?? a.uploadedAt))
-    : attachmentsOf(db, parent.type, parent.id);
+    : extraParents?.length
+      ? [parent, ...extraParents.filter((x) => x.type !== parent.type || x.id !== parent.id)].flatMap((x) => attachmentsOf(db, x.type, x.id)).sort((a, b) => (b.takenAt ?? b.uploadedAt).localeCompare(a.takenAt ?? a.uploadedAt))
+      : attachmentsOf(db, parent.type, parent.id);
   const items = rows.filter((a) => canViewAttachment(user, db, a)).map((a) => toView(db, user, a));
   const canAdd = canAddToParent(user, db, p);
   const photos = items.filter((i) => i.kind === "photo").length;
@@ -48,7 +53,7 @@ export function AttachmentsCard({
         {/* 案件の記録は資料の種類 (現場図面・採寸図・現場の写真・施工前・施工後・資料) を選んで登録する (お客様のご要望 2026-11-25「⑤」) */}
         {canAdd && <AttachmentUploader parentType={p.type} parentId={p.id} accept={ATTACHMENT_ACCEPT} categories={p.type === "customer" || p.type === "inquiry" || p.type === "quote" || p.type === "order"} />}
         {items.length > 0 ? (
-          <AttachmentGallery items={items} deleteAction={deleteAttachment} returnTo={returnTo} showParent={Boolean(customerId)} />
+          <AttachmentGallery items={items} deleteAction={deleteAttachment} returnTo={returnTo} showParent={Boolean(customerId) || Boolean(extraParents?.length)} />
         ) : (
           <p className="text-xs text-ink-3">まだ登録されていません。</p>
         )}

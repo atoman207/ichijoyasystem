@@ -30,7 +30,7 @@ import { linkableInquiries } from "@/lib/link-search";
 import { linkInquiryFromForm } from "@/lib/actions/inquiries";
 import { InquiryLinkSearch } from "@/components/features/LinkSearch";
 import { Camera, Link2 } from "lucide-react";
-import { CustomerCasesCard, customerCaseRows } from "@/components/customers/CustomerCases";
+import { CustomerCaseGroupsCard, customerCaseGroups } from "@/components/customers/CustomerCases";
 
 export default async function CustomerDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string; cases?: string }> }) {
   const { id } = await params;
@@ -57,7 +57,9 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
   logRecordView(user, info, { entity: "customer", id: c.id, label: `${c.code} ${c.name}`, storeId: c.storeId }, db.auditLogs);
   // 進行中の案件だけで見ている人 (basis = open) には、進行中の案件だけを見せる。全社員に公開・閲覧の申請の承認のときは施工の履歴もすべて
   const t = viewOnly && info.basis === "open" ? openCaseTimeline(db, customerTimeline(db, id)) : customerTimeline(db, id);
-  const openItems = t.inquiries.filter((i) => ["new", "in_progress", "quoted"].includes(i.status)).length + t.orders.filter((o) => ["pending_approval", "returned", "confirmed", "scheduled", "in_progress"].includes(o.status)).length;
+  // 案件ごと (問い合わせ・見積・受注をまとめた箱。src/lib/case-group.ts)。進行中 = 終わっていない記録がある案件
+  const caseGroups = customerCaseGroups(db, t, toDateKey(new Date()));
+  const openItems = caseGroups.filter((g) => g.open).length;
   // 重複の可能性がある既存顧客 (電話・メール・氏名と住所の一致、同じ姓と地区)
   const dup = findDuplicateCustomers(db, { ...c, otherPhones: (c.contacts ?? []).map((x) => x.phone) }, c.id);
   const dupRows = [...dup.high.map((m) => ({ ...m, label: "重複の可能性が高い" })), ...dup.check.map((m) => ({ ...m, label: "要確認" }))];
@@ -106,8 +108,8 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
 
       <div className="mb-6 grid grid-cols-2 gap-3 @3xl:grid-cols-4">
         <Stat label="累計売上 (税込)" value={viewOnly && info.basis === "open" ? "-" : yen(t.lifetime)} />
-        <Stat label="案件数 (受注) · 押すと過去の案件" value={`${t.orders.length} 件`} sub={`見積 ${t.quotes.length} 件 · 問い合わせ ${t.inquiries.length} 件`} href="#cases-past" />
-        <Stat label="進行中 · 押すと一覧" value={`${openItems} 件`} href="#cases-open" />
+        <Stat label="案件数 · 押すと過去の案件" value={`${caseGroups.length} 件`} sub={`受注 ${t.orders.length} 件 · 見積 ${t.quotes.length} 件 · 問い合わせ ${t.inquiries.length} 件`} href="#cases-past" />
+        <Stat label="進行中の案件 · 押すと一覧" value={`${openItems} 件`} href="#cases-open" />
         <Stat label="未入金" value={yen(receivable)} tone={receivable > 0 ? "warn" : undefined} href="#billing" />
       </div>
 
@@ -169,9 +171,11 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
 
         <div className="space-y-4 @3xl:col-span-2">
           <CaseScheduleCard
-            title="予定"
-            description="このお客様の案件の予定 (現地調査・採寸・引き取り・納品・施工・訪問)。登録すると担当者とともに店舗の共通カレンダーに反映されます"
+            title="これからの予定"
+            description="このお客様の案件の、これからの予定 (現地調査・採寸・引き取り・納品・施工・訪問)。終わった予定は各案件の画面で確認できます"
             events={t.events}
+            upcomingOnly
+            emptyText="これからの予定はありません"
             allEvents={db.schedule}
             users={new Map(db.users.map((u) => [u.id, u]))}
             stores={new Map(db.stores.map((s) => [s.id, s]))}
@@ -181,8 +185,9 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
             quickKinds={["visit", "survey", "onsite_quote", "measure"]}
             canAdd={canAccessStore(user, c.storeId)}
           />
+          {/* 進行中の案件・過去の案件 (お客様のご要望 2026-11-26「■7」: 基本情報 + 進行中 + 過去。写真・資料は各案件の画面にもまとまる) */}
+          <CustomerCaseGroupsCard groups={caseGroups} all={cases === "all"} allHref={`/customers/${c.id}?cases=all#cases-past`} />
           <AttachmentsCard db={db} user={user} parent={{ type: "customer", id: c.id }} customerId={c.id} returnTo={`/customers/${c.id}`} />
-          <CustomerCasesCard rows={customerCaseRows(db, t)} all={cases === "all"} allHref={`/customers/${c.id}?cases=all#cases-past`} />
           <Card>
             <CardHeader title="外部とのやりとり履歴" description={`${t.comms.length} 件 · 電話・メール・LINE・Web・対面のやりとりを案件に紐付けて残します。メール・LINE は「相手に送信する」で送れます`} />
             <ContactLogForm returnTo={returnTo} customerId={c.id} defaultChannel={c.preferredChannel === "line" ? "line" : c.preferredChannel === "email" ? "email" : "phone"} canSend />

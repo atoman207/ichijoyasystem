@@ -8,6 +8,7 @@ import type { StoreId } from "@/lib/db/types";
 import { BILLING_LABEL, CASE_PRESETS, PAYMENT_STATE_LABEL, SCHEDULE_LABEL, SPEC_LABEL, STAGE_LABEL, STAGE_TONE, buildCases, type BillingState, type PaymentState, type ScheduleState, type SpecState, type Stage } from "@/lib/case-status";
 import { fmtDate, toDateKey, yen } from "@/lib/format";
 import { Badge, Card, CardHeader, Flash, PageHeader, Pager, Select, StoreTag, paginate } from "@/components/ui";
+import { buildCaseMap } from "@/lib/case-group";
 
 const KIND_LABEL = { inquiry: "問い合わせ", quote: "見積", order: "受注" } as const;
 
@@ -28,6 +29,7 @@ export default async function CasesPage({ searchParams }: { searchParams: Promis
   const all = buildCases(db, (s) => (wide || canAccessStore(user, s)) && (!store || s === store), today).filter((r) => canAccessStore(user, r.storeId) || readsAll || isOpenCaseRow(r));
   const closed = sp.closed ?? "open";
   const preset = CASE_PRESETS.find((p) => p.key === sp.preset);
+  const caseMap = buildCaseMap(db);
   const q = q0;
   let rows = all.filter((r) => (closed === "all" ? true : closed === "closed" ? r.closed : !r.closed));
   if (preset) rows = all.filter(preset.test);
@@ -64,6 +66,10 @@ export default async function CasesPage({ searchParams }: { searchParams: Promis
       <PageHeader title="案件の進捗" description={`問い合わせ → 見積 → 受注・施工 → 請求 → 入金 → 全処理完了 までを 1 つの一覧で。状態は進捗・見積と仕様・工事日程・請求・入金に分けて絞り込めます${canSeeAllStores(user) ? "" : readsAll ? `。ほかの店舗の案件は「全店舗」または検索で表示します (${otherNote})` : `。ほかの店舗の案件も、入金が完了するまでは「全店舗」または検索で表示します (${otherNote})`}`} />
 
       <div className="mb-4 flex flex-wrap gap-1.5">
+        {/* TEL待ちは案件を横断した一覧の画面 (お客様のご要望 2026-11-26「■6」) */}
+        <Link href="/cases/tel" className="inline-flex items-center gap-1.5 rounded-full border border-warn/40 bg-warn-soft px-3 py-1 text-xs font-medium text-warn-ink hover:border-warn" data-testid="cases-tel-link">
+          TEL待ち一覧を開く
+        </Link>
         {CASE_PRESETS.map((p) => {
           const n = all.filter(p.test).length;
           const active = sp.preset === p.key;
@@ -138,6 +144,8 @@ export default async function CasesPage({ searchParams }: { searchParams: Promis
                   <td className="px-4 py-2 text-xs">
                     <Link href={r.href} className="font-medium text-accent hover:underline">{r.number}</Link>
                     <div className="text-[10px] text-ink-3">{KIND_LABEL[r.kind]} · {fmtDate(r.date)}</div>
+                    {/* 案件の画面 (この案件の問い合わせ・見積・受注・予定・請求・資料をまとめて。src/lib/case-group.ts) */}
+                    <Link href={`/cases/${caseMap.caseOf(r.id) ?? r.id}`} className="text-[10px] text-accent hover:underline" data-testid="cases-open-case">案件の画面</Link>
                   </td>
                   <td className="max-w-[18rem] px-2 py-2">
                     <div className="truncate font-medium text-ink">{r.customerName}{r.customerId ? "" : <span className="ml-1 text-[10px] font-normal text-warn-ink">顧客未登録</span>}</div>

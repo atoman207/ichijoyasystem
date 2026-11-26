@@ -32,7 +32,7 @@ export default async function QuotesPage({ searchParams }: { searchParams: Promi
   return (
     <div>
       <Flash msg={sp.msg} err={sp.err} />
-      <PageHeader title="見積" description={`${rows.length} 件 · 合計 ${yen(sum)}`} actions={<><LinkButton href="/capture?kind=handwritten_quote" variant="secondary">手書き見積を取り込む</LinkButton><LinkButton href="/quotes/new">+ 見積を作成</LinkButton></>} />
+      <PageHeader title="見積" description={`${rows.length} 件 · 合計 ${yen(sum)}`} actions={<><LinkButton href="/quotes/new?method=photo" variant="secondary">手書き見積を撮影して作成</LinkButton><LinkButton href="/quotes/new">+ 見積を作成</LinkButton></>} />
       <LinkTabs
         current={current}
         items={[

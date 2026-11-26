@@ -94,7 +94,7 @@ export default async function InvoiceDetailPage({ params, searchParams }: { para
           </Card>
 
           {remaining > 0 && inv.status !== "void" && (
-            <Card>
+            <Card id="payment">
               <CardHeader title="入金を登録" description="現金・振込・カード・PayPay など。登録すると売掛残高と案件の状態に反映され、現金は店舗の現金出納帳にも記帳します" />
               <form action={recordPayment.bind(null, inv.id)} className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @5xl:grid-cols-4">
                 <Field label="入金日"><Input type="date" name="date" defaultValue={today} /></Field>

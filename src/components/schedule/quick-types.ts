@@ -211,8 +211,8 @@ export interface QuickPair {
 /** 予定表の小さな画面の「この案件で」(お客様のご要望 2026-11-25「予定表 → 案件 → 見積書撮影・登録 → 受注登録 → 日程登録 → 資料登録 → 帳票出力」) */
 export interface QuickWork {
   caseLabel: string;
-  /** ② 手書きの見積書を撮影して見積を作る (見積のない案件) */
-  capture?: { inquiryId?: string; customerId?: string };
+  /** ② 手書きの見積書を撮影して見積を作る (見積のない案件。additional = 見積・受注のある案件の別の見積 (追加工事・別の案。お客様のご要望 2026-11-26「■6」)) */
+  capture?: { inquiryId?: string; customerId?: string; caseId?: string; additional?: boolean };
   /** 見積の画面 (見積がある案件) */
   quote?: { id: string; number: string; status: string; href: string };
   /** ③④ 受注にする (日程つき)。見積が承認前なら「現場で受注」(見積の承認とあわせて申請) */

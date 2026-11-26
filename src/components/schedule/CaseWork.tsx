@@ -3,7 +3,7 @@
 import { useRef, useState, useTransition, type ReactNode } from "react";
 import clsx from "clsx";
 import Link from "@/components/ui/Link";
-import { Camera, ClipboardCheck, FileImage, FileText, ImagePlus, LoaderCircle, Printer, Receipt as ReceiptIcon } from "lucide-react";
+import { Camera, ClipboardCheck, FileImage, FileText, ImagePlus, Keyboard, LoaderCircle, Printer, Receipt as ReceiptIcon } from "lucide-react";
 import { Button, buttonClass } from "@/components/ui";
 import { captureCaseQuote } from "@/lib/actions/capture";
 import { convertQuoteToOrder } from "@/lib/actions/quotes";
@@ -74,12 +74,16 @@ function Block({ title, icon, children, testId, defaultOpen = false, badge }: { 
   );
 }
 
-/** ② 手書きの見積書を撮影 (スマートフォン・タブレットは端末のカメラ、ほかは写真・PDF を選ぶ) */
+/**
+ * ② 手書きの見積書を撮影 (スマートフォン・タブレットは端末のカメラ、ほかは写真・PDF を選ぶ)、または手入力で見積を作成
+ * (お客様のご要望 2026-11-26「■1」: どこから見積作成に入っても 撮影・AI の読み取り / 手入力 の 2 通り。どちらも保存のあとこの予定表に戻る)
+ */
 function CaptureQuote({ eventId, returnTo, capture }: { eventId: string; returnTo: string; capture: NonNullable<QuickWork["capture"]> }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState("");
   const cam = useRef<HTMLInputElement>(null);
   const pick = useRef<HTMLInputElement>(null);
+  const manual = `/quotes/new?${new URLSearchParams({ ...(capture.customerId ? { customerId: capture.customerId } : {}), ...(capture.inquiryId ? { inquiryId: capture.inquiryId } : {}), ...(capture.caseId ? { caseId: capture.caseId } : {}), returnTo })}`;
   const send = async (files: FileList | null) => {
     const f = files?.[0];
     if (!f) return;
@@ -94,6 +98,7 @@ function CaptureQuote({ eventId, returnTo, capture }: { eventId: string; returnT
       fd.set("eventId", eventId);
       if (capture.inquiryId) fd.set("inquiryId", capture.inquiryId);
       if (capture.customerId) fd.set("customerId", capture.customerId);
+      if (capture.caseId) fd.set("caseId", capture.caseId);
       start(async () => {
         await captureCaseQuote(fd);
       });
@@ -123,9 +128,13 @@ function CaptureQuote({ eventId, returnTo, capture }: { eventId: string; returnT
             写真・PDF を選ぶ
             <input ref={pick} type="file" accept="image/*,application/pdf,.pdf" className="sr-only" onChange={(e) => send(e.target.files)} />
           </label>
+          <Link href={manual} className={buttonClass("secondary", "sm")} data-testid="case-quote-manual">
+            <Keyboard />
+            手入力で見積を作成
+          </Link>
         </div>
       )}
-      <p className="mt-1.5 text-[11px] leading-relaxed text-ink-3">AI が品名・数量・単価・引取日・納品日を読み取り、この案件の見積の作成の画面を開きます。確かめて保存すると、この予定表に戻ります。</p>
+      <p className="mt-1.5 text-[11px] leading-relaxed text-ink-3">撮影すると AI が品名・数量・単価・引取日・納品日を読み取り (読めない行も空の行で残します)、この案件の見積の作成の画面を開きます。手入力はシステムの見積書の書式に直接入力します。どちらも保存すると、この予定表に戻ります。</p>
       {error && <p className="mt-1 text-[11px] text-critical-ink">{error}</p>}
     </div>
   );
@@ -156,7 +165,16 @@ export function CaseWorkSection({ work, eventId, returnTo: listReturn, onReload 
         </span>
       </div>
 
-      {work.capture && <CaptureQuote eventId={eventId} returnTo={returnTo} capture={work.capture} />}
+      {work.capture &&
+        (work.capture.additional ? (
+          // 見積・受注のある案件の別の見積 (追加工事・別の案)。いつもは閉じておく
+          <details className="border-b border-line" data-testid="case-capture-more">
+            <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-accent hover:bg-subtle/60">＋ この案件に別の見積を作る (追加工事・仕様や金額の違う案)</summary>
+            <CaptureQuote eventId={eventId} returnTo={returnTo} capture={work.capture} />
+          </details>
+        ) : (
+          <CaptureQuote eventId={eventId} returnTo={returnTo} capture={work.capture} />
+        ))}
 
       {t && (
         <Block title={t.onsite ? "現場で受注にする (日程も一緒に登録)" : "受注にする (日程も一緒に登録)"} icon={<ClipboardCheck className="h-3.5 w-3.5 text-accent" aria-hidden />} testId="case-to-order" badge={<span className="text-[11px] font-normal text-ink-2 tnum">{yen(t.total)}</span>}>

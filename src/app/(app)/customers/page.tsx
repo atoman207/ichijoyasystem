@@ -76,6 +76,8 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
           <tr>
             <Th>顧客コード</Th>
             <Th>氏名 / 会社名</Th>
+            {/* 名前の右に住所 (同姓同名のお客様の見分け・検索の確認。お客様のご要望 2026-11-26「■3」) */}
+            <Th>住所</Th>
             <Th>連絡先</Th>
             <Th>担当店舗</Th>
             <Th>担当者</Th>
@@ -85,7 +87,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 && <EmptyRow colSpan={8} />}
+          {rows.length === 0 && <EmptyRow colSpan={9} />}
           {paged.items.map((c) => {
             const s = stats.get(c.id);
             return (
@@ -100,6 +102,10 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
                       <Badge key={t} dot={false}>{t}</Badge>
                     ))}
                   </div>
+                </Td>
+                <Td className="max-w-[16rem] text-xs leading-snug text-ink-2">
+                  {c.postalCode && <span className="mr-1 text-[11px] text-ink-3 tnum">〒{c.postalCode}</span>}
+                  {c.address || <span className="text-ink-3">-</span>}
                 </Td>
                 <Td>
                   <div className="text-sm tnum">{c.phone}</div>

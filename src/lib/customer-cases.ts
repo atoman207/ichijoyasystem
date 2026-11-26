@@ -4,6 +4,8 @@ import { fmtDate } from "@/lib/format";
 import { invoiceOfOrder } from "@/lib/billing";
 import { parseLedgerItems } from "@/lib/assistant/facts";
 import { TAX_MODE_LABEL, taxModeOf } from "@/lib/quote-calc";
+import { buildCaseMap, summarizeCase } from "@/lib/case-group";
+import { caseIndex, type Stage } from "@/lib/case-status";
 
 /**
  * 顧客の画面の「案件の一覧」のデータ (お客様のご要望 2026-11-25「① 顧客情報画面の表示優先順位」):
@@ -146,3 +148,69 @@ export function customerCaseRows(db: Database, t: { inquiries: Inquiry[]; quotes
   return rows.sort((a, b) => b.date.localeCompare(a.date) || b.number.localeCompare(a.number));
 }
 
+
+/* ------------------------------------------------------------------ */
+/* 案件ごとにまとめる (お客様のご要望 2026-11-26「■7 顧客詳細画面」)      */
+/* ------------------------------------------------------------------ */
+
+export interface CaseGroupRow {
+  /** 案件の ID (案件の画面 /cases/<ID>) */
+  key: string;
+  href: string;
+  number: string;
+  title: string;
+  open: boolean;
+  stage: Stage;
+  stageLabel: string;
+  detail: string;
+  date: string;
+  dateLabel: string;
+  amount?: number;
+  amountLabel: string;
+  counts: { inquiries: number; quotes: number; orders: number };
+  /** 案件の記録 (受注・見積 (受注にならなかった見積も履歴として)・見積のない問い合わせ)。新しい順 */
+  records: CaseRow[];
+}
+
+/** お客様の案件 (進行中 → 過去)。1 つの案件に問い合わせ・見積・受注がいくつあっても 1 行 */
+export function customerCaseGroups(db: Database, t: { inquiries: Inquiry[]; quotes: Quote[]; orders: Order[] }, today: string): CaseGroupRow[] {
+  const map = buildCaseMap(db);
+  const ix = caseIndex(db);
+  const quotes = new Map(t.quotes.map((q) => [q.id, q]));
+  const byCase = new Map<string, CaseRow[]>();
+  const push = (id: string, row: CaseRow) => {
+    const c = map.caseOf(id) ?? id;
+    byCase.set(c, [...(byCase.get(c) ?? []), row]);
+  };
+  const ordered = new Set(t.orders.map((o) => o.quoteId).filter(Boolean));
+  for (const o of t.orders) if (o.status !== "cancelled") push(o.id, orderRow(db, o, quotes));
+  for (const q of t.quotes) if (!ordered.has(q.id) && !q.orderId) push(q.id, quoteRow(q, t.inquiries.find((i) => i.id === q.inquiryId)));
+  const quoted = new Set(t.quotes.map((q) => q.inquiryId).filter(Boolean));
+  for (const i of t.inquiries) if (!quoted.has(i.id) && !i.quoteId && !i.deleted) push(i.id, inquiryRow(i));
+  const out: CaseGroupRow[] = [];
+  for (const [caseId, records] of byCase) {
+    const m = map.members(caseId);
+    if (!m) continue;
+    const s = summarizeCase(m, ix, today);
+    records.sort((a, b) => b.date.localeCompare(a.date) || b.number.localeCompare(a.number));
+    // 受注のある案件の、受注より前の受注にならなかった見積は履歴 (進行中にしない)
+    for (const r of records) if (r.status.kind === "quote" && s.counts.orders > 0 && r.open && !s.rows.some((x) => x.id === r.key && !x.closed)) r.open = false;
+    out.push({
+      key: caseId,
+      href: s.href,
+      number: s.number,
+      title: s.title,
+      open: s.open,
+      stage: s.stage,
+      stageLabel: s.stageLabel,
+      detail: s.detail,
+      date: s.lastAt,
+      dateLabel: s.startedAt && s.lastAt && s.startedAt !== s.lastAt ? `${fmtDate(s.startedAt)}〜${fmtDate(s.lastAt)}` : fmtDate(s.lastAt || s.startedAt),
+      amount: s.amount,
+      amountLabel: s.amountLabel,
+      counts: s.counts,
+      records,
+    });
+  }
+  return out.sort((a, b) => b.date.localeCompare(a.date) || b.number.localeCompare(a.number));
+}

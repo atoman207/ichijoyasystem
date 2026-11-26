@@ -161,6 +161,8 @@ export const TABLES: TableDef[] = [
       ["scheduleHold", "jsonb"],
       // 施工現場の住所 (依頼主の住所と違うとき。お客様のご要望 2026-11-25「⑨」)
       ["siteAddress", "text"],
+      // 2026-11-26: ほかの案件に追加した問い合わせの案件 (その案件の最初の記録の ID。src/lib/case-group.ts)
+      ["caseId", "text"],
     ],
     orderBy: ["received_at"],
     indexes: [["store_id"], ["status"], ["customer_id"]],
@@ -230,6 +232,8 @@ export const TABLES: TableDef[] = [
       ["receiptName", "text"],
       // 2026-11-23: 畳の仕様 (部屋ごと。畳表・畳縁・畳床・寸法。src/lib/tatami-spec.ts)。受注に引き継ぐ
       ["tatamiRooms", "jsonb"],
+      // 2026-11-26: 案件 (ほかの案件に追加した見積。src/lib/case-group.ts)
+      ["caseId", "text"],
     ],
     orderBy: ["created_at"],
     indexes: [["store_id"], ["status"], ["customer_id"]],
@@ -242,6 +246,8 @@ export const TABLES: TableDef[] = [
       ["id", "text primary key"],
       ["number", "text not null unique"],
       ["quoteId", "text references quotes(id) on delete set null"],
+      // 2026-11-26: 案件 (ほかの案件に追加した受注。src/lib/case-group.ts)
+      ["caseId", "text"],
       ["customerId", "text not null references customers(id)"],
       ["storeId", "text not null references stores(id)"],
       ["title", "text not null"],

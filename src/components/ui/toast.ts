@@ -13,6 +13,8 @@
  * React を使わない (Toaster.tsx が useSyncExternalStore で読む)。テストは npm run test:notify (toast.test.mjs)
  */
 
+import { splitMsgLink } from "@/lib/msg-link";
+
 export type ToastTone = "success" | "error" | "info" | "warn" | "notice";
 
 export interface ToastAction {
@@ -160,13 +162,18 @@ toast.dismiss = (id?: string) => {
  * 同じ回の msg と err は両方出す
  */
 export function showResult(msg?: string | null, err?: string | null): void {
-  const m = msg?.trim();
+  // 文の最後の「[[ボタン]](/場所)」はボタンにする (src/lib/msg-link.ts。例: 日程の登録のあとの「予定表で確認」)
+  const parsed = msg ? splitMsgLink(msg.trim()) : undefined;
+  const m = parsed?.text.trim();
   const e = err?.trim();
   if (!m && !e) return;
   let list = items.filter((i) => i.group !== RESULT_GROUP || i.text === m || i.text === e);
+  if (msg) fromUrl.add(msg.trim());
   if (m) {
     fromUrl.add(m);
-    list = add(list, "success", m, { group: RESULT_GROUP }, false).list;
+    const link = parsed?.link;
+    // ボタンのある知らせは長めに出す (押す時間をとる)
+    list = add(list, "success", m, { group: RESULT_GROUP, ...(link ? { action: { label: link.label, href: link.href }, duration: Math.max(12000, Number(toastDuration("success", m))) } : {}) }, false).list;
   }
   if (e) {
     fromUrl.add(e);

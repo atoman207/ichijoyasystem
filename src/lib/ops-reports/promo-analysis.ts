@@ -132,8 +132,9 @@ export function inquiryFacts(db: AnalysisDb, scope: PromoScope, ctx: Ctx = conte
   const stores = new Set(scope.storeIds);
   const out: InquiryFact[] = [];
   for (const inq of db.inquiries) {
-    // 削除した問い合わせ (誤って登録したもの) は数えない
-    if (inq.deleted || !stores.has(inq.storeId)) continue;
+    // 削除した問い合わせ (誤って登録したもの) は数えない。既存の案件に追加した問い合わせ (追加工事・クレームのご連絡。caseId) は新しい反響ではないので数えない
+    // (2026-11-26「■5」。問い合わせの一覧は「lead=1」で同じ数え方)
+    if (inq.deleted || inq.caseId || !stores.has(inq.storeId)) continue;
     const d = inquiryDate(inq);
     if (d < scope.from || d > scope.to) continue;
     out.push(factOf(ctx, inq));

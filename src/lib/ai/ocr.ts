@@ -9,6 +9,7 @@ import { COMMENT_TAGS, MEDIA_OPTIONS, PRIORITY_OPTIONS, normPostcardNo, tagComme
 import { EQUIPMENT_OPTIONS, PAYMENT_OPTIONS, SITE_MEDIA_OPTIONS } from "@/lib/site-info";
 import { AiError, aiEnabled, generateJson, type AiPart } from "./provider";
 import { RECEPTION_SCHEMA } from "./reception";
+import { checkRows, hasRowContent, reconcileRows, retryInstruction } from "./ocr-rows";
 
 export { aiEnabled } from "./provider";
 
@@ -116,13 +117,17 @@ const SCHEMAS: Record<DocumentKind, Schema> = {
     paymentMethod: ENUM(PAYMENT_OPTIONS, "支払い方法 (納品時) の○: 現金 / カード (マスター・VISA を含む) / PayPay / 振込 / 訪問集金 / その他"),
     paymentNote: s("支払い方法の補足 (VISA・マスター、その他の括弧内など)"),
     taxMode: ENUM(["税込", "税抜"], "小計欄の左の「税込 / 税抜」の○"),
+    // 先に行を数えてから items を書かせる (行の読み落としを防ぐ。足りなければ読み直し・空の行で埋める = ocr-rows.ts)
+    lineCount: { type: "integer", description: "明細の欄で何かが書かれている行の数 (〃 の行・読めない行・諸経費・▲ の値引き・金券の行を含む。何も書かれていない行と、行ごと取り消し線で消した行は数えない)。先に数え、items をこの数と同じ行数にする" },
     items: arr(
       obj({
+        line: { type: "integer", description: "この行が明細の何行目か (書き込みのある行だけを上から 1, 2, 3… と数える)" },
         ...ITEM_PROPS,
-        uncertain: { type: "boolean", description: "読みにくい・判断が難しい行なら true (無理に決めない)" },
+        name: { type: "string", description: "品名・作業名 (書かれているとおり。〃 は上の行の品名に置き換える。読めなければ空文字にして uncertain を true)" },
+        uncertain: { type: "boolean", description: "読みにくい・判断が難しい・一部しか読めない行なら true (無理に決めない)" },
         corrected: { type: "boolean", description: "この行の数字・文字を取り消し線などで消して書き直していれば true" },
       }),
-      "明細 (上から順に。諸経費の行も含める。行ごと取り消し線で消した行は含めない。数字が書かれた行は品名が読めなくても含める)",
+      "明細の欄の書き込みのある行すべてを、用紙の上から順に 1 行ずつ (並べ替えない・まとめない・省かない)。〃 の行・諸経費・▲ の値引き・金券の行も 1 行。読めない行も省かずに入れる (品名が読めなければ空文字、数字が読めなければ null、uncertain を true)。何も書かれていない行と、行ごと取り消し線で消した行は入れない",
     ),
     subtotal: n("小計 (訂正があれば訂正後)"),
     discount: n("値引き (明細とは別に書かれた値引きの合計。▲ が付いていても正の数。なければ null)"),
@@ -263,7 +268,7 @@ const SCHEMAS: Record<DocumentKind, Schema> = {
 
 /** 書類の種類ごとの項目名 (確認画面で修正した値は、この項目だけ受け取る) */
 export const FIELD_KEYS: Record<DocumentKind, string[]> = Object.fromEntries(
-  Object.entries(SCHEMAS).map(([k, schema]) => [k, Object.keys((schema as { properties: Record<string, unknown> }).properties).filter((p) => p !== "confidence" && p !== "warnings")]),
+  Object.entries(SCHEMAS).map(([k, schema]) => [k, Object.keys((schema as { properties: Record<string, unknown> }).properties).filter((p) => p !== "confidence" && p !== "warnings" && p !== "lineCount")]),
 ) as Record<DocumentKind, string[]>;
 
 const KIND_HINT: Record<DocumentKind, string> = {
@@ -273,7 +278,9 @@ const KIND_HINT: Record<DocumentKind, string> = {
     "- 明細の金額欄はケタごとの枠です。単価 × 数量と金額が合うか確かめ、合わないときは uncertain を true にしてください。",
     "- ▲ や △ が付いた数 (値引き・割引) はマイナスの数にしてください。",
     "- 取り消し線・二重線・塗りつぶしで消した数字・文字は使わず、書き直した値 (枠の上・横・すぐ下に小さく書かれることが多い) を使ってください。消して書き直した箇所はすべて corrections に「どこを・消した値 → 書き直した値」で書き、その明細の行は corrected を true にしてください。消した値しかなく書き直しが見つからないときは uncertain を true に。",
-    "- 数量・単価・金額のどれかが書かれている行は、品名が読めなくても省かずに入れてください (品名は読める範囲で書き、uncertain を true に)。明細の行の金額欄にある ▲ 付きの数字 (値引き・金券・割引) も、1 つずつ明細の行にします。小計・消費税・合計の欄やその近くに書かれた ▲ の値引きは、明細ではなく discount (正の数) に入れます。行を省くと合計が合わなくなります。",
+    "- 明細は行を 1 行も省かないでください。まず明細の欄で何かが書かれている行を上から数えて lineCount に入れ、items にはその数と同じ行数を、用紙の上から順に入れます (並べ替えない・2 行を 1 行にまとめない・1 行を分けない)。各行の line には何行目か (1 から) を入れます。",
+    "- 読み取れない・一部しか読めない行も省かずに、読めた範囲で入れてください (読めない品名は空文字、読めない数字は null)。その行は uncertain を true にします。担当者があとで写真と見比べて直します。",
+    "- 明細の行の金額欄にある ▲ 付きの数字 (値引き・金券・割引) も、1 つずつ明細の行にします。小計・消費税・合計の欄やその近くに書かれた ▲ の値引きは、明細ではなく discount (正の数) に入れます。行を省くと合計が合わなくなります。",
     "- 最後に、明細の金額の合計 − 値引き が 書かれた合計 (税込合計金額) と合うか見直してください。合わなければ、読み落とした行・▲ の数字・読み違えた桁がないか画像をもう一度確かめ、それでも合わなければ warnings に書いてください (合わせるために数字を作らないでください)。",
     "- 「税込 / 税抜」に○があれば taxMode に。単価が税込のことが多いです。",
     "- 読めない・判断が難しい文字は推測で埋めず、項目名を uncertainFields に入れてください。",
@@ -327,17 +334,41 @@ export async function extractDocument(params: { kind: DocumentKind; fileName: st
     return failed(kind, "このファイルは AI で読み取れません。写真 (JPEG・PNG) か PDF を取り込んでください。");
   }
   const document: AiPart = isPdf ? { type: "pdf", base64, fileName } : { type: "image", mediaType: mimeType === "image/jpg" ? "image/jpeg" : mimeType, base64 };
-  try {
-    const r = await generateJson<Record<string, unknown>>({
+  const ask = `書類の種類: ${kind}${mode === "calc" ? " (金額を書く前の見積書)" : ""}。この書類を読み取ってください。`;
+  const request = (text: string) =>
+    generateJson<Record<string, unknown>>({
       system: systemPrompt(kind, products, mode),
-      parts: [document, { type: "text", text: `書類の種類: ${kind}${mode === "calc" ? " (金額を書く前の見積書)" : ""}。この書類を読み取ってください。` }],
+      parts: [document, { type: "text", text }],
       schema: SCHEMAS[kind],
       schemaName: `ichijoya_${kind}`,
       maxTokens: 8000,
     });
+  try {
+    let r = await request(ask);
+    let ms = r.ms;
+    let rowWarnings: string[] = [];
+    if (kind === "handwritten_quote") {
+      // 数えた行より少ない行しか返ってこなかったときは 1 回だけ読み直す (行の読み落としを防ぐ。お客様のご要望 2026-11-26「■1」)
+      const first = checkRows(r.data.items, r.data.lineCount);
+      if (first.missing > 0) {
+        try {
+          const again = await request(`${ask}\n${retryInstruction(first)}`);
+          ms += again.ms;
+          if (checkRows(again.data.items, again.data.lineCount).read > first.read) r = again;
+        } catch (err) {
+          console.warn(`[ocr] re-read for missing rows failed (${fileName}):`, err instanceof AiError ? err.code : err);
+        }
+      }
+      // 空欄の行だけを除き、順番はそのまま、まだ足りない行は空の行 (要確認) で埋める
+      const rec = reconcileRows(r.data.items, r.data.lineCount);
+      rowWarnings = rec.warnings;
+      const data: Record<string, unknown> = { ...r.data, items: rec.rows };
+      delete data.lineCount;
+      r = { ...r, data };
+    }
     const { extracted, warnings } = normalizeExtracted(kind, markCorrectedRows(r.data), products, { mode });
     const confidence = typeof r.data.confidence === "number" && r.data.confidence >= 0 && r.data.confidence <= 1 ? r.data.confidence : 0.8;
-    return { provider: r.provider, model: r.model, confidence, extracted, warnings, ms: r.ms };
+    return { provider: r.provider, model: r.model, confidence, extracted, warnings: [...rowWarnings, ...warnings], ms };
   } catch (err) {
     const message = err instanceof AiError ? err.message : "AI の読み取りに失敗しました。";
     console.warn(`[ocr] extraction failed (${kind}, ${fileName}):`, err instanceof AiError ? `${err.code} ${err.detail ?? ""}` : err);
@@ -403,21 +434,27 @@ function validDate(v: unknown): string | undefined {
   return Number.isNaN(d.getTime()) || d.getUTCDate() !== Number(m[3]) ? undefined : iso;
 }
 
-export function normalizeItems(raw: unknown, products: Product[]): LineItem[] {
+/**
+ * 明細の行をそろえる。keepUnnamed (手書き見積書): 品名が読めない行も、数字・規格・要確認の印があれば残す
+ * (品名は空・要確認。お客様のご要望 2026-11-26「■1」: 行そのものは省かない)。ほかの書類は品名のない行を除く
+ */
+export function normalizeItems(raw: unknown, products: Product[], opts: { keepUnnamed?: boolean } = {}): LineItem[] {
   if (!Array.isArray(raw)) return [];
   const out: LineItem[] = [];
   for (const r of raw as Record<string, unknown>[]) {
-    const name = toStr(r?.name);
-    if (!name) continue;
+    if (!r || typeof r !== "object") continue;
+    const name = toStr(r.name);
+    if (!name && !(opts.keepUnnamed && hasRowContent(r))) continue;
     const qty = toNum(r.qty);
     const unitPrice = toNum(r.unitPrice);
     let amount = toNum(r.amount);
     const calculated = amount === undefined && qty !== undefined && unitPrice !== undefined;
     if (calculated) amount = Math.round(qty * unitPrice);
     const rate = toNum(r.rate);
-    const p = matchProduct(products, `${name} ${toStr(r.spec) ?? ""}`);
+    // 品名が読めない行は商品マスタに当てない (規格だけで別の商品の単価が入らないように)
+    const p = name ? matchProduct(products, `${name} ${toStr(r.spec) ?? ""}`) : undefined;
     out.push({
-      name,
+      name: name ?? "",
       spec: toStr(r.spec),
       qty: qty ?? (amount !== undefined && unitPrice === undefined ? 1 : undefined),
       unit: toStr(r.unit) ?? p?.unit,
@@ -431,7 +468,7 @@ export function normalizeItems(raw: unknown, products: Product[]): LineItem[] {
       ...(r.corrected === true ? { corrected: true } : {}),
       ...(calculated ? { amountCalculated: true } : {}),
       ...(rate !== undefined && rate > 0 && rate < 1 ? { rate } : {}),
-      ...(r.uncertain === true || (qty !== undefined && unitPrice !== undefined && amount !== undefined && Math.abs(Math.round(qty * unitPrice) - amount) > 1) ? { uncertain: true } : {}),
+      ...(r.uncertain === true || !name || (qty !== undefined && unitPrice !== undefined && amount !== undefined && Math.abs(Math.round(qty * unitPrice) - amount) > 1) ? { uncertain: true } : {}),
     });
   }
   return out;
@@ -538,7 +575,7 @@ export function normalizeExtracted(kind: DocumentKind, raw: Record<string, unkno
       const c = readCandidates(v);
       if (c.length) ex._accountCandidates = c;
     } else if (k === "items") {
-      ex.items = normalizeItems(v, products);
+      ex.items = normalizeItems(v, products, { keepUnnamed: kind === "handwritten_quote" });
     } else if (k === "rooms" || k === "fittings") {
       ex[k] = normalizeRows(v, k === "rooms" ? ["widthMm", "depthMm", "tatamiCount"] : ["count", "widthMm", "heightMm"], k === "rooms" ? "name" : "kind");
     } else if (k === "fields") {
@@ -584,6 +621,8 @@ export function normalizeExtracted(kind: DocumentKind, raw: Record<string, unkno
     if (unsure.length) warnings.push(`要確認: ${unsure.map((k) => HW_LABEL[k] ?? k).join("・")}`);
     const rows = items.filter((i) => i.uncertain).length;
     if (rows) warnings.push(`読み取りに自信がない明細が ${rows} 行あります (黄色の行)`);
+    const unnamed = items.filter((i) => !i.name).length;
+    if (unnamed) warnings.push(`品名を読み取れなかった明細が ${unnamed} 行あります (品名が空の行)。写真と見比べて入力してください`);
     const rateRows = items.filter((i) => i.rate && i.uncertain).length;
     if (rateRows) warnings.push(`割合の値引き (「2割引」など) の対象の行を確かめてください (${rateRows} 行)`);
     if (opts.mode === "calc") {
