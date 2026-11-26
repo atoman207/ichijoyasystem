@@ -73,7 +73,8 @@ eq([unit("カーテン", "2 窓"), unit("ロールスクリーン")], ["ヶ所",
 eq([unit("襖", "仏一式 あかつき689"), unit("フスマ", "仏間 のぞみ117"), unit("仏間 襖")], ["式", "式", "式"], "仏間 (襖) → 式");
 eq([unit("畳", "縁 マス菊"), unit("畳縁", "アラベスク510"), unit("ヘリ", "倉四季90"), unit("へり", "マス菊"), unit("縁", "浮6")], ["畳", "畳", "畳", "畳", "畳"], "縁 → 畳 (品名が「畳」でも仕様の「縁」)");
 eq([unit("クロス張替え 6畳"), unit("フローリング工事"), unit("内装リフォーム")], ["式", "式", "式"], "リフォーム → 式 (「6畳」は部屋の広さ)");
-eq([unit("諸経費"), unit("DM値引"), unit("金券値引き"), unit("マイトスタット", "敷き込み"), unit("ベニア交換")], ["-", "-", "-", "-", "-"], "値引き・諸経費・分からないものは単位を変えない");
+eq([unit("諸経費"), unit("DM値引"), unit("金券値引き"), unit("防虫加工"), unit("ベニア交換")], ["-", "-", "-", "-", "-"], "値引き・諸経費・分からないものは単位を変えない");
+eq([unit("マイトスタット", "敷き込み"), unit("マイトスタット巻き込み")], ["畳", "畳"], "マイトスタット (畳の付属) → 畳 (2026-11-26。巻き込み・敷き込みは line-kind の mite)");
 eq([unit("畳表替え めぐみ　縁代込", "中国産 上級"), cat("畳表替え めぐみ　縁代込")], ["畳", "tatami"], "「縁代込」は縁ではなく畳の行");
 eq([unit("襖張替え 引手込み")], ["枚"], "「引手込み」は襖の行");
 eq([cat("襖", "両面 みやこ317"), cat("引手", "そのまま"), cat("襖", "仏一式"), cat("障子"), cat("網戸"), cat("畳", "縁 マス菊"), cat("カーテン"), cat("クロス張替え"), cat("諸経費"), cat("DM値引")], ["fusuma", "fusuma", "fusuma", "fusuma", "fusuma", "tatami", "curtain", "reform", "-", "-"], "品目: 襖・障子・網戸・引手・仏間 → 襖 (障子・網戸を含む)、縁 → 畳、カーテン、リフォーム。値引き・諸経費は自動のまま");
@@ -344,6 +345,12 @@ const man = rows().find((x) => x.source === "manual");
 ok(r.msg?.includes("追加しました") && man?.date === d(3) && man.qty === 4 && man.herinashiSeen, `手で追加 (${r.msg ?? r.err})`);
 r = await act(staff, () => actions.addProduction(form({ back, storeId: "koshi", title: "在庫の畳", undecided: "1" })));
 ok(rows().some((x) => x.source === "manual" && x.name === "在庫の畳" && x.mode === "undecided"), "製造日未定で追加");
+// 画面から部屋ごとの仕様つきで追加 (お客様のご要望 2026-11-26「畳製造の画面から直接製造予定を追加」)
+r = await act(staff, () => actions.addProduction(form({ back, storeId: "koshi", title: "個別の注文 2 部屋", date: d(4), rooms: JSON.stringify([{ id: "tr_add001", work: "new", qty: 6, omote: "きずな", heri: "マス菊", mite: true, doko: "建材床", dokoThickness: "55mm", sizes: [{ size: "630×290", qty: 4 }, { size: "580×630", qty: 2 }] }, { id: "tr_add002", work: "omote", qty: 4.5, omote: "さくら", herinashi: true, size: "本間" }]) })));
+const withRooms = rows().find((x) => x.source === "manual" && x.name === "個別の注文 2 部屋");
+eq([Boolean(r.msg?.includes("追加しました")), withRooms?.qty, withRooms?.herinashi, withRooms?.roomsSource, withRooms?.rooms.map((x) => Boolean(x.mite)), withRooms?.rooms[0].sizes?.length], [true, 10.5, 4.5, "record", [true, false], 2], "部屋ごとの仕様つきで追加: 畳数・縁無は部屋の合計・マイト・寸法 2 種類");
+r = await act(staff, () => actions.addProduction(form({ back, storeId: "koshi", title: "壊れた仕様", date: d(4), rooms: "{bad" })));
+ok(r.err?.includes("形式"), "壊れた仕様の入力は断る");
 r = await act(staff, () => actions.addProduction(form({ back, storeId: "koshi", title: "" })));
 ok(Boolean(r.err), "案件・内容がなければ断る");
 r = await act(staff, () => actions.deleteProduction(form({ back, id: man.record.id })));

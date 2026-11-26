@@ -6,10 +6,13 @@
  *   (TatamiProduction.rooms) に持つ。どこにもなければ見積の明細と手書きの備考 (サイズ・わら・建材) から自動で作る (roomsFromLines)
  * - 移行した予定表の引き取りは、工場の製造の表の行 (予定のメモの「製造: …」) から作る (roomsFromSheetMemo)
  * - 空の項目は未確定。画面では「寸法未確認」「畳床未確認」のように出し、あとから入れ・直せる (表替え・裏返しは今の床を使う)
+ * - 1 部屋に寸法が 2 種類以上 (「630×290－4枚、580×630－2枚」) は sizes に寸法ごとの枚数 (roomSizes で 1 種類の size と同じに扱う)
+ * - マイトスタット巻き込み (製造の加工) は部屋ごとの mite。見積の明細の「マイトスタット巻き込み」から部屋が決まるときだけ自動で付け、
+ *   決まらなければ「マイトの部屋を確認」。敷き込み (現場で敷く) は製造に関係ないので付けない (お客様のご要望 2026-11-26)
  * ブラウザー (入力の部品) とサーバーの両方から使う純粋関数。データベースには触れない
  */
-import type { QuoteItem, SiteInfo, TatamiRoom } from "@/lib/db/types";
-import { lineKind } from "@/lib/line-kind";
+import type { QuoteItem, SiteInfo, TatamiRoom, TatamiSize } from "@/lib/db/types";
+import { lineKind, miteKindOf } from "@/lib/line-kind";
 
 export type TatamiWork = TatamiRoom["work"];
 export const TATAMI_WORK_LABEL: Record<TatamiWork, string> = { omote: "表替え", ura: "裏返し", new: "新調" };
@@ -22,6 +25,8 @@ export const SIZE_CHOICES = ["本間 (京間)", "中京間 (三六)", "六一間
 export const THICKNESS_CHOICES = ["15mm", "20mm", "25mm", "30mm", "35mm", "40mm", "45mm", "50mm", "55mm", "60mm"];
 /** 1 案件の部屋の上限 */
 export const MAX_ROOMS = 30;
+/** 1 部屋の寸法の種類の上限 */
+export const MAX_SIZES = 6;
 
 const nk = (v: unknown) =>
   String(v ?? "")
@@ -52,8 +57,22 @@ export function roomPending(r: TatamiRoom): string[] {
     if (!r.doko?.trim()) out.push("畳床");
     else if (needsThickness(r.doko) && !r.dokoThickness?.trim()) out.push("厚み");
   }
-  if (!r.size?.trim()) out.push("寸法");
+  if (!roomSizes(r).length) out.push("寸法");
   return out;
+}
+
+/** 部屋の寸法 (寸法ごとの枚数。1 種類の size も 1 行にする) */
+export function roomSizes(r: Pick<TatamiRoom, "size" | "sizes">): TatamiSize[] {
+  const list = (r.sizes ?? []).filter((x) => x?.size?.trim());
+  if (list.length) return list;
+  return r.size?.trim() ? [{ size: r.size.trim() }] : [];
+}
+
+/** 寸法の文 (例: 630×290 4枚・580×630 2枚 / 本間) */
+export function sizesText(r: Pick<TatamiRoom, "size" | "sizes">): string {
+  return roomSizes(r)
+    .map((x) => `${x.size}${x.qty ? ` ${fmtQty(x.qty)}枚` : ""}`)
+    .join("・");
 }
 
 /** 部屋の合計 (畳数・へり無し畳の枚数) */
@@ -82,6 +101,20 @@ const SIZE_WORDS: [RegExp, string][] = [
   [/六〇|六十間/, "六〇間"],
 ];
 const MM_SIZE = /(\d{3,4})\s*[x×*＊]\s*(\d{3,4})/;
+const MM_SIZE_ALL = /(\d{3,4})\s*[x×*＊]\s*(\d{3,4})(?:\s*[-−ー－‐:：=＝]?\s*(\d{1,3}(?:\.\d)?)(?![\d.x×*＊])\s*(?:枚|畳|帖)?)?/g;
+
+/**
+ * 寸法と枚数の並び (「630×290－4枚、580×630－2枚」→ 2 種類)。mm の寸法が 2 つ以上あるときだけ (1 つなら sizeIn)
+ */
+export function sizesIn(text: string): TatamiSize[] {
+  const t = nk(text);
+  const out: TatamiSize[] = [];
+  for (const m of t.matchAll(MM_SIZE_ALL)) {
+    const qty = m[3] ? Number(m[3]) : undefined;
+    out.push({ size: `${m[1]}×${m[2]}`, ...(qty && qty > 0 ? { qty } : {}) });
+  }
+  return out.length >= 2 ? out.slice(0, MAX_SIZES) : [];
+}
 
 /** 寸法の言葉 (本間・五八・六一・880×1760) */
 export function sizeIn(text: string): string | undefined {
@@ -190,8 +223,12 @@ export function roomsFromLines(src: LineSource): TatamiRoom[] {
     const omote = omoteIn(it.name, it.spec, work);
     if (omote) r.omote = omote;
     if (k?.herinashi) r.herinashi = true;
+    const many = sizesIn(text);
     const size = sizeIn(text) ?? (siteSizeText ? sizeIn(siteSizeText) ?? siteSizeText : undefined);
-    if (size) r.size = size;
+    if (many.length) r.sizes = many;
+    else if (size) r.size = size;
+    // 畳の行そのものに「マイトスタット巻き込み」と書いてある
+    if (miteKindOf(text) === "wrap") r.mite = true;
     if (work === "new") {
       const doko = (it.dokoMaterialId ? src.materialName?.(it.dokoMaterialId) : undefined) ?? dokoIn(text);
       if (doko) r.doko = doko;
@@ -202,6 +239,25 @@ export function roomsFromLines(src: LineSource): TatamiRoom[] {
     if (notes.length) r.note = notes.join("・");
     return r;
   });
+  // 備考の「サイズ」に寸法が 2 種類以上 (部屋が 1 つのときだけ。部屋が複数なら どの部屋か分からないので書かれたまま)
+  const siteMany = sizesIn(siteSizeText);
+  if (siteMany.length && rooms.length === 1 && !rooms[0].sizes) {
+    rooms[0].sizes = siteMany;
+    delete rooms[0].size;
+  }
+  // マイトスタット巻き込みの明細 (別の行): 部屋が 1 つ・畳数が全部屋の合計・畳数が同じ部屋が 1 つ なら その部屋。決まらなければ「部屋を確認」
+  const miteLines = lines.filter((x) => x.k?.kind === "mite" && x.k.mite === "wrap").map((x) => pieceQty(x.it.qty, x.it.unit));
+  if (miteLines.length && rooms.length && !rooms.some((r) => r.mite)) {
+    const total = rooms.reduce((a, r) => a + (r.qty > 0 ? r.qty : 0), 0);
+    const want = miteLines.reduce((a, q) => a + q, 0);
+    const pick = (list: TatamiRoom[]) => list.forEach((r) => (r.mite = true));
+    if (rooms.length === 1 || (want > 0 && Math.abs(want - total) < 0.01)) pick(rooms);
+    else {
+      const hits = miteLines.map((q) => rooms.filter((r) => q > 0 && r.qty === q));
+      if (hits.every((h) => h.length === 1) && new Set(hits.map((h) => h[0].id)).size === hits.length) pick(hits.map((h) => h[0]));
+      else for (const r of rooms) r.note = [r.note, "マイト (巻き込み) の部屋を確認"].filter(Boolean).join("・");
+    }
+  }
   // 縁
   const need = rooms.filter((r) => !r.herinashi);
   if (heriLines.length === 1) for (const r of need) r.heri = heriLines[0].name;
@@ -296,8 +352,27 @@ export function cleanRooms(raw: unknown): { rooms: TatamiRoom[]; error?: string 
       r.herinashi = true;
       delete r.heri;
     }
+    if (x.mite === true || x.mite === "1" || x.mite === "true") r.mite = true;
+    // 寸法ごとの枚数 (2 種類以上)。1 種類で枚数がなければ size にする
+    if (Array.isArray(x.sizes)) {
+      const list: TatamiSize[] = [];
+      for (const z of x.sizes as Record<string, unknown>[]) {
+        const size = str(z?.size, 40);
+        if (!size) continue;
+        const zq = typeof z.qty === "number" ? z.qty : Number(String(z.qty ?? "").normalize("NFKC"));
+        if (z.qty !== undefined && z.qty !== "" && (!Number.isFinite(zq) || zq < 0 || zq > 500)) return { rooms: [], error: "寸法ごとの枚数は 0〜500 の数で入れてください。" };
+        list.push({ size, ...(Number.isFinite(zq) && zq > 0 ? { qty: Math.round(zq * 10) / 10 } : {}) });
+      }
+      if (list.length > MAX_SIZES) return { rooms: [], error: `1 部屋の寸法は ${MAX_SIZES} 種類までです。` };
+      if (list.length === 1 && !list[0].qty) {
+        r.size = list[0].size;
+      } else if (list.length) {
+        r.sizes = list;
+        delete r.size;
+      }
+    }
     if (r.dokoThickness && /^\d+(\.\d)?$/.test(r.dokoThickness)) r.dokoThickness = `${r.dokoThickness}mm`;
-    const empty = !r.qty && !r.room && !r.omote && !r.heri && !r.herinashi && !r.doko && !r.dokoThickness && !r.size && !r.note;
+    const empty = !r.qty && !r.room && !r.omote && !r.heri && !r.herinashi && !r.doko && !r.dokoThickness && !r.size && !r.sizes && !r.mite && !r.note;
     if (empty) continue;
     ids.add(id);
     rooms.push(r);
@@ -307,7 +382,7 @@ export function cleanRooms(raw: unknown): { rooms: TatamiRoom[]; error?: string 
 
 /** 同じ仕様か (保存の要否) */
 export function sameRooms(a: TatamiRoom[] | undefined, b: TatamiRoom[] | undefined): boolean {
-  const canon = (v: TatamiRoom[] | undefined) => JSON.stringify(cleanRooms(v ?? []).rooms.map((r) => [r.id, r.room ?? "", r.work, r.qty, r.omote ?? "", r.heri ?? "", Boolean(r.herinashi), r.doko ?? "", r.dokoThickness ?? "", r.size ?? "", r.note ?? ""]));
+  const canon = (v: TatamiRoom[] | undefined) => JSON.stringify(cleanRooms(v ?? []).rooms.map((r) => [r.id, r.room ?? "", r.work, r.qty, r.omote ?? "", r.heri ?? "", Boolean(r.herinashi), r.doko ?? "", r.dokoThickness ?? "", r.size ?? "", (r.sizes ?? []).map((z) => [z.size, z.qty ?? 0]), Boolean(r.mite), r.note ?? ""]));
   return canon(a) === canon(b);
 }
 
@@ -317,9 +392,10 @@ export function roomText(r: TatamiRoom, i: number): string {
   return [
     `${roomLabel(r, i)} ${TATAMI_WORK_LABEL[r.work]} ${r.qty > 0 ? `${fmtQty(r.qty)}畳` : "畳数未確認"}`,
     r.work === "ura" ? "" : r.omote ? `表 ${r.omote}` : "畳表未確認",
+    r.mite ? "マイト (巻き込み)" : "",
     r.herinashi ? "縁無" : r.heri ? `縁 ${r.heri}` : "畳縁未確認",
     floor,
-    r.size ? `寸法 ${r.size}` : "寸法未確認",
+    roomSizes(r).length ? `寸法 ${sizesText(r)}` : "寸法未確認",
     r.note ?? "",
   ]
     .filter(Boolean)

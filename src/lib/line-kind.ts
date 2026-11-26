@@ -9,14 +9,19 @@
  * 判定の順:
  * 1. 品名が「畳」「襖」「障子」「網戸」だけのとき (手書き見積書の書き方。仕様に「引き手 S-186」「縁 マス菊」「仏一式」) は仕様を先に見る
  *    (「引手・取手は仕様を優先して判定」のご指示)。それ以外は品名で決め、品名で決まらなければ仕様を見る
- * 2. 言葉: 値引き → 諸経費など → 引手・取手 → 仏間 → 網戸 → 障子 → 襖 → へり無し畳 → 縁 → カーテン → 畳 → リフォーム
+ * 2. 言葉: 値引き → マイトスタット (防ダニシート) → 諸経費など → 引手・取手 → 仏間 → 網戸 → 障子 → 襖 → へり無し畳 → 縁 → カーテン → 畳 → リフォーム
+ *    マイトスタットは畳の付属 (kind = mite。畳の枚数・引取納品の品目に数えない)。巻き込み (製造のときに畳床に巻き込む = 畳製造予定に出す) と
+ *    敷き込み (現場で畳の下に敷く = 製造に関係ない) を mite で分ける (お客様のご要望 2026-11-26「マイトスタットの巻き込み加工」)
  *    (「6畳」「8帖間」は部屋の広さとして外す。「縁代込」「縁付き」は畳の言い方として縁にしない。「へり無し」「縁無」「琉球」はへり無し畳)
  * 3. 言葉で決まらなければ商品マスタの分類 (ServiceCategory)
  *
  * ブラウザーとサーバーの両方から使う純粋関数 (データベースに触れない)。
  */
 
-export type LineKind = "tatami" | "heri" | "fusuma" | "butsuma" | "hikite" | "shoji" | "amido" | "curtain" | "reform" | "misc" | "discount";
+export type LineKind = "tatami" | "mite" | "heri" | "fusuma" | "butsuma" | "hikite" | "shoji" | "amido" | "curtain" | "reform" | "misc" | "discount";
+
+/** マイトスタット (防ダニシート) の加工: wrap = 巻き込み (製造の加工) / lay = 敷き込み (現場で敷く) / unknown = 書かれていない (要確認) */
+export type MiteKind = "wrap" | "lay" | "unknown";
 
 export interface LineInfo {
   kind: LineKind;
@@ -26,6 +31,21 @@ export interface LineInfo {
   herinashi?: boolean;
   /** 半畳 */
   half?: boolean;
+  /** マイトスタットの加工 (kind = mite のとき) */
+  mite?: MiteKind;
+}
+
+const MITE = /マイト\s*スタ[ッツ]?[トド]|マイト(?!ル)|防ダニ\s*シート|ダニ防止シート|防虫\s*シート/;
+const MITE_WRAP = /巻き?込|まき\s*こみ|巻込|巻き|巻(?=\s|$|[)）])/;
+const MITE_LAY = /敷き?込|しき\s*こみ|敷込|敷き|敷(?=\s|$|[)）])/;
+
+/** マイトスタットの行の加工 (マイトスタットの言葉がなければ undefined)。敷き込みと巻き込みの両方の言葉があれば要確認 */
+export function miteKindOf(text: string | undefined): MiteKind | undefined {
+  const t = (text ?? "").normalize("NFKC");
+  if (!MITE.test(t)) return undefined;
+  const wrap = MITE_WRAP.test(t);
+  const lay = MITE_LAY.test(t);
+  return wrap && !lay ? "wrap" : lay && !wrap ? "lay" : "unknown";
 }
 
 /** 品名が品目の言葉だけ (仕様を先に見る) */
@@ -66,6 +86,8 @@ function kindOfText(raw: string): LineInfo | undefined {
   const t = raw.replace(HERINASHI_ALL, " 畳 ").replace(TOLERATED, " ").replace(ROOM_SIZE, " ");
   if (!t.trim()) return undefined;
   if (DISCOUNT.test(t)) return { kind: "discount" };
+  const mite = miteKindOf(raw);
+  if (mite) return { kind: "mite", mite };
   if (MISC.test(t)) return { kind: "misc" };
   if (HIKITE.test(t)) return { kind: "hikite" };
   if (BUTSUMA.test(t)) return { kind: "butsuma" };
@@ -133,6 +155,7 @@ export const UNIT_OPTIONS = ["畳", "枚", "個", "ヶ所", "式", "m", "㎡", "
  */
 const UNIT_BY_KIND: Partial<Record<LineKind, string>> = {
   tatami: "畳",
+  mite: "畳",
   heri: "畳",
   fusuma: "枚",
   shoji: "枚",
@@ -154,6 +177,7 @@ export function autoUnit(name: string | undefined, spec?: string, productCategor
 /** 種類 → 管理会計の品目 (src/lib/mgmt/categories.ts の 7 区分。縁は畳、引手・仏間は襖 (障子・網戸を含む)) */
 const ITEM_BY_KIND: Partial<Record<LineKind, string>> = {
   tatami: "tatami",
+  mite: "tatami",
   heri: "tatami",
   fusuma: "fusuma",
   shoji: "fusuma",

@@ -628,10 +628,25 @@ export interface TatamiRoom {
   doko?: string;
   /** 畳床の厚み (例: 55mm) */
   dokoThickness?: string;
-  /** 寸法 (例: 本間・江戸間 (五八)・六一・880×1760) */
+  /** 寸法 (例: 本間・江戸間 (五八)・六一・880×1760)。寸法が 1 種類のとき */
   size?: string;
+  /**
+   * 寸法が 2 種類以上の部屋の寸法ごとの枚数 (例: 630×290 を 4 枚・580×630 を 2 枚。お客様のご要望 2026-11-26「1部屋の中に複数の畳サイズ」)。
+   * あれば size は使わない (src/lib/tatami-spec.ts の roomSizes)
+   */
+  sizes?: TatamiSize[];
+  /** マイトスタット巻き込み (防ダニシートを畳床に巻き込む製造の加工)。敷き込み (現場で敷く) は製造に関係ないので持たない */
+  mite?: boolean;
   /** メモ (半畳・炉あり など) */
   note?: string;
+}
+
+/** 部屋の寸法 1 種類と枚数 */
+export interface TatamiSize {
+  /** 寸法 (例: 630×290・本間) */
+  size: string;
+  /** 枚数 (分からなければ空) */
+  qty?: number;
 }
 
 /** 引取・納品の品目 (src/lib/handover.ts の HANDOVER_ITEM)。reform は施工期間 (開始日〜終了日) で予定表に載せる */

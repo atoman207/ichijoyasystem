@@ -4,6 +4,7 @@ import { addDays, toDateKey } from "@/lib/format";
 import { EXPENSE_ACCOUNTS } from "@/lib/constants";
 import { readCandidates, suggestAccounts } from "@/lib/expense-account";
 import { matchProduct } from "@/lib/product-match";
+import { miteKindOf } from "@/lib/line-kind";
 import { calcSheet } from "@/lib/quote-sheet-calc";
 import { COMMENT_TAGS, MEDIA_OPTIONS, PRIORITY_OPTIONS, normPostcardNo, tagComment } from "@/lib/survey";
 import { EQUIPMENT_OPTIONS, PAYMENT_OPTIONS, SITE_MEDIA_OPTIONS } from "@/lib/site-info";
@@ -282,6 +283,8 @@ const KIND_HINT: Record<DocumentKind, string> = {
     "- 読み取れない・一部しか読めない行も省かずに、読めた範囲で入れてください (読めない品名は空文字、読めない数字は null)。その行は uncertain を true にします。担当者があとで写真と見比べて直します。",
     "- 明細の行の金額欄にある ▲ 付きの数字 (値引き・金券・割引) も、1 つずつ明細の行にします。小計・消費税・合計の欄やその近くに書かれた ▲ の値引きは、明細ではなく discount (正の数) に入れます。行を省くと合計が合わなくなります。",
     "- 最後に、明細の金額の合計 − 値引き が 書かれた合計 (税込合計金額) と合うか見直してください。合わなければ、読み落とした行・▲ の数字・読み違えた桁がないか画像をもう一度確かめ、それでも合わなければ warnings に書いてください (合わせるために数字を作らないでください)。",
+    "- マイトスタット (防ダニシート) には 2 種類あります。「巻き込み」(製造のときに防ダニシートを畳床に巻き込む加工) と「敷き込み」(現場で畳の下に敷き込む作業) です。品名には書かれている言葉のとおり「マイトスタット巻き込み」「マイトスタット敷き込み」と書き、取り違えないでください (「巻」「巻込」は巻き込み、「敷」「敷込」は敷き込み)。どちらか読み取れないときは品名を「マイトスタット」とし、その行の uncertain を true にしてください。",
+    "- 1 部屋に畳の寸法が 2 種類以上あるとき (例: 「630×290－4枚、580×630－2枚」) は、規格 (spec) に寸法と枚数を書かれたとおりに入れてください。",
     "- 「税込 / 税抜」に○があれば taxMode に。単価が税込のことが多いです。",
     "- 読めない・判断が難しい文字は推測で埋めず、項目名を uncertainFields に入れてください。",
     "- よく出る言葉 (読み取りの参考): 畳表替え・新調・裏返し・へり (縁)・防ダニ・織部・さくら・めぐみ・古都・襖 (フスマ) 張替え・板戸・片面・両面・裏貼り・両開き・引手・丁番・下地補修・朱雀・しずか・ちどり・鳥の子・障子張替え・ストライク・ワーロン・雲竜・無地・網戸 (アミド) 張替え・18メッシュ・グレー・ブラック・カーテン・レース・Aフック・タッセル・2割引・DM値引・諸経費・処分・引取。",
@@ -623,6 +626,10 @@ export function normalizeExtracted(kind: DocumentKind, raw: Record<string, unkno
     if (rows) warnings.push(`読み取りに自信がない明細が ${rows} 行あります (黄色の行)`);
     const unnamed = items.filter((i) => !i.name).length;
     if (unnamed) warnings.push(`品名を読み取れなかった明細が ${unnamed} 行あります (品名が空の行)。写真と見比べて入力してください`);
+    // マイトスタット: 巻き込み (製造の加工 = 畳製造予定に出る) と 敷き込み (現場で敷く) を取り違えないように (お客様のご要望 2026-11-26)
+    const miteUnknown = items.filter((i) => miteKindOf(`${i.name ?? ""} ${i.spec ?? ""}`) === "unknown");
+    for (const i of miteUnknown) i.uncertain = true;
+    if (miteUnknown.length) warnings.push(`マイトスタットの明細が「巻き込み」か「敷き込み」か読み取れませんでした (${miteUnknown.length} 行)。巻き込みは畳製造予定に出ます。写真と見比べて品名を「マイトスタット巻き込み」か「マイトスタット敷き込み」に直してください`);
     const rateRows = items.filter((i) => i.rate && i.uncertain).length;
     if (rateRows) warnings.push(`割合の値引き (「2割引」など) の対象の行を確かめてください (${rateRows} 行)`);
     if (opts.mode === "calc") {

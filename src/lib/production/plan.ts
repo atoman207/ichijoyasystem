@@ -419,6 +419,8 @@ export interface MaterialTotals {
   doko: { name: string; qty: number }[];
   /** 仕様が未確認 (部屋ごとの仕様がない) の畳数 */
   unknown: number;
+  /** マイトスタット巻き込み (製造の加工) の畳数 */
+  mite: number;
 }
 
 /**
@@ -431,6 +433,7 @@ export function productionMaterials(rows: Pick<ProductionRow, "rooms" | "qty" | 
   const doko = new Map<string, number>();
   let herinashi = 0;
   let unknown = 0;
+  let mite = 0;
   const add = (m: Map<string, number>, k: string, n: number) => m.set(k, (m.get(k) ?? 0) + n);
   for (const r of rows) {
     if (r.status === "cancelled") continue;
@@ -441,6 +444,7 @@ export function productionMaterials(rows: Pick<ProductionRow, "rooms" | "qty" | 
     }
     for (const x of rooms) {
       if (x.work !== "ura") add(omote, x.omote?.trim() || "畳表 未確認", x.qty);
+      if (x.mite) mite += x.qty;
       if (x.herinashi) herinashi += x.qty;
       else add(heri, x.heri?.trim() || "縁 未確認", x.qty);
       if (x.work === "new") add(doko, `${x.doko?.trim() || "畳床 未確認"}${x.dokoThickness ? ` ${x.dokoThickness}` : ""}`, x.qty);
@@ -448,7 +452,7 @@ export function productionMaterials(rows: Pick<ProductionRow, "rooms" | "qty" | 
   }
   // 未確認は最後、ほかは畳数の多い順
   const list = (m: Map<string, number>) => [...m].map(([name, qty]) => ({ name, qty })).sort((a, b) => Number(a.name.includes("未確認")) - Number(b.name.includes("未確認")) || b.qty - a.qty || a.name.localeCompare(b.name, "ja"));
-  return { omote: list(omote), heri: list(heri), herinashi, doko: list(doko), unknown };
+  return { omote: list(omote), heri: list(heri), herinashi, doko: list(doko), unknown, mite };
 }
 
 /** 次の営業日 (休日カレンダーの休業日を飛ばす) */

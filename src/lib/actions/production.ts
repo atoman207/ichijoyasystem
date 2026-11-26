@@ -9,7 +9,7 @@ import { isDateKey, shortDate } from "@/lib/calendar";
 import { toDateKey } from "@/lib/format";
 import { carryTarget, findProductionRow, productionId, type ProductionRow } from "@/lib/production/plan";
 import { productionTableMissing } from "@/lib/production/tables";
-import { cleanRooms, roomsText, sameRooms } from "@/lib/tatami-spec";
+import { cleanRooms, roomTotals, roomsText, sameRooms } from "@/lib/tatami-spec";
 import { orderRooms } from "@/lib/tatami-rooms";
 import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
@@ -157,8 +157,19 @@ export async function addProduction(formData: FormData) {
   const title = str(formData, "title").slice(0, 80);
   if (!title) fail(back, "案件・内容を入れてください。");
   const spec = str(formData, "spec").slice(0, 200);
-  const qty = Number(str(formData, "qty") || 0);
-  const herinashi = Number(str(formData, "herinashi") || 0);
+  // 部屋ごとの仕様 (畳表・マイト・畳縁・畳床・寸法)。入れたときは畳数・縁無の畳数も部屋の合計
+  let rawRooms: unknown = [];
+  try {
+    rawRooms = JSON.parse(str(formData, "rooms") || "[]");
+  } catch {
+    fail(back, "仕様の形式が正しくありません。もう一度入力してください。");
+  }
+  const parsedRooms = cleanRooms(rawRooms);
+  if (parsedRooms.error) fail(back, parsedRooms.error);
+  const rooms = parsedRooms.rooms;
+  const totals = roomTotals(rooms);
+  const qty = rooms.length && totals.qty > 0 ? totals.qty : Number(str(formData, "qty") || 0);
+  const herinashi = rooms.length && totals.qty > 0 ? totals.herinashi : Number(str(formData, "herinashi") || 0);
   if (!Number.isFinite(qty) || qty < 0 || qty > 500 || !Number.isFinite(herinashi) || herinashi < 0 || herinashi > 500) fail(back, "畳数は 0〜500 の数で入れてください。");
   const undecided = str(formData, "undecided") === "1";
   const date = str(formData, "date");
@@ -186,6 +197,7 @@ export async function addProduction(formData: FormData) {
       spec: spec || undefined,
       qty: qty || undefined,
       herinashi: herinashi || undefined,
+      rooms: rooms.length ? rooms : undefined,
       note: note || undefined,
       history: [{ at: now, by: user.id, action: "create", to: undecided ? undefined : date }],
       createdBy: user.id,
@@ -194,7 +206,7 @@ export async function addProduction(formData: FormData) {
       updatedAt: now,
     };
     db.tatamiProduction.push(rec);
-    addAudit(db, { userId: user.id, action: "create", entity: "production", entityId: id, entityLabel: title, summary: `畳製造予定を追加: ${title} ${undecided ? "製造日未定" : shortDate(date)} ${qty ? `${qty}畳` : ""}`.trim(), storeId });
+    addAudit(db, { userId: user.id, action: "create", entity: "production", entityId: id, entityLabel: title, summary: `畳製造予定を追加: ${title} ${undecided ? "製造日未定" : shortDate(date)} ${qty ? `${qty}畳` : ""}${rooms.length ? ` (${roomsText(rooms).slice(0, 160)})` : ""}`.trim(), storeId });
   });
   revalidatePath(PAGE);
   revalidatePath("/schedule");

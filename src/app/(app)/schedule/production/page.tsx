@@ -1,6 +1,6 @@
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
-import { CalendarDays, CalendarX2, Check, ChevronLeft, ChevronRight, Factory, Plus, RotateCcw, TriangleAlert, Undo2 } from "lucide-react";
+import { CalendarDays, CalendarX2, Check, ChevronLeft, ChevronRight, Factory, Plus, RotateCcw, Trash2, TriangleAlert, Undo2 } from "lucide-react";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
@@ -8,10 +8,10 @@ import type { Store, StoreId } from "@/lib/db/types";
 import { canEditProduction, canViewCompanySchedule } from "@/lib/auth/permissions";
 import { dateRange, dayOfWeek, isDateKey, longDate, shortDate } from "@/lib/calendar";
 import { addDays, toDateKey } from "@/lib/format";
-import { Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select, Textarea } from "@/components/ui";
+import { Button, Card, CardHeader, Field, Flash, Input, LinkButton, LinkTabs, Note, PageHeader, Select } from "@/components/ui";
 import { addProduction, deleteProduction, saveProductionRooms, updateProduction } from "@/lib/actions/production";
 import { TatamiRoomsTable, pendingRoomCount } from "@/components/schedule/TatamiRoomsTable";
-import { TatamiRoomsEditor } from "@/components/schedule/TatamiRoomsEditor";
+import { TatamiRoomsEditor, TatamiRoomsFields } from "@/components/schedule/TatamiRoomsEditor";
 import { roomsFromSheetMemo } from "@/lib/tatami-spec";
 import { quoteRooms } from "@/lib/tatami-rooms";
 import { carryTarget, productionByDay, productionMaterials, productionRows, productionView, type ProductionRow } from "@/lib/production/plan";
@@ -44,7 +44,7 @@ function Materials({ rows, title }: { rows: ProductionRow[]; title?: string }) {
         <span className="text-ink-3">{label}</span> {xs.map((x) => `${x.name} ${num(x.qty)}`).join("・")}
       </span>
     ) : null;
-  if (!m.omote.length && !m.heri.length && !m.doko.length && !m.herinashi && !m.unknown) return null;
+  if (!m.omote.length && !m.heri.length && !m.doko.length && !m.herinashi && !m.unknown && !m.mite) return null;
   return (
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-line bg-subtle/40 px-4 py-1.5 text-[11px] text-ink-2" data-testid="production-materials">
       <span className="font-medium text-ink">{title ?? "使う材料"}</span>
@@ -52,6 +52,7 @@ function Materials({ rows, title }: { rows: ProductionRow[]; title?: string }) {
       {part("畳縁", m.heri)}
       {m.herinashi > 0 && <span className="text-critical-ink">縁無 {num(m.herinashi)}</span>}
       {part("畳床 (新調)", m.doko)}
+      {m.mite > 0 && <span className="font-medium text-info-ink">マイト (巻き込み) {num(m.mite)}</span>}
       {m.unknown > 0 && <span className="text-warn-ink">仕様の未確認 {num(m.unknown)}</span>}
       <Link href="/heri" className="ml-auto text-accent hover:underline">
         縁の在庫
@@ -110,16 +111,20 @@ function RowItem({ r, stores, editable, back, today, db }: { r: ProductionRow; s
     </>
   );
   return (
-    <li className={clsx("grid grid-cols-1 gap-x-4 gap-y-2 px-4 py-3 @3xl:grid-cols-[minmax(0,1fr)_minmax(0,auto)]", r.status === "done" && "bg-subtle/40")} data-testid="production-row">
+    // 列の幅を決めておく (どの行も 状態・店舗・お客様・畳数・部屋ごとの表・操作 の縦の線がそろう。お客様のご要望 2026-11-26)
+    <li className={clsx("grid grid-cols-1 gap-x-4 gap-y-2 px-4 py-3 @3xl:grid-cols-[minmax(0,1fr)_16rem]", r.status === "done" && "bg-subtle/40")} data-testid="production-row">
       <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className={clsx("rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap", STATUS_STYLE[status])}>{statusLabel}</span>
-          {store && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 @xl:grid @xl:grid-cols-[8.5rem_6rem_minmax(0,1fr)]">
+          <span className={clsx("justify-self-start rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap", STATUS_STYLE[status])}>{statusLabel}</span>
+          {store ? (
             <span className="inline-flex items-center gap-1 text-xs whitespace-nowrap text-ink-2">
               <span className="h-2 w-2 rounded-full" style={{ background: store.color }} aria-hidden />
               {store.shortName}
             </span>
+          ) : (
+            <span />
           )}
+          <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
           {r.href ? (
             <Link href={r.href} className="font-medium text-ink hover:text-accent hover:underline">
               {r.name}
@@ -128,8 +133,9 @@ function RowItem({ r, stores, editable, back, today, db }: { r: ProductionRow; s
             <span className="font-medium text-ink">{r.name}</span>
           )}
           {r.orderNumber && <span className="text-[11px] text-ink-3">{r.orderNumber}</span>}
+          </span>
         </div>
-        <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+        <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 @xl:grid @xl:grid-cols-[8.5rem_6rem_minmax(0,1fr)]">
           <span className={clsx("text-base font-semibold tnum", r.status === "done" ? "text-ink-2" : "text-ink")} data-testid="production-qty">
             {r.qty ? `${num(r.qty)}畳` : "畳数不明"}
             {r.herinashiSeen && (
@@ -139,8 +145,11 @@ function RowItem({ r, stores, editable, back, today, db }: { r: ProductionRow; s
               </span>
             )}
           </span>
-          {r.work && <span className="text-xs text-ink-2">{r.work}</span>}
-          {pendingRoomCount(r.rooms) > 0 && r.status === "planned" && <span className="rounded bg-warn-soft px-1.5 py-0.5 text-[11px] font-semibold text-warn-ink">仕様の未確認 {pendingRoomCount(r.rooms)} 部屋</span>}
+          <span className="text-xs text-ink-2">{r.work}</span>
+          <span className="flex flex-wrap items-center gap-1.5">
+            {r.rooms.some((x) => x.mite) && <span className="rounded bg-info-soft px-1.5 py-0.5 text-[11px] font-semibold text-info-ink">マイト (巻き込み) {r.rooms.filter((x) => x.mite).length} 部屋</span>}
+            {pendingRoomCount(r.rooms) > 0 && r.status === "planned" && <span className="rounded bg-warn-soft px-1.5 py-0.5 text-[11px] font-semibold text-warn-ink">仕様の未確認 {pendingRoomCount(r.rooms)} 部屋</span>}
+          </span>
         </div>
         <div className="mt-1.5">
           <TatamiRoomsTable rooms={r.rooms} dim={r.status === "done"} />
@@ -161,7 +170,7 @@ function RowItem({ r, stores, editable, back, today, db }: { r: ProductionRow; s
         ))}
         {editable && (
           <details className="mt-2 rounded-lg border border-line bg-panel" data-testid="rooms-edit">
-            <summary className="cursor-pointer px-3 py-1.5 text-xs font-medium text-accent-ink">仕様を入力・変更 (部屋ごとの畳表・畳縁・畳床・寸法)</summary>
+            <summary className="cursor-pointer px-3 py-1.5 text-xs font-medium text-accent-ink">仕様を入力・変更 (部屋ごとの畳表・マイト・畳縁・畳床・寸法)</summary>
             <div className="border-t border-line p-3">
               <TatamiRoomsEditor
                 action={saveProductionRooms}
@@ -177,7 +186,7 @@ function RowItem({ r, stores, editable, back, today, db }: { r: ProductionRow; s
         )}
       </div>
       {editable && (
-        <div className="flex flex-wrap items-center gap-1.5 @3xl:justify-end">
+        <div className="flex flex-wrap content-start items-center gap-1.5 @3xl:justify-end">
           {r.status === "planned" && (
             <>
               <form action={updateProduction}>
@@ -201,7 +210,7 @@ function RowItem({ r, stores, editable, back, today, db }: { r: ProductionRow; s
                   </Button>
                 </form>
               )}
-              {(r.mode === "manual" || (r.mode === "undecided" && r.baseDate)) && (
+              {r.source !== "manual" && r.baseDate && (r.mode === "manual" || r.mode === "undecided") && (
                 <form action={updateProduction}>
                   {hidden("auto")}
                   <Button size="sm" variant="ghost" title={`製造日を${r.baseLabel} (${r.baseDate ? shortDate(r.baseDate) : "-"}) に戻します`}>
@@ -228,16 +237,48 @@ function RowItem({ r, stores, editable, back, today, db }: { r: ProductionRow; s
               </Button>
             </form>
           )}
-          {r.source === "manual" && r.record && (
-            <form action={deleteProduction}>
-              <input type="hidden" name="id" value={r.record.id} />
-              <input type="hidden" name="back" value={back} />
-              <Button size="sm" variant="ghost" className="text-critical-ink">削除</Button>
-            </form>
-          )}
+          <DeleteRow r={r} back={back} />
         </div>
       )}
     </li>
+  );
+}
+
+/**
+ * 製造の予定の削除 (すべての行。お客様のご要望 2026-11-26「すべての製造予定に削除ボタン」)。押すと確かめの文を出す。
+ * 手で追加した行は記録ごと消す。受注・予定表から入った行は製造の予定から外すだけ (受注・予定表の引取・納品は変わらない。下の「削除した製造の予定」から戻せる)
+ */
+function DeleteRow({ r, back }: { r: ProductionRow; back: string }) {
+  const manual = r.source === "manual" && r.record;
+  return (
+    <details className="group text-xs" data-testid="production-delete">
+      <summary className="inline-flex h-8 cursor-pointer list-none items-center gap-1 rounded-lg px-2 font-medium text-critical hover:bg-critical-soft hover:text-critical-ink">
+        <Trash2 className="h-4 w-4" aria-hidden />
+        削除
+      </summary>
+      <div className="mt-1 w-64 rounded-lg border border-critical/30 bg-critical-soft/40 p-2 text-ink">
+        <p className="font-medium">本当に削除しますか？</p>
+        <p className="mt-0.5 text-[11px] text-ink-2">{manual ? "手で追加したこの製造の予定を削除します。" : "畳製造予定から外します。受注・予定表の引取日・納品日は変わりません (下の「削除した製造の予定」から戻せます)。"}</p>
+        {manual ? (
+          <form action={deleteProduction} className="mt-1.5">
+            <input type="hidden" name="id" value={r.record!.id} />
+            <input type="hidden" name="back" value={back} />
+            <Button size="sm" variant="danger">
+              削除する
+            </Button>
+          </form>
+        ) : (
+          <form action={updateProduction} className="mt-1.5">
+            <input type="hidden" name="key" value={r.key} />
+            <input type="hidden" name="op" value="cancel" />
+            <input type="hidden" name="back" value={back} />
+            <Button size="sm" variant="danger">
+              削除する
+            </Button>
+          </form>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -268,6 +309,8 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
   const all = productionRows(db, q);
   const inStore = (r: ProductionRow) => !storeFilter || r.storeId === storeFilter;
   const view = productionView(all.filter(inStore), q);
+  // 削除した (製造の予定から外した) 行: 期間の行と製造日未定の行
+  const removed = all.filter(inStore).filter((r) => r.status === "cancelled" && (!r.date || (r.date >= from && r.date <= to)));
   const stores = new Map(db.stores.map((s) => [s.id, s]));
   const byDay = productionByDay(all.filter(inStore).filter((r) => r.date && r.date >= from && r.date <= to));
   const storeTabs = [
@@ -293,7 +336,7 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
               予定表へ
             </LinkButton>
             {editable && (
-              <LinkButton href="#add" size="sm">
+              <LinkButton href={`${link()}${link().includes("?") ? "&" : "?"}add=1#add`} size="sm">
                 <Plus />
                 製造の予定を追加
               </LinkButton>
@@ -302,6 +345,70 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
         }
       />
       {!ready && <Note tone="warn">畳製造予定のテーブルがまだデータベースにありません。表示はできますが、繰り越し・製造済みなどの記録はデプロイ (テーブルの作成) のあとにできます。</Note>}
+
+      {editable && (
+        <details id="add" open={sp.add === "1"} className="mb-4 rounded-2xl border border-line bg-panel shadow-xs" data-testid="production-add">
+          <summary className="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-semibold text-ink">
+            <Plus className="h-4 w-4 text-accent" aria-hidden />
+            製造の予定を追加 (個別の製造)
+            <span className="text-xs font-normal text-ink-3">予定表・受注にない製造 (在庫の畳・置き畳・個別の注文など) をこの画面から直接入れます</span>
+          </summary>
+          <form action={addProduction} className="@container space-y-3 border-t border-line p-4">
+            <input type="hidden" name="back" value={back} />
+            <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-4">
+              <Field label="店舗" required>
+                <Select name="storeId" defaultValue={storeFilter ?? user.storeId} required>
+                  {db.stores.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="製造日" hint="未定のときは右の「製造日未定」に印">
+                <Input type="date" name="date" defaultValue={from} />
+              </Field>
+              <Field label="製造日未定">
+                <label className="flex h-10 items-center gap-2 text-sm text-ink">
+                  <input type="checkbox" name="undecided" value="1" className="h-4 w-4" />
+                  製造日がまだ決まっていない
+                </label>
+              </Field>
+              <Field label="受注番号 (あれば)">
+                <Input name="orderNumber" placeholder="例: O-2026-1480" />
+              </Field>
+              <Field label="案件・内容" required className="@xl:col-span-2">
+                <Input name="title" required maxLength={80} placeholder="例: 置き畳 (展示用)・○○様 追加の 2 畳" />
+              </Field>
+              <Field label="メモ" className="@xl:col-span-2">
+                <Input name="note" maxLength={300} />
+              </Field>
+            </div>
+            <div className="rounded-xl border border-line bg-subtle/40 p-3">
+              <p className="mb-2 text-xs font-medium text-ink">部屋ごとの仕様 (畳表・マイト・畳縁・畳床・寸法)。畳数は部屋の合計になります</p>
+              <TatamiRoomsFields initial={[]} idPrefix="pr-add" />
+            </div>
+            <details className="text-xs">
+              <summary className="cursor-pointer text-ink-2">仕様を入れずに畳数だけ入れる</summary>
+              <div className="mt-2 grid grid-cols-1 gap-3 @xl:grid-cols-3">
+                <Field label="仕様">
+                  <Input name="spec" maxLength={200} placeholder="例: 表替え さくら / 縁 マス菊" />
+                </Field>
+                <Field label="畳数">
+                  <Input type="number" name="qty" min={0} max={500} step="any" inputMode="decimal" />
+                </Field>
+                <Field label="うちへり無し畳">
+                  <Input type="number" name="herinashi" min={0} max={500} step="any" inputMode="decimal" />
+                </Field>
+              </div>
+            </details>
+            <Button>
+              <Plus />
+              追加する
+            </Button>
+          </form>
+        </details>
+      )}
 
       <LinkTabs items={storeTabs} current={link({ store: storeParam })} />
 
@@ -431,54 +538,31 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
           )}
         </Card>
 
-        {editable && (
-          <Card id="add">
-            <CardHeader title="製造の予定を追加" description="受注・予定表にない製造 (在庫の畳・置き畳の製作など) を追加します。受注の引き取りの分は自動で入るので追加は不要です" icon={<Plus />} />
-            <form action={addProduction} className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-3">
-              <input type="hidden" name="back" value={back} />
-              <Field label="店舗" required>
-                <Select name="storeId" defaultValue={storeFilter ?? user.storeId} required>
-                  {db.stores.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="製造日" hint="未定のときは下の「製造日未定」に印">
-                <Input type="date" name="date" defaultValue={from} />
-              </Field>
-              <Field label="製造日未定">
-                <label className="flex h-10 items-center gap-2 text-sm text-ink">
-                  <input type="checkbox" name="undecided" value="1" className="h-4 w-4" />
-                  製造日がまだ決まっていない
-                </label>
-              </Field>
-              <Field label="案件・内容" required>
-                <Input name="title" required maxLength={80} placeholder="例: 置き畳 (展示用)" />
-              </Field>
-              <Field label="仕様">
-                <Input name="spec" maxLength={200} placeholder="例: 表替え さくら / 縁 マス菊" />
-              </Field>
-              <Field label="受注番号 (あれば)">
-                <Input name="orderNumber" placeholder="例: O-2026-1480" />
-              </Field>
-              <Field label="畳数">
-                <Input type="number" name="qty" min={0} max={500} step="any" inputMode="decimal" />
-              </Field>
-              <Field label="うちへり無し畳">
-                <Input type="number" name="herinashi" min={0} max={500} step="any" inputMode="decimal" />
-              </Field>
-              <Field label="メモ" className="@xl:col-span-2 @4xl:col-span-1">
-                <Textarea name="note" rows={1} maxLength={300} />
-              </Field>
-              <div className="@xl:col-span-2 @4xl:col-span-3">
-                <Button>
-                  <Plus />
-                  追加する
-                </Button>
-              </div>
-            </form>
+        {removed.length > 0 && (
+          <Card padded={false} id="removed">
+            <details>
+              <summary className="cursor-pointer px-4 py-2.5 text-sm font-semibold text-ink-2">削除した製造の予定 ({removed.length} 件)</summary>
+              <ul className="divide-y divide-line border-t border-line">
+                {removed.map((r) => (
+                  <li key={r.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-xs text-ink-2" data-testid="production-removed">
+                    <span className="font-medium text-ink">{r.name}</span>
+                    <span>{r.date ? shortDate(r.date) : "製造日未定"}</span>
+                    <span className="tnum">{r.qty ? `${num(r.qty)}畳` : ""}</span>
+                    {editable && (
+                      <form action={updateProduction} className="ml-auto">
+                        <input type="hidden" name="key" value={r.key} />
+                        <input type="hidden" name="op" value="restore" />
+                        <input type="hidden" name="back" value={back} />
+                        <Button size="sm" variant="ghost">
+                          <Undo2 />
+                          製造の予定に戻す
+                        </Button>
+                      </form>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </details>
           </Card>
         )}
 
@@ -488,7 +572,9 @@ export default async function ProductionPage({ searchParams }: { searchParams: P
             <li>・受注の「引取・納品の日程」の畳 (表替え・裏返しは引取日、新調は採寸の予定の日) と、予定表の引き取りの予定 (畳の枚数のあるもの) から自動で入ります。引取日が変わると、日付を変えていない製造予定も一緒に動きます。</li>
             <li>・当日に製造できなかったときは「繰り越す」で翌営業日へ (休業日は飛ばします)。別の日は「日付を変更」、長期預かりなどは「未定にする」。</li>
             <li>・製造日を変えても、予定表の引取日・納品日の予定は変わりません。製造日が納品日より後になると注意が出ます。</li>
-            <li>・<span className="font-semibold text-critical-ink">縁無</span> はへり無し畳 (製造に時間がかかります)。納品の日が過ぎた予定・施工完了の受注は製造済みとみなします。</li>
+            <li>・<span className="font-semibold text-critical-ink">縁無</span> はへり無し畳 (製造に時間がかかります)。<span className="font-semibold text-info-ink">マイト</span> はマイトスタット巻き込み (防ダニシートを畳床に巻き込む加工。敷き込みは現場の作業なので出しません)。部屋ごとに「仕様を入力・変更」で付け外しできます。納品の日が過ぎた予定・施工完了の受注は製造済みとみなします。</li>
+            <li>・1 部屋に寸法が 2 種類以上あるときは「寸法を追加」で寸法ごとの枚数を入れます (例: 630×290 を 4 枚・580×630 を 2 枚)。</li>
+            <li>・予定表・受注にない製造は、上の「製造の予定を追加」から直接入れます。「削除」は製造の予定から外すだけで、予定表の引取日・納品日は変わりません。</li>
           </ul>
         </Card>
       </div>

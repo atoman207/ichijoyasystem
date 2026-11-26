@@ -1,18 +1,33 @@
 import clsx from "clsx";
 import type { TatamiRoom } from "@/lib/db/types";
-import { TATAMI_WORK_LABEL, fmtQty, needsThickness, roomLabel, roomPending } from "@/lib/tatami-spec";
+import { TATAMI_WORK_LABEL, fmtQty, needsThickness, roomLabel, roomPending, roomSizes } from "@/lib/tatami-spec";
 
 /**
  * 畳の仕様 (部屋ごと) の表示 (畳製造予定・受注・見積の画面)。未確定の項目は「寸法未確認」などの印で出す。
- * 広い欄は表、狭い欄 (スマートフォン) は部屋ごとのカード (コンテナクエリ)
+ * 広い欄は表、狭い欄 (スマートフォン) は部屋ごとのカード (コンテナクエリ)。
+ * 表の列の幅は決めておく (table-fixed + colgroup)。畳製造予定の行ごとの表の縦の線がそろう (お客様のご要望 2026-11-26「各項目の縦のラインを揃え」)。
+ * マイトスタット巻き込みは畳表の右に「マイト」、寸法が 2 種類以上の部屋は寸法ごとの枚数を 1 行ずつ
  */
 
 function Pending({ children }: { children: string }) {
   return <span className="inline-flex items-center rounded bg-warn-soft px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap text-warn-ink">{children}</span>;
 }
 
+export function MiteMark() {
+  return (
+    <span className="ml-1 inline-flex items-center rounded bg-info-soft px-1 text-[11px] font-semibold whitespace-nowrap text-info-ink" title="マイトスタット巻き込み (防ダニシートを畳床に巻き込む加工)" data-testid="mite-mark">
+      マイト
+    </span>
+  );
+}
+
 function cells(r: TatamiRoom) {
-  const omote = r.work === "ura" ? <span className="text-ink-3">今の表 (裏返し)</span> : r.omote ? r.omote : <Pending>畳表未確認</Pending>;
+  const omote = (
+    <>
+      {r.work === "ura" ? <span className="text-ink-3">今の表 (裏返し)</span> : r.omote ? r.omote : <Pending>畳表未確認</Pending>}
+      {r.mite && <MiteMark />}
+    </>
+  );
   const heri = r.herinashi ? <span className="rounded bg-critical-soft px-1 text-xs font-semibold text-critical-ink">縁無</span> : r.heri ? r.heri : <Pending>畳縁未確認</Pending>;
   const doko =
     r.work === "new" ? (
@@ -32,7 +47,19 @@ function cells(r: TatamiRoom) {
     ) : (
       <span className="text-ink-2">{r.doko || "今の床"}</span>
     );
-  const size = r.size ? r.size : <Pending>寸法未確認</Pending>;
+  const list = roomSizes(r);
+  const size = list.length ? (
+    <span className="flex flex-col" data-testid="room-sizes">
+      {list.map((z, i) => (
+        <span key={`${z.size}-${i}`} className="whitespace-nowrap">
+          {z.size}
+          {z.qty ? <span className="ml-1 font-semibold tnum">{fmtQty(z.qty)}枚</span> : null}
+        </span>
+      ))}
+    </span>
+  ) : (
+    <Pending>寸法未確認</Pending>
+  );
   const qty = r.qty > 0 ? `${fmtQty(r.qty)}畳` : <Pending>畳数未確認</Pending>;
   return { omote, heri, doko, size, qty };
 }
@@ -41,7 +68,16 @@ export function TatamiRoomsTable({ rooms, dim = false }: { rooms: TatamiRoom[]; 
   if (!rooms.length) return null;
   return (
     <div className={clsx("@container", dim && "opacity-70")} data-testid="tatami-rooms">
-      <table className="hidden w-full border-collapse text-xs @2xl:table">
+      <table className="hidden w-full table-fixed border-collapse text-xs @2xl:table">
+        <colgroup>
+          <col className="w-[14%]" />
+          <col className="w-[8%]" />
+          <col className="w-[7%]" />
+          <col className="w-[21%]" />
+          <col className="w-[17%]" />
+          <col className="w-[15%]" />
+          <col className="w-[18%]" />
+        </colgroup>
         <thead>
           <tr className="border-b border-line text-left text-[11px] text-ink-3">
             <th className="py-1 pr-2 font-medium">部屋</th>
@@ -58,16 +94,16 @@ export function TatamiRoomsTable({ rooms, dim = false }: { rooms: TatamiRoom[]; 
             const c = cells(r);
             return (
               <tr key={r.id} className="border-b border-line/60 align-top last:border-0" data-testid="tatami-room">
-                <td className="py-1 pr-2 font-medium text-ink">
+                <td className="py-1 pr-2 font-medium break-words text-ink">
                   {roomLabel(r, i)}
                   {r.note && <div className="text-[11px] font-normal text-ink-3">{r.note}</div>}
                 </td>
                 <td className="py-1 pr-2 whitespace-nowrap text-ink-2">{TATAMI_WORK_LABEL[r.work]}</td>
                 <td className="py-1 pr-2 text-right font-semibold whitespace-nowrap text-ink tnum">{c.qty}</td>
-                <td className="py-1 pr-2 text-ink">{c.omote}</td>
-                <td className="py-1 pr-2 text-ink">{c.heri}</td>
-                <td className="py-1 pr-2 text-ink">{c.doko}</td>
-                <td className="py-1 pr-2 text-ink">{c.size}</td>
+                <td className="py-1 pr-2 break-words text-ink">{c.omote}</td>
+                <td className="py-1 pr-2 break-words text-ink">{c.heri}</td>
+                <td className="py-1 pr-2 break-words text-ink">{c.doko}</td>
+                <td className="py-1 pr-2 break-words text-ink">{c.size}</td>
               </tr>
             );
           })}

@@ -74,6 +74,7 @@ export async function POST(req: Request) {
   if (task === "doc-bank") return docBankFix(url, req);
   if (task === "visit-merge") return visitMerge(url);
   if (task === "avatars") return avatarsFix(url, req);
+  if (task === "user-names") return userNamesFix(url, req);
   if (task !== "quote-line-units") return NextResponse.json({ error: "unknown task" }, { status: 400 });
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? from;
@@ -455,6 +456,40 @@ async function avatarsFix(url: URL, req: Request) {
     }
   });
   return NextResponse.json({ ok: true, applied: true, photos: view, at: nowIso() });
+}
+
+/**
+ * 社員の名前を直す (公開サイトのスタッフ紹介に合わせたフルネームなど。お客様のご要望 2026-11-26)。
+ * テスト期間はアカウントの変更を止めているため、開発担当がここから直す。本文 JSON の names = [{ userId, from (今の名前), to (新しい名前) }]。
+ * 既定は確認だけ (apply=1 で書く)。今の名前が from と違えば直さない。社員の名前はコードに書かない
+ */
+async function userNamesFix(url: URL, req: Request) {
+  const apply = url.searchParams.get("apply") === "1";
+  const body = (await req.json().catch(() => null)) as { names?: { userId?: unknown; from?: unknown; to?: unknown }[] } | null;
+  if (!Array.isArray(body?.names) || !body.names.length || body.names.length > 50) return NextResponse.json({ error: "names (1〜50 件) を JSON で送ってください" }, { status: 400 });
+  const db0 = await syncDb();
+  type Row = { userId: string; from: string; to: string; status: "same" | "set" | "error"; error?: string };
+  const rows: Row[] = body.names.map((n) => {
+    const userId = typeof n.userId === "string" ? n.userId : "";
+    const from = typeof n.from === "string" ? n.from : "";
+    const to = typeof n.to === "string" ? n.to.normalize("NFC").replace(/\s+/g, " ").trim().slice(0, 60) : "";
+    const u = db0.users.find((x) => x.id === userId);
+    if (!u) return { userId, from, to, status: "error", error: "社員が見つかりません" };
+    if (!to) return { userId, from, to, status: "error", error: "新しい名前が空です" };
+    if (u.name === to) return { userId, from, to, status: "same" };
+    if (u.name !== from) return { userId, from, to, status: "error", error: `今の名前が違います (登録: ${u.name})` };
+    return { userId, from, to, status: "set" };
+  });
+  if (!apply || rows.some((r) => r.status === "error") || !rows.some((r) => r.status === "set")) return NextResponse.json({ ok: !rows.some((r) => r.status === "error"), applied: false, names: rows });
+  await mutate((db) => {
+    for (const r of rows) {
+      const u = db.users.find((x) => x.id === r.userId);
+      if (r.status !== "set" || !u || u.name !== r.from) continue;
+      u.name = r.to;
+      addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "user", entityId: u.id, entityLabel: r.to, summary: `社員の名前を変更: ${r.from} → ${r.to} (公開サイトのスタッフ紹介に合わせる)`, storeId: u.storeId, changes: [{ field: "name", before: r.from, after: r.to }] });
+    }
+  });
+  return NextResponse.json({ ok: true, applied: true, names: rows, at: nowIso() });
 }
 
 function diffChangesHidden(before: { avatarHidden?: boolean }, after: boolean | undefined) {

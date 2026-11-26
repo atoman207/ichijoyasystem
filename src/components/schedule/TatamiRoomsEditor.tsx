@@ -1,63 +1,72 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Copy, Plus, RotateCcw, Trash } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Copy, Plus, RotateCcw, Trash, X } from "lucide-react";
 import type { TatamiRoom } from "@/lib/db/types";
-import { DOKO_TYPES, SIZE_CHOICES, THICKNESS_CHOICES, TATAMI_WORKS, TATAMI_WORK_LABEL, cleanRooms, newRoomId, roomPending, roomTotals, fmtQty, type TatamiWork } from "@/lib/tatami-spec";
+import { DOKO_TYPES, MAX_SIZES, SIZE_CHOICES, THICKNESS_CHOICES, TATAMI_WORKS, TATAMI_WORK_LABEL, cleanRooms, newRoomId, roomPending, roomSizes, roomTotals, fmtQty, type TatamiWork } from "@/lib/tatami-spec";
 import { Button, Field, Input, Select } from "@/components/ui";
 
-type Row = Omit<TatamiRoom, "qty"> & { qty: string };
+type SizeRow = { size: string; qty: string };
+type Row = Omit<TatamiRoom, "qty" | "size" | "sizes"> & { qty: string; sizes: SizeRow[] };
 
-const toRow = (r: TatamiRoom): Row => ({ ...r, qty: r.qty > 0 ? String(r.qty) : "" });
-const toRoom = (r: Row): TatamiRoom => ({ ...r, qty: Number(r.qty.normalize("NFKC")) || 0 });
+const blankSize = (): SizeRow => ({ size: "", qty: "" });
+const toRow = (r: TatamiRoom): Row => {
+  const { size: _size, sizes: _sizes, ...rest } = r;
+  void _size;
+  void _sizes;
+  const list = roomSizes(r).map((z) => ({ size: z.size, qty: z.qty ? String(z.qty) : "" }));
+  return { ...rest, qty: r.qty > 0 ? String(r.qty) : "", sizes: list.length ? list : [blankSize()] };
+};
+const toRoom = (r: Row): TatamiRoom => {
+  const { sizes, ...rest } = r;
+  const list = sizes.filter((z) => z.size.trim()).map((z) => ({ size: z.size, qty: Number(z.qty.normalize("NFKC")) || undefined }));
+  return { ...rest, qty: Number(r.qty.normalize("NFKC")) || 0, ...(list.length ? { sizes: list } : {}) };
+};
 
 /**
- * 畳の仕様 (部屋ごと) の入力 (畳製造予定・受注・見積の画面)。部屋ごとに 作業・畳数・畳表・畳縁 (縁無)・畳床 (種類・厚み)・寸法。
- * 空欄は未確定 (「寸法未確認」と出る)。あとから入れ・直せる。同じ畳表で縁だけ違う部屋は「複製」してから縁を直す
+ * 畳の仕様 (部屋ごと) の入力欄 (フォームの中に置く。選んだ仕様は hidden の rooms = JSON)。
+ * 部屋ごとに 作業・畳数・寸法 (2 種類以上は寸法ごとの枚数)・畳表 (マイトスタット巻き込み)・畳縁 (縁無)・畳床 (種類・厚み)・メモ。
+ * 空欄は未確定 (「寸法未確認」と出る)。同じ畳表で縁だけ違う部屋は「複製」してから縁を直す
  */
-export function TatamiRoomsEditor({
-  action,
+export function TatamiRoomsFields({
   initial,
   auto,
-  hidden,
   works = TATAMI_WORKS,
   omoteChoices = [],
   heriChoices = [],
-  submitLabel = "仕様を保存する",
   idPrefix,
+  onChange,
 }: {
-  action: (formData: FormData) => void | Promise<void>;
   initial: TatamiRoom[];
   /** 見積の明細から自動で作った案 (「見積の明細から作り直す」) */
   auto?: TatamiRoom[];
-  hidden?: Record<string, string>;
   /** 新しい部屋の作業の候補 (畳製造予定の行はその行の作業) */
   works?: TatamiWork[];
   omoteChoices?: string[];
   heriChoices?: string[];
-  submitLabel?: string;
   idPrefix: string;
+  /** 入力が変わったとき (確かめの結果) */
+  onChange?: (check: { rooms: TatamiRoom[]; error?: string }) => void;
 }) {
   const [rows, setRows] = useState<Row[]>(() => initial.map(toRow));
   const rooms = useMemo(() => rows.map(toRoom), [rows]);
   const check = useMemo(() => cleanRooms(rooms), [rooms]);
+  useEffect(() => onChange?.(check), [check, onChange]);
   const totals = roomTotals(check.rooms);
   const update = (id: string, patch: Partial<Row>) => setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  const add = () => setRows((rs) => [...rs, { id: newRoomId(), work: works[0] ?? "omote", qty: "" }]);
+  const updateSize = (id: string, i: number, patch: Partial<SizeRow>) => setRows((rs) => rs.map((r) => (r.id === id ? { ...r, sizes: r.sizes.map((z, j) => (j === i ? { ...z, ...patch } : z)) } : r)));
+  const add = () => setRows((rs) => [...rs, { id: newRoomId(), work: works[0] ?? "omote", qty: "", sizes: [blankSize()] }]);
   const copy = (id: string) =>
     setRows((rs) => {
       const i = rs.findIndex((r) => r.id === id);
       if (i < 0) return rs;
-      const c = { ...rs[i], id: newRoomId(), room: "" };
+      const c = { ...rs[i], id: newRoomId(), room: "", sizes: rs[i].sizes.map((z) => ({ ...z })) };
       return [...rs.slice(0, i + 1), c, ...rs.slice(i + 1)];
     });
   const list = (id: string) => `${idPrefix}-${id}`;
 
   return (
-    <form action={action} className="@container space-y-3" data-testid="tatami-rooms-editor">
-      {Object.entries(hidden ?? {}).map(([k, v]) => (
-        <input key={k} type="hidden" name={k} value={v} />
-      ))}
+    <div className="@container space-y-3" data-testid="tatami-rooms-editor">
       <input type="hidden" name="rooms" value={JSON.stringify(check.rooms)} />
       <datalist id={list("doko")}>{DOKO_TYPES.map((d) => <option key={d} value={d} />)}</datalist>
       <datalist id={list("size")}>{SIZE_CHOICES.map((d) => <option key={d} value={d} />)}</datalist>
@@ -68,6 +77,8 @@ export function TatamiRoomsEditor({
       {rows.map((r, i) => {
         const n = i + 1;
         const pending = roomPending(toRoom(r));
+        const many = r.sizes.length > 1;
+        const pieces = r.sizes.reduce((a, z) => a + (Number(z.qty.normalize("NFKC")) || 0), 0);
         return (
           <div key={r.id} className="rounded-xl border border-line p-3" data-testid="tatami-room-row">
             <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -106,9 +117,33 @@ export function TatamiRoomsEditor({
               <Field label="畳数" hint="半畳は 0.5">
                 <Input type="number" inputMode="decimal" min={0} step={0.5} value={r.qty} onChange={(e) => update(r.id, { qty: e.target.value })} aria-label={`部屋 ${n} の畳数`} />
               </Field>
-              <Field label="寸法" className="col-span-2 @2xl:col-span-2" hint="例: 本間・江戸間 (五八)・880×1760">
-                <Input value={r.size ?? ""} onChange={(e) => update(r.id, { size: e.target.value })} list={list("size")} placeholder="未確認 (現地で採寸)" maxLength={40} aria-label={`部屋 ${n} の寸法`} />
-              </Field>
+              <div className="col-span-2 @2xl:col-span-2" data-testid="room-size-rows">
+                <span className="label">寸法{many ? " (寸法ごとの枚数)" : ""}</span>
+                <div className="mt-1 space-y-1.5">
+                  {r.sizes.map((z, j) => (
+                    <div key={j} className="flex items-center gap-1.5">
+                      <Input value={z.size} onChange={(e) => updateSize(r.id, j, { size: e.target.value })} list={list("size")} placeholder={j === 0 ? "未確認 (現地で採寸)" : "例: 580×630"} maxLength={40} aria-label={`部屋 ${n} の寸法 ${j + 1}`} className="min-w-0 flex-1" />
+                      {many && (
+                        <>
+                          <Input type="number" inputMode="decimal" min={0} step={1} value={z.qty} onChange={(e) => updateSize(r.id, j, { qty: e.target.value })} placeholder="枚数" aria-label={`部屋 ${n} の寸法 ${j + 1} の枚数`} className="w-20 shrink-0" />
+                          <span className="shrink-0 text-xs text-ink-2">枚</span>
+                          <button type="button" onClick={() => update(r.id, { sizes: r.sizes.filter((_, k) => k !== j) })} className="shrink-0 rounded p-1 text-critical hover:bg-critical-soft" aria-label={`部屋 ${n} の寸法 ${j + 1} を外す`}>
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-2">
+                  {r.sizes.length < MAX_SIZES && (
+                    <button type="button" onClick={() => update(r.id, { sizes: [...r.sizes, blankSize()] })} className="inline-flex items-center gap-0.5 py-0.5 text-xs font-medium text-accent hover:underline" data-testid="add-size">
+                      <Plus className="h-3.5 w-3.5" /> 寸法を追加 (1 部屋に寸法が 2 種類以上)
+                    </button>
+                  )}
+                  {many && pieces > 0 && <span className="text-[11px] text-ink-3 tnum">枚数の合計 {fmtQty(pieces)}枚</span>}
+                </div>
+              </div>
               <Field label="畳表" className="col-span-2 @2xl:col-span-2">
                 <Input
                   value={r.work === "ura" ? "" : (r.omote ?? "")}
@@ -119,6 +154,10 @@ export function TatamiRoomsEditor({
                   maxLength={60}
                   aria-label={`部屋 ${n} の畳表`}
                 />
+                <label className="mt-1 inline-flex cursor-pointer items-center gap-1 text-xs text-ink" title="防ダニシートを畳床に巻き込む製造の加工 (敷き込みは現場の作業なので付けません)">
+                  <input type="checkbox" checked={Boolean(r.mite)} onChange={(e) => update(r.id, { mite: e.target.checked || undefined })} className="h-4 w-4 accent-accent" aria-label={`部屋 ${n} はマイトスタット巻き込み`} data-testid="room-mite" />
+                  マイトスタット巻き込み
+                </label>
               </Field>
               <Field label="畳縁" className="col-span-2 @2xl:col-span-2">
                 <div className="flex items-center gap-2">
@@ -160,7 +199,42 @@ export function TatamiRoomsEditor({
         </span>
       </div>
       {check.error && <p className="text-xs text-critical-ink">{check.error}</p>}
-      <Button type="submit" size="sm" disabled={Boolean(check.error)} data-testid="tatami-rooms-save">
+    </div>
+  );
+}
+
+/**
+ * 畳の仕様 (部屋ごと) の入力 (畳製造予定・受注・見積の画面)。TatamiRoomsFields を保存のフォームで包む
+ */
+export function TatamiRoomsEditor({
+  action,
+  initial,
+  auto,
+  hidden,
+  works = TATAMI_WORKS,
+  omoteChoices = [],
+  heriChoices = [],
+  submitLabel = "仕様を保存する",
+  idPrefix,
+}: {
+  action: (formData: FormData) => void | Promise<void>;
+  initial: TatamiRoom[];
+  auto?: TatamiRoom[];
+  hidden?: Record<string, string>;
+  works?: TatamiWork[];
+  omoteChoices?: string[];
+  heriChoices?: string[];
+  submitLabel?: string;
+  idPrefix: string;
+}) {
+  const [error, setError] = useState<string>();
+  return (
+    <form action={action} className="space-y-3">
+      {Object.entries(hidden ?? {}).map(([k, v]) => (
+        <input key={k} type="hidden" name={k} value={v} />
+      ))}
+      <TatamiRoomsFields initial={initial} auto={auto} works={works} omoteChoices={omoteChoices} heriChoices={heriChoices} idPrefix={idPrefix} onChange={(c) => setError(c.error)} />
+      <Button type="submit" size="sm" disabled={Boolean(error)} data-testid="tatami-rooms-save">
         {submitLabel}
       </Button>
     </form>
