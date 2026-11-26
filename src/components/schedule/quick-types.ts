@@ -218,25 +218,7 @@ export interface QuickWork {
   /** 見積の画面 (見積がある案件) */
   quote?: { id: string; number: string; status: string; href: string };
   /** ③④ 受注にする (日程つき)。見積が承認前なら「現場で受注」(見積の承認とあわせて申請) */
-  toOrder?: {
-    quoteId: string;
-    quoteNumber: string;
-    total: number;
-    onsite: boolean;
-    own: boolean;
-    approvalNote: string;
-    initial: HandoverFormRow[];
-    /** 手書きの見積書の「引取日時」「納品日時」(日程の案の元) */
-    sourceText?: string;
-    workerIds: string[];
-    siteAddress: string;
-    storeId: StoreId;
-    users: FormUser[];
-    stores: FormStore[];
-    currentUserId: string;
-    /** 同じ案件の訪問 (見積・現調・現見) の予定。作業 (引取・施工) がその日なら新しい予定を足さずに「現見」に切り替わる */
-    visits: { date: string; label: string; time: string }[];
-  };
+  toOrder?: QuoteOrderPlan;
   /** 受注にできない理由 (承認待ちの変更など) */
   orderBlocked?: string;
   order?: { id: string; number: string; status: string; href: string };
@@ -265,4 +247,32 @@ export interface QuickDocs {
   };
   /** まとめて印刷の画面 (その日・その店舗) */
   batchHref: string;
+}
+
+/**
+ * 見積を受注にする画面の材料 (予定表の小さな画面の「受注にする」と見積の画面の「受注登録」で共通。src/lib/quote-order-plan.ts)
+ */
+export interface QuoteOrderPlan {
+  quoteId: string;
+  quoteNumber: string;
+  total: number;
+  /** 下書き・承認待ちの見積 (見積の承認とあわせて申請する「現場で受注」) */
+  onsite: boolean;
+  own: boolean;
+  approvalNote: string;
+  initial: HandoverFormRow[];
+  /** 手書きの見積書の「引取日時」「納品日時」(日程の案の元) */
+  sourceText?: string;
+  /** 登録済みの予定から引き継いだ日程の説明 (例: 引取 11/26・納品 11/30 の予定) */
+  inheritedText?: string;
+  workerIds: string[];
+  siteAddress: string;
+  storeId: StoreId;
+  users: FormUser[];
+  stores: FormStore[];
+  currentUserId: string;
+  /** 同じ案件の訪問 (見積・現調・現見) の予定。作業 (引取・施工) がその日なら新しい予定を足さずに「現見」に切り替わる */
+  visits: { date: string; label: string; time: string }[];
+  /** 同じ案件の登録済みの引き取り・納品の予定 (受注の予定として使い回す。二重にしない) */
+  existing: { id: string; kind: "pickup" | "delivery"; date: string; label: string; time: string }[];
 }

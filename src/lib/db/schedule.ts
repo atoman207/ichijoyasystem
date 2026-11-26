@@ -169,10 +169,10 @@ export function selectableCases(db: Database, user: User): CaseRef[] {
  * 受注の施工予定 → 予定表 (施工の予定 1 件) へ反映する。
  * 施工開始日が未定になれば連動する予定を外す。時刻を渡さなければ既存の時刻 (新規は 9:00–15:00) を使う。
  */
-export function syncOrderEvent(db: Database, o: Order, actorId: string, times?: { startTime?: string; endTime?: string }): ScheduleEvent | undefined {
+export function syncOrderEvent(db: Database, o: Order, actorId: string, times?: { startTime?: string; endTime?: string }, opts: { noAdopt?: boolean } = {}): ScheduleEvent | undefined {
   // 品目ごとの引取・納品の日程のある受注 (畳・襖・障子・網戸): 引き取り・納品の日だけの予定 (src/lib/handover.ts)
   if (o.handovers?.length) {
-    syncHandoverEvents(db, o, actorId);
+    syncHandoverEvents(db, o, actorId, { noAdopt: opts.noAdopt });
     return db.schedule.find((e) => e.orderId === o.id && e.source === "order");
   }
   const idx = db.schedule.findIndex((e) => e.orderId === o.id && e.source === "order");

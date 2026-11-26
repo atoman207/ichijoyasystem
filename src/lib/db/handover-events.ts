@@ -8,6 +8,7 @@ import { replanProductionForPickup } from "@/lib/scheduling/production";
 import { planTablesReady } from "@/lib/scheduling/tables";
 import { toDateKey } from "@/lib/format";
 import { ADOPTED_KIND, adoptionAudit, isAdoptedVisit, restoreVisit, sameDayVisit } from "@/lib/visit-adopt";
+import { buildCaseMap, caseIdOfEvent } from "@/lib/case-group";
 
 /**
  * 受注の品目ごとの引取・納品の日程 (Order.handovers) → 予定表の予定 (src/lib/handover.ts)
@@ -16,8 +17,10 @@ import { ADOPTED_KIND, adoptionAudit, isAdoptedVisit, restoreVisit, sameDayVisit
  * - 予定は source = "order"・sourceRef = "handover:<役割>:<行の ID>+…"。作り直すときは同じ役割で品目の重なる予定を使い回す
  *   (予定の ID・担当者・手で書いたメモ・車両の予約・製造の予定のつながりを保つ)
  * - 以前の形 (施工期間の「施工」の予定 1 件) の予定は、日程を保存したときに置き換える
- * - 予定表 (スプレッドシート) から移行した、同じ案件 (この受注・見積・問い合わせ) の今日以降の引き取り・納品の予定は、
- *   新しく作る代わりに使い回す (同じ予定を二重にしない。src/lib/schedule-sheet/plan.ts)
+ * - 同じ案件 (この受注・見積・問い合わせ・案件に追加した記録。src/lib/case-group.ts) の今日以降の引き取り・納品の予定 (予定表から移行した予定・
+ *   予定表や問い合わせから手で登録した予定・引取から足した納品。ほかの受注の予定は除く) は、新しく作る代わりに使い回す
+ *   (どの画面から受注を登録しても同じ予定を二重にしない。お客様のご要望 2026-11-26「二重登録の防止」)。
+ *   受注の登録の画面で「登録済みの予定はそのまま残して新しく追加する」を選んだときだけ使い回さない (opts.noAdopt)
  * - 作業 (引き取り・1 日の施工) の日に同じ案件の訪問 (見積・現調・現見) の予定があれば、新しい予定を足さずにその予定を「現見」に切り替える
  *   (見積の訪問がその場で現見になったとき。src/lib/visit-adopt.ts)。作業を別の日に動かす・使わなくなったときは訪問の予定に戻す (消さない)
  * - 受注の scheduledStart / scheduledEnd は日程の最初の日・最後の日 (経営ダッシュボード・案件の状態・予定の提案が使う)
@@ -41,7 +44,7 @@ const timeKey = (e: Pick<ScheduleEvent, "date" | "endDate" | "startTime" | "endT
  * 日程から予定表の予定を作り直す。戻り値の moved は日時が変わった予定 (車両の予約・製造の予定の作り直しに使う)。
  * prevWorkers: 受注の担当を変えたときの前の担当 (前の担当のままの予定だけ新しい担当にする。予定ごとに変えた担当は残す)
  */
-export function syncHandoverEvents(db: Database, o: Order, actorId: string, opts: { prevWorkers?: string[] } = {}): { moved: ScheduleEvent[] } {
+export function syncHandoverEvents(db: Database, o: Order, actorId: string, opts: { prevWorkers?: string[]; noAdopt?: boolean } = {}): { moved: ScheduleEvent[] } {
   const mine = db.schedule.filter((e) => e.orderId === o.id && e.source === "order");
   const moved: ScheduleEvent[] = [];
   if (o.status === "cancelled") return { moved };
@@ -56,15 +59,19 @@ export function syncHandoverEvents(db: Database, o: Order, actorId: string, opts
   const now = nowIso();
   const today = toDateKey(new Date());
   const inquiryId = quote?.inquiryId;
-  // 予定表から移行した予定と、予定表の小さな画面で引取・現見から足した納品 (sourceRef = "pair:…"。src/lib/schedule-pair.ts) は使い回す
-  const adoptable = db.schedule.filter(
-    (e) =>
-      (e.source === "import" || (e.source === "manual" && e.kind === "delivery" && Boolean(e.sourceRef?.startsWith("pair:")))) &&
-      e.date >= today &&
-      (e.kind === "pickup" || e.kind === "delivery") &&
-      (!e.orderId || e.orderId === o.id) &&
-      (e.orderId === o.id || (o.quoteId && e.quoteId === o.quoteId) || (inquiryId && e.inquiryId === inquiryId)),
-  );
+  // 同じ案件の受注の予定でない引き取り・納品の予定 (予定表から移行・手で登録・引取から足した納品 "pair:…") は使い回す
+  const map = opts.noAdopt ? undefined : buildCaseMap(db);
+  const myCase = map?.caseOf(o.id);
+  const adoptable = opts.noAdopt
+    ? []
+    : db.schedule.filter(
+        (e) =>
+          e.source !== "order" &&
+          e.date >= today &&
+          (e.kind === "pickup" || e.kind === "delivery") &&
+          (!e.orderId || e.orderId === o.id) &&
+          (e.orderId === o.id || (o.quoteId && e.quoteId === o.quoteId) || (inquiryId && e.inquiryId === inquiryId) || Boolean(myCase && caseIdOfEvent(map!, e) === myCase)),
+      );
 
   const keys = { orderId: o.id, quoteId: o.quoteId, inquiryId, customerId: o.customerId };
   // 切り替えた訪問の予定で、作業が別の日に動いたもの (訪問の予定に戻す)
@@ -95,7 +102,7 @@ export function syncHandoverEvents(db: Database, o: Order, actorId: string, opts
     const canVisit = g.role === "pickup" || (g.role === "install" && !g.endDate);
     let adopting = false;
     let beforeKind: ScheduleEvent["kind"] | undefined;
-    if (!cand && canVisit) {
+    if (!cand && canVisit && !opts.noAdopt) {
       cand = sameDayVisit(db, keys, g.date, used);
       adopting = Boolean(cand);
       beforeKind = cand?.kind;

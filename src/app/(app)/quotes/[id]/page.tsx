@@ -13,17 +13,19 @@ import { logRecordView } from "@/lib/record-views";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { staffForStore } from "@/lib/staff-choices";
-import { canAccessStore, canApprove, canEditProduction, skipsApproval } from "@/lib/auth/permissions";
+import { canAccessStore, canApprove, canEditCaseStore, canEditProduction, skipsApproval } from "@/lib/auth/permissions";
+import { quoteOrderPlan } from "@/lib/quote-order-plan";
+import { QuoteToOrderForm } from "@/components/schedule/QuoteToOrderForm";
+import { caseHref, caseIdOf } from "@/lib/case-group";
 import { TatamiRoomsCard } from "@/components/schedule/TatamiRoomsCard";
 import { saveQuoteTatamiRooms } from "@/lib/actions/tatami-rooms";
 import { ROOMS_SOURCE_LABEL, orderRooms, quoteRooms } from "@/lib/tatami-rooms";
 import { quoteChain, userName } from "@/lib/db/queries";
-import { convertQuoteToOrder, deleteQuote, markQuoteLost, sendQuote, submitQuote } from "@/lib/actions/quotes";
+import { deleteQuote, markQuoteLost, sendQuote, submitQuote } from "@/lib/actions/quotes";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
 import { customerPhonesText } from "@/lib/customer-contacts";
-import { Badge, Button, Card, CardHeader, Dl, Field, Flash, Input, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, buttonClass } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, Dl, Field, Flash, LinkButton, Note, PageHeader, Select, StatusBadge, StoreTag, buttonClass } from "@/components/ui";
 import { ApprovalDecision, ApprovalHistoryCard, HistoryCard, RecordStamp } from "@/components/features/History";
 import { ContactList, ContactLogForm } from "@/components/features/Contacts";
 import { SendDocumentCard } from "@/components/features/SendDocument";
@@ -37,8 +39,6 @@ import { caseFlow } from "@/lib/case-flow";
 import { formStores, formUsers } from "@/components/schedule/form-data";
 import { CasePlanCard } from "@/components/scheduling/CasePlanCard";
 import { caseEvents } from "@/lib/db/schedule";
-import { hasHandoverItems } from "@/lib/handover";
-import { quoteHandoverLines } from "@/lib/handover-save";
 import { toDateKey } from "@/lib/format";
 import { AiSummary } from "@/components/features/AiSummary";
 import { RecordDocDrafts } from "@/components/features/DocDrafts";
@@ -46,9 +46,9 @@ import { RecordDocDrafts } from "@/components/features/DocDrafts";
 /** 見積書の PDF を作ってメールで送る (送信の応答を待つ) ため */
 export const maxDuration = 60;
 
-export default async function QuoteDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
+export default async function QuoteDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string; next?: string }> }) {
   const { id } = await params;
-  const { msg, err } = await searchParams;
+  const { msg, err, next } = await searchParams;
   const user = await requireUser();
   /** 管理者 (社長) の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
   const own = skipsApproval(user, "quote");
@@ -68,9 +68,13 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
   const chain = quoteChain(db, q);
   const pending = chain.approvals.find((a) => a.status === "pending" && (a.type === "quote" || a.type === "quote_amend"));
   const canDecide = pending ? canApprove(user, pending) : false;
-  const workers = staffForStore(db, q.storeId);
   const returnTo = `/quotes/${id}`;
   const doc = db.documents.find((d) => d.id === q.documentId);
+  // 受注にする (品目ごとの引取日・納品日も同じ画面で。お客様のご要望 2026-11-26「③」。src/lib/quote-order-plan.ts)
+  const canCase = !viewOnly && !lock.locked && canEditCaseStore(user, q.storeId);
+  const planOrBlocked = canCase ? quoteOrderPlan(db, user, q) : undefined;
+  const orderPlan = planOrBlocked && !("blocked" in planOrBlocked) ? planOrBlocked : undefined;
+  const caseRoot = caseIdOf(db, q.id);
 
   return (
     <div>
@@ -91,6 +95,22 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
       />
       {viewOnly && <CaseViewBanner storeName={store?.name ?? "ほかの店舗"} what="見積" basis={info.basis} grantUntil={info.grantUntil} />}
       <CaseFlowBar flow={caseFlow(db, { quoteId: q.id }, new Date())} />
+      {next === "1" && !q.orderId && (
+        // 見積を登録したあとの次の操作 (お客様のご要望 2026-11-26「② 見積登録から受注登録への動線」: 受注登録のし忘れを防ぐ)
+        <Card className="mb-4 border-accent/40 bg-accent-soft/40" data-testid="quote-next-step">
+          <CardHeader title="見積を登録しました。次の操作を選んでください" description="その場で受注になったときは「受注登録へ進む」で、引き取り日・納品日と一緒に登録します。まだ受注でなければ「見積のみで終了する」(TEL待ちの一覧から後で受注にできます)" />
+          <div className="flex flex-wrap gap-2">
+            {orderPlan ? (
+              <LinkButton href={`/quotes/${q.id}#to-order`} size="sm" data-testid="go-to-order">受注登録へ進む</LinkButton>
+            ) : planOrBlocked && "blocked" in planOrBlocked ? (
+              <span className="text-xs text-warn-ink">{planOrBlocked.blocked}</span>
+            ) : null}
+            <LinkButton href={caseRoot ? `${caseHref(caseRoot)}?msg=${encodeURIComponent(`見積 ${q.number} を登録しました (受注はまだです)。`)}` : `/quotes?msg=${encodeURIComponent(`見積 ${q.number} を登録しました (受注はまだです)。`)}`} variant="secondary" size="sm" data-testid="quote-only">
+              見積のみで終了する
+            </LinkButton>
+          </div>
+        </Card>
+      )}
       {!viewOnly && lock.reason && <CompletedLockBanner reason={lock.reason} admin={!lock.locked} />}
       <ReadOnlyArea readOnly={viewOnly || lock.locked}>
 
@@ -237,43 +257,33 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
             </Card>
           )}
           {(q.status === "approved" || q.status === "sent") && !q.orderId && (
-            <div className="grid grid-cols-1 gap-4 @2xl:grid-cols-2">
-              <Card>
-                <CardHeader title="送付の記録 (郵送・手渡し・電話など)" description="システムの外で送った場合に記録します。記録は顧客のやりとり履歴に残ります" />
-                <form action={sendQuote.bind(null, q.id)} className="flex flex-wrap items-end gap-2">
-                  <Field label="送付手段">
-                    <Select name="channel" defaultValue={customer?.preferredChannel === "visit" ? "mail" : customer?.preferredChannel ?? "email"}>
-                      {(["email", "line", "chatwork", "mail", "phone", "visit"] as const).map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}
-                    </Select>
-                  </Field>
-                  <Button type="submit" variant={q.status === "sent" ? "secondary" : "primary"}>{q.status === "sent" ? "再送付を記録" : "送付を記録"}</Button>
-                </form>
-              </Card>
-              <Card id="to-order">
-                <CardHeader title="受注 (契約) 登録" description="お客様の承諾後に登録。契約は承認後に確定します" />
-                <form action={convertQuoteToOrder.bind(null, q.id)} className="space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
-                    {hasHandoverItems(quoteHandoverLines(db, q.items), q.category) ? (
-                      <Field label="引取日" hint="納品日は受注の画面で品目ごとに入れます (表替えは当日納品)"><Input type="date" name="scheduledStart" /></Field>
-                    ) : (
-                      <Field label="施工予定日"><Input type="date" name="scheduledStart" /></Field>
-                    )}
-                    <Field label="施工担当">
-                      <Select name="workerIds">
-                        {workers.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-                      </Select>
-                    </Field>
-                  </div>
-                  <Field label="施工場所" hint="お客様の住所と違うとき (ご実家など) は書き換えてください"><Input name="siteAddress" defaultValue={q.siteAddress || customer?.address} /></Field>
-                  <Field label="メモ"><Input name="note" placeholder="例: LINE で正式依頼あり" /></Field>
-                  <div className="flex gap-2">
-                    <Button type="submit">{own ? "受注登録 (契約を確定・承認不要)" : "受注登録 (契約承認を申請)"}</Button>
-                    <Button type="submit" variant="danger" formAction={markQuoteLost.bind(null, q.id)}>失注</Button>
-                  </div>
-                </form>
-              </Card>
-            </div>
+            <Card>
+              <CardHeader title="送付の記録 (郵送・手渡し・電話など)" description="システムの外で送った場合に記録します。記録は顧客のやりとり履歴に残ります" />
+              <form action={sendQuote.bind(null, q.id)} className="flex flex-wrap items-end gap-2">
+                <Field label="送付手段">
+                  <Select name="channel" defaultValue={customer?.preferredChannel === "visit" ? "mail" : customer?.preferredChannel ?? "email"}>
+                    {(["email", "line", "chatwork", "mail", "phone", "visit"] as const).map((c) => <option key={c} value={c}>{CHANNEL_LABEL[c]}</option>)}
+                  </Select>
+                </Field>
+                <Button type="submit" variant={q.status === "sent" ? "secondary" : "primary"}>{q.status === "sent" ? "再送付を記録" : "送付を記録"}</Button>
+              </form>
+            </Card>
           )}
+          {orderPlan && (
+            <Card id="to-order" data-testid="quote-to-order">
+              <CardHeader
+                title={orderPlan.onsite ? "受注 (契約) 登録 — 現場で受注が決まったとき" : "受注 (契約) 登録"}
+                description="引き取り日・納品日 (施工日) も一緒に登録して予定表に載せます。決まっていない日は「未定」のまま登録でき、あとで受注の画面から入れられます"
+              />
+              <QuoteToOrderForm plan={orderPlan} submitLabel={orderPlan.own ? "受注登録 (契約を確定・承認不要) して予定表に載せる" : "受注登録 (契約承認を申請) して予定表に載せる"} />
+              {(q.status === "approved" || q.status === "sent") && (
+                <form action={markQuoteLost.bind(null, q.id)} className="mt-3 border-t border-line pt-3">
+                  <Button type="submit" variant="danger" size="sm">失注にする</Button>
+                </form>
+              )}
+            </Card>
+          )}
+          {!orderPlan && planOrBlocked && "blocked" in planOrBlocked && <Note tone="warn">{planOrBlocked.blocked}</Note>}
           {(q.status === "approved" || q.status === "sent" || q.status === "accepted") && (
             <SendDocumentCard
               kind="quote"

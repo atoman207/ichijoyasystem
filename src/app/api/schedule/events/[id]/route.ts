@@ -38,12 +38,10 @@ import { invoiceAccessInfo, orderAccessInfo, quoteAccessInfo } from "@/lib/case-
 import { canIssueFor } from "@/lib/invoice-rules";
 import { partLabel, receiptChecks, receiptDraft, receiptHeading, receiptWanted } from "@/lib/receipts";
 import { outputsOf } from "@/lib/doc-outputs";
-import { HANDOVER_ITEM, suggestHandovers, toFormRows } from "@/lib/handover";
-import { quoteHandoverLines } from "@/lib/handover-save";
-import { formStores, formUsers } from "@/components/schedule/form-data";
+import { quoteOrderPlan } from "@/lib/quote-order-plan";
 import { QUOTE_STATUS, ORDER_STATUS } from "@/lib/constants";
 import { toDateKey } from "@/lib/format";
-import { VISIT_KINDS, caseVisits } from "@/lib/visit-adopt";
+import { VISIT_KINDS } from "@/lib/visit-adopt";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -311,40 +309,10 @@ function quickWork(db: Database, user: User, e: ScheduleEvent): QuickWork | unde
   if (o) out.order = { id: o.id, number: o.number, status: ORDER_STATUS[o.status]?.label ?? o.status, href: `/orders/${o.id}` };
   // ③④ 受注にする (品目ごとの日程つき)
   if (q && !o && canCase) {
-    if (q.pendingChange) out.orderBlocked = "見積の変更が承認待ちです。承認・差戻しのあとに受注にできます。";
-    else if (["draft", "pending_approval", "approved", "sent"].includes(q.status)) {
-      const onsite = q.status === "draft" || q.status === "pending_approval";
-      const own = skipsApproval(user, "order");
-      // 手書きの見積書に引取日がなければ、訪問 (見積・現調・現見) の日 = その場で作業 (現見) を初期値にする
-      const fallback = VISIT_KINDS.includes(e.kind) || e.date >= today ? e.date : today;
-      let rows = suggestHandovers({ lines: quoteHandoverLines(db, q.items), category: q.category, pickupText: q.siteInfo?.pickupAt, deliveryText: q.siteInfo?.deliveryAt, fallbackPickup: fallback, ref: today });
-      // 畳・襖・障子・網戸のない見積 (リフォームなど) は施工日の行
-      if (!rows.length) rows = [{ id: `hv_${Date.now().toString(36)}`, item: "reform", label: HANDOVER_ITEM.reform.label, pickupDate: fallback }];
-      // 同じ案件の訪問の予定 (作業がその日なら「現見」に切り替わる。src/lib/visit-adopt.ts)
-      const visits = caseVisits(db, { quoteId: q.id, inquiryId: q.inquiryId ?? chain?.inquiry?.id, customerId: q.customerId }).map((v) => ({ date: v.date, label: SCHEDULE_KIND[v.kind].label, time: v.startTime ?? (v.slot === "am" ? "午前" : v.slot === "pm" ? "午後" : "") }));
-      const sourceText = [q.siteInfo?.pickupAt && `引取: ${q.siteInfo.pickupAt}`, q.siteInfo?.deliveryAt && `納品: ${q.siteInfo.deliveryAt}`].filter(Boolean).join(" / ") || undefined;
-      out.toOrder = {
-        quoteId: q.id,
-        quoteNumber: q.number,
-        total: q.total,
-        onsite,
-        own,
-        approvalNote: own
-          ? "店長・管理者のため承認は省略し、その場で受注 (契約) を確定します。"
-          : onsite
-            ? "見積の承認と受注 (契約) の承認をあわせて申請します (受注を承認すると見積も承認済み)。承認の前でも日程は予定表に載ります。"
-            : "受注 (契約) の承認を申請します。承認の前でも日程は予定表に載ります。",
-        initial: toFormRows(rows),
-        sourceText,
-        workerIds: e.assigneeIds,
-        siteAddress: q.siteAddress || customer?.address || "",
-        storeId: q.storeId,
-        users: formUsers(db),
-        stores: formStores(db),
-        currentUserId: user.id,
-        visits,
-      };
-    } else out.orderBlocked = "この状態の見積は受注にできません。";
+    // 手書きの見積書に引取日がなければ、訪問 (見積・現調・現見) の日 = その場で作業 (現見) を初期値にする。登録済みの引き取り・納品の予定があればその日程を引き継ぐ
+    const plan = quoteOrderPlan(db, user, q, { fallbackDate: VISIT_KINDS.includes(e.kind) || e.date >= today ? e.date : today, workerIds: e.assigneeIds, inquiryId: chain?.inquiry?.id });
+    if (plan && "blocked" in plan) out.orderBlocked = plan.blocked;
+    else if (plan) out.toOrder = plan;
   }
   // ⑤ 資料・写真 (登録先は一番進んだ記録)
   const headType = o ? "order" : q ? "quote" : chain?.inquiry ? "inquiry" : undefined;

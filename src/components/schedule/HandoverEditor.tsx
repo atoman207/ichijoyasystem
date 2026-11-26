@@ -75,6 +75,22 @@ function linkedIds(rs: Row[]): string[] {
   return ids.length >= 2 ? ids : [];
 }
 
+/** 「未定」(日付を空にする。お客様のご要望 2026-11-26「引き取り日・納品日それぞれについて未定も選択できるように」) */
+function UndecidedButton({ on, label, onClick }: { on: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={on}
+      aria-label={label}
+      title="日付が決まっていないとき"
+      className={`h-10 shrink-0 rounded-lg border px-2.5 text-xs font-medium whitespace-nowrap ${on ? "border-warn bg-warn-soft text-warn-ink" : "border-line bg-panel text-ink-2 hover:bg-subtle"}`}
+    >
+      未定
+    </button>
+  );
+}
+
 /** 時間の指定 (指定なし・AM 午前・PM 午後・時刻) と、時刻のときの開始・終了 */
 function TimeChoice({
   what,
@@ -444,8 +460,12 @@ export function HandoverEditor({
                   <fieldset className="min-w-0 space-y-2 rounded-lg bg-subtle/60 p-2">
                     <legend className="px-1 text-xs font-medium text-ink">引き取り</legend>
                     <Field label="引取日">
-                      <Input type="date" value={r.pickupDate} onChange={(e) => setPickup(r.id, "pickupDate", e.target.value)} aria-label={`引取日 ${n}`} />
+                      <div className="flex items-center gap-1.5">
+                        <Input type="date" value={r.pickupDate} onChange={(e) => setPickup(r.id, "pickupDate", e.target.value)} aria-label={`引取日 ${n}`} className="min-w-0 flex-1" />
+                        <UndecidedButton on={!r.pickupDate} label={`引取日 ${n} を未定にする`} onClick={() => edit(r.id, { pickupDate: "", pickupMode: "", pickupStart: "", pickupEnd: "" })} />
+                      </div>
                     </Field>
+                    {!r.pickupDate && <p className="text-[11px] font-medium text-warn-ink" data-testid="pickup-undecided">引取日は未定です (決まったら入れてください。未定のあいだは予定表に載りません)</p>}
                     <TimeChoice
                       what="引き取り"
                       index={n}
@@ -464,15 +484,18 @@ export function HandoverEditor({
                       当日納品 (引取日に納品)
                     </label>
                     <Field label="納品日">
-                      <Input
-                        type="date"
-                        value={r.same ? r.pickupDate : r.deliveryDate}
-                        min={r.pickupDate || undefined}
-                        readOnly={r.same}
-                        onChange={(e) => edit(r.id, { deliveryDate: e.target.value })}
-                        className={r.same ? "bg-subtle text-ink-2" : undefined}
-                        aria-label={`納品日 ${n}`}
-                      />
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          type="date"
+                          value={r.same ? r.pickupDate : r.deliveryDate}
+                          min={r.pickupDate || undefined}
+                          readOnly={r.same}
+                          onChange={(e) => edit(r.id, { deliveryDate: e.target.value })}
+                          className={`min-w-0 flex-1 ${r.same ? "bg-subtle text-ink-2" : ""}`}
+                          aria-label={`納品日 ${n}`}
+                        />
+                        <UndecidedButton on={!r.same && !r.deliveryDate} label={`納品日 ${n} を未定にする`} onClick={() => edit(r.id, { same: false, deliveryDate: "", deliveryMode: "", deliveryStart: "", deliveryEnd: "" })} />
+                      </div>
                     </Field>
                     <TimeChoice
                       what="納品"
@@ -484,7 +507,7 @@ export function HandoverEditor({
                       onStart={(v) => edit(r.id, { deliveryStart: v })}
                       onEnd={(v) => edit(r.id, { deliveryEnd: v })}
                     />
-                    {!r.same && !r.deliveryDate && r.pickupDate && <p className="text-[11px] text-ink-3">納品日が決まったら入れてください (空欄のあいだは引き取りだけが予定表に載ります)。</p>}
+                    {!r.same && !r.deliveryDate && <p className="text-[11px] font-medium text-warn-ink" data-testid="delivery-undecided">納品日は未定です (決まったら入れてください。{r.pickupDate ? "未定のあいだは引き取りだけが予定表に載ります" : "未定のあいだは予定表に載りません"})</p>}
                   </fieldset>
                 </div>
               )}

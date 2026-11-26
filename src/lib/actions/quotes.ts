@@ -200,7 +200,8 @@ export async function createQuote(formData: FormData) {
     // 店舗のロールは自店舗のお客様だけ (一覧で見えないお客様の見積を作らない)。店長は全店舗のお客様 (permissions.ts の canEditCaseStore)
     assertCaseStore(user, customer.storeId, back);
     // 案件から作る見積 (caseId): 問い合わせのある案件はその問い合わせ、ない案件は案件の ID でつなぐ
-    const caseIdIn = str(formData, "caseId");
+    // "new" = お客様の画面・見積の一覧などから開いて「新しい案件として作成」を選んだ (src/components/features/QuoteCaseChoice.tsx)
+    const caseIdIn = str(formData, "caseId") === "new" ? "" : str(formData, "caseId");
     const caseLink = caseIdIn ? caseQuoteLink(db, caseIdIn) : undefined;
     if (caseIdIn && !caseLink) fail(back, "見積を足す案件が見つかりません。案件の画面から開き直してください。");
     if (caseLink?.customerId && caseLink.customerId !== customerId) fail(back, "案件のお客様と違うお客様が選ばれています。案件のお客様を選ぶか、お客様の画面から見積を作成してください。");
@@ -275,7 +276,8 @@ export async function createQuote(formData: FormData) {
   revalidatePath("/quotes");
   // 予定表の小さな画面から撮影して作った見積は、その画面に戻る (お客様のご要望 2026-11-25「②」)
   const ret = safeReturn(str(formData, "returnTo"), "");
-  redirect(withMsg(ret || `/quotes/${id}`, intent === "submit" ? `見積を作成し、${submitted}` : ret ? "見積を下書き保存しました。続けて「受注にする」で受注と日程を登録できます。" : "見積を下書き保存しました。"));
+  // 見積の画面では「受注登録へ進む」「見積のみで終了する」を出す (?next=1。お客様のご要望 2026-11-26「②」受注登録のし忘れを防ぐ)
+  redirect(withMsg(ret || `/quotes/${id}?next=1`, intent === "submit" ? `見積を作成し、${submitted}` : ret ? "見積を下書き保存しました。続けて「受注にする」で受注と日程を登録できます。" : "見積を下書き保存しました。"));
 }
 
 export async function updateQuote(id: string, formData: FormData) {
@@ -522,7 +524,8 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
     else if (scheduledStart && hasHandoverItems(hvLines, q.category)) {
       created.handovers = suggestHandovers({ lines: hvLines, category: q.category, pickupText: q.siteInfo?.pickupAt, deliveryText: q.siteInfo?.deliveryAt, pickupDate: scheduledStart, ref: today });
     }
-    if (created.scheduledStart) syncOrderEvent(db, created, user.id);
+    // 同じ案件の登録済みの引き取り・納品の予定は使い回す (二重にしない)。「新しく追加する」を選んだときだけ使い回さない
+    if (created.scheduledStart) syncOrderEvent(db, created, user.id, undefined, { noAdopt: str(formData, "existingEvents") === "add" });
     syncHandoverMemo(db, created);
     // 引取・納品の日程を入れたときは「予定表で確認」のボタン (引き取りの日の週・受注の店舗。src/lib/msg-link.ts)
     const dates = (created.handovers ?? []).flatMap((h) => [{ date: h.pickupDate, pickup: true }, { date: h.deliveryDate }]);

@@ -21,6 +21,7 @@ export function CaseChoice({
   customerName,
   suggestedId,
   step,
+  what = "問い合わせ",
 }: {
   name?: string;
   value: string;
@@ -33,6 +34,8 @@ export function CaseChoice({
   suggestedId?: string;
   /** 見出しの番号 (例: ②) */
   step?: string;
+  /** 追加する記録 (問い合わせ・見積)。見積の作成の画面でも使う (src/components/features/QuoteCaseChoice.tsx) */
+  what?: string;
 }) {
   const all = [...open, ...past];
   const selected = all.find((c) => c.id === value);
@@ -59,7 +62,7 @@ export function CaseChoice({
             </span>
             {!c.canAdd && <span className="mt-0.5 block text-[11px] text-warn-ink">{c.storeName}の案件のため、ここからは追加できません (店舗に依頼してください)</span>}
             <span className="mt-1 flex flex-wrap items-center gap-3">
-              {c.canAdd && <span className={`text-xs font-medium ${on ? "text-accent-ink" : "text-ink-2"}`}>{on ? "✓ この案件に問い合わせを追加" : "この案件に問い合わせを追加"}</span>}
+              {c.canAdd && <span className={`text-xs font-medium ${on ? "text-accent-ink" : "text-ink-2"}`}>{on ? `✓ この案件に${what}を追加` : `この案件に${what}を追加`}</span>}
               <a href={c.href} target="_blank" rel="noopener" className="inline-flex items-center gap-0.5 text-xs text-accent hover:underline" onClick={(e) => e.stopPropagation()}>
                 案件を開く (別のタブ) <ExternalLink className="h-3 w-3" aria-hidden />
               </a>
@@ -77,7 +80,7 @@ export function CaseChoice({
         <p className="mt-0.5 text-xs text-ink-2">
           {open.length === 0
             ? `${customerName} 様の進行中の案件はありません。新しいご依頼として登録します (完了した工事へのクレーム・手直しのご連絡は、下の「完了した案件」から選べます)。`
-            : `${customerName} 様の進行中の案件が ${open.length} 件あります。工事内容・進み具合を確かめて、同じ件のご連絡なら「この案件に問い合わせを追加」、新しいご依頼なら「新規案件として登録」を選んでください。`}
+            : `${customerName} 様の進行中の案件が ${open.length} 件あります。工事内容・進み具合を確かめて、同じ件なら「この案件に${what}を追加」、新しいご依頼なら「新規案件として登録」を選んでください。`}
         </p>
       </div>
       <label className={`flex cursor-pointer gap-2 rounded-lg border p-3 text-sm ${value === "new" ? "border-accent bg-accent-soft ring-1 ring-accent/30" : "border-line bg-panel hover:border-accent/40"}`} data-testid="case-choice-new">
@@ -85,7 +88,7 @@ export function CaseChoice({
         <span>
           <span className="font-semibold text-ink">新規案件として登録</span>
           {suggestedId === "new" && open.length > 0 && <span className="ml-1 rounded bg-accent px-1.5 text-[10px] font-semibold text-white">提案</span>}
-          <span className="block text-[11px] text-ink-3">新しいご依頼 (別の部屋・別の工事など)。この問い合わせが新しい案件の始まりになります</span>
+          <span className="block text-[11px] text-ink-3">新しいご依頼 (別の部屋・別の工事など)。この{what}が新しい案件の始まりになります</span>
         </span>
       </label>
       {open.length > 0 && (
@@ -103,7 +106,7 @@ export function CaseChoice({
         </details>
       )}
       <p className={`rounded-lg px-3 py-2 text-xs ${value === "new" ? "bg-subtle text-ink-2" : "bg-accent-soft text-accent-ink"}`} data-testid="case-choice-summary">
-        {selected ? `→ 案件 ${selected.number} (${selected.title || "工事内容の記入なし"}) に問い合わせを追加します${selected.open ? "" : " (完了した案件へのご連絡)"}。問い合わせ一覧と案件の画面の両方に出ます。` : "→ 新しい案件として登録します。"}
+        {selected ? `→ 案件 ${selected.number} (${selected.title || "工事内容の記入なし"}) に${what}を追加します${selected.open ? "" : " (完了した案件へのご連絡)"}。${what === "問い合わせ" ? "問い合わせ一覧と案件の画面の両方に出ます。" : "案件の予定 (見積・現調・引取・納品) とつながり、受注にしたときに予定を二重にしません。"}` : "→ 新しい案件として登録します。"}
       </p>
     </section>
   );

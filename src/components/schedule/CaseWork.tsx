@@ -6,7 +6,6 @@ import Link from "@/components/ui/Link";
 import { Camera, ClipboardCheck, FileImage, FileText, ImagePlus, Keyboard, LoaderCircle, Printer, Receipt as ReceiptIcon } from "lucide-react";
 import { Button, buttonClass } from "@/components/ui";
 import { captureCaseQuote } from "@/lib/actions/capture";
-import { convertQuoteToOrder } from "@/lib/actions/quotes";
 import { issueCaseInvoice } from "@/lib/actions/day-docs";
 import { setReceiptWanted } from "@/lib/actions/receipts";
 import { deleteAttachment } from "@/lib/actions/attachments";
@@ -14,11 +13,9 @@ import { prepareFile } from "@/components/attachments/image-prep";
 import { AttachmentUploader } from "@/components/attachments/AttachmentUploader";
 import { AttachmentGallery } from "@/components/attachments/AttachmentGallery";
 import { ReceiptForm } from "@/components/finance/ReceiptForm";
-import { HandoverEditor } from "./HandoverEditor";
+import { QuoteToOrderForm } from "./QuoteToOrderForm";
 import { PdfLink } from "@/components/features/PdfLink";
 import type { QuickWork } from "./quick-types";
-import type { OrderHandover } from "@/lib/db/types";
-import { handoverGroups } from "@/lib/handover";
 import { reopenHref } from "@/lib/maps/links";
 
 /**
@@ -30,34 +27,6 @@ import { reopenHref } from "@/lib/maps/links";
  */
 
 const yen = (n: number) => `¥${Math.round(n).toLocaleString("ja-JP")}`;
-const md = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
-
-/**
- * 受注にしたとき予定表がどうなるか (お客様のご要望 2026-11-25): 作業 (引取・1 日の施工) が訪問 (見積・現調・現見) と同じ日なら、その訪問の予定を
- * 「現見」に切り替える (新しい予定は足さない)。別の日なら訪問の予定は残して、作業の予定を足す。サーバーの判定は src/lib/visit-adopt.ts
- */
-function VisitNote({ rows, visits }: { rows: OrderHandover[]; visits: { date: string; label: string; time: string }[] }) {
-  const work = handoverGroups(rows).filter((g) => g.role === "pickup" || (g.role === "install" && !g.endDate));
-  if (!visits.length || !work.length) return null;
-  const switched = visits.filter((v) => work.some((g) => g.date === v.date));
-  const kept = visits.filter((v) => !switched.includes(v));
-  const added = work.filter((g) => !visits.some((v) => v.date === g.date));
-  return (
-    <div className="mt-2 space-y-1 rounded-lg border border-accent/30 bg-accent-soft/30 px-2.5 py-1.5 text-[11px] leading-relaxed text-ink" data-testid="visit-note">
-      {switched.map((v) => (
-        <p key={`s${v.date}`}>
-          <span className="font-semibold text-accent-ink">{md(v.date)} の{v.label}{v.time ? ` (${v.time})` : ""}の予定を「現見」に切り替えます</span> (同じ日に作業するため、新しい予定は足しません)。
-        </p>
-      ))}
-      {kept.length > 0 && added.length > 0 && (
-        <p>
-          {kept.map((v) => `${md(v.date)} の${v.label}`).join("・")}の予定はそのまま残し、{added.map((g) => md(g.date)).join("・")} の作業の予定を追加します (見積のみの訪問で、作業は別の日)。
-        </p>
-      )}
-      {!switched.length && <p className="text-ink-2">訪問の日にその場で作業する (現見になった) ときは、引取日 (施工日) を訪問の日 ({visits.map((v) => md(v.date)).join("・")}) にしてください。訪問の予定がそのまま「現見」に切り替わります。</p>}
-    </div>
-  );
-}
 
 function Block({ title, icon, children, testId, defaultOpen = false, badge }: { title: string; icon: ReactNode; children: ReactNode; testId?: string; defaultOpen?: boolean; badge?: ReactNode }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -178,35 +147,7 @@ export function CaseWorkSection({ work, eventId, returnTo: listReturn, onReload 
 
       {t && (
         <Block title={t.onsite ? "現場で受注にする (日程も一緒に登録)" : "受注にする (日程も一緒に登録)"} icon={<ClipboardCheck className="h-3.5 w-3.5 text-accent" aria-hidden />} testId="case-to-order" badge={<span className="text-[11px] font-normal text-ink-2 tnum">{yen(t.total)}</span>}>
-          <HandoverEditor
-            action={convertQuoteToOrder.bind(null, t.quoteId)}
-            initial={t.initial}
-            saved={[]}
-            suggested
-            own={t.own}
-            workerIds={t.workerIds}
-            siteAddress={t.siteAddress}
-            users={t.users}
-            stores={t.stores}
-            storeId={t.storeId}
-            currentUserId={t.currentUserId}
-            submitLabel={t.own ? "受注を登録して予定表に載せる" : "受注を登録 (承認を申請) して予定表に載せる"}
-            hidden={{ returnTo, onsite: t.onsite ? "1" : "0" }}
-            planNote={(rows) => <VisitNote rows={rows} visits={t.visits} />}
-            extra={
-              <div className="space-y-1.5">
-                <p className="rounded-lg bg-info-soft px-3 py-2 text-[11px] leading-relaxed text-info-ink">
-                  見積 {t.quoteNumber} ({yen(t.total)}) を受注にします。{t.approvalNote}
-                  {t.sourceText ? ` 手書きの見積書の日時 (${t.sourceText}) から日程の案を入れています。` : " 引取日・納品日 (施工日) を品目ごとに入れてください。"}
-                  畳は引取の当日納品、襖・障子・網戸は別の日、同じ品目を 2 日に分けるときは「分けて納品」。
-                </p>
-                <label className="block">
-                  <span className="label">メモ (任意)</span>
-                  <input name="note" maxLength={300} placeholder="例: 現場でご注文いただきました" className="field" />
-                </label>
-              </div>
-            }
-          />
+          <QuoteToOrderForm plan={t} returnTo={returnTo} />
         </Block>
       )}
       {work.orderBlocked && <p className="border-t border-line px-3 py-2 text-[11px] text-ink-3">{work.orderBlocked}</p>}

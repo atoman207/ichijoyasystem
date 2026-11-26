@@ -21,6 +21,7 @@ import { SiteInfoFields } from "@/components/features/SiteInfo";
 import type { ServiceCategory } from "@/lib/db/types";
 import { QuoteEditor, type EditorItem } from "@/components/features/QuoteEditor";
 import { QuoteStartChoice } from "@/components/features/QuoteStartChoice";
+import { QuoteCaseChoice } from "@/components/features/QuoteCaseChoice";
 import { CaptureUploader } from "@/components/features/CaptureUploader";
 import type { TaxMode } from "@/lib/quote-calc";
 import { itemCategoryProps } from "@/lib/mgmt/categories";
@@ -154,6 +155,8 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
             <Input name="validUntil" type="date" defaultValue={addDays(toDateKey(new Date()), settings.quoteValidDays)} />
           </Field>
         </div>
+        {/* 案件を決めずに開いたとき: どの案件の見積か (同じ案件の予定にひも付けて、受注にしたときに予定を二重にしない。お客様のご要望 2026-11-26「①」) */}
+        {!inquiry && !caseRoot && <QuoteCaseChoice initialCustomerId={customer?.id} initialCustomerName={customer?.name} />}
         <div>
           <div className="label">明細</div>
           <QuoteEditor products={db.products} defaultCategory={docCategoryValue} initialItems={initialItems} autoOnLoad initialDiscount={typeof ex.discount === "number" ? ex.discount : 0} initialTaxMode={taxModeDefault} {...itemCategoryProps(db, docCategoryValue)} doko={dokoChoiceInfo(db, toDateKey(new Date()))} />
