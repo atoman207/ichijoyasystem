@@ -109,7 +109,8 @@ section("1. 表 (表替え・張替え) と 新 (新調) の数え分け");
   eq([l.tatami, l.fresh.tatami, l.fusuma, l.fresh.fusuma, l.shoji], [8, 2, 5, 2, 4], "見積の明細: 畳 8 (新調 2)・襖 5 (新調 2)・障子 4。縁は数えない");
   const m = WK.mergeCounts(a, l);
   eq([m.tatami, m.fresh.tatami], [16, 4], "足し合わせても新調の枚数を保つ");
-  eq(WK.workText(a), "タ8 フ4 シ6 ア3", "予定表のチップの省略表記はこれまでどおり (表・新の合計)");
+  // 2026-11-26「■9」: 予定表のチップは新調に「新」を付けて張替えと分ける (表・新の欄の数と同じ)
+  eq(WK.workText(a), "タ6 タ新2 フ4 シ4 シ新2 ア新3", "予定表のチップは新調に「新」を付けて分ける (タ6 タ新2 …)");
   const cols = DS.colsOf(a);
   eq(cols, { tatami: { omote: 6, fresh: 2 }, fusuma: { omote: 4, fresh: 0 }, shoji: { omote: 4, fresh: 2 }, amido: { omote: 0, fresh: 3 } }, "欄の数 (表・新)");
   const h = WK.countsFromText("縁無半12", { shorthand: true });

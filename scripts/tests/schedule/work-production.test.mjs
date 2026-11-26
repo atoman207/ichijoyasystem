@@ -98,9 +98,10 @@ const lines = [
 ];
 eq(W.workText(W.countsFromLines(lines)), "タ12 フ6 シ4 ア2", "畳 12・襖 6・障子 4・網戸 2 →「タ12 フ6 シ4 ア2」(縁・引手・値引き・諸経費は数えない)");
 const withHeri = W.countsFromLines([{ name: "畳表替え", qty: 6, unit: "畳" }, { name: "へり無し畳 新調", spec: "半畳", qty: 6, unit: "枚" }]);
-eq(W.workText(withHeri), "タ12(縁無半6)", "へり無し畳は「(縁無…)」で目立たせる (12 のうち 6)");
-eq(W.workTokens(withHeri)[0].note, "(縁無半6)", "へり無し畳の注記は別の部品 (色を付ける)");
-eq(W.workText(W.countsFromLines([{ name: "へり無し畳 新調", qty: 8, unit: "枚" }])), "タ8(縁無)", "すべてへり無しなら「タ8(縁無)」");
+// 2026-11-26「■9」: 新調は「タ新6」と分ける。へり無しの注記は畳の最後の部品に付ける
+eq(W.workText(withHeri), "タ6 タ新6(縁無半6)", "へり無し畳は「(縁無…)」で目立たせる (12 のうち 6。新調 6 は「タ新6」)");
+eq(W.workTokens(withHeri).find((t) => t.note)?.note, "(縁無半6)", "へり無し畳の注記は別の部品 (色を付ける)");
+eq(W.workText(W.countsFromLines([{ name: "へり無し畳 新調", qty: 8, unit: "枚" }])), "タ新8(縁無)", "すべてへり無しの新調なら「タ新8(縁無)」");
 eq(W.workText(W.countsFromLines([{ name: "襖", spec: "仏間一式", qty: 1, unit: "式" }])), "フ", "仏間 (一式) は枚数なしの「フ」");
 eq(W.workText(W.countsFromText("(清水万石) 谷本 引き取り\n畳 表替え12 / 襖 張替3 / 障子 張替6 / 網戸 張替3")), "タ12 フ3 シ6 ア3", "移行した予定表の 1 行目「畳 表替え12 / 襖 張替3 …」");
 eq(W.workText(W.countsFromText("倉本 様 引き取り (畳 表替え 6枚・襖 4面)")), "タ6 フ4", "受注の予定の件名「(畳 表替え 6枚・襖 4面)」");
@@ -115,6 +116,36 @@ eq(W.workText(W.countsFromText("和室6畳 クロス", { shorthand: true })), ""
 eq([W.stripKindWords("(清水万石) 谷本 引き取り", "pickup"), W.stripKindWords("(中) 髙木 現地調査・見積", "survey"), W.stripKindWords("倉本 様 納品 (畳 表替え 6枚)", "delivery"), W.stripKindWords("(池田) 國本 顧客訪問", "visit"), W.stripKindWords("山田 様 施工", "install"), W.stripKindWords("会議", "meeting")], ["(清水万石) 谷本", "(中) 髙木", "倉本 様", "(池田) 國本", "山田 様 施工", "会議"], "件名の右の「引き取り」「納品」などは出さない (施工・社内の予定はそのまま)");
 
 /* ================================================================== */
+// 2026-11-26「■9 予定表の施工内容の表示」: 新調は「新」を付けて張替えと分ける
+{
+  const lines = (name, qty, unit = "枚") => W.workText(W.countsFromLines([{ name, qty, unit }]));
+  eq(lines("畳 表替え", 6, "畳"), "タ6", "畳表替え6畳: タ6");
+  eq(lines("畳 新調", 6, "畳"), "タ新6", "畳新調6畳: タ新6");
+  eq(lines("襖 張替え", 2), "フ2", "襖張替え2枚: フ2");
+  eq(lines("襖 新調", 2), "フ新2", "襖新調2枚: フ新2");
+  eq(lines("障子 新調", 2), "シ新2", "障子新調2枚: シ新2");
+  eq(lines("網戸 新調", 2), "ア新2", "網戸新調2枚: ア新2");
+  const mixed = W.countsFromLines([
+    { name: "畳 表替え", qty: 6, unit: "畳" },
+    { name: "畳 新調", qty: 4, unit: "畳" },
+    { name: "襖 張替え", qty: 2, unit: "枚" },
+    { name: "襖 新調", qty: 2, unit: "枚" },
+  ]);
+  eq(W.workText(mixed), "タ6 タ新4 フ2 フ新2", "張替えと新調の混在: タ6 タ新4 フ2 フ新2");
+  eq(W.workText(W.countsFromText("タ6 タ新4 フ2 フ新2", { shorthand: true })), "タ6 タ新4 フ2 フ新2", "手入力の「タ6 タ新4 フ2 フ新2」も同じ形で読み戻せる");
+  eq(W.workText(W.countsFromText("畳 表替え6・新調2")), "タ6 タ新2", "移行した予定表の「畳 表替え6・新調2」: タ6 タ新2");
+  eq(W.workDescription(mixed), "畳 6・畳 新調 4・襖 2・襖 新調 2", "読み上げ・ツールチップも新調を分ける");
+  ok(W.workTokens(mixed).filter((t) => t.fresh).length === 2, "新調の部品に印 (fresh)");
+}
+// 2026-11-26「予定表の作業内容の表示」: 見積・現場管理・施工などの自由な作業内容
+{
+  for (const t of ["タ6 タ新4 フ2 フ新2", "タ12(縁無6) フ6", "畳 表替え8 / 襖 張替2", "畳 表替え6・新調2", "タ4半", "縁無半12"]) ok(W.isCountsOnlyText(t), `数量だけの文: ${t} (作業量に数える)`);
+  for (const t of ["タ3間、フ1部屋", "養生、廃材撤去", "クロス工事、畳下床板2間", "よろしく", ""]) ok(!W.isCountsOnlyText(t), `自由な作業内容: ${t || "(空)"} (そのまま表示)`);
+  eq(W.workNoteOf({ work: "養生、廃材撤去" }), "養生、廃材撤去", "自由な作業内容は表示用の文");
+  eq(W.workNoteOf({ work: "タ6 タ新4" }), undefined, "数量だけの文は表示用の文にしない (数量として出す)");
+  eq(W.workNoteOf({}), undefined, "作業内容なし");
+}
+
 section("3. 登録済みの見積の単位・品目をそろえる");
 const N = await imp("lib/quote-line-normalize.ts");
 const fakeDb = {
@@ -223,9 +254,9 @@ const SW = await imp("lib/schedule-work.ts");
 const evs = db().schedule.filter((e) => e.orderId === "o_wp" || e.id.startsWith("ev_imp") || e.id === "ev_sv");
 const wk = SW.scheduleWork(db(), evs);
 const textOf = (pred) => W.workText(wk.get(evs.find(pred)?.id));
-eq(textOf((e) => e.orderId === "o_wp" && e.kind === "pickup"), "タ18(縁無半6) フ6", "受注の引き取り (畳・新調・襖をまとめて): タ18(縁無半6) フ6");
+eq(textOf((e) => e.orderId === "o_wp" && e.kind === "pickup"), "タ12 タ新6(縁無半6) フ6", "受注の引き取り (畳・新調・襖をまとめて): タ12 タ新6(縁無半6) フ6");
 eq(textOf((e) => e.orderId === "o_wp" && e.kind === "delivery" && e.date === d(5)), "タ12", "当日納品は畳の表替えだけ: タ12");
-eq(textOf((e) => e.orderId === "o_wp" && e.kind === "delivery" && e.date === d(9)), "タ6(縁無半)", "後日の新調の納品: タ6(縁無半)");
+eq(textOf((e) => e.orderId === "o_wp" && e.kind === "delivery" && e.date === d(9)), "タ新6(縁無半)", "後日の新調の納品: タ新6(縁無半)");
 eq(textOf((e) => e.orderId === "o_wp" && e.kind === "delivery" && e.date === d(7)), "フ6", "襖の納品: フ6");
 eq(textOf((e) => e.id === "ev_imp"), "タ6(縁無半4) フ7", "移行した予定表の引き取り (1 行目の枚数 + メモの縁無)");
 eq(textOf((e) => e.id === "ev_sv"), "タ6 フ1", "見積の予定 (現地調査) のメモの省略");

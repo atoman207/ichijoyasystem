@@ -114,7 +114,9 @@ eq(WK.workText(WS.scheduleWork(db(), [e]).get(e.id)), "タ12(縁無6) フ6 シ4 
 r = await act(staffUser, () => SA.updateEventWork(ev0.id, form({ work: "畳 表替え8 / 襖 張替2", returnTo: ret })));
 eq(WK.workText(WS.scheduleWork(db(), [db().schedule.find((x) => x.id === ev0.id)]).get(ev0.id)), "タ8 フ2", "「畳 表替え8 / 襖 張替2」の書き方も読む");
 r = await act(staffUser, () => SA.updateEventWork(ev0.id, form({ work: "よろしく", returnTo: ret })));
-ok(r.err && /読み取れません/.test(r.err) && db().schedule.find((x) => x.id === ev0.id).work === "畳 表替え8 / 襖 張替2", "読み取れない文は断る (前の値のまま)");
+// 2026-11-26: 自由な作業内容 (数量の読めない文) もそのまま保存して予定表に表示する (作業量の枚数には使わない)
+ok(!r.err && db().schedule.find((x) => x.id === ev0.id).work === "よろしく" && /作業内容/.test(r.msg ?? ""), `自由な作業内容も保存する (${r.msg ?? r.err})`);
+eq(WK.workNoteOf(db().schedule.find((x) => x.id === ev0.id)), "よろしく", "自由な作業内容は表示用 (workNoteOf)");
 r = await act(staffUser, () => SA.updateEventWork(ev0.id, form({ work: "", returnTo: ret })));
 eq([db().schedule.find((x) => x.id === ev0.id).work, /自動に戻しました/.test(r.msg ?? "")], [undefined, true], "空にすると自動に戻す");
 ok(db().auditLogs.some((l) => l.entity === "schedule" && l.entityId === ev0.id && l.changes?.some((c) => c.field === "work")), "変更履歴に仕事内容の前後");
