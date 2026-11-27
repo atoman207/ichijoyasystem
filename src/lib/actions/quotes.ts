@@ -31,6 +31,7 @@ import { scheduleCheckLink } from "@/lib/msg-link";
 import { adoptPlaceholderCase, resolvePlaceholderCustomer } from "@/lib/placeholder-customer";
 import { isPlaceholderCustomer } from "@/lib/placeholder-match";
 import { amendBlockedByInvoice } from "@/lib/invoice-sync";
+import { placeTextOrEmpty } from "@/lib/maps/address";
 
 /**
  * 案件に見積を足すときのつながり (お客様のご要望 2026-11-26「■4」「■6」: 1 つの案件に見積を複数)。
@@ -91,7 +92,8 @@ function categoryChanges(before: QuoteItem[], after: QuoteItem[]): { line: numbe
 /** 施工場所 (お客様の住所と違うとき) と領収書の宛名。フォームに欄がないときは undefined (変更しない) */
 function siteFieldsOf(formData: FormData): { siteAddress?: string; receiptName?: string } | undefined {
   if (!formData.has("siteAddress") && !formData.has("receiptName")) return undefined;
-  return { siteAddress: str(formData, "siteAddress").slice(0, 200) || undefined, receiptName: str(formData, "receiptName").slice(0, 100) || undefined };
+  // 印・記号だけ (手書き見積書の「㋜」など) は施工場所にしない (maps/address.ts の isPlaceText。2026-11-27)
+  return { siteAddress: placeTextOrEmpty(str(formData, "siteAddress")) || undefined, receiptName: str(formData, "receiptName").slice(0, 100) || undefined };
 }
 
 /**
@@ -531,7 +533,7 @@ export async function convertQuoteToOrder(id: string, formData: FormData) {
       scheduledStart,
       scheduledEnd: span.end ?? scheduledStart,
       workerIds,
-      siteAddress: str(formData, "siteAddress") || q.siteAddress || customer?.address || "",
+      siteAddress: placeTextOrEmpty(str(formData, "siteAddress")) || placeTextOrEmpty(q.siteAddress) || customer?.address || "",
       receiptName: q.receiptName,
       workDetails: q.workDetails,
       siteInfo: q.siteInfo,

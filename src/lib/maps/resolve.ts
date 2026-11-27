@@ -1,5 +1,5 @@
 import type { Customer, Database, MapDocument, MapLocation, MapLocationRef, MapRefType, Order, Quote, ScheduleEvent, StoreId } from "@/lib/db/types";
-import { areaMatches, areaWithin, normalizeAddress, sameAddressText, type NormalizedAddress } from "./address";
+import { areaMatches, areaWithin, isPlaceText, normalizeAddress, sameAddressText, type NormalizedAddress } from "./address";
 import { mapLinkBasis, mapsDirectionsUrl, mapsSearchUrl, type MapLinkBasis, type MapTarget } from "./google";
 import { mapSearchAddress } from "./query";
 
@@ -246,19 +246,19 @@ export function placeOfQuote(db: Database, q: Quote, idx = mapIndex(db)): Resolv
   const c = db.customers.find((x) => x.id === q.customerId);
   const cust = c ? placeOfCustomer(db, c, idx) : undefined;
   const record: PlaceRecord = { type: "quote", id: q.id, storeId: q.storeId, customerId: q.customerId, label: `見積 ${q.number}`, href: `/quotes/${q.id}` };
-  if (!q.siteAddress?.trim()) {
+  if (!isPlaceText(q.siteAddress)) {
     // 見積の施工場所が空 = お客様の住所と同じ (見積の入力の決まり)
     if (!cust) return build(db, idx, { role: "site", heading: "施工場所", origin: `見積 ${q.number}`, text: "", record });
     return { ...cust, role: "site", heading: "施工場所", origin: `見積 ${q.number} の施工場所 (お客様の住所と同じ)`, sameAsCustomer: true };
   }
-  return withCustomer(build(db, idx, { role: "site", heading: "施工場所", origin: `見積 ${q.number} の施工場所`, text: q.siteAddress, record }), cust, "施工場所");
+  return withCustomer(build(db, idx, { role: "site", heading: "施工場所", origin: `見積 ${q.number} の施工場所`, text: q.siteAddress ?? "", record }), cust, "施工場所");
 }
 
 export function placeOfOrder(db: Database, o: Order, idx = mapIndex(db)): ResolvedPlace {
   const c = db.customers.find((x) => x.id === o.customerId);
   const cust = c ? placeOfCustomer(db, c, idx) : undefined;
   const record: PlaceRecord = { type: "order", id: o.id, storeId: o.storeId, customerId: o.customerId, label: `受注 ${o.number}`, href: `/orders/${o.id}` };
-  if (!o.siteAddress?.trim()) {
+  if (!isPlaceText(o.siteAddress)) {
     if (!cust) return build(db, idx, { role: "site", heading: "施工場所", origin: `受注 ${o.number}`, text: "", record });
     // 施工場所が空の受注 (移行した記録の一部): お客様の住所であることを明示して出す
     return {
@@ -270,7 +270,7 @@ export function placeOfOrder(db: Database, o: Order, idx = mapIndex(db)): Resolv
       warnings: ["施工場所が登録されていません。お客様の住所と違う場所なら、案件情報の「施工場所 (現場住所)」を入力してください。", ...cust.warnings],
     };
   }
-  return withCustomer(build(db, idx, { role: "site", heading: "施工場所", origin: `受注 ${o.number} の施工場所`, text: o.siteAddress, record }), cust, "施工場所", o.id);
+  return withCustomer(build(db, idx, { role: "site", heading: "施工場所", origin: `受注 ${o.number} の施工場所`, text: o.siteAddress ?? "", record }), cust, "施工場所", o.id);
 }
 
 /** 予定が紐づく案件・お客様の場所 (予定に別の場所がなければこれを使う) */
@@ -320,7 +320,8 @@ export function placeOfEvent(db: Database, e: ScheduleEvent, idx = mapIndex(db))
   const base = basePlaceOfEvent(db, e, idx);
   const mode = eventLocationMode(db, e, idx, base);
   const record: PlaceRecord = { type: "event", id: e.id, storeId: e.storeId, customerId: e.customerId, label: `予定 ${e.title}`, href: `/schedule/${e.id}` };
-  if (mode === "follow" && base) {
+  // 予定の場所が印・記号だけ (「㋜」など) なら案件・お客様の場所 (isPlaceText。2026-11-27)
+  if ((mode === "follow" || (Boolean(e.location?.trim()) && !isPlaceText(e.location))) && base) {
     const origin =
       e.source === "order"
         ? `${base.origin} (受注の施工予定と連動)`

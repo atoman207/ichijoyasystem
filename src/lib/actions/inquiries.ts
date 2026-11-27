@@ -29,6 +29,7 @@ import { caseForAdd, caseOptionsForCustomer, noteInquiryOnCase, type CaseAdd, ty
 import { buildCaseMap } from "@/lib/case-group";
 import { withPostal } from "@/lib/postal/lookup";
 import type { MediaKey } from "@/lib/db/types";
+import { placeTextOrEmpty } from "@/lib/maps/address";
 
 /** 媒体 (当社を知ったきっかけ) は必須。選択肢に「不明」がある */
 const MEDIA_REQUIRED = "媒体 (当社を知ったきっかけ) を選んでください。お客様に聞けなかったときは「不明」を選びます。";
@@ -144,7 +145,7 @@ export async function createInquiry(formData: FormData) {
     // 担当店舗: 手で選んだ店舗 > 住所 (入力した住所 → お客様の住所) の担当エリア > お客様の店舗 > 自店舗 (お客様のご要望 2026-11-24「③」。src/lib/store-area.ts)
     const address = str(formData, "address").slice(0, 200);
     // 施工現場の住所 (依頼主の住所と違うとき)。担当店舗の担当エリアは現場の住所で決める
-    const siteAddress = str(formData, "siteAddress").replace(/\s+/g, " ").trim().slice(0, 200);
+    const siteAddress = placeTextOrEmpty(str(formData, "siteAddress"));
     // 既存の案件に追加: 案件の店舗 (手で選んだときは、その店舗の記録を変更できれば選んだ店舗)
     const requested = str(formData, "storeId");
     const auto = str(formData, "storeAuto") === "1";
@@ -226,7 +227,7 @@ export async function updateInquiry(id: string, formData: FormData) {
     inq.nextAction = str(formData, "nextAction") || undefined;
     inq.nextActionDue = str(formData, "nextActionDue") || undefined;
     if (formData.has("detail")) inq.detail = str(formData, "detail");
-    if (formData.has("siteAddress")) inq.siteAddress = str(formData, "siteAddress").replace(/\s+/g, " ").trim().slice(0, 200) || undefined;
+    if (formData.has("siteAddress")) inq.siteAddress = placeTextOrEmpty(str(formData, "siteAddress")) || undefined;
     // 媒体は必須 (更新の画面に欄がある。わからなければ「不明」)
     if (formData.has("media")) inq.media = readMedia(formData, back);
     if (formData.has("promotionId")) {

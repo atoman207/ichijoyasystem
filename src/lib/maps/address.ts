@@ -76,6 +76,27 @@ const HYPHENS = /[‐‑‒–—―−﹣－⁃]/g;
 const PREF_RE = /^(北海道|東京都|京都府|大阪府|[^\s\d市区町村郡]{2,3}県)/;
 const KUMAMOTO_WARDS = /^(中央区|東区|西区|南区|北区)/;
 
+/**
+ * 場所の文字か (住所・町名・地区の名前)。丸で囲んだ文字 (「㋜」「①」)・記号だけ・かな 1 文字は場所ではない
+ * (お客様のご連絡 2026-11-27: 手書き見積書の住所の欄の丸印「㋜」を AI が住所として読み、施工場所 → 受注 → 予定の場所になって予定表の地区が「（ス）」になった)。
+ * 漢字 1 文字の地区 (予定表の取込の「栄」「中」) は場所
+ */
+export function isPlaceText(text: string | undefined | null): boolean {
+  const raw = (text ?? "").trim();
+  if (!raw) return false;
+  // NFKC の前の文字で見る (丸で囲んだカタカナ・数字は NFKC でふつうの文字になるため)
+  const core = [...raw].filter((ch) => /[\u3400-\u9fff\uf900-\ufaff々〆ヶぁ-ゖァ-ヺーA-Za-z0-9０-９Ａ-Ｚａ-ｚ]/.test(ch)).join("");
+  if (!core) return false;
+  if (core.length === 1 && /[ぁ-ゖァ-ヺー]/.test(core)) return false;
+  return true;
+}
+
+/** 入力・読み取りの施工場所・予定の場所: 場所の文字ならそのまま (空白をそろえて 200 文字まで)、印・記号だけなら空 */
+export function placeTextOrEmpty(text: string | undefined | null): string {
+  const t = (text ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+  return isPlaceText(t) ? t : "";
+}
+
 /** 文字の揺れをそろえる (全角英数 → 半角・ハイフンの種類・空白) */
 export function cleanAddressText(text: string | undefined | null): string {
   if (!text) return "";

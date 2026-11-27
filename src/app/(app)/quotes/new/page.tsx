@@ -31,6 +31,7 @@ import { itemCategoryProps } from "@/lib/mgmt/categories";
 import { dokoChoiceInfo } from "@/lib/mgmt/costing";
 import { attachmentsOf } from "@/lib/attachments";
 import { staffChoiceGroups } from "@/lib/staff-choices";
+import { placeTextOrEmpty } from "@/lib/maps/address";
 import { StaffOptions } from "@/components/features/StaffOptions";
 import { Button, Card, CardHeader, Field, Flash, FormActions, Input, LinkButton, Note, PageHeader, Select, Textarea } from "@/components/ui";
 
@@ -81,7 +82,11 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
     });
     if (!initialItems.length) initialItems = undefined;
   }
-  const exText = (k: string) => (typeof ex[k] === "string" ? (ex[k] as string).trim() : "");
+  // 読み取った住所が印・記号だけ (住所の欄の丸印「㋜」など) なら住所として使わない (maps/address.ts の isPlaceText。2026-11-27)
+  const exText = (k: string) => {
+    const v = typeof ex[k] === "string" ? (ex[k] as string).trim() : "";
+    return k === "siteAddress" ? placeTextOrEmpty(v) : v;
+  };
   const docTitle = exText("title") || (doc ? `${exText("customerName") || exText("siteName") || "お客様"} ${DOCUMENT_KIND_LABEL[doc.kind].replace(/ \(.*\)$/, "")}より` : "");
   const defaultTitle = inquiry ? inquiry.summary.replace(/^[^:：]+[:：]\s*/, "") : docTitle;
   const roomsText = Array.isArray(ex.rooms) ? (ex.rooms as { name?: string; size?: string; tatamiCount?: number }[]).map((r) => [r.name, r.size ?? (r.tatamiCount ? `${r.tatamiCount}畳` : "")].filter(Boolean).join(" ")).filter(Boolean).join("、") : "";

@@ -25,6 +25,7 @@ import { newCaseStore } from "@/lib/store-area";
 import { updateQuote } from "./quotes";
 import { createScheduleEvent, quickUpdateScheduleEvent } from "./schedule";
 import { choice, fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
+import { placeTextOrEmpty } from "@/lib/maps/address";
 
 /**
  * 予定表の小さな画面から案件を直す・足す (お客様のご要望 2026-11-25「予定表を起点に、案件の確認・変更・追加をその画面で」)
@@ -77,7 +78,7 @@ export async function relinkCase(caseId: string, formData: FormData) {
 export async function setCaseSite(caseId: string, formData: FormData) {
   const user = await requireActionUser();
   const ret = back(formData, "/schedule");
-  const address = str(formData, "siteAddress").replace(/\s+/g, " ").trim().slice(0, 200);
+  const address = placeTextOrEmpty(str(formData, "siteAddress"));
   let message = "";
   await mutate((db) => {
     const chain = caseChainOf(db, caseId);
@@ -175,7 +176,7 @@ export async function quickNewCase(formData: FormData) {
   if (!summary) fail(ret, "新しい案件の内容 (要件) を入力してください。");
   const media = str(formData, "media");
   if (!isMediaKey(media)) fail(ret, "媒体 (当社を知ったきっかけ) を選んでください。");
-  const siteAddress = str(formData, "siteAddress").replace(/\s+/g, " ").trim().slice(0, 200);
+  const siteAddress = placeTextOrEmpty(str(formData, "siteAddress"));
   const date = str(formData, "date");
   const kindRaw = str(formData, "kind");
   const kind: ScheduleKind = SCHEDULE_KINDS.includes(kindRaw as ScheduleKind) && SCHEDULE_KIND[kindRaw as ScheduleKind].group === "case" ? (kindRaw as ScheduleKind) : "survey";

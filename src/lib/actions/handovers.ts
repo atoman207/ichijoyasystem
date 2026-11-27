@@ -13,6 +13,7 @@ import { cleanHandovers } from "@/lib/handover";
 import { planConflicts, savePlan } from "@/lib/handover-save";
 import { assertCaseStore, fail, requireActionUser, str, withMsg } from "./guards";
 import { scheduleCheckLink } from "@/lib/msg-link";
+import { placeTextOrEmpty } from "@/lib/maps/address";
 
 /**
  * 受注の画面の「引取・納品の日程」(品目ごとの引取日・納品日。src/lib/handover.ts)
@@ -32,7 +33,7 @@ export async function saveOrderHandovers(id: string, formData: FormData) {
   if (parsed.error) fail(back, parsed.error);
   const workerIds = [...new Set(formData.getAll("workerIds").map(String).filter(Boolean))];
   const reason = str(formData, "reason").slice(0, 300);
-  const siteAddress = str(formData, "siteAddress");
+  const siteAddress = placeTextOrEmpty(str(formData, "siteAddress"));
 
   const db0 = getDb();
   const o0 = db0.orders.find((x) => x.id === id);

@@ -26,6 +26,7 @@ import { safeReturn } from "./guards";
 import { postingFromForm, roleLabels, salesReadiness, undecidedRoles, workStaffNoneFromForm } from "@/lib/sales-ready";
 import { applyPosting, applyStaffAndPosting, applyWorkStaff } from "@/lib/order-staff-save";
 import { amendBlockedByInvoice } from "@/lib/invoice-sync";
+import { placeTextOrEmpty } from "@/lib/maps/address";
 
 /** 作業の担当 (現地見積・引取・納品・施工。複数可) を変える (受注の画面の「作業の担当」。お客様のご要望 2026-11-25「④」) */
 export async function saveWorkStaff(id: string, formData: FormData) {
@@ -111,7 +112,7 @@ export async function updateOrderSchedule(id: string, formData: FormData) {
     o.scheduledEnd = start ? end || start : undefined;
     if (workerIds.length) o.workerIds = workerIds;
     const siteBefore = o.siteAddress;
-    o.siteAddress = str(formData, "siteAddress") || o.siteAddress;
+    o.siteAddress = placeTextOrEmpty(str(formData, "siteAddress")) || o.siteAddress;
     if (siteBefore !== o.siteAddress) propagateOrderSite(db, user, o, siteBefore);
     if (o.status === "confirmed" && start) o.status = "scheduled";
     if (o.status === "scheduled" && !start) o.status = "confirmed";
@@ -350,7 +351,7 @@ export async function updateOrderInfo(id: string, formData: FormData) {
     const before = { ...o };
     o.title = title;
     o.category = choice(formData, "category", CATEGORY_LABEL, o.category);
-    o.siteAddress = str(formData, "siteAddress") || o.siteAddress;
+    o.siteAddress = placeTextOrEmpty(str(formData, "siteAddress")) || o.siteAddress;
     if (formData.has("receiptName")) o.receiptName = str(formData, "receiptName").slice(0, 100) || undefined;
     if (formData.has("workDetails")) o.workDetails = str(formData, "workDetails") || undefined;
     const storeId = str(formData, "storeId");

@@ -20,6 +20,7 @@ import { parseHandoverRef } from "@/lib/handover";
 import { addAvatarPhoto } from "@/lib/avatar-photos";
 import { putObject, readObject } from "@/lib/storage";
 import { createHash } from "node:crypto";
+import { isPlaceText } from "@/lib/maps/address";
 import { applyAttendanceWorkbook, matchAttendanceUser, parseAttendanceWorkbook, planWorkbookSetup, workbookImportSummary } from "@/lib/hr/attendance";
 import { attendanceTablesMissing } from "@/lib/hr/tables";
 import { attendanceEmployees, attendanceSettings, staffCategory } from "@/lib/hr/timecard";
@@ -59,6 +60,9 @@ export const maxDuration = 60;
  *   task = visit-merge: 見積の訪問がその場で現見になったのに、受注の登録で同じ日に作業の予定がもう 1 件できた案件 (お客様のご連絡 2026-11-25。
  *     この日より前の版の受注の登録) を 1 件にまとめる: 訪問の予定を受注の「現見」の予定に切り替え (時間・担当者・メモは訪問のまま)、受注の作業の予定を消す
  *     (src/lib/visit-adopt.ts と同じ判定)。from = この日以降に登録した受注 (既定 2026-11-23)。既定は確認だけ、apply=1 で書き込み、予定ごとに変更履歴
+ *   task = site-marks: 施工場所・予定の場所が印・記号だけ (手書き見積書の住所の欄の丸印「㋜」を AI が住所として読んだ。お客様のご連絡 2026-11-27
+ *     「予定表の地域名が（ス）」) の見積・受注・問い合わせの施工場所を空にし、予定の場所を案件の住所 (受注・見積の施工場所 → お客様の住所) にする
+ *     (maps/address.ts の isPlaceText。漢字 1 文字の地区「栄」などは変えない)。既定は確認だけ、apply=1 で書き込み、記録ごとに変更履歴
  *   task = attendance-workbook: 労務士へ送っている勤務表「令和○年度.xlsx」(お客様からお預かりした表) を勤怠に取り込む (画面の 勤怠 → 労務士へ送る勤務表 →
  *     以前の表の取込 と同じ処理 = src/lib/hr/attendance.ts の applyAttendanceWorkbook。締めの過ぎた月は確定、一番新しい表から社員番号・パートの時給・
  *     宛名・会社名の行・アカウントのない社員を設定に入れる)。社員の名前・番号はコードに書かず、本文 (JSON) = { file: .xlsx の base64, name: ファイル名 } で受け取る。
@@ -85,6 +89,7 @@ export async function POST(req: Request) {
   if (task === "avatars") return avatarsFix(url, req);
   if (task === "user-names") return userNamesFix(url, req);
   if (task === "attendance-workbook") return attendanceWorkbookFix(url, req);
+  if (task === "site-marks") return siteMarksFix(url);
   if (task !== "quote-line-units") return NextResponse.json({ error: "unknown task" }, { status: 400 });
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? from;
@@ -567,4 +572,48 @@ async function attendanceWorkbookFix(url: URL, req: Request) {
     return NextResponse.json({ error: (e as Error).message }, { status: 409 });
   }
   return NextResponse.json({ ok: true, applied: true, result, summary: workbookImportSummary(result), at: nowIso() });
+}
+
+/** 施工場所・予定の場所の印・記号 (「㋜」など) を直す */
+async function siteMarksFix(url: URL) {
+  const apply = url.searchParams.get("apply") === "1";
+  const bad = (v?: string) => Boolean(v?.trim()) && !isPlaceText(v);
+  const scan = (db: Database) => {
+    const recs = [
+      ...db.quotes.filter((q) => bad(q.siteAddress)).map((q) => ({ kind: "quote" as const, id: q.id, label: q.number, storeId: q.storeId, before: q.siteAddress! })),
+      ...db.orders.filter((o) => bad(o.siteAddress)).map((o) => ({ kind: "order" as const, id: o.id, label: o.number, storeId: o.storeId, before: o.siteAddress! })),
+      ...db.inquiries.filter((i) => bad(i.siteAddress)).map((i) => ({ kind: "inquiry" as const, id: i.id, label: i.number, storeId: i.storeId, before: i.siteAddress! })),
+    ];
+    const caseAddress = (e: Database["schedule"][number]) => {
+      const o = e.orderId ? db.orders.find((x) => x.id === e.orderId) : undefined;
+      const q = e.quoteId ? db.quotes.find((x) => x.id === e.quoteId) : o?.quoteId ? db.quotes.find((x) => x.id === o.quoteId) : undefined;
+      const c = db.customers.find((x) => x.id === (e.customerId ?? o?.customerId ?? q?.customerId));
+      return [o?.siteAddress, q?.siteAddress, c?.address].find((a) => a?.trim() && isPlaceText(a)) ?? "";
+    };
+    const events = db.schedule.filter((e) => bad(e.location)).map((e) => ({ id: e.id, date: e.date, title: e.title, storeId: e.storeId, before: e.location!, after: caseAddress(e) }));
+    return { recs, events };
+  };
+  const db0 = await syncDb();
+  const found = scan(db0);
+  if (!apply || (!found.recs.length && !found.events.length)) return NextResponse.json({ ok: true, applied: false, ...found });
+  const done = await mutate((db) => {
+    const now = nowIso();
+    const { recs, events } = scan(db);
+    for (const r of recs) {
+      const rec = r.kind === "quote" ? db.quotes.find((x) => x.id === r.id) : r.kind === "order" ? db.orders.find((x) => x.id === r.id) : db.inquiries.find((x) => x.id === r.id);
+      if (!rec) continue;
+      rec.siteAddress = r.kind === "order" ? "" : undefined;
+      rec.updatedAt = now;
+      addAudit(db, { userId: SYSTEM_USER, action: "update", entity: r.kind, entityId: r.id, entityLabel: r.label, summary: `施工場所の「${r.before}」は住所ではないため空にしました (手書き見積書の住所の欄の印を読み取ったもの。お客様の住所で表示)`, storeId: r.storeId, changes: [{ field: "siteAddress", before: r.before, after: null }] });
+    }
+    for (const ev of events) {
+      const e = db.schedule.find((x) => x.id === ev.id);
+      if (!e) continue;
+      e.location = ev.after || undefined;
+      e.updatedAt = now;
+      addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "schedule", entityId: e.id, entityLabel: e.title, summary: `予定の場所の「${ev.before}」は住所ではないため、案件・お客様の住所にしました`, storeId: e.storeId, changes: [{ field: "location", before: ev.before, after: ev.after || null }] });
+    }
+    return { recs: recs.length, events: events.length };
+  });
+  return NextResponse.json({ ok: true, applied: true, ...found, done, at: nowIso() });
 }

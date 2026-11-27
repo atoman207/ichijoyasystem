@@ -81,4 +81,15 @@ eq(G.parseCoordinates("３２．８，１３０．７"), { lat: 32.8, lng: 130.7
 eq(G.parseCoordinates("熊本"), null, "non-coordinates rejected");
 eq(G.parseCoordinates("200, 130"), null, "out-of-range latitude rejected");
 ok(!G.inJapan(130.7, 32.8), "swapped lat/lng detected as outside Japan");
+
+section("場所の文字か (印・記号だけは住所にしない。2026-11-27 予定表の地区が「（ス）」)");
+{
+  const L = await imp("lib/schedule-label.ts");
+  ok(!A.isPlaceText("㋜") && !A.isPlaceText("①") && !A.isPlaceText("◎") && !A.isPlaceText("ス") && !A.isPlaceText("  "), "丸で囲んだ文字・記号・かな 1 文字は場所ではない");
+  ok(A.isPlaceText("栄") && A.isPlaceText("中") && A.isPlaceText("合志市須屋1234") && A.isPlaceText("豊岡"), "漢字 1 文字の地区・住所は場所");
+  eq([A.placeTextOrEmpty("㋜"), A.placeTextOrEmpty(" 山鹿市菊鹿町池永 729 ")], ["", "山鹿市菊鹿町池永 729"], "印は空・住所はそのまま");
+  eq(L.shortTown("㋜"), "", "町名にしない");
+  eq(L.eventTown({ location: "㋜", siteAddress: "㋜", customer: { type: "individual", address: "山鹿市菊鹿町池永729" } }), "菊鹿町池永", "予定の場所・施工場所が印ならお客様の住所の町名");
+  eq(L.eventTown({ location: "栄", customer: { type: "individual", address: "合志市須屋1234" } }), "栄", "予定表の取込の地区 (漢字 1 文字) はそのまま");
+}
 summary();

@@ -53,6 +53,7 @@ import {
 } from "@/lib/reception";
 import { newReceptionDoc, providerLabel, pushReceptionDoc, receptionExtracted } from "@/lib/reception-docs";
 import { assertStore, choice, fail, requireActionUser, resolveStoreId, str, withErr, withMsg } from "./guards";
+import { placeTextOrEmpty } from "@/lib/maps/address";
 
 /**
  * 受付 (すべての問い合わせの共通の入口。src/lib/reception.ts)
@@ -599,7 +600,9 @@ export async function registerReception(formData: FormData) {
       if (!selectable(assignee)) fail(back, `担当者は、担当店舗 (${storeLabel}) の社員か本部の社員から選んでください (自分で担当するときは、担当店舗を自店舗にしてください)。`);
       applyFields(doc, f, user, channel, formData);
       const now = nowIso();
-      const siteAddress = f.siteAddress && f.siteAddress !== (customer.address || f.address) ? f.siteAddress : undefined;
+      // 印・記号だけ (メモの丸印など) は施工現場にしない (maps/address.ts の isPlaceText)
+      const siteRead = placeTextOrEmpty(f.siteAddress);
+      const siteAddress = siteRead && siteRead !== (customer.address || f.address) ? siteRead : undefined;
       const detail = [
         f.detail,
         f.desiredDate ? `希望の日時: ${f.desiredDate}` : "",

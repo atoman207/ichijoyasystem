@@ -1,5 +1,5 @@
 import type { Customer, Database, Inquiry, Order, Quote, ScheduleEvent } from "@/lib/db/types";
-import { normalizeAddress, sameAddressText } from "@/lib/maps/address";
+import { isPlaceText, normalizeAddress, sameAddressText } from "@/lib/maps/address";
 import { stripKindWords } from "@/lib/work-summary";
 
 /**
@@ -15,7 +15,8 @@ import { stripKindWords } from "@/lib/work-summary";
 /** 住所 → 予定表に出す町名 (市・区を外す。町・村はそのまま): 熊本市中央区坪井5丁目 → 坪井 / 合志市須屋1234 → 須屋 / 菊池郡菊陽町曲手 → 菊陽町曲手 */
 export function shortTown(address: string | undefined | null): string {
   const raw = (address ?? "").trim();
-  if (!raw) return "";
+  // 印・記号だけ (手書き見積書の住所の欄の「㋜」など) は町名にしない (次の候補 = お客様の住所へ。2026-11-27「（ス）」)
+  if (!raw || !isPlaceText(raw)) return "";
   const n = normalizeAddress(raw);
   // 番地のない住所 (建物名だけ・地区だけ) は空白の前まで
   let t = n.houseNumber ? n.town : normalizeAddress(raw.split(/[\s　]+/)[0]).town;
