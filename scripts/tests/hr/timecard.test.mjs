@@ -247,7 +247,8 @@ section("労務士へ送る勤務表を作る (2031 年 3 月分 = 2/21〜3/20)"
   const buf = X.attendanceXlsx(db, res.month);
   const parsed = ATT.parseAttendanceWorkbook(buf);
   eq(parsed[0]?.yearMonth, "2031-03", ".xlsx を取り込み直すと同じ月 (シート名 13.3 = 令和 13 年 3 月)");
-  const back = parsed[0].lines.find((l) => l.name === u.name);
+  const back = parsed[0].lines.find((l) => T.staffNameKey(l.name) === T.staffNameKey(u.name));
+  eq(back?.name, u.name.replace(/ /g, "　"), ".xlsx の氏名は名字と名前の間を全角の空白 (以前の表と同じ)");
   eq([back?.workDays, back?.absenceDays, back?.lateEarly, back?.paidLeaveDays], [workDays, 1, "0:21", 1], ".xlsx の値が取り込み直しで同じ");
   ok(String(back?.note).includes("インセンティブ"), ".xlsx の備考");
   const sheets = XR.readXlsx(buf);
@@ -298,6 +299,8 @@ section("以前の表 (令和○年度.xlsx) の取込 → 設定 (社員番号�
   db.attendanceLines = [];
   const sheets = ATT.parseAttendanceWorkbook(buf);
   eq([sheets[0].addressee, sheets[0].companyLine], ["テスト労務士事務所", "株式会社　　　テスト"], "宛名 (御中の前) と会社名の行 (空白もそのまま)");
+  eq(sheets[0].lines.find((l) => l.employeeNo === "56")?.note, "振休消化0.5日", "備考は書かれたまま");
+  ok(sheets[0].lines[0].note === "インセンティブ￥5,000（現金）", "備考の「￥」「（現金）」を半角にしない (以前の表の見た目のまま出し直す)");
   eq(sheets[0].lines.find((l) => l.kind === "part")?.rateChange, { from: "2030-12-21", yen: 1040 }, "右の欄の「時給変更2030.12.21～＠1,040」");
   eq(ATT.parseRateChange("時給変更2025.12.21～＠1,040"), { from: "2025-12-21", yen: 1040 }, "時給の変更の読み取り");
   const r = ATT.applyAttendanceWorkbook(db, sheets, { userId: admin.id, now, today: "2031-06-01", makeId: store.newId, sourceLabel: "令和13年度.xlsx", finalizePast: true });
@@ -332,7 +335,7 @@ section("以前の表 (令和○年度.xlsx) の取込 → 設定 (社員番号�
   const again = db.attendanceLines.filter((l) => l.monthId === res5.month.id && l.name === "架空 次郎");
   eq([again.length, again[0]?.workDays, again[0]?.sort], [1, 20, typed.sort], "作り直しても手で入れた数字を同じ位置に残す (二重にしない)");
   const xr5 = XR.readXlsx(X.attendanceXlsx(db, res5.month))[0].rows;
-  ok([...xr5.values()].some((row) => row.get("B") === "架空 次郎"), ".xlsx にアカウントのない人の行");
+  ok([...xr5.values()].some((row) => row.get("B") === "架空　次郎"), ".xlsx にアカウントのない人の行");
   // 最後の月を過ぎた人・アカウントができた人は載せない
   cur.extraStaff[0].until = "2031-04";
   ok(!B.buildAttendanceMonth(db, "2031-05", "2031-06-01").lines.some((l) => l.name === "架空 次郎"), "最後の月より後は載せない");

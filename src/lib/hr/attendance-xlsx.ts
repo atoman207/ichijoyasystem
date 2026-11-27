@@ -26,6 +26,8 @@ const STAFF_SLOTS = 12;
 const cell = (v: XCell, st: XStyle = {}): XCell => ({ v: v as string | number | null | undefined, ...st });
 const box = (v: XCell, st: XStyle = {}): XCell => cell(v, { border: true, ...st });
 const num = (n?: number) => (n === undefined || n === null ? "" : n);
+/** 氏名の名字と名前の間は全角の空白 (以前の表と同じ) */
+const fullName = (s?: string) => (s ?? "").trim().replace(/[ 　]+/g, "　");
 /** 社員番号は数で (以前の表と同じ) */
 const no = (s?: string) => (s && /^\d+$/.test(s) ? Number(s) : (s ?? ""));
 
@@ -58,7 +60,7 @@ export function attendanceSheet(db: Pick<Database, "settings" | "stores" | "atte
     push(
       [
         box(no(l?.employeeNo), { size: 12, align: "center" }),
-        box(l?.name ?? "", { size: 16 }),
+        box(fullName(l?.name), { size: 16 }),
         box(num(l?.workDays), { size: 12, align: "center" }),
         box(num(l?.absenceDays), { size: 12, align: "center" }),
         box(l?.lateEarly ?? "", { size: 12, align: "center", text: true }),
@@ -80,7 +82,7 @@ export function attendanceSheet(db: Pick<Database, "settings" | "stores" | "atte
     push(
       [
         box(no(l?.employeeNo), { size: 11, align: "center" }),
-        box(l?.name ?? "", { size: 16 }),
+        box(fullName(l?.name), { size: 16 }),
         box(num(l?.workDays), { size: 12, align: "center" }),
         box(l?.workHours ?? "", { size: 12, align: "center", text: true }),
         box(l?.hourlyRate ? `＠${l.hourlyRate.toLocaleString("ja-JP")}` : "", { size: 14, align: "center", text: true }),

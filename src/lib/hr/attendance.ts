@@ -136,10 +136,12 @@ export function parseAttendanceSheet(sheetName: string, rows: string[][]): Parse
     }
     if (!mode) continue;
     if (c0 === "No" || c1 === "氏名") continue;
-    const name = c1 || (c0 && !/^\d+$/.test(c0) ? c0 : "");
-    if (!name || name === "氏名") continue;
+    const key = c1 || (c0 && !/^\d+$/.test(c0) ? c0 : "");
+    if (!key || key === "氏名") continue;
+    // 氏名・備考は書かれたまま (全角の空白・「￥」「（現金）」・改行を残す。以前の表と同じ見た目で出し直すため)
+    const name = String((c1 ? row[1] : row[0]) ?? "").trim().replace(/[ \t]+/g, " ") || key;
     const employeeNo = /^\d+$/.test(c0) ? c0 : undefined;
-    const note = N((row[6] ?? "").replace(/[\r\n]+/g, " ")) || undefined;
+    const note = String(row[6] ?? "").replace(/\r\n?/g, "\n").replace(/^\s+|\s+$/g, "") || undefined;
     const rateChange = parseRateChange(String(row[9] ?? ""));
     if (mode === "staff") {
       lines.push({
