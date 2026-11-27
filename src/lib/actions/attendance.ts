@@ -3,9 +3,10 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, mutate, newId, nowIso } from "@/lib/db/store";
+import { toDateKey } from "@/lib/format";
 import type { AttendanceLine, AttendanceLineKind } from "@/lib/db/types";
 import { canManageAttendance } from "@/lib/auth/permissions";
-import { applyAttendanceSheet, draftLinesFromUsers, parseAttendanceWorkbook } from "@/lib/hr/attendance";
+import { applyAttendanceWorkbook, draftLinesFromUsers, parseAttendanceWorkbook, workbookImportSummary, type WorkbookImportResult } from "@/lib/hr/attendance";
 import { attendanceTablesMissing } from "@/lib/hr/tables";
 import { fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
 
@@ -50,20 +51,18 @@ export async function importAttendanceWorkbook(fd: FormData) {
   }
   if (!sheets.length) fail(back, "勤怠の月次シートが見つかりません (シート名「8.11」や「令和○年○月分」を確かめてください)。");
   const force = str(fd, "force") === "1";
-  const results: string[] = [];
+  const finalizePast = str(fd, "finalizePast") === "1";
+  let result: WorkbookImportResult | undefined;
   await mutate((db) => {
-    for (const sheet of sheets) {
-      try {
-        const r = applyAttendanceSheet(db, sheet, { userId: user.id, now: nowIso(), makeId: newId, sourceLabel: file.name.slice(0, 120), force });
-        results.push(`${r.yearMonth} (${r.lines} 行)`);
-      } catch (e) {
-        fail(back, (e as Error).message);
-      }
+    try {
+      result = applyAttendanceWorkbook(db, sheets, { userId: user.id, now: nowIso(), today: toDateKey(new Date()), makeId: newId, sourceLabel: file.name.slice(0, 120), force, finalizePast });
+    } catch (e) {
+      fail(back, (e as Error).message);
     }
-    addAudit(db, { userId: user.id, action: "import", entity: "attendance_month", entityId: "workbook", entityLabel: file.name.slice(0, 80), summary: `勤怠月次を取込: ${results.join("・")}` });
+    addAudit(db, { userId: user.id, action: "import", entity: "attendance_month", entityId: "workbook", entityLabel: file.name.slice(0, 80), summary: workbookImportSummary(result!) });
   });
   revalidate();
-  redirect(withMsg(back, `取り込みました: ${results.join("、")}`));
+  redirect(withMsg(back, workbookImportSummary(result!)));
 }
 
 /** 空の月を作る (社員マスタ + 有給・休日出勤の候補) */

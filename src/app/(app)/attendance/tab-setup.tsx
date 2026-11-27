@@ -1,16 +1,18 @@
 import { canManageAttendanceRules } from "@/lib/auth/permissions";
-import { saveAttendanceProfiles, saveAttendanceRules, saveSharoushi } from "@/lib/actions/timecard";
+import { saveAttendanceProfiles, saveAttendanceRules, saveExtraStaff, saveSharoushi } from "@/lib/actions/timecard";
 import { attendanceEmployees, fixedOvertimeMin, hourlyRateOn, shiftOf, staffCategory, STAFF_CATEGORIES, STAFF_CATEGORY, WEEKDAY_JA } from "@/lib/hr/timecard";
 import { PendingButton } from "@/components/ui/PendingButton";
 import { Card, CardHeader, Field, Input, Note, Select, Textarea, buttonClass } from "@/components/ui";
+import { documentSettings } from "@/lib/doc-settings";
 import type { Ctx } from "./parts";
 
-/** 勤怠の設定: 決まり (管理者) / 社員ごと (区分・社員番号・シフト・固定残業・時給。本部・管理者) / 労務士の宛先と文面 (本部・管理者) */
+/** 勤怠の設定: 決まり (管理者) / 社員ごと (区分・社員番号・シフト・固定残業・時給。本部・管理者) / 勤務表にだけ載せる社員 (アカウントなし) / 労務士の宛先と文面 (本部・管理者) */
 export function SetupTab({ ctx }: { ctx: Ctx }) {
   const { db, user, today, settings: s, clerks } = ctx;
   const rules = canManageAttendanceRules(user);
   const users = attendanceEmployees(db);
   const back = "/attendance?tab=setup";
+  const companyName = documentSettings(db).companyName;
   const shiftRows = [...s.shifts, { id: "", name: "", start: "", end: "", breaks: [] }];
   return (
     <div className="space-y-4">
@@ -243,6 +245,67 @@ export function SetupTab({ ctx }: { ctx: Ctx }) {
         </form>
       </Card>
 
+      <Card padded={false}>
+        <div id="extra-staff" className="p-4 pb-0">
+          <CardHeader
+            title="勤務表にだけ載せる社員 (アカウントなし)"
+            description="アカウントがなく打刻しない社員。労務士へ送る勤務表に行を入れます (数字は手で入力)。以前の表を取り込むと、アカウントに当たらなかった人がここに入ります。退職などで載せなくなったら「最後の月」を入れるか削除します"
+          />
+        </div>
+        <form action={saveExtraStaff}>
+          <input type="hidden" name="returnTo" value={`${back}#extra-staff`} />
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left text-xs">
+              <thead className="bg-subtle text-ink-2">
+                <tr>
+                  <th className="px-2 py-2">氏名</th>
+                  <th className="px-2 py-2">区分</th>
+                  <th className="px-2 py-2">No</th>
+                  <th className="px-2 py-2">時給 (パート)</th>
+                  <th className="px-2 py-2">最後の月 (空 = 続ける)</th>
+                  <th className="px-2 py-2">削除</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...s.extraStaff, undefined].map((e, i) => (
+                  <tr key={e?.key ?? "new"} className="border-t border-line">
+                    <td className="px-2 py-1.5">
+                      <Input name={`x_${i}_name`} defaultValue={e?.name ?? ""} placeholder={e ? undefined : "追加する人の氏名"} aria-label="氏名" />
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <Select name={`x_${i}_kind`} defaultValue={e?.kind ?? "staff"} aria-label="区分">
+                        <option value="staff">社員</option>
+                        <option value="part">パート</option>
+                      </Select>
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <Input name={`x_${i}_no`} defaultValue={e?.employeeNo ?? ""} className="w-16" aria-label="No" />
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <Input name={`x_${i}_rate`} defaultValue={e?.hourlyRate ?? ""} className="w-20" inputMode="numeric" aria-label="時給" />
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <Input type="month" name={`x_${i}_until`} defaultValue={e?.until ?? ""} aria-label="最後の月" />
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {e && (
+                        <label className="flex items-center gap-1 text-critical">
+                          <input type="checkbox" name={`x_${i}_remove`} value="1" /> 削除
+                        </label>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="border-t border-line p-3">
+            <PendingButton type="submit" className={buttonClass("primary", "md")}>勤務表にだけ載せる社員を保存</PendingButton>
+            <span className="ml-3 text-xs text-ink-3">アカウントを作った人は打刻から計算するので、ここから外れます。</span>
+          </div>
+        </form>
+      </Card>
+
       <Card>
         <CardHeader title="労務士" description="勤務表の宛名・送り先と、メールの件名・本文の既定。{月}・{期間}・{会社}・{宛名} を差し込みます" />
         <form action={saveSharoushi} className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
@@ -252,6 +315,9 @@ export function SetupTab({ ctx }: { ctx: Ctx }) {
           </Field>
           <Field label="送り先のメールアドレス (複数はカンマ区切り)">
             <Input name="to" defaultValue={s.sharoushi.to} placeholder="roumu@example.jp" />
+          </Field>
+          <Field label="勤務表の 2 行目の会社名" hint="空のときは帳票の会社名。以前の表を取り込むと、その表の書き方 (空白を含む) が入ります" className="@xl:col-span-2">
+            <Input name="companyLine" defaultValue={s.sharoushi.companyLine} placeholder={companyName} />
           </Field>
           <Field label="件名" className="@xl:col-span-2">
             <Input name="subject" defaultValue={s.sharoushi.subject} />

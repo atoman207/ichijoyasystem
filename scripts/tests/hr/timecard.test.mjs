@@ -263,6 +263,88 @@ section("備考の書き方 (いまの勤務表と同じ)");
   eq(INC.incentiveNote({ cash: 11000, salary: 0 }), ["インセンティブ￥11,000（現金）"], "金額の書き方");
 }
 
+section("以前の表 (令和○年度.xlsx) の取込 → 設定 (社員番号・パート・時給・宛名・アカウントのない社員) → 次の月の勤務表 (お客様の表 2026-11-26)");
+{
+  const now = new Date().toISOString();
+  db.attendanceMonths = [];
+  db.attendanceLines = [];
+  setAtt({ startDate: "2031-02-21", profiles: { [chuo.id]: { rates: [{ from: "2030-12-21", yen: 1040, changed: true }] } }, sharoushi: { name: "テスト労務士事務所", companyLine: "株式会社　　　テスト" } });
+  eq(T.rateChangeNote(T.attendanceSettings(db), chuo.id, "2031-04-20"), "時給変更2030.12.21～＠1,040", "右の欄の書き方 (以前の表と同じ)");
+  // 以前の表 (2031-04 = 令和 13 年 4 月分) を作って .xlsx にする (お預かりした表と同じ並び)
+  const m4 = { id: "attm_old", yearMonth: "2031-04", payLabel: "4/30支給", status: "final", createdBy: admin.id, createdAt: now, updatedBy: admin.id, updatedAt: now };
+  db.attendanceMonths.push(m4);
+  const L4 = (o) => ({ id: store.newId("attl"), monthId: m4.id, source: "import", createdAt: now, updatedAt: now, ...o });
+  db.attendanceLines.push(
+    L4({ kind: "staff", sort: 0, employeeNo: "18", userId: staff.id, name: staff.name.replace(" ", "　"), workDays: 21, lateEarly: "0:21", paidLeaveDays: 4, note: "インセンティブ￥5,000（現金）" }),
+    L4({ kind: "staff", sort: 1, employeeNo: "56", name: "架空　次郎", workDays: 8, absenceDays: 6, paidLeaveDays: 10.5, note: "振休消化0.5日" }),
+    L4({ kind: "part", sort: 2, employeeNo: "53", userId: chuo.id, name: chuo.name, workDays: 16, workHours: "82:48", hourlyRate: 1040 }),
+  );
+  const buf = X.attendanceXlsx(db, m4);
+  const files = (await imp("lib/xlsx.ts")).zipEntries(buf);
+  const sheetXml = files.get("xl/worksheets/sheet1.xml").toString("utf8");
+  const stylesXml = files.get("xl/styles.xml").toString("utf8");
+  ok(stylesXml.includes("ＭＳ Ｐゴシック") && stylesXml.includes('<sz val="18"/>') && stylesXml.includes("<u/>"), "フォント ＭＳ Ｐゴシック・宛名 18pt・会社名は下線 (以前の表と同じ)");
+  ok(sheetXml.includes('<mergeCell ref="A1:H1"/>') && sheetXml.includes('<mergeCell ref="A2:H2"/>') && sheetXml.includes('paperSize="9"') && sheetXml.includes('fitToPage="1"'), "宛名・会社名の結合、A4 縦で 1 ページ");
+  ok(sheetXml.includes('<row r="8" ht="33.75" customHeight="1">') && sheetXml.includes('<col min="7" max="7" width="27.5" customWidth="1"/>'), "行の高さ・列の幅");
+  const rows4 = XR.readXlsx(buf)[0].rows;
+  eq(rows4.get(21)?.get("A"), "パート", "社員の枠は 12 行 (8〜19 行目) → 21 行目に「パート」(以前の表と同じ位置)");
+  eq([rows4.get(2)?.get("A"), rows4.get(4)?.get("G"), rows4.get(8)?.get("A")], ["株式会社　　　テスト", "　　　　　令和　13年　4月分", "18"], "会社名の行・月の見出し・社員番号は数");
+  eq(rows4.get(23)?.get("J"), "時給変更2030.12.21～＠1,040", "パートの右の欄に時給の変更");
+  ok(!rows4.get(23)?.get("G"), "時給の変更は備考に書かない");
+
+  // 取り込む (設定はまだ空 = お預かりした表を初めて入れるとき)
+  setAtt({ startDate: "2031-02-21" });
+  db.attendanceMonths = [];
+  db.attendanceLines = [];
+  const sheets = ATT.parseAttendanceWorkbook(buf);
+  eq([sheets[0].addressee, sheets[0].companyLine], ["テスト労務士事務所", "株式会社　　　テスト"], "宛名 (御中の前) と会社名の行 (空白もそのまま)");
+  eq(sheets[0].lines.find((l) => l.kind === "part")?.rateChange, { from: "2030-12-21", yen: 1040 }, "右の欄の「時給変更2030.12.21～＠1,040」");
+  eq(ATT.parseRateChange("時給変更2025.12.21～＠1,040"), { from: "2025-12-21", yen: 1040 }, "時給の変更の読み取り");
+  const r = ATT.applyAttendanceWorkbook(db, sheets, { userId: admin.id, now, today: "2031-06-01", makeId: store.newId, sourceLabel: "令和13年度.xlsx", finalizePast: true });
+  eq([r.finalized, db.attendanceMonths.find((m) => m.yearMonth === "2031-04")?.status], [["2031-04"], "final"], "締めの過ぎた月は確定 (送付済み)");
+  const s1 = T.attendanceSettings(db);
+  eq([s1.profiles[staff.id]?.employeeNo, s1.profiles[chuo.id]?.employeeNo, s1.profiles[chuo.id]?.category], ["18", "53", "part"], "社員番号・パートを設定に入れる");
+  eq(s1.profiles[chuo.id]?.rates, [{ from: "2030-12-21", yen: 1040, changed: true }], "時給と変更日");
+  eq([s1.sharoushi.name, s1.sharoushi.companyLine], ["テスト労務士事務所", "株式会社　　　テスト"], "宛名・会社名の行");
+  eq(s1.extraStaff.map((e) => [e.name, e.kind, e.employeeNo]), [["架空 次郎", "staff", "56"]], "アカウントに当たらない人は「勤務表にだけ載せる社員」");
+  ok(r.extras.includes("架空 次郎") && ATT.workbookImportSummary(r).includes("アカウントのない社員"), "取込の知らせにアカウントのない社員");
+  // 画面で直した値は取り込み直しで変えない
+  const cur = db.settings.find((x) => x.id === T.ATTENDANCE_SETTINGS_ID).value;
+  cur.profiles[staff.id].employeeNo = "99";
+  ATT.applyAttendanceWorkbook(db, sheets, { userId: admin.id, now, today: "2031-06-01", makeId: store.newId, force: true, finalizePast: true });
+  const s2 = T.attendanceSettings(db);
+  eq([s2.profiles[staff.id]?.employeeNo, s2.extraStaff.length], ["99", 1], "取り込み直しても入れた値はそのまま・同じ人を二重にしない");
+  cur.profiles[staff.id].employeeNo = "18";
+
+  // 次の月 (2031-05) を打刻から作る: 並びは前の月の表のまま・アカウントのない人は空の行 (手で入れる)
+  const built = B.buildAttendanceMonth(db, "2031-05", "2031-06-01");
+  const order = built.lines.map((l) => l.name);
+  ok(order.indexOf(staff.name) < order.indexOf("架空 次郎") && order.indexOf("架空 次郎") < order.indexOf(chuo.name), "前の月の表の並び (アカウントのない人も同じ位置)");
+  const extra = built.lines.find((l) => l.name === "架空 次郎");
+  eq([extra?.source, extra?.employeeNo, extra?.workDays, extra?.kind], ["manual", "56", undefined, "staff"], "アカウントのない人の行は数字を空に (手で入力)");
+  ok(built.warnings.some((w) => w.startsWith("架空 次郎:")), "送る前の確かめにアカウントのない人");
+  eq([built.lines.find((l) => l.userId === chuo.id)?.kind, built.lines.find((l) => l.userId === chuo.id)?.hourlyRate, built.lines.find((l) => l.userId === staff.id)?.employeeNo], ["part", 1040, "18"], "パートの行・時給・社員番号");
+  ok(!/時給変更/.test(built.lines.find((l) => l.userId === chuo.id)?.note ?? ""), "時給の変更は備考に書かない (右の欄)");
+  const res5 = B.applyBuiltMonth(db, built, { userId: hq.id, now, makeId: store.newId });
+  const typed = db.attendanceLines.find((l) => l.monthId === res5.month.id && l.name === "架空 次郎");
+  typed.workDays = 20;
+  B.applyBuiltMonth(db, B.buildAttendanceMonth(db, "2031-05", "2031-06-01"), { userId: hq.id, now, makeId: store.newId });
+  const again = db.attendanceLines.filter((l) => l.monthId === res5.month.id && l.name === "架空 次郎");
+  eq([again.length, again[0]?.workDays, again[0]?.sort], [1, 20, typed.sort], "作り直しても手で入れた数字を同じ位置に残す (二重にしない)");
+  const xr5 = XR.readXlsx(X.attendanceXlsx(db, res5.month))[0].rows;
+  ok([...xr5.values()].some((row) => row.get("B") === "架空 次郎"), ".xlsx にアカウントのない人の行");
+  // 最後の月を過ぎた人・アカウントができた人は載せない
+  cur.extraStaff[0].until = "2031-04";
+  ok(!B.buildAttendanceMonth(db, "2031-05", "2031-06-01").lines.some((l) => l.name === "架空 次郎"), "最後の月より後は載せない");
+  cur.extraStaff[0].until = undefined;
+  cur.extraStaff.push({ key: T.staffNameKey(staff.name), name: staff.name, kind: "staff" });
+  eq(B.buildAttendanceMonth(db, "2031-05", "2031-06-01").lines.filter((l) => T.staffNameKey(l.name) === T.staffNameKey(staff.name)).length, 1, "アカウントのある人は打刻から (二重にしない)");
+  cur.extraStaff.pop();
+  db.attendanceMonths = [];
+  db.attendanceLines = [];
+  setAtt({ startDate: "2031-02-21" });
+}
+
 section("表・コレクション");
 {
   for (const t of ["attendance_days", "attendance_requests"]) ok(SCHEMA.TABLES.some((x) => x.table === t), `schema に ${t}`);

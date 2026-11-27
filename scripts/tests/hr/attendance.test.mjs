@@ -57,39 +57,45 @@ section("スキーマ・migrate");
   ok(MIG.HR_COLLECTIONS.includes("attendanceMonths") && MIG.HR_COLLECTIONS.includes("attendanceLines"), "migrate の HR_COLLECTIONS");
 }
 
-section("令和8年度.xlsx の取込");
+section("令和8年度.xlsx の取込 (お預かりした表。リポジトリにないので、ある環境でだけ確かめる。社員の名前はテストに書かない)");
 {
   const file = path.join(root, "source", "15_人事・労務", "勤怠", "令和8年度_勤怠月次.xlsx");
-  ok(fs.existsSync(file), "ソース登録簿に令和8年度_勤怠月次.xlsx がある");
-  const sheets = A.parseAttendanceWorkbook(fs.readFileSync(file));
-  eq(sheets.map((s) => s.yearMonth), ["2026-07", "2026-08", "2026-09", "2026-10", "2026-11"], "5 か月分");
-  const nov = sheets.find((s) => s.yearMonth === "2026-11");
-  ok(nov && nov.payLabel === "11/30支給", "11 月の支給ラベル");
-  const matsuzawa = nov.lines.find((l) => l.name.includes("松澤"));
-  ok(matsuzawa && matsuzawa.workDays === 21 && matsuzawa.lateEarly === "0:21" && matsuzawa.paidLeaveDays === 4, "松澤 11 月 (出勤・遅刻・有給)");
-  const ogata = nov.lines.find((l) => l.name.includes("緒方"));
-  ok(ogata && ogata.lateEarly === "1:36", "緒方の Excel シリアル遅刻が 1:36");
-  const part = nov.lines.find((l) => l.kind === "part" && l.name.includes("飯塚"));
-  ok(part && part.workHours === "82:48" && part.hourlyRate === 1040, "パート 飯塚 (出勤時間・時給)");
+  if (!fs.existsSync(file)) {
+    ok(true, "お預かりした表がない環境なので省く (source/ はコミットしない)");
+  } else {
+    const sheets = A.parseAttendanceWorkbook(fs.readFileSync(file));
+    eq(sheets.map((s) => s.yearMonth), ["2026-07", "2026-08", "2026-09", "2026-10", "2026-11"], "5 か月分");
+    const nov = sheets.find((s) => s.yearMonth === "2026-11");
+    ok(nov && nov.payLabel === "11/30支給", "11 月の支給ラベル");
+    ok(Boolean(nov.addressee) && !nov.addressee.includes("御中"), "1 行目の宛名 (御中の前)");
+    ok(Boolean(nov.companyLine), "2 行目の会社名");
+    const staffLines = nov.lines.filter((l) => l.kind === "staff");
+    ok(staffLines.length >= 5 && staffLines.every((l) => typeof l.workDays === "number"), "社員の行に出勤日数");
+    ok(staffLines.every((l) => !l.lateEarly || /^\d{1,3}:\d{2}$/.test(l.lateEarly)), "遅刻・早退は Excel の時刻シリアル・全角のコロンも H:MM にそろえる");
+    ok(staffLines.some((l) => l.lateEarly === "1:36"), "Excel の時刻シリアル (0.0666…) = 1:36");
+    const part = nov.lines.find((l) => l.kind === "part");
+    ok(part && /^\d+:\d{2}$/.test(part.workHours ?? "") && part.hourlyRate > 0, "パートの出勤時間・時給");
+    ok(Boolean(part?.rateChange?.from), "パートの右の欄の「時給変更…」を読む");
 
-  const now = "2026-11-26T00:00:00.000Z";
-  const r = A.applyAttendanceSheet(db, nov, { userId: admin.id, now, makeId: store.newId, sourceLabel: "令和8年度_勤怠月次.xlsx" });
-  eq(r.yearMonth, "2026-11", "apply の年月");
-  ok(db.attendanceMonths.some((m) => m.yearMonth === "2026-11" && m.status === "draft"), "下書きの月が残る");
-  ok(db.attendanceLines.filter((l) => l.monthId === r.monthId).length === nov.lines.length, "行数が一致");
-  const csv = A.attendanceCsv(db, db.attendanceMonths.find((m) => m.id === r.monthId));
-  ok(csv.includes("松澤") && csv.includes("飯塚") && csv.startsWith("勤怠月次,2026-11"), "CSV に社員・パート");
+    const now = "2026-11-26T00:00:00.000Z";
+    const r = A.applyAttendanceSheet(db, nov, { userId: admin.id, now, makeId: store.newId, sourceLabel: "令和8年度_勤怠月次.xlsx" });
+    eq(r.yearMonth, "2026-11", "apply の年月");
+    ok(db.attendanceMonths.some((m) => m.yearMonth === "2026-11" && m.status === "draft"), "下書きの月が残る");
+    ok(db.attendanceLines.filter((l) => l.monthId === r.monthId).length === nov.lines.length, "行数が一致");
+    const csv = A.attendanceCsv(db, db.attendanceMonths.find((m) => m.id === r.monthId));
+    ok(csv.includes(staffLines[0].name) && csv.includes(part.name) && csv.startsWith("勤怠月次,2026-11"), "CSV に社員・パート");
 
-  throws(
-    () => {
-      db.attendanceMonths.find((m) => m.id === r.monthId).status = "final";
-      A.applyAttendanceSheet(db, nov, { userId: admin.id, now, makeId: store.newId });
-    },
-    "確定済み",
-    "確定済みは force なしで断る",
-  );
-  A.applyAttendanceSheet(db, nov, { userId: admin.id, now, makeId: store.newId, force: true });
-  ok(db.attendanceMonths.find((m) => m.yearMonth === "2026-11").status === "draft", "force で下書きに戻る");
+    throws(
+      () => {
+        db.attendanceMonths.find((m) => m.id === r.monthId).status = "final";
+        A.applyAttendanceSheet(db, nov, { userId: admin.id, now, makeId: store.newId });
+      },
+      "確定済み",
+      "確定済みは force なしで断る",
+    );
+    A.applyAttendanceSheet(db, nov, { userId: admin.id, now, makeId: store.newId, force: true });
+    ok(db.attendanceMonths.find((m) => m.yearMonth === "2026-11").status === "draft", "force で下書きに戻る");
+  }
 }
 
 section("有給・休日出勤からの候補");

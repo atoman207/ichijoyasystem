@@ -2,11 +2,11 @@ import type { AttendanceLine, AttendanceLineCalc, AttendanceMonth, Database, Use
 import { kpiSettings } from "@/lib/kpi-settings";
 import { documentSettings } from "@/lib/doc-settings";
 import { fmtDays } from "./leave";
-import { attendanceEmployees, attendancePeriod, attendanceSettings, fmtHm, hourlyRateOn, payLabelOf, periodSummary, staffCategory, type PeriodSummary } from "./timecard";
+import { attendanceEmployees, attendancePeriod, attendanceSettings, fmtHm, hourlyRateOn, payLabelOf, periodSummary, staffCategory, staffNameKey, type ExtraStaff, type PeriodSummary } from "./timecard";
 import { incentiveNote, monthIncentives, type MonthIncentives } from "./incentive-month";
 
 /**
- * 労務士へ送る勤務表 (田仲労務士書式) を打刻・休暇・インセンティブから作る
+ * 労務士へ送る勤務表 (いまの労務士の書式) を打刻・休暇・インセンティブから作る
  * ------------------------------------------------------------
  * 社内総合マニュアルの対応表 (キャスタイム → 労務士の書式) のとおり:
  * 出勤日数 = 出勤した日 (休日出勤を含む) / 欠勤 = 全日欠勤 / 遅刻・早退 = 遅刻 + 早退 (半日休暇の残りの半日に来ていない時間を含む) /
@@ -32,22 +32,25 @@ export function noteFor(sum: Pick<PeriodSummary, "compDays" | "holidayWorkDays" 
   return parts.length ? parts.join("\n") : undefined;
 }
 
-/** 前の月の表の並び (社員 ID → 順番・社員番号) */
-function previousOrder(db: BuildDb, yearMonth: string): { order: Map<string, number>; numbers: Map<string, string> } {
+/** 前の月の表の並び (社員 ID・アカウントのない人の氏名 → 順番、社員 ID → 社員番号) */
+function previousOrder(db: BuildDb, yearMonth: string): { order: Map<string, number>; byName: Map<string, number>; numbers: Map<string, string> } {
   const months = [...(db.attendanceMonths ?? [])].filter((m) => m.yearMonth < yearMonth).sort((a, b) => b.yearMonth.localeCompare(a.yearMonth));
   const order = new Map<string, number>();
+  const byName = new Map<string, number>();
   const numbers = new Map<string, string>();
   for (const m of months) {
-    const lines = (db.attendanceLines ?? []).filter((l) => l.monthId === m.id && l.userId).sort((a, b) => a.sort - b.sort);
-    for (const l of lines) {
-      if (!order.has(l.userId!)) order.set(l.userId!, order.size);
-      if (l.employeeNo && !numbers.has(l.userId!)) numbers.set(l.userId!, l.employeeNo);
-    }
-    if (order.size) break;
+    const lines = (db.attendanceLines ?? []).filter((l) => l.monthId === m.id).sort((a, b) => a.sort - b.sort);
+    lines.forEach((l, i) => {
+      if (!byName.has(staffNameKey(l.name))) byName.set(staffNameKey(l.name), i);
+      if (!l.userId) return;
+      if (!order.has(l.userId)) order.set(l.userId, i);
+      if (l.employeeNo && !numbers.has(l.userId)) numbers.set(l.userId, l.employeeNo);
+    });
+    if (lines.length) break;
   }
   // 社員番号はもっと前の表にもあれば使う
   for (const l of db.attendanceLines ?? []) if (l.userId && l.employeeNo && !numbers.has(l.userId)) numbers.set(l.userId, l.employeeNo);
-  return { order, numbers };
+  return { order, byName, numbers };
 }
 
 export interface BuiltMonth {
@@ -69,18 +72,23 @@ export function buildAttendanceMonth(db: BuildDb, yearMonth: string, today: stri
   const { from, to } = attendancePeriod(db, yearMonth);
   const users = attendanceEmployees(db).filter((u) => staffCategory(s, u, clerks) !== "officer");
   const incentives = monthIncentives(db, yearMonth, users, today, s);
-  const { order, numbers } = previousOrder(db, yearMonth);
-  const sorted = [...users].sort((a, b) => {
-    const ca = staffCategory(s, a, clerks) === "part" ? 1 : 0;
-    const cb = staffCategory(s, b, clerks) === "part" ? 1 : 0;
-    return ca - cb || (order.get(a.id) ?? 1000 + users.indexOf(a)) - (order.get(b.id) ?? 1000 + users.indexOf(b));
-  });
+  const { order, byName, numbers } = previousOrder(db, yearMonth);
+  // アカウントのない社員 (設定)。この月まで載せる人だけ。アカウントができた人 (同じ氏名) は打刻から作る
+  const userKeys = new Set(users.map((u) => staffNameKey(u.name)));
+  const extras = s.extraStaff.filter((e) => (!e.until || e.until >= yearMonth) && !userKeys.has(e.key));
+  type Entry = { part: boolean; rank: number; user?: User; extra?: ExtraStaff };
+  const entries: Entry[] = [
+    ...users.map((u, i) => ({ part: staffCategory(s, u, clerks) === "part", rank: order.get(u.id) ?? byName.get(staffNameKey(u.name)) ?? 1000 + i, user: u })),
+    ...extras.map((e, i) => ({ part: e.kind === "part", rank: byName.get(e.key) ?? 2000 + i, extra: e })),
+  ].sort((a, b) => Number(a.part) - Number(b.part) || a.rank - b.rank);
   const warnings: string[] = [];
   if (!s.startDate) warnings.push("打刻を使い始めた日が設定されていません (設定 → 打刻を使い始めた日)。欠勤・打刻漏れは数えていません。");
   else if (s.startDate > from) warnings.push(`打刻を使い始めた日 (${s.startDate}) より前の日は、欠勤・打刻漏れを数えていません。`);
   if (to >= today) warnings.push(`締めの日 (${to}) がまだ来ていません。今日までの打刻で作っています。`);
   const summaries = new Map<string, PeriodSummary>();
-  const lines: BuiltLine[] = sorted.map((u: User, i) => {
+  const lines: BuiltLine[] = entries.map((entry, i) => {
+    if (entry.extra) return extraLine(entry.extra, i, from, to, warnings);
+    const u: User = entry.user!;
     const sum = periodSummary(db, u, from, to, today, clerks);
     summaries.set(u.id, sum);
     const inc = incentives.persons.get(u.id);
@@ -93,9 +101,8 @@ export function buildAttendanceMonth(db: BuildDb, yearMonth: string, today: stri
     if (part && !hourlyRateOn(s, u.id, to)) w.push("時給が未設定");
     for (const x of w) warnings.push(`${u.name}: ${x}`);
     const rate = part ? hourlyRateOn(s, u.id, to) : undefined;
-    const rateChanged = rate && rate.from > from && rate.from <= to;
-    const baseNote = noteFor(sum, incentiveNote(inc));
-    const note = [baseNote, rateChanged ? `時給変更${rate!.from.replace(/-/g, ".")}～＠${rate!.yen.toLocaleString("ja-JP")}` : ""].filter(Boolean).join("\n") || undefined;
+    // 時給の変更は備考ではなく表の右の欄 (以前の表と同じ。attendance-xlsx.ts の rateChangeNote)
+    const note = noteFor(sum, incentiveNote(inc));
     const calc: AttendanceLineCalc = {
       from,
       to,
@@ -138,6 +145,21 @@ export function buildAttendanceMonth(db: BuildDb, yearMonth: string, today: stri
   return { yearMonth, from, to, payLabel: payLabelOf(yearMonth), lines, incentives, summaries, warnings };
 }
 
+/** アカウントのない社員の行 (数字は空 = 手で入れる。打刻がないので計算しない) */
+function extraLine(e: ExtraStaff, sort: number, from: string, to: string, warnings: string[]): BuiltLine {
+  const w = ["アカウントがないため打刻から計算できません。出勤日数などを手で入力してください"];
+  warnings.push(`${e.name}: ${w[0]}`);
+  return {
+    kind: e.kind,
+    sort,
+    employeeNo: e.employeeNo,
+    name: e.name,
+    hourlyRate: e.kind === "part" ? e.hourlyRate : undefined,
+    source: "manual",
+    calc: { from, to, outsideMin: 0, fixedMin: 0, nightMin: 0, lateMin: 0, earlyMin: 0, workedMin: 0, holidayWorkDays: 0, compUsedDays: 0, specialDays: 0, incentiveSalary: 0, incentiveCash: 0, incentiveItems: [], warnings: w },
+  };
+}
+
 /** 作った勤務表を書き込む (mutate の中)。確定済みは断る。手で足した行 (source = manual) は残す */
 export function applyBuiltMonth(db: Database, built: BuiltMonth, opts: { userId: string; now: string; makeId: (p: string) => string }): { month: AttendanceMonth; lines: number } {
   let month = (db.attendanceMonths ?? []).find((m) => m.yearMonth === built.yearMonth);
@@ -153,9 +175,18 @@ export function applyBuiltMonth(db: Database, built: BuiltMonth, opts: { userId:
   }
   const keep = (db.attendanceLines ?? []).filter((l) => l.monthId === month!.id && l.source === "manual");
   db.attendanceLines = (db.attendanceLines ?? []).filter((l) => l.monthId !== month!.id);
-  const lines: AttendanceLine[] = built.lines.map((l) => ({ ...l, id: opts.makeId("attl"), monthId: month!.id, createdAt: opts.now, updatedAt: opts.now }));
+  // アカウントのない社員の行は、作り直す前に手で入れた行 (同じ氏名) をその位置に残す
+  const used = new Set<string>();
+  const lines: AttendanceLine[] = built.lines.map((l) => {
+    const typed = l.source === "manual" ? keep.find((k) => !used.has(k.id) && staffNameKey(k.name) === staffNameKey(l.name)) : undefined;
+    if (typed) {
+      used.add(typed.id);
+      return { ...typed, sort: l.sort, kind: l.kind, employeeNo: typed.employeeNo ?? l.employeeNo, calc: l.calc, updatedAt: opts.now };
+    }
+    return { ...l, id: opts.makeId("attl"), monthId: month!.id, createdAt: opts.now, updatedAt: opts.now };
+  });
   const base = lines.length;
-  db.attendanceLines.push(...lines, ...keep.map((k, i) => ({ ...k, sort: base + i, updatedAt: opts.now })));
+  db.attendanceLines.push(...lines, ...keep.filter((k) => !used.has(k.id)).map((k, i) => ({ ...k, sort: base + i, updatedAt: opts.now })));
   return { month, lines: lines.length };
 }
 

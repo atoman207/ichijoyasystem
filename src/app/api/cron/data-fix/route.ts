@@ -20,6 +20,11 @@ import { parseHandoverRef } from "@/lib/handover";
 import { addAvatarPhoto } from "@/lib/avatar-photos";
 import { putObject, readObject } from "@/lib/storage";
 import { createHash } from "node:crypto";
+import { applyAttendanceWorkbook, matchAttendanceUser, parseAttendanceWorkbook, planWorkbookSetup, workbookImportSummary } from "@/lib/hr/attendance";
+import { attendanceTablesMissing } from "@/lib/hr/tables";
+import { attendanceEmployees, attendanceSettings, staffCategory } from "@/lib/hr/timecard";
+import { monthIncentives } from "@/lib/hr/incentive-month";
+import { kpiSettings } from "@/lib/kpi-settings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,6 +59,10 @@ export const maxDuration = 60;
  *   task = visit-merge: 見積の訪問がその場で現見になったのに、受注の登録で同じ日に作業の予定がもう 1 件できた案件 (お客様のご連絡 2026-11-25。
  *     この日より前の版の受注の登録) を 1 件にまとめる: 訪問の予定を受注の「現見」の予定に切り替え (時間・担当者・メモは訪問のまま)、受注の作業の予定を消す
  *     (src/lib/visit-adopt.ts と同じ判定)。from = この日以降に登録した受注 (既定 2026-11-23)。既定は確認だけ、apply=1 で書き込み、予定ごとに変更履歴
+ *   task = attendance-workbook: 労務士へ送っている勤務表「令和○年度.xlsx」(お客様からお預かりした表) を勤怠に取り込む (画面の 勤怠 → 労務士へ送る勤務表 →
+ *     以前の表の取込 と同じ処理 = src/lib/hr/attendance.ts の applyAttendanceWorkbook。締めの過ぎた月は確定、一番新しい表から社員番号・パートの時給・
+ *     宛名・会社名の行・アカウントのない社員を設定に入れる)。社員の名前・番号はコードに書かず、本文 (JSON) = { file: .xlsx の base64, name: ファイル名 } で受け取る。
+ *     確認のときは、表の備考のインセンティブとシステムの計算 (口コミ・点検など) の違いも返す。既定は確認だけ、apply=1 で書き込み、変更履歴
  *   task = avatars: 社員の顔写真を登録する (お客様のご要望 2026-11-26「顔写真は弊社ホームページのスタッフ紹介から」)。写真と社員はコードに書かず、
  *     本文 (JSON) = { photos: [{ userId, name (確かめ用。社員の名前と同じ), image (JPEG・PNG・WebP の base64。512 KB まで), note? }] } で受け取る。
  *     今の写真と同じ中身なら何もしない。前の写真は以前の写真に残し、ファイルは消さない (src/lib/avatar-photos.ts)。既定は確認だけ、apply=1 で書き込み、社員ごとに変更履歴
@@ -75,6 +84,7 @@ export async function POST(req: Request) {
   if (task === "visit-merge") return visitMerge(url);
   if (task === "avatars") return avatarsFix(url, req);
   if (task === "user-names") return userNamesFix(url, req);
+  if (task === "attendance-workbook") return attendanceWorkbookFix(url, req);
   if (task !== "quote-line-units") return NextResponse.json({ error: "unknown task" }, { status: 400 });
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? from;
@@ -494,4 +504,67 @@ async function userNamesFix(url: URL, req: Request) {
 
 function diffChangesHidden(before: { avatarHidden?: boolean }, after: boolean | undefined) {
   return Boolean(before.avatarHidden) === Boolean(after) ? [] : [{ field: "avatarHidden", before: before.avatarHidden ? "はい" : "", after: after ? "はい" : "" }];
+}
+
+/** 表の備考の「インセンティブ￥5,000（現金）」「ｲﾝｾﾝﾃｨﾌﾞ\3,000」→ 現金・成果給の円 */
+function noteIncentives(note: string | undefined): { cash: number; salary: number } {
+  const out = { cash: 0, salary: 0 };
+  const t = (note ?? "").normalize("NFKC");
+  for (const m of t.matchAll(/インセンティブ\s*[¥￥\\]\s*([\d,]+)\s*(\(現金\))?/g)) {
+    const yen = Number(m[1].replace(/,/g, ""));
+    if (m[2]) out.cash += yen;
+    else out.salary += yen;
+  }
+  return out;
+}
+
+/** 令和○年度.xlsx (労務士へ送っている勤務表) を勤怠に取り込む */
+async function attendanceWorkbookFix(url: URL, req: Request) {
+  const apply = url.searchParams.get("apply") === "1";
+  const body = (await req.json().catch(() => null)) as { file?: unknown; name?: unknown; force?: unknown } | null;
+  const buf = typeof body?.file === "string" ? Buffer.from(body.file, "base64") : Buffer.alloc(0);
+  const name = typeof body?.name === "string" && body.name.trim() ? body.name.trim().slice(0, 120) : "勤怠月次.xlsx";
+  if (!buf.length || buf.length > 5 * 1024 * 1024) return NextResponse.json({ error: "file (.xlsx の base64。5 MB まで) を JSON で送ってください" }, { status: 400 });
+  const missing = await attendanceTablesMissing();
+  if (missing) return NextResponse.json({ error: missing }, { status: 503 });
+  let sheets;
+  try {
+    sheets = parseAttendanceWorkbook(buf);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+  }
+  if (!sheets.length) return NextResponse.json({ error: "勤怠の月次シートが見つかりません" }, { status: 400 });
+  const db0 = await syncDb();
+  const today = toDateKey(new Date());
+  const s = attendanceSettings(db0);
+  const clerks = kpiSettings(db0).clerkUserIds;
+  const users = attendanceEmployees(db0).filter((u) => staffCategory(s, u, clerks) !== "officer");
+  // 表の備考のインセンティブ (手計算) とシステムの計算の違い (確かめ用。書き込まない)
+  const incentiveCheck = sheets.map((sh) => {
+    const inc = monthIncentives(db0, sh.yearMonth, users, today, s);
+    const rows = sh.lines.map((l) => {
+      const u = matchAttendanceUser(db0, l.name);
+      const sheet = noteIncentives(l.note);
+      const p = u ? inc.persons.get(u.id) : undefined;
+      return { name: l.name, account: Boolean(u), sheetCash: sheet.cash, sheetSalary: sheet.salary, systemCash: p?.cash ?? 0, systemSalary: p?.salary ?? 0, items: p?.items.map((x) => `${x.label} ${x.yen}${x.detail ? ` (${x.detail})` : ""}`) ?? [] };
+    });
+    return { yearMonth: sh.yearMonth, ranges: inc.ranges, differ: rows.filter((r) => r.sheetCash !== r.systemCash || r.sheetSalary !== r.systemSalary).length, rows };
+  });
+  const existing = sheets.map((sh) => {
+    const m = db0.attendanceMonths.find((x) => x.yearMonth === sh.yearMonth);
+    return { yearMonth: sh.yearMonth, sheet: sh.sheetName, payLabel: sh.payLabel, lines: sh.lines.length, staff: sh.lines.filter((l) => l.kind === "staff").length, part: sh.lines.filter((l) => l.kind === "part").length, current: m ? `${m.status} (${db0.attendanceLines.filter((l) => l.monthId === m.id).length} 行)` : "なし" };
+  });
+  const plan = planWorkbookSetup(db0, sheets);
+  if (!apply) return NextResponse.json({ ok: true, applied: false, months: existing, setup: plan, incentiveCheck });
+  let result;
+  try {
+    result = await mutate((db) => {
+      const r = applyAttendanceWorkbook(db, sheets, { userId: SYSTEM_USER, now: nowIso(), today, makeId: newId, sourceLabel: name, force: body?.force === true, finalizePast: true });
+      addAudit(db, { userId: SYSTEM_USER, action: "import", entity: "attendance_month", entityId: "workbook", entityLabel: name.slice(0, 80), summary: workbookImportSummary(r) });
+      return r;
+    });
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 409 });
+  }
+  return NextResponse.json({ ok: true, applied: true, result, summary: workbookImportSummary(result), at: nowIso() });
 }

@@ -52,6 +52,8 @@ export interface RateChange {
   /** この日から */
   from: string;
   yen: number;
+  /** 時給を変えた日 (以前の表の「時給変更…」から。勤務表の右の欄に書く)。履歴の 2 つ目以降はいつも変更 */
+  changed?: boolean;
 }
 
 export interface StaffProfile {
@@ -64,6 +66,22 @@ export interface StaffProfile {
   /** パートの時給 (変更の履歴) */
   rates?: RateChange[];
 }
+
+/**
+ * アカウントのない社員 (打刻しない人。労務士の勤務表にだけ載せる。以前の表の取込でアカウントに当たらなかった人)。
+ * 勤務表を作ると、この人の行を空の数字で入れる (手で入力する)。until = この月の表まで載せる (退職など。空 = 続ける)
+ */
+export interface ExtraStaff {
+  key: string;
+  name: string;
+  kind: "staff" | "part";
+  employeeNo?: string;
+  hourlyRate?: number;
+  until?: string;
+}
+
+/** 氏名を比べる形 (空白・全角半角の違いを除く) */
+export const staffNameKey = (s: string) => s.normalize("NFKC").replace(/[\s　]+/g, "");
 
 export type IncentivePay = "cash" | "salary";
 export type IncentivePeriod = "prev_month" | "closing";
@@ -100,7 +118,10 @@ export interface AttendanceSettings {
   nightStart: string;
   nightEnd: string;
   profiles: Record<string, StaffProfile>;
-  sharoushi: { name: string; to: string; cc: string; subject: string; body: string };
+  /** アカウントのない社員 (勤務表にだけ載せる) */
+  extraStaff: ExtraStaff[];
+  /** companyLine = 勤務表の 2 行目の会社名 (空 = 帳票の会社名) */
+  sharoushi: { name: string; to: string; cc: string; subject: string; body: string; companyLine: string };
   incentives: {
     /** Google 口コミ (星・コメント・写真 1 点 = 1,000 円) */
     review: IncentiveRule;
@@ -126,8 +147,10 @@ export const ATTENDANCE_DEFAULTS: AttendanceSettings = {
   nightStart: "22:00",
   nightEnd: "05:00",
   profiles: {},
+  extraStaff: [],
   sharoushi: {
     name: "",
+    companyLine: "",
     to: "",
     cc: "",
     subject: "{月}分 出勤簿 ({会社})",
@@ -219,7 +242,7 @@ export function attendanceSettings(db: Pick<Database, "settings">): AttendanceSe
     const rates = (Array.isArray(p.rates) ? p.rates : [])
       .map((r) => (r && typeof r === "object" ? (r as Record<string, unknown>) : {}))
       .filter((r) => isDate(r.from) && num(r.yen, 1, 100_000) !== undefined)
-      .map((r) => ({ from: r.from as string, yen: r.yen as number }))
+      .map((r) => ({ from: r.from as string, yen: r.yen as number, ...(r.changed === true ? { changed: true } : {}) }))
       .sort((a, b) => a.from.localeCompare(b.from));
     const prof: StaffProfile = {
       category,
@@ -229,6 +252,26 @@ export function attendanceSettings(db: Pick<Database, "settings">): AttendanceSe
       rates: rates.length ? rates : undefined,
     };
     if (Object.values(prof).some((x) => x !== undefined)) profiles[id] = prof;
+  }
+  const extraKeys = new Set<string>();
+  const extraStaff: ExtraStaff[] = [];
+  for (const raw of Array.isArray(v.extraStaff) ? v.extraStaff : []) {
+    if (!raw || typeof raw !== "object") continue;
+    const e = raw as Record<string, unknown>;
+    const name = str(e.name, 40);
+    if (!name) continue;
+    const key = staffNameKey(name);
+    if (extraKeys.has(key)) continue;
+    extraKeys.add(key);
+    extraStaff.push({
+      key,
+      name,
+      kind: e.kind === "part" ? "part" : "staff",
+      employeeNo: str(e.employeeNo, 20) || undefined,
+      hourlyRate: num(e.hourlyRate, 1, 100_000),
+      until: typeof e.until === "string" && /^\d{4}-\d{2}$/.test(e.until) ? e.until : undefined,
+    });
+    if (extraStaff.length >= 50) break;
   }
   return {
     startDate: isDate(v.startDate) ? v.startDate : "",
@@ -240,8 +283,10 @@ export function attendanceSettings(db: Pick<Database, "settings">): AttendanceSe
     nightStart: isHm(v.nightStart, 24 * 60) ? v.nightStart : d.nightStart,
     nightEnd: isHm(v.nightEnd, 12 * 60) ? v.nightEnd : d.nightEnd,
     profiles,
+    extraStaff,
     sharoushi: {
       name: str(sh.name, 80),
+      companyLine: str(sh.companyLine, 80),
       to: str(sh.to, 200),
       cc: str(sh.cc, 300),
       subject: str(sh.subject, 200) || d.sharoushi.subject,
@@ -282,6 +327,16 @@ export function fixedOvertimeMin(s: AttendanceSettings, user: ProfileUser, clerk
   if (c === "part" || c === "officer") return 0;
   const h = s.profiles[user.id]?.fixedOvertimeHours ?? (c === "office" ? s.fixedOvertime.office : s.fixedOvertime.craft);
   return Math.round(h * 60);
+}
+
+/** 勤務表の右の欄の「時給変更2025.12.21～＠1,040」(いまの時給が変更したものなら。以前の表と同じ書き方) */
+export function rateChangeNote(s: AttendanceSettings, userId: string, date: string): string | undefined {
+  const rates = s.profiles[userId]?.rates ?? [];
+  const i = rates.findLastIndex((r) => r.from <= date);
+  if (i < 0 || (i === 0 && !rates[0].changed)) return undefined;
+  const r = rates[i];
+  const [y, m, d] = r.from.split("-");
+  return `時給変更${y}.${m}.${d}～＠${r.yen.toLocaleString("ja-JP")}`;
 }
 
 /** その日の時給 (パート) と、期間の中で変わったときの変更日 */

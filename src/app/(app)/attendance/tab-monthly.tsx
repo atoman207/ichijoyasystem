@@ -14,7 +14,7 @@ import { Button, Card, CardHeader, Field, Input, Note, Select, Textarea, buttonC
 import { monthChoices, ymLabel, type Ctx } from "./parts";
 
 /**
- * 労務士へ送る勤務表 (田仲労務士書式)
+ * 労務士へ送る勤務表 (いまの労務士の書式)
  * 打刻・休暇・インセンティブから作る → 確かめる (打刻漏れ・未承認の申請・計算の内訳) → 確定 → .xlsx をメールで送る。
  * 以前の「令和○年度.xlsx」の取込・手入力・行の追加削除もそのまま使える (src/lib/actions/attendance.ts)
  */
@@ -74,9 +74,12 @@ export function MonthlyTab({ ctx }: { ctx: Ctx }) {
               <div className="mt-2 space-y-3">
                 <form action={importAttendanceWorkbook} className="space-y-2" encType="multipart/form-data">
                   <input type="hidden" name="back" value="/attendance?tab=monthly" />
-                  <Field label="令和○年度.xlsx を取込" hint="シート「8.11」など。下書きの月は置き換えます">
+                  <Field label="令和○年度.xlsx を取込" hint="シート「8.11」など。下書きの月は置き換えます。一番新しい表から、社員番号・パートの時給・宛名・アカウントのない社員を設定に入れます (入っている値は変えません)">
                     <Input type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
                   </Field>
+                  <label className="flex items-center gap-2 text-xs text-ink-2">
+                    <input type="checkbox" name="finalizePast" value="1" defaultChecked /> 締めの過ぎた月は確定にする (労務士へ送り終えた表。打刻からの作り直しで置き換えない)
+                  </label>
                   <label className="flex items-center gap-2 text-xs text-ink-2">
                     <input type="checkbox" name="force" value="1" /> 確定済みも取り込む (確定を取り消して置き換え)
                   </label>

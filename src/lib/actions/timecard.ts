@@ -9,7 +9,7 @@ import { toDateKey } from "@/lib/format";
 import { LeaveError, decideLeave } from "@/lib/hr/apply";
 import { LEAVE_SLOT } from "@/lib/hr/leave";
 import { attendanceTablesMissing } from "@/lib/hr/tables";
-import { ATTENDANCE_SETTINGS_ID, ATTENDANCE_DEFAULTS, HM_RE, STAFF_CATEGORY, attendanceSettings, shiftOf, toMin, type AttendanceSettings, type IncentivePay, type IncentivePeriod, type ShiftDef, type StaffCategory, type StaffProfile } from "@/lib/hr/timecard";
+import { ATTENDANCE_SETTINGS_ID, ATTENDANCE_DEFAULTS, HM_RE, STAFF_CATEGORY, attendanceSettings, shiftOf, staffNameKey, toMin, type AttendanceSettings, type ExtraStaff, type IncentivePay, type IncentivePeriod, type ShiftDef, type StaffCategory, type StaffProfile } from "@/lib/hr/timecard";
 import { cancelAttendanceRequest, createAttendanceRequest, decideAttendanceRequest, requestSummary, stamp, type RequestResult } from "@/lib/hr/timecard-apply";
 import { applyBuiltMonth, buildAttendanceMonth } from "@/lib/hr/attendance-build";
 import { attendanceFileName, attendanceXlsx } from "@/lib/hr/attendance-xlsx";
@@ -369,11 +369,47 @@ export async function saveSharoushi(formData: FormData) {
   if (to && to.split(/[,、\s]+/).filter(Boolean).some((x) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x))) fail(back, "メールアドレスを正しく入力してください (複数はカンマ区切り)。");
   await mutate((db) =>
     writeSettings(db, user, "労務士の宛先・文面を変更", (cur) => ({
-      sharoushi: { name: str(formData, "name").slice(0, 80), to: to.slice(0, 200), cc: "", subject: str(formData, "subject").slice(0, 200) || cur.sharoushi.subject, body: String(formData.get("body") ?? "").slice(0, 4000) || cur.sharoushi.body },
+      sharoushi: {
+        name: str(formData, "name").slice(0, 80),
+        companyLine: formData.has("companyLine") ? String(formData.get("companyLine") ?? "").trim().slice(0, 80) : cur.sharoushi.companyLine,
+        to: to.slice(0, 200),
+        cc: "",
+        subject: str(formData, "subject").slice(0, 200) || cur.sharoushi.subject,
+        body: String(formData.get("body") ?? "").slice(0, 4000) || cur.sharoushi.body,
+      },
     })),
   );
   revalidate();
   redirect(withMsg(back, "労務士の宛先・文面を保存しました。"));
+}
+
+/** アカウントのない社員 (打刻しない人。労務士の勤務表にだけ載せる): 本部・管理者 */
+export async function saveExtraStaff(formData: FormData) {
+  const user = await requireActionUser();
+  const back = safeReturn(str(formData, "returnTo"), `${BACK}?tab=setup#extra-staff`);
+  if (!canManageAttendance(user)) fail(back, "勤務表にだけ載せる社員は本部スタッフ・管理者が設定します。");
+  const rows: ExtraStaff[] = [];
+  const keys = new Set<string>();
+  for (let i = 0; i < 60; i++) {
+    if (!formData.has(`x_${i}_name`)) continue;
+    const name = str(formData, `x_${i}_name`).replace(/[\s　]+/g, " ").slice(0, 40);
+    if (!name || formData.get(`x_${i}_remove`) === "1") continue;
+    const key = staffNameKey(name);
+    if (keys.has(key)) fail(back, `「${name}」が 2 回あります。`);
+    keys.add(key);
+    const until = str(formData, `x_${i}_until`);
+    if (until && !/^\d{4}-\d{2}$/.test(until)) fail(back, "載せる最後の月を正しく入力してください。");
+    const rate = str(formData, `x_${i}_rate`).replace(/[,，円＠@]/g, "");
+    const yen = rate ? Number(rate) : undefined;
+    if (yen !== undefined && (!Number.isFinite(yen) || yen <= 0 || yen > 100_000)) fail(back, "時給を正しく入力してください。");
+    rows.push({ key, name, kind: str(formData, `x_${i}_kind`) === "part" ? "part" : "staff", employeeNo: str(formData, `x_${i}_no`).slice(0, 20) || undefined, hourlyRate: yen, until: until || undefined });
+  }
+  const db0 = getDb();
+  const taken = rows.find((r) => db0.users.some((u) => u.active && staffNameKey(u.name) === r.key));
+  if (taken) fail(back, `「${taken.name}」さんはアカウントがあります (打刻から作ります)。ここには入れません。`);
+  await mutate((db) => writeSettings(db, user, `勤務表にだけ載せる社員を変更 (${rows.length} 人)`, () => ({ extraStaff: rows })));
+  revalidate();
+  redirect(withMsg(back, "勤務表にだけ載せる社員を保存しました。"));
 }
 
 /** インセンティブの手入力 (点検の件数・口コミの点の置き換え、調整額) */

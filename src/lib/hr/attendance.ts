@@ -1,8 +1,9 @@
-import type { AttendanceLine, AttendanceLineKind, AttendanceMonth, Database, LeaveRequest, User } from "@/lib/db/types";
+import type { AppSetting, AttendanceLine, AttendanceLineKind, AttendanceMonth, Database, LeaveRequest, User } from "@/lib/db/types";
 import { readXlsx } from "@/lib/xlsx";
 import { xlsxRows } from "@/lib/survey-workbook/read";
 import { leaveEmployees } from "./leave";
 import { closingRange, fmtDays, hrSettings } from "./leave";
+import { ATTENDANCE_SETTINGS_ID, attendanceSettings, staffNameKey, type AttendanceSettings, type ExtraStaff, type StaffProfile } from "./timecard";
 
 /**
  * 勤怠の月次表 (労務士へ送る一覧)
@@ -71,11 +72,29 @@ export function cleanTime(raw: unknown): string | undefined {
   return s;
 }
 
+/** 表の右の欄 (J 列) の「時給変更2025.12.21～＠1,040」→ 変更日・時給 */
+export function parseRateChange(text: string): { from: string; yen: number } | undefined {
+  const m = N(text).match(/時給変更\s*(\d{4})[./年-](\d{1,2})[./月-](\d{1,2})日?\s*[~～〜-]\s*@?\s*([\d,]+)/);
+  if (!m) return undefined;
+  const yen = Number(m[4].replace(/,/g, ""));
+  const from = `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  return yen > 0 && yen <= 100_000 && !Number.isNaN(Date.parse(from)) ? { from, yen } : undefined;
+}
+
+export type ParsedAttendanceLine = Omit<AttendanceLine, "id" | "monthId" | "createdAt" | "updatedAt"> & {
+  /** 表の右の欄 (J 列) の時給の変更 (パート) */
+  rateChange?: { from: string; yen: number };
+};
+
 export interface ParsedAttendanceSheet {
   yearMonth: string;
   payLabel?: string;
   sheetName: string;
-  lines: Omit<AttendanceLine, "id" | "monthId" | "createdAt" | "updatedAt">[];
+  /** 1 行目の宛名 (「○○ 御中」の ○○) */
+  addressee?: string;
+  /** 2 行目の会社名 (書かれたまま。空白も残す) */
+  companyLine?: string;
+  lines: ParsedAttendanceLine[];
 }
 
 /** 1 シート (月) を読む */
@@ -91,6 +110,15 @@ export function parseAttendanceSheet(sheetName: string, rows: string[][]): Parse
     }
   }
   if (!yearMonth) return null;
+  let addressee: string | undefined;
+  let companyLine: string | undefined;
+  for (const row of rows.slice(0, 3)) {
+    const raw = String(row[0] ?? "").trim();
+    if (!raw) continue;
+    const to = N(raw).match(/^(.+?)\s*御中$/);
+    if (to && !addressee) addressee = to[1].trim().slice(0, 80);
+    else if (addressee && !companyLine && !/御中/.test(raw)) companyLine = raw.slice(0, 80);
+  }
 
   let mode: AttendanceLineKind | null = null;
   const lines: ParsedAttendanceSheet["lines"] = [];
@@ -112,6 +140,7 @@ export function parseAttendanceSheet(sheetName: string, rows: string[][]): Parse
     if (!name || name === "氏名") continue;
     const employeeNo = /^\d+$/.test(c0) ? c0 : undefined;
     const note = N((row[6] ?? "").replace(/[\r\n]+/g, " ")) || undefined;
+    const rateChange = parseRateChange(String(row[9] ?? ""));
     if (mode === "staff") {
       lines.push({
         kind: "staff",
@@ -136,10 +165,11 @@ export function parseAttendanceSheet(sheetName: string, rows: string[][]): Parse
         hourlyRate: parseRate(row[4]),
         note,
         paidLeaveDays: parseNum(row[7]),
+        ...(rateChange ? { rateChange } : {}),
       });
     }
   }
-  return { yearMonth, payLabel, sheetName, lines };
+  return { yearMonth, payLabel, sheetName, addressee, companyLine, lines };
 }
 
 /** .xlsx (令和○年度の勤怠月次) の全シートを読む */
@@ -224,7 +254,7 @@ export interface ApplyAttendanceResult {
 export function applyAttendanceSheet(
   db: Database,
   sheet: ParsedAttendanceSheet,
-  opts: { userId: string; now: string; makeId: (p: string) => string; sourceLabel?: string; force?: boolean },
+  opts: { userId: string; now: string; makeId: (p: string) => string; sourceLabel?: string; force?: boolean; finalize?: boolean },
 ): ApplyAttendanceResult {
   let month = (db.attendanceMonths ?? []).find((m) => m.yearMonth === sheet.yearMonth);
   if (month?.status === "final" && !opts.force) throw new Error(`${sheet.yearMonth} は確定済みです。取り込むときは確定を取り消してください。`);
@@ -277,7 +307,164 @@ export function applyAttendanceSheet(
     };
   });
   db.attendanceLines.push(...lines);
+  if (opts.finalize) {
+    // 労務士へ送り終えた月 (締めの過ぎた月): 確定にして、打刻からの作り直しで置き換わらないようにする
+    month.status = "final";
+    month.finalizedBy = opts.userId;
+    month.finalizedAt = opts.now;
+  }
   return { monthId: month.id, yearMonth: sheet.yearMonth, added: true, lines: lines.length };
+}
+
+/* ------------------------------------------------------------------ */
+/* 取り込んだ表から勤怠の設定へ (社員番号・パート・時給・宛名・アカウントのない社員)                   */
+/* ------------------------------------------------------------------ */
+
+export interface WorkbookSetupPlan {
+  /** 一番新しい表の月 */
+  latest: string;
+  addressee?: string;
+  companyLine?: string;
+  /** アカウントに当たった人 (設定に入れる値。入っている値は変えない) */
+  people: { userId: string; name: string; employeeNo?: string; part?: boolean; rate?: { from: string; yen: number; changed?: boolean } }[];
+  /** アカウントのない人 (勤務表にだけ載せる) */
+  extras: ExtraStaff[];
+}
+
+/**
+ * 一番新しい表 (今の社員) から、勤怠の設定に入れる値を決める。設定にもう入っている値は変えない (画面で直した値を残す)。
+ * 時給の変更日は右の欄の「時給変更…」、なければその時給が最初に出た月の締めの期間の始まり
+ */
+export function planWorkbookSetup(db: Database, sheets: ParsedAttendanceSheet[]): WorkbookSetupPlan | undefined {
+  const latest = [...sheets].sort((a, b) => b.yearMonth.localeCompare(a.yearMonth))[0];
+  if (!latest) return undefined;
+  const s = attendanceSettings(db);
+  const closing = hrSettings(db).closingDay;
+  const people: WorkbookSetupPlan["people"] = [];
+  const extras: ExtraStaff[] = [];
+  const seen = new Set<string>();
+  for (const l of latest.lines) {
+    const key = staffNameKey(l.name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const user = matchAttendanceUser(db, l.name);
+    if (!user) {
+      if (s.extraStaff.some((e) => e.key === key)) continue;
+      extras.push({ key, name: l.name.replace(/[\s　]+/g, " ").trim(), kind: l.kind, employeeNo: l.employeeNo, hourlyRate: l.kind === "part" ? l.hourlyRate : undefined });
+      continue;
+    }
+    const prof = s.profiles[user.id] ?? {};
+    const row: WorkbookSetupPlan["people"][number] = { userId: user.id, name: user.name };
+    if (l.employeeNo && !prof.employeeNo) row.employeeNo = l.employeeNo;
+    if (l.kind === "part" && !prof.category) row.part = true;
+    if (l.kind === "part" && !prof.rates?.length && (l.rateChange || l.hourlyRate)) {
+      if (l.rateChange && (!l.hourlyRate || l.rateChange.yen === l.hourlyRate)) row.rate = { ...l.rateChange, changed: true };
+      else if (l.hourlyRate) {
+        // その時給が続いている一番前の月から
+        const months = [...sheets].sort((a, b) => b.yearMonth.localeCompare(a.yearMonth));
+        let first = latest.yearMonth;
+        for (const m of months) {
+          const same = m.lines.find((x) => staffNameKey(x.name) === key);
+          if (!same || same.hourlyRate !== l.hourlyRate) break;
+          first = m.yearMonth;
+        }
+        row.rate = { from: closingRange(first, closing).from, yen: l.hourlyRate };
+      }
+    }
+    if (row.employeeNo || row.part || row.rate) people.push(row);
+  }
+  return {
+    latest: latest.yearMonth,
+    addressee: !s.sharoushi.name && latest.addressee ? latest.addressee : undefined,
+    companyLine: !s.sharoushi.companyLine && latest.companyLine ? latest.companyLine : undefined,
+    people,
+    extras,
+  };
+}
+
+/** 設定に書く (mutate の中)。変えた内容の文を返す */
+export function applyWorkbookSetup(db: Database, plan: WorkbookSetupPlan, opts: { userId: string; now: string }): string[] {
+  const cur: AttendanceSettings = attendanceSettings(db);
+  const profiles: Record<string, StaffProfile> = { ...cur.profiles };
+  const done: string[] = [];
+  let nos = 0;
+  let parts = 0;
+  let rates = 0;
+  for (const p of plan.people) {
+    const prof: StaffProfile = { ...(profiles[p.userId] ?? {}) };
+    if (p.employeeNo && !prof.employeeNo) {
+      prof.employeeNo = p.employeeNo;
+      nos++;
+    }
+    if (p.part && !prof.category) {
+      prof.category = "part";
+      parts++;
+    }
+    if (p.rate && !prof.rates?.length) {
+      prof.rates = [p.rate];
+      rates++;
+    }
+    profiles[p.userId] = prof;
+  }
+  const extraStaff = [...cur.extraStaff, ...plan.extras.filter((e) => !cur.extraStaff.some((x) => x.key === e.key))].slice(0, 50);
+  const sharoushi = { ...cur.sharoushi, name: cur.sharoushi.name || plan.addressee || "", companyLine: cur.sharoushi.companyLine || plan.companyLine || "" };
+  if (nos) done.push(`社員番号 ${nos} 人`);
+  if (parts) done.push(`パート ${parts} 人`);
+  if (rates) done.push(`時給 ${rates} 人`);
+  if (plan.addressee && !cur.sharoushi.name) done.push(`宛名「${plan.addressee} 御中」`);
+  if (plan.companyLine && !cur.sharoushi.companyLine) done.push("会社名の行");
+  if (extraStaff.length > cur.extraStaff.length) done.push(`アカウントのない社員 ${extraStaff.length - cur.extraStaff.length} 人`);
+  if (!done.length) return [];
+  let row: AppSetting | undefined = db.settings.find((x) => x.id === ATTENDANCE_SETTINGS_ID);
+  if (!row) {
+    row = { id: ATTENDANCE_SETTINGS_ID, value: {}, updatedBy: opts.userId, updatedAt: opts.now };
+    db.settings.push(row);
+  }
+  row.value = { ...cur, profiles, extraStaff, sharoushi } as unknown as Record<string, unknown>;
+  row.updatedBy = opts.userId;
+  row.updatedAt = opts.now;
+  return done;
+}
+
+export interface WorkbookImportResult {
+  months: string[];
+  finalized: string[];
+  setup: string[];
+  extras: string[];
+}
+
+/** 取込の結果の文 (画面の知らせ・変更履歴) */
+export function workbookImportSummary(r: WorkbookImportResult): string {
+  const a = [`勤怠月次を取り込みました: ${r.months.join("、")}`];
+  if (r.finalized.length) a.push(`締めの過ぎた ${r.finalized.length} か月は確定 (送付済み) にしました`);
+  if (r.setup.length) a.push(`設定に入れたもの: ${r.setup.join("・")}`);
+  if (r.extras.length) a.push(`アカウントのない社員 (勤務表にだけ載せる): ${r.extras.join("・")}`);
+  return a.join("。") + "。";
+}
+
+/**
+ * 令和○年度.xlsx の取込 (画面の「以前の表の取込」と運用の手直しで共通。mutate の中)。
+ * 締めの過ぎた月は確定にする (finalizePast)。一番新しい表から設定 (社員番号・パート・時給・宛名・アカウントのない社員) も入れる
+ */
+export function applyAttendanceWorkbook(
+  db: Database,
+  sheets: ParsedAttendanceSheet[],
+  opts: { userId: string; now: string; today: string; makeId: (p: string) => string; sourceLabel?: string; force?: boolean; finalizePast?: boolean },
+): WorkbookImportResult {
+  const closing = hrSettings(db).closingDay;
+  const out: WorkbookImportResult = { months: [], finalized: [], setup: [], extras: [] };
+  for (const sheet of sheets) {
+    const finalize = Boolean(opts.finalizePast) && closingRange(sheet.yearMonth, closing).to < opts.today;
+    const r = applyAttendanceSheet(db, sheet, { userId: opts.userId, now: opts.now, makeId: opts.makeId, sourceLabel: opts.sourceLabel, force: opts.force, finalize });
+    out.months.push(`${r.yearMonth} (${r.lines} 行)`);
+    if (finalize) out.finalized.push(r.yearMonth);
+  }
+  const plan = planWorkbookSetup(db, sheets);
+  if (plan) {
+    out.setup = applyWorkbookSetup(db, plan, { userId: opts.userId, now: opts.now });
+    out.extras = plan.extras.map((e) => e.name);
+  }
+  return out;
 }
 
 /** 労務士向け CSV (社員ブロック + パートブロック) */

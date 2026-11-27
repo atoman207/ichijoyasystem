@@ -3,19 +3,51 @@ import { deflateRawSync } from "node:zlib";
 /**
  * .xlsx の書き出し (ライブラリを使わない最小限の実装。読み取りは src/lib/xlsx.ts)
  * ------------------------------------------------------------
- * シートごとに 行 × 列 の値 (文字・数値・空) を書く。書式は 太字・折り返し・罫線 だけ、列の幅、セルの結合。
- * 労務士へ送る勤務表 (src/lib/hr/attendance-xlsx.ts) に使う
+ * シートごとに 行 × 列 の値 (文字・数値・空) を書く。書式は 文字の大きさ・太字・下線・折り返し・罫線・寄せ、列の幅・行の高さ、セルの結合、
+ * 印刷の設定 (用紙・向き・1 ページに収める・余白)。労務士へ送る勤務表 (src/lib/hr/attendance-xlsx.ts。いまの「令和○年度.xlsx」の見た目) に使う
  */
 
-export type XCell = string | number | null | undefined | { v: string | number | null | undefined; bold?: boolean; wrap?: boolean; border?: boolean; align?: "center" | "right" };
+export interface XStyle {
+  bold?: boolean;
+  underline?: boolean;
+  /** 文字の大きさ (pt。既定 11) */
+  size?: number;
+  wrap?: boolean;
+  border?: boolean;
+  align?: "left" | "center" | "right";
+  /** 縦の位置 (既定: 罫線・大きさのあるセルは中央) */
+  valign?: "top" | "center";
+  /** 文字列の表示形式 (「@」= 文字。時刻の「0:21」を数にしない) */
+  text?: boolean;
+}
+
+export type XCell = string | number | null | undefined | ({ v: string | number | null | undefined } & XStyle);
+
+export interface XPage {
+  /** 9 = A4 */
+  paper?: number;
+  orientation?: "portrait" | "landscape";
+  /** 1 ページに収める */
+  fitToPage?: boolean;
+  /** 余白 (インチ) */
+  margins?: { left: number; right: number; top: number; bottom: number; header: number; footer: number };
+}
 
 export interface XSheet {
   name: string;
   rows: XCell[][];
   /** 列の幅 (文字数) */
   widths?: number[];
+  /** 行の高さ (pt。行の番号 - 1 の位置。空 = 既定) */
+  heights?: (number | undefined)[];
   /** 結合 ("A1:C1") */
   merges?: string[];
+  page?: XPage;
+}
+
+export interface XBook {
+  /** 既定のフォント (既定 游ゴシック) */
+  font?: string;
 }
 
 const CRC_TABLE = (() => {
@@ -102,65 +134,90 @@ export function colName(i: number): string {
   return s;
 }
 
-// 書式: 0 = 標準 / 1 = 太字 / 2 = 折り返し / 3 = 罫線 / 4 = 罫線 + 折り返し / 5 = 罫線 + 太字 + 中央 / 6 = 罫線 + 右寄せ / 7 = 中央
-const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+/** セルの書式 → 書式の番号 (styles.xml の cellXfs)。同じ書式は 1 つにまとめる */
+class StyleTable {
+  private fonts = new Map<string, number>();
+  private xfs = new Map<string, number>();
+  private fontXml: string[] = [];
+  private xfXml: string[] = [];
+  constructor(private fontName: string) {
+    this.font({});
+    this.xfXml.push(`<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>`);
+    this.xfs.set("", 0);
+  }
+  private font(st: XStyle): number {
+    const key = `${st.bold ? "b" : ""}${st.underline ? "u" : ""}${st.size ?? 11}`;
+    const hit = this.fonts.get(key);
+    if (hit !== undefined) return hit;
+    const id = this.fontXml.length;
+    this.fontXml.push(`<font>${st.bold ? "<b/>" : ""}${st.underline ? "<u/>" : ""}<sz val="${st.size ?? 11}"/><name val="${esc(this.fontName)}"/><family val="3"/><charset val="128"/></font>`);
+    this.fonts.set(key, id);
+    return id;
+  }
+  of(st: XStyle): number {
+    const valign = st.valign ?? (st.border || st.size || st.align ? "center" : st.wrap ? "top" : undefined);
+    const key = JSON.stringify([st.bold, st.underline, st.size, st.wrap, st.border, st.align, valign, st.text]);
+    if (key === JSON.stringify([undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined])) return 0;
+    const hit = this.xfs.get(key);
+    if (hit !== undefined) return hit;
+    const fontId = this.font(st);
+    const align = st.align || valign || st.wrap ? `<alignment${st.align ? ` horizontal="${st.align}"` : ""}${valign ? ` vertical="${valign}"` : ""}${st.wrap ? ` wrapText="1"` : ""}/>` : "";
+    const id = this.xfXml.length;
+    this.xfXml.push(
+      `<xf numFmtId="${st.text ? 49 : 0}" fontId="${fontId}" fillId="0" borderId="${st.border ? 1 : 0}" xfId="0"${st.text ? ` applyNumberFormat="1"` : ""}${fontId ? ` applyFont="1"` : ""}${st.border ? ` applyBorder="1"` : ""}${align ? ` applyAlignment="1">${align}</xf>` : "/>"}`,
+    );
+    this.xfs.set(key, id);
+    return id;
+  }
+  xml(): string {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<fonts count="2"><font><sz val="11"/><name val="游ゴシック"/></font><font><b/><sz val="11"/><name val="游ゴシック"/></font></fonts>
+<fonts count="${this.fontXml.length}">${this.fontXml.join("")}</fonts>
 <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
-<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/><diagonal/></border></borders>
+<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color auto="1"/></left><right style="thin"><color auto="1"/></right><top style="thin"><color auto="1"/></top><bottom style="thin"><color auto="1"/></bottom><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="8">
-<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
-<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf>
-<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"><alignment vertical="center"/></xf>
-<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment wrapText="1" vertical="center"/></xf>
-<xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
-<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="center"/></xf>
-</cellXfs>
+<cellXfs count="${this.xfXml.length}">${this.xfXml.join("")}</cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;
-
-function styleOf(c: Exclude<XCell, string | number | null | undefined>): number {
-  if (c.border && c.bold) return 5;
-  if (c.border && c.wrap) return 4;
-  if (c.border && c.align === "right") return 6;
-  if (c.border) return 3;
-  if (c.bold) return 1;
-  if (c.wrap) return 2;
-  if (c.align === "center") return 7;
-  return 0;
+  }
 }
 
-function sheetXml(sh: XSheet): string {
+function sheetXml(sh: XSheet, styles: StyleTable): string {
   const cols = sh.widths?.length ? `<cols>${sh.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("")}</cols>` : "";
-  const rows = sh.rows
-    .map((row, ri) => {
-      const cells = row
-        .map((raw, ci) => {
-          const c = raw !== null && typeof raw === "object" ? raw : { v: raw };
-          const s = raw !== null && typeof raw === "object" ? styleOf(raw) : 0;
-          const ref = `${colName(ci)}${ri + 1}`;
-          const sa = s ? ` s="${s}"` : "";
-          if (c.v === null || c.v === undefined || c.v === "") return s ? `<c r="${ref}"${sa}/>` : "";
-          if (typeof c.v === "number" && Number.isFinite(c.v)) return `<c r="${ref}"${sa}><v>${c.v}</v></c>`;
-          return `<c r="${ref}"${sa} t="inlineStr"><is><t xml:space="preserve">${esc(String(c.v))}</t></is></c>`;
-        })
-        .join("");
-      return cells ? `<row r="${ri + 1}">${cells}</row>` : "";
-    })
-    .join("");
+  const count = Math.max(sh.rows.length, sh.heights?.length ?? 0);
+  const rows = Array.from({ length: count }, (_, ri) => {
+    const row = sh.rows[ri] ?? [];
+    const cells = row
+      .map((raw, ci) => {
+        const c = raw !== null && typeof raw === "object" ? raw : { v: raw };
+        const s = raw !== null && typeof raw === "object" ? styles.of(raw) : 0;
+        const ref = `${colName(ci)}${ri + 1}`;
+        const sa = s ? ` s="${s}"` : "";
+        if (c.v === null || c.v === undefined || c.v === "") return s ? `<c r="${ref}"${sa}/>` : "";
+        if (typeof c.v === "number" && Number.isFinite(c.v)) return `<c r="${ref}"${sa}><v>${c.v}</v></c>`;
+        return `<c r="${ref}"${sa} t="inlineStr"><is><t xml:space="preserve">${esc(String(c.v))}</t></is></c>`;
+      })
+      .join("");
+    const ht = sh.heights?.[ri];
+    const attrs = ht ? ` ht="${ht}" customHeight="1"` : "";
+    return cells || attrs ? `<row r="${ri + 1}"${attrs}>${cells}</row>` : "";
+  }).join("");
   const merges = sh.merges?.length ? `<mergeCells count="${sh.merges.length}">${sh.merges.map((m) => `<mergeCell ref="${m}"/>`).join("")}</mergeCells>` : "";
+  const pg = sh.page;
+  const m = pg?.margins ?? { left: 0.7, right: 0.7, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 };
+  const sheetPr = pg?.fitToPage ? `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>` : "";
+  const setup = pg ? `<pageSetup paperSize="${pg.paper ?? 9}" orientation="${pg.orientation ?? "portrait"}"${pg.fitToPage ? ` fitToWidth="1" fitToHeight="1"` : ""}/>` : "";
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${cols}<sheetData>${rows}</sheetData>${merges}<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>`;
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${sheetPr}<sheetFormatPr defaultRowHeight="13.5"/>${cols}<sheetData>${rows}</sheetData>${merges}<pageMargins left="${m.left}" right="${m.right}" top="${m.top}" bottom="${m.bottom}" header="${m.header}" footer="${m.footer}"/>${setup}</worksheet>`;
 }
 
 /** シート名に使えない文字を除く (31 文字まで) */
 const sheetName = (s: string) => s.replace(/[\\/?*[\]:]/g, " ").slice(0, 31) || "Sheet";
 
-export function writeXlsx(sheets: XSheet[]): Buffer {
+export function writeXlsx(sheets: XSheet[], book: XBook = {}): Buffer {
   const list = sheets.length ? sheets : [{ name: "Sheet1", rows: [] }];
+  const styles = new StyleTable(book.font ?? "游ゴシック");
+  const sheetFiles = list.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: sheetXml(s, styles) }));
   const names = list.map((s) => sheetName(s.name));
   const files = [
     {
@@ -183,8 +240,8 @@ export function writeXlsx(sheets: XSheet[]): Buffer {
       data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${list.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}<Relationship Id="rId${list.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
     },
-    { name: "xl/styles.xml", data: STYLES },
-    ...list.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: sheetXml(s) })),
+    { name: "xl/styles.xml", data: styles.xml() },
+    ...sheetFiles,
   ];
   return makeZip(files.map((f) => ({ name: f.name, data: Buffer.from(f.data, "utf8") })));
 }
