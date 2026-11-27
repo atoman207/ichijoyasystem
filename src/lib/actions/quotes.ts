@@ -30,6 +30,7 @@ import { buildCaseMap, quoteLinkForCase } from "@/lib/case-group";
 import { scheduleCheckLink } from "@/lib/msg-link";
 import { adoptPlaceholderCase, resolvePlaceholderCustomer } from "@/lib/placeholder-customer";
 import { isPlaceholderCustomer } from "@/lib/placeholder-match";
+import { amendBlockedByInvoice } from "@/lib/invoice-sync";
 
 /**
  * 案件に見積を足すときのつながり (お客様のご要望 2026-11-26「■4」「■6」: 1 つの案件に見積を複数)。
@@ -127,11 +128,6 @@ function calc(items: QuoteItem[], discount: number, mode: TaxMode = "excluded") 
 
 /** フォームの税の書き方 (内税・外税・非課税。src/lib/quote-calc.ts) */
 const taxModeIn = (fd: FormData): TaxMode => parseTaxMode({ taxMode: str(fd, "taxMode"), taxIncluded: str(fd, "taxIncluded") });
-
-/** 見積から作った受注に、有効な (無効化していない) 請求書があるか。あれば金額は変えられない */
-function hasActiveInvoice(db: Database, quoteId: string): boolean {
-  return db.orders.some((o) => o.quoteId === quoteId && o.status !== "cancelled" && db.invoices.some((i) => i.id === o.invoiceId && i.status !== "void"));
-}
 
 /** 見積・受注の承認者 (金額が基準以上、本部の案件、店長の申請、承認できる店長がいない店舗は管理者) */
 function requiredRole(db: Database, storeId: StoreId, amount: number, requesterId: string): "store_manager" | "admin" {
@@ -379,7 +375,9 @@ export async function updateQuote(id: string, formData: FormData) {
         return;
       }
       if (sameContent) fail(back, "変更された内容がありません。");
-      if (hasActiveInvoice(db, q.id)) fail(ret || `/quotes/${id}`, "請求書を発行済みの案件は金額を変更できません。入金前であれば、請求書を無効化してから変更を申請してください。");
+      // 入金の記録がある・まとめ請求の請求書は直さない。受注 1 件の入金前の請求書は反映のときに同じ明細・金額に直す (src/lib/invoice-sync.ts。お客様のご要望 2026-11-27「■1」)
+      const invoiceBlock = amendBlockedByInvoice(db, { quoteId: q.id });
+      if (invoiceBlock) fail(ret || `/quotes/${id}`, invoiceBlock);
       // 差額が少ない変更 (仕様・品名・数量だけで金額が同じものを含む) は承認なし・理由は省略可 (お客様のご要望 2026-11-25「⑥」。approval-decide.ts の smallAmountChange)
       const limit = approvalSettings(db).smallChangeLimit;
       const small = limit > 0 && Math.abs(t.total - q.total) <= limit;
@@ -388,7 +386,9 @@ export async function updateQuote(id: string, formData: FormData) {
       if (siteChanged) applySiteFields(db, q, site!, user);
       q.pendingChange = { items, ...t, taxIncluded, taxExempt, title, workDetails, notes, reason, requestedBy: user.id, requestedAt: now };
       q.updatedAt = now;
-      const role = requiredRole(db, q.storeId, Math.max(t.total, q.total), user.id);
+      // 売上確定のあと (施工完了・請求済・入金済) の修正は店長の承認 (金額の基準で管理者に回さない)。店長・管理者は自分の権限で反映 (settleOwnApproval)
+      const confirmedSales = db.orders.some((o) => o.quoteId === q.id && ["completed", "invoiced", "paid"].includes(o.status));
+      const role = confirmedSales ? approverRole(db.users, q.storeId, false, user.id) : requiredRole(db, q.storeId, Math.max(t.total, q.total), user.id);
       const amend: Approval = {
         id: newId("ap"),
         type: "quote_amend",
