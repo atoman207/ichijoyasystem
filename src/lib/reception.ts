@@ -106,7 +106,7 @@ export interface ReceptionFields {
 }
 
 /** 受付で読み取った日程の種類 (予定表の種類と同じ名前) */
-export const APPOINTMENT_KINDS = ["survey", "site_survey", "onsite_quote", "measure", "pickup", "delivery", "install", "visit"] as const;
+export const APPOINTMENT_KINDS = ["survey", "site_survey", "onsite_quote", "measure", "pickup", "delivery", "install", "reform", "visit"] as const;
 export type AppointmentKind = (typeof APPOINTMENT_KINDS)[number];
 
 /** 受付で読み取った日程 (AI はメモの文字 text を残し、日付・時刻を YYYY-MM-DD・HH:mm にする。register = 予定表に登録する) */

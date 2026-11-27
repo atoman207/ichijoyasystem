@@ -188,7 +188,7 @@ export function bandOf(e: Pick<ScheduleEvent, "startTime" | "slot">): SheetBand 
 }
 
 /** 枚数を作業量に数える種類 (左の欄)。採寸は新調の枚数 (「新」の欄) */
-const COUNT_LEFT = new Set<ScheduleKind>(["pickup", "onsite_quote", "install", "measure"]);
+const COUNT_LEFT = new Set<ScheduleKind>(["pickup", "onsite_quote", "install", "reform", "measure"]);
 
 /**
  * 行の数え方: count = 枚数を出して数える / fixed = 1 件 = 設定の枚数 (見積・現調・現場管理。枚数の欄には出さない) /
@@ -380,7 +380,7 @@ function countsNote(c: SheetCols): string {
 export function remarkOf(e: ScheduleEvent, c: WorkCounts | undefined, contentNote?: string): string {
   const parts: string[] = [];
   if (e.id.startsWith("hold:")) parts.push("仮押さえ");
-  if (e.kind === "install" || e.kind === "site") parts.push(`${SCHEDULE_KIND[e.kind].short}: ${e.title.replace(/^\[[^\]]*\]\s*/, "")}`);
+  if (e.kind === "install" || e.kind === "reform" || e.kind === "site") parts.push(`${SCHEDULE_KIND[e.kind].short}: ${e.title.replace(/^\[[^\]]*\]\s*/, "")}`);
   if (contentNote) parts.push(`内容 ${contentNote}`);
   if (c?.herinashiSeen) parts.push(`縁無${c.herinashiHalf ? "半" : ""}${c.herinashi > 0 ? c.herinashi : ""}`);
   if (c && (c.curtain > 0 || c.seen.curtain)) parts.push(`カーテン${c.curtain > 0 ? c.curtain : ""}`);

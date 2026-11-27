@@ -197,6 +197,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             {/* 帳票の出力は閲覧のみの社員もできる (お客様のご要望 2026-11-25「⑥」。出力の記録が残る) */}
             {chain.quote && <PdfLink href={`/api/pdf/quotes/${chain.quote.id}`} className={buttonClass("ghost", "sm")}>見積書 PDF</PdfLink>}
             {o.status !== "cancelled" && <PdfLink href={`/api/pdf/delivery/${o.id}`} className={buttonClass("ghost", "sm")}>納品書 PDF</PdfLink>}
+            {/* 近隣挨拶文 (お客様のご要望 2026-11-27「■3」) */}
+            {o.status !== "cancelled" && <Link href={`/print/greeting/${o.id}?returnTo=${encodeURIComponent(`/orders/${o.id}`)}`} className={buttonClass("ghost", "sm")}>近隣挨拶文</Link>}
             {chain.invoice && chain.invoice.status !== "void" && <PdfLink href={`/api/pdf/invoices/${chain.invoice.id}`} className={buttonClass("secondary", "sm")}>請求書 PDF</PdfLink>}
             {chain.invoice && chain.invoice.status !== "void" && <LinkButton href={`/invoices/${chain.invoice.id}#receipts`} variant="ghost" size="sm">領収書</LinkButton>}
             {/* 売上確定・請求書発行 (お客様のご要望 2026-11-27「■1」。確定のあとは同じ画面で修正) */}
@@ -417,7 +419,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
                 : {
                     caseRef: `order:${o.id}`,
                     storeId: o.storeId,
-                    kinds: ["install", "site", "visit", "measure", "pickup", "delivery"],
+                    kinds: ["install", "reform", "site", "visit", "measure", "pickup", "delivery"],
                     users: formUsers(db),
                     stores: formStores(db),
                     defaultAssigneeIds: o.workerIds.length ? [...o.workerIds] : [user.id],

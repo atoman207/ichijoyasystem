@@ -49,7 +49,7 @@ export interface SalesReadiness {
 export function salesReadiness(o: Pick<Order, "workStaff" | "posting">, needsPosting: boolean): SalesReadiness {
   const staff = staffDecided(o.workStaff);
   const posting = !needsPosting || postingDecided(o.posting);
-  const missing = [!staff ? "作業の担当 (現地見積・引取・納品・施工。いなければ「なし」)" : "", !posting ? "ポスティングの枚数 (配っていなければ「配れてない」)" : ""].filter(Boolean);
+  const missing = [!staff ? "作業の担当 (見積・引取・納品・施工。いなければ「なし」)" : "", !posting ? "ポスティングの枚数 (配っていなければ「配れてない」)" : ""].filter(Boolean);
   const where = needsPosting ? "受注の画面の「作業の担当・ポスティング」" : "受注の画面の「作業の担当」";
   return { ok: staff && posting, staff, posting, postingNeeded: needsPosting, reason: missing.length ? `${missing.join("と")}を登録してください (${where})。売上登録・請求書の発行の前に必要です` : undefined };
 }

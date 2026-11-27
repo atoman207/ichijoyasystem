@@ -314,7 +314,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
             today={toDateKey(new Date())}
             newParams={chain.order ? `orderId=${chain.order.id}` : `quoteId=${q.id}`}
             returnTo={returnTo}
-            quickKinds={chain.order ? ["pickup", "delivery", "install", "site", "visit"] : ["visit", "measure", "survey", "onsite_quote", "site_survey"]}
+            quickKinds={chain.order ? ["pickup", "delivery", "install", "reform", "site", "visit"] : ["visit", "measure", "survey", "onsite_quote", "site_survey"]}
             canAdd={!["rejected", "expired"].includes(q.status) && canAccessStore(user, q.storeId)}
             quickAdd={{
               caseRef: chain.order ? `order:${chain.order.id}` : `quote:${q.id}`,

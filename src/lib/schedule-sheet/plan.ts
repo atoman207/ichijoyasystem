@@ -125,10 +125,10 @@ export interface SheetPlan {
 }
 
 const KJ: Partial<Record<ScheduleKind, string>> = { delivery: "納品", pickup: "引き取り", measure: "採寸", survey: "見積", site_survey: "現地調査", onsite_quote: "現場見積", visit: "顧客訪問", site: "現場管理" };
-const CASE_KINDS = new Set<ScheduleKind>(["pickup", "delivery", "survey", "site_survey", "onsite_quote", "measure", "visit", "install", "site"]);
+const CASE_KINDS = new Set<ScheduleKind>(["pickup", "delivery", "survey", "site_survey", "onsite_quote", "measure", "visit", "install", "reform", "site"]);
 const OPEN_ORDER = new Set(["confirmed", "scheduled", "in_progress"]);
 const OPEN_INQUIRY = new Set(["new", "in_progress", "quoted"]);
-const family = (k: ScheduleKind) => (k === "pickup" ? "pickup" : k === "delivery" ? "delivery" : k === "install" ? "install" : CASE_KINDS.has(k) ? "visit" : k);
+const family = (k: ScheduleKind) => (k === "pickup" ? "pickup" : k === "delivery" ? "delivery" : k === "install" || k === "reform" ? "install" : CASE_KINDS.has(k) ? "visit" : k);
 
 /** 地区の比べ方 (空白・市町村郡の字を除く) */
 const foldArea = (s: string | undefined) => fold(s).replace(/大字/g, "").replace(/[市町村郡区]/g, "");

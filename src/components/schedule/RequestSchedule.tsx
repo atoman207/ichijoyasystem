@@ -12,7 +12,7 @@ import { Button } from "@/components/ui";
 import { ConflictNote, StaffPicker, TimeModeButtons, useConflicts, type TimeMode } from "./EventQuick";
 import type { QuickStaff } from "./quick-types";
 
-const KINDS: ScheduleKind[] = ["survey", "site_survey", "onsite_quote", "measure", "visit", "pickup", "delivery", "install", "site"];
+const KINDS: ScheduleKind[] = ["survey", "site_survey", "onsite_quote", "measure", "visit", "pickup", "delivery", "install", "reform", "site"];
 
 /**
  * 依頼 (メンション) の画面の日程登録 (お客様のご要望 2026-11-25「メンションからの日程調整・予定登録」)。

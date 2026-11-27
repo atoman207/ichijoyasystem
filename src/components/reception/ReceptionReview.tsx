@@ -586,7 +586,7 @@ function MatchPanel({ customers, fields, chosen }: { customers: ReviewCustomer[]
   );
 }
 
-const APPT_LABEL: Record<(typeof APPOINTMENT_KINDS)[number], string> = { survey: "見積り", site_survey: "現地調査 (現調)", onsite_quote: "現場見積 (現見)", measure: "採寸", pickup: "引取", delivery: "納品", install: "施工", visit: "訪問・打合せ" };
+const APPT_LABEL: Record<(typeof APPOINTMENT_KINDS)[number], string> = { survey: "見積り", site_survey: "現地調査 (現調)", onsite_quote: "現場見積 (現見)", measure: "採寸", pickup: "引取", delivery: "納品", install: "施工", reform: "リフォーム", visit: "訪問・打合せ" };
 
 /**
  * メモ・会話で決まっている日程 (訪問・引取など) を、予定の登録の初期値として直す (お客様のご要望 2026-11-25「⑦」)。

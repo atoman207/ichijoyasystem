@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import type { ComponentType } from "react";
-import { CalendarDays, CalendarOff, ClipboardList, ClipboardPen, Hammer, Handshake, HardHat, Landmark, Megaphone, PackageOpen, PartyPopper, Ruler, Search, TriangleAlert, Truck, Users } from "lucide-react";
+import { CalendarDays, CalendarOff, ClipboardList, ClipboardPen, Hammer, Handshake, HardHat, Landmark, Megaphone, PackageOpen, PaintRoller, PartyPopper, Ruler, Search, TriangleAlert, Truck, Users } from "lucide-react";
 import type { ScheduleKind } from "@/lib/db/types";
 import { SCHEDULE_GROUP_LABEL, SCHEDULE_KIND, SCHEDULE_KINDS, type ScheduleGroup } from "@/lib/constants";
 import type { WorkToken } from "@/lib/work-summary";
@@ -32,6 +32,7 @@ export const KIND_STYLE: Record<ScheduleKind, KindStyle> = {
   pickup: { icon: PackageOpen, bar: "bg-[#c98500]", border: "border-l-[#c98500]", soft: "bg-[#fff5dc]", ink: "text-[#8a5a00]" },
   delivery: { icon: Truck, bar: "bg-[#0d9488]", border: "border-l-[#0d9488]", soft: "bg-[#e2f5f2]", ink: "text-[#0b6b62]" },
   install: { icon: Hammer, bar: "bg-[#1f7a4d]", border: "border-l-[#1f7a4d]", soft: "bg-[#e6f3eb]", ink: "text-[#145a37]" },
+  reform: { icon: PaintRoller, bar: "bg-[#8b5a2b]", border: "border-l-[#8b5a2b]", soft: "bg-[#f6eee4]", ink: "text-[#6b431c]" },
   visit: { icon: Handshake, bar: "bg-[#d9602f]", border: "border-l-[#d9602f]", soft: "bg-[#fdeee6]", ink: "text-[#9a3f16]" },
   site: { icon: HardHat, bar: "bg-[#6d7f12]", border: "border-l-[#6d7f12]", soft: "bg-[#f1f5df]", ink: "text-[#4d5a0b]" },
   meeting: { icon: Users, bar: "bg-[#4f6b8a]", border: "border-l-[#4f6b8a]", soft: "bg-[#edf1f6]", ink: "text-[#36506d]" },

@@ -55,7 +55,7 @@ export const RECEPTION_SCHEMA = {
         additionalProperties: false,
         required: ["kind", "date", "time", "slot", "text"],
         properties: {
-          kind: { type: "string", enum: [...APPOINTMENT_KINDS], description: "survey = 見積り・見積もりに伺う / site_survey = 現地調査 (現調・下見) / onsite_quote = 現場見積 (現見。見積もりしてそのまま工事) / measure = 採寸 / pickup = 引取 / delivery = 納品 / install = 施工・工事 / visit = 訪問・打合せ" },
+          kind: { type: "string", enum: [...APPOINTMENT_KINDS], description: "survey = 見積り・見積もりに伺う / site_survey = 現地調査 (現調・下見) / onsite_quote = 現場見積 (現見。見積もりしてそのまま工事) / measure = 採寸 / pickup = 引取 / delivery = 納品 / install = 施工・工事 / reform = リフォーム工事 / visit = 訪問・打合せ" },
           date: { type: "string", description: "日付 YYYY-MM-DD (年がなければ今日の日付から近い将来の年。曜日だけ・『来週』などは今日の日付から計算。分からなければ空文字)" },
           time: { type: "string", description: "時刻 HH:mm (24 時間。『10時』= 10:00、『午後2時』= 14:00。書かれていなければ空文字)" },
           slot: { type: "string", enum: ["am", "pm", ""], description: "時刻がなく『午前』『AM』なら am、『午後』『PM』なら pm。なければ空文字" },

@@ -14,15 +14,16 @@ import type { Database, Order, OrderWorkStaff, ScheduleKind } from "@/lib/db/typ
 export const WORK_ROLES = ["survey", "pickup", "delivery", "install"] as const;
 export type WorkRole = (typeof WORK_ROLES)[number];
 
-export const WORK_ROLE_LABEL: Record<WorkRole, string> = { survey: "現地見積", pickup: "引取", delivery: "納品", install: "施工" };
+/** 作業の名前 (お客様のご要望 2026-11-27「■2」:「現地見積」→「見積」) */
+export const WORK_ROLE_LABEL: Record<WorkRole, string> = { survey: "見積", pickup: "引取", delivery: "納品", install: "施工" };
 export const WORK_ROLE_HINT: Record<WorkRole, string> = {
   survey: "見積り・現地調査・現場見積・採寸に行った人",
   pickup: "畳・襖などを引き取りに行った人",
   delivery: "納品・取り付けに行った人",
-  install: "リフォーム・取付などの施工をした人",
+  install: "リフォーム・取付などの施工をした人 (予定の種別の「施工」「リフォーム」)",
 };
 
-const KIND_ROLE: Partial<Record<ScheduleKind, WorkRole>> = { survey: "survey", site_survey: "survey", onsite_quote: "survey", measure: "survey", pickup: "pickup", delivery: "delivery", install: "install" };
+const KIND_ROLE: Partial<Record<ScheduleKind, WorkRole>> = { survey: "survey", site_survey: "survey", onsite_quote: "survey", measure: "survey", pickup: "pickup", delivery: "delivery", install: "install", reform: "install" };
 
 export const workRoleOfKind = (k: ScheduleKind): WorkRole | undefined => KIND_ROLE[k];
 

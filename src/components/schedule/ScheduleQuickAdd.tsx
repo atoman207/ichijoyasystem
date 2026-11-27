@@ -118,7 +118,7 @@ export function ScheduleQuickAdd(p: ScheduleQuickAddProps) {
 
       <label className="block">
         <span className="label">作業内容 (任意・予定表に表示)</span>
-        <input name="work" maxLength={200} className="field" placeholder={kind === "pickup" || kind === "delivery" ? "空欄なら明細から自動 (例: タ6 タ新4 フ2)" : kind === "site" ? "例: 養生、廃材撤去" : kind === "install" ? "例: クロス工事、畳下床板2間" : "例: タ3間、フ1部屋"} />
+        <input name="work" maxLength={200} className="field" placeholder={kind === "pickup" || kind === "delivery" ? "空欄なら明細から自動 (例: タ6 タ新4 フ2)" : kind === "site" ? "例: 養生、廃材撤去" : kind === "install" || kind === "reform" ? "例: クロス工事、畳下床板2間" : "例: タ3間、フ1部屋"} />
       </label>
       <label className="block">
         <span className="label">メモ (任意)</span>

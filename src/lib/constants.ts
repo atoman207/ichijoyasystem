@@ -288,6 +288,7 @@ export const SCHEDULE_KIND: Record<ScheduleKind, { label: string; short: string;
   pickup: { label: "引き取り", short: "引取", tone: "warn", group: "case", minutes: 60 },
   delivery: { label: "納品", short: "納品", tone: "good", group: "case", minutes: 90 },
   install: { label: "施工", short: "施工", tone: "accent", group: "case", minutes: 360 },
+  reform: { label: "リフォーム", short: "リフォーム", tone: "accent", group: "case", minutes: 480 },
   visit: { label: "顧客訪問", short: "顧客訪問", tone: "serious", group: "case", minutes: 60 },
   site: { label: "現場管理", short: "現場管理", tone: "accent", group: "case", minutes: 60 },
   meeting: { label: "会議・打合せ", short: "会議", tone: "neutral", group: "internal", minutes: 60 },

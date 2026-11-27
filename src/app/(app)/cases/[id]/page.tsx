@@ -1,6 +1,6 @@
 import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
-import { CalendarDays, ClipboardList, FileText, FolderOpen, Inbox, MapPin, MessageSquarePlus, Phone, Receipt, Wrench } from "lucide-react";
+import { CalendarDays, ClipboardList, FileText, FolderOpen, Inbox, MapPin, Megaphone, MessageSquarePlus, Phone, Receipt, Wrench } from "lucide-react";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import type { Inquiry, Order, Quote, ScheduleKind } from "@/lib/db/types";
@@ -39,7 +39,7 @@ export const dynamic = "force-dynamic";
 // 材料の発注の「手書きの発注一覧を撮影して読み取る」(AI) のため
 export const maxDuration = 60;
 
-const QUICK_KINDS: ScheduleKind[] = ["pickup", "delivery", "install", "site", "visit", "measure", "survey", "onsite_quote", "site_survey"];
+const QUICK_KINDS: ScheduleKind[] = ["pickup", "delivery", "install", "reform", "site", "visit", "measure", "survey", "onsite_quote", "site_survey"];
 
 export default async function CasePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | undefined>> }) {
   const { id } = await params;
@@ -121,6 +121,9 @@ export default async function CasePage({ params, searchParams }: { params: Promi
   }
   if (weekLink) actions.push({ href: weekLink.href, label: "予定表で確認", icon: CalendarDays, note: "施工店舗の週の予定表" });
   actions.push({ href: "#docs", label: "帳票を出力", icon: FileText });
+  // 近隣挨拶文 (お客様のご要望 2026-11-27「■3」。顧客名・担当者名・工事日程を入れて印刷。リフォームの案件を先に)
+  const greetOrder = liveOrders.find((o) => o.category === "reform") ?? liveOrders.find((o) => ["confirmed", "scheduled", "in_progress"].includes(o.status)) ?? liveOrders[0];
+  if (greetOrder) actions.push({ href: `/print/greeting/${greetOrder.id}?returnTo=${encodeURIComponent(returnTo)}`, label: "近隣挨拶文を作成・印刷", icon: Megaphone, note: "顧客名・担当者名・工事日程を自動で入れます" });
 
   return (
     <div>

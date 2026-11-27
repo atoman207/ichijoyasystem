@@ -17,7 +17,7 @@ import { SCHEDULE_KIND } from "@/lib/constants";
  * 領収書は案件ごとに発行する・しない (Order.receiptWanted。未設定は入金の予定方法: 現金・訪問集金 = 発行する)
  */
 
-export const DAY_DOC_KINDS: readonly ScheduleKind[] = ["delivery", "install", "onsite_quote"];
+export const DAY_DOC_KINDS: readonly ScheduleKind[] = ["delivery", "install", "reform", "onsite_quote"];
 
 export interface DayDocRow {
   /** 案件の先頭の記録 (受注 → 見積 → 問い合わせ) の ID */

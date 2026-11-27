@@ -256,7 +256,7 @@ function quickCase(db: Database, user: User, e: ScheduleEvent, resolver: ReturnT
       media: customer.type === "corporate" ? "business" : "repeat",
       storeId: chain?.head.storeId ?? e.storeId,
       categories: Object.entries(CATEGORY_LABEL).map(([id, label]) => ({ id, label })),
-      kinds: (["survey", "site_survey", "onsite_quote", "measure", "pickup", "delivery", "install", "visit", "site"] as ScheduleKind[]).map((k) => ({ id: k, label: SCHEDULE_KIND[k].label })),
+      kinds: (["survey", "site_survey", "onsite_quote", "measure", "pickup", "delivery", "install", "reform", "visit", "site"] as ScheduleKind[]).map((k) => ({ id: k, label: SCHEDULE_KIND[k].label })),
     };
   }
   return out;

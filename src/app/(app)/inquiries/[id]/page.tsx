@@ -140,7 +140,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const caseOpts = customer && canLink && !quote && !inq.caseId ? caseOptionsForCustomer(db, user, customer.id, toDateKey(new Date()), { excludeCaseId: caseIdOf(db, inq.id), placeholders: true }) : undefined;
   const otherCases = caseOpts?.open ?? [];
   const pastCases = caseOpts?.past ?? [];
-  const scheduleKinds: ScheduleKind[] = order ? ["pickup", "delivery", "install", "site", "visit", "measure"] : ["survey", "onsite_quote", "site_survey", "measure", "visit", "pickup", "delivery", "install", "site"];
+  const scheduleKinds: ScheduleKind[] = order ? ["pickup", "delivery", "install", "reform", "site", "visit", "measure"] : ["survey", "onsite_quote", "site_survey", "measure", "visit", "pickup", "delivery", "install", "reform", "site"];
 
   return (
     <div>
@@ -370,7 +370,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
             today={toDateKey(new Date())}
             newParams={caseParam}
             returnTo={`/inquiries/${inq.id}`}
-            quickKinds={order ? ["pickup", "delivery", "install", "site", "visit"] : ["survey", "onsite_quote", "site_survey", "measure", "visit"]}
+            quickKinds={order ? ["pickup", "delivery", "install", "reform", "site", "visit"] : ["survey", "onsite_quote", "site_survey", "measure", "visit"]}
             canAdd={(Boolean(quote) || Boolean(order)) && canAccessStore(user, inq.storeId)}
             emptyText={open && !quote ? "まだ予定はありません。日程が決まったら上の「日程を登録」で入れてください (予定表に自動で載ります)" : "予定はありません"}
             description="現地調査・採寸・顧客訪問を担当者つきで登録すると、店舗の共通カレンダーに自動で反映されます。見積・受注に進んでも同じ案件の予定として引き継がれます"

@@ -61,7 +61,7 @@ export function caseFlow(db: FlowDb, from: { inquiryId?: string; quoteId?: strin
 
   // 2. 担当へ依頼 / 3. 日程
   const events = inquiry ? (ix.events.get(inquiry.id) ?? []) : db.schedule.filter((e) => (quote && e.quoteId === quote.id) || (order && e.orderId === order.id));
-  const visitEvents = events.filter((e) => SCHEDULE_KIND[e.kind]?.group === "case" && !["pickup", "delivery", "install"].includes(e.kind));
+  const visitEvents = events.filter((e) => SCHEDULE_KIND[e.kind]?.group === "case" && !["pickup", "delivery", "install", "reform"].includes(e.kind));
   const firstVisit = visitEvents.slice().sort((a, b) => a.date.localeCompare(b.date))[0];
   const request = flow?.request;
   const beyond = Boolean(quote || order);

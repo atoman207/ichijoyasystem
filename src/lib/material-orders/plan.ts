@@ -193,7 +193,7 @@ export function caseDates(db: Pick<Database, "schedule">, orderId: string, today
     const ds = evs.filter((e) => kinds.includes(e.kind)).map((e) => e.date).sort();
     return ds.find((d) => d >= today) ?? ds[0];
   };
-  return { pickup: pick(["pickup", "onsite_quote"]), delivery: pick(["delivery"]), install: pick(["install"]) };
+  return { pickup: pick(["pickup", "onsite_quote"]), delivery: pick(["delivery"]), install: pick(["install", "reform"]) };
 }
 
 const addDaysKey = (d: string, n: number) => {
