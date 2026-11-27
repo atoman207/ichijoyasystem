@@ -87,10 +87,10 @@ export function GreetingLetter({ draft, backHref }: { draft: GreetingDraft; back
       </div>
 
       {/* 挨拶文 (A4 縦) */}
-      <article className="mx-auto flex min-h-[273mm] w-[186mm] max-w-full flex-col bg-white px-[10mm] py-[10mm] text-[#1f2a24] shadow print:min-h-0 print:w-auto print:px-0 print:py-0 print:shadow-none" style={{ fontFamily: '"Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif' }}>
+      <article className="mx-auto flex min-h-[273mm] w-[186mm] max-w-full flex-col bg-white px-[10mm] py-[10mm] text-[#1f2a24] shadow print:min-h-[262mm] print:w-auto print:px-0 print:py-0 print:shadow-none" style={{ fontFamily: '"Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif' }}>
         <header className="text-center">
           <p className="text-[11pt] tracking-[0.3em] text-[#4b5a50]">近隣の皆様へ</p>
-          <h1 className="mt-2 text-[30pt] leading-tight font-bold tracking-[0.12em]" style={{ color: GREEN }}>
+          <h1 className="mt-2 text-[34pt] leading-tight font-bold tracking-[0.12em]" style={{ color: GREEN }}>
             {d.title}
           </h1>
           <div className="mx-auto mt-3 h-[3px] w-24 rounded-full" style={{ background: GREEN }} />
@@ -98,20 +98,20 @@ export function GreetingLetter({ draft, backHref }: { draft: GreetingDraft; back
 
         <section className="mt-8 rounded-xl border-2 px-6 py-5 text-center" style={{ borderColor: GREEN }}>
           <p className="text-[12pt] tracking-[0.5em] text-[#4b5a50]">工事予定日</p>
-          <p className="mt-2 text-[20pt] font-bold tracking-wide">{d.dates || "　"}</p>
+          <p className="mt-2 text-[23pt] font-bold tracking-wide">{d.dates || "　"}</p>
           <p className="mt-3 inline-block rounded-md border border-dashed border-[#4b5a50] px-4 py-1 text-[14pt]">
             予定時間　<span className="font-bold tracking-wide">{d.time}</span>
           </p>
         </section>
 
-        <section className="mt-7 space-y-3 text-[13pt] leading-[1.9]">
+        <section className="mt-8 space-y-4 text-[14.5pt] leading-[1.9]">
           <p>
             上記の予定期間で、<span className="mx-1 border-b border-[#1f2a24] px-2 font-bold">{d.customer || "　　　　"}</span>様邸にて
             <br />
             {d.work || "工事"}を行わせていただきます。
           </p>
           {lines.length > 0 && (
-            <ul className="rounded-lg bg-[#f3f8f1] px-5 py-3 text-[12.5pt] leading-[1.9]">
+            <ul className="rounded-lg bg-[#f3f8f1] px-5 py-3 text-[13.5pt] leading-[2]">
               {lines.map((l, i) => (
                 <li key={i} className="flex gap-2">
                   <span style={{ color: GREEN }}>●</span>
@@ -120,11 +120,11 @@ export function GreetingLetter({ draft, backHref }: { draft: GreetingDraft; back
               ))}
             </ul>
           )}
-          <p className="text-[11.5pt] leading-[2]">{d.body}</p>
+          <p className="text-[12.5pt] leading-[2]">{d.body}</p>
         </section>
 
         <div className="mt-auto flex items-end justify-between gap-6 pt-8">
-          <div className="relative max-w-[95mm] rounded-2xl border-2 px-4 py-3 text-[11pt] leading-[1.8]" style={{ borderColor: GREEN }}>
+          <div className="relative max-w-[95mm] rounded-2xl border-2 px-4 py-3 text-[12pt] leading-[1.8]" style={{ borderColor: GREEN }}>
             {bubble}
             <span className="absolute -bottom-[9px] right-10 h-4 w-4 rotate-45 border-r-2 border-b-2 bg-white" style={{ borderColor: GREEN }} aria-hidden />
           </div>

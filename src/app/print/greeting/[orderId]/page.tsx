@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { syncDb } from "@/lib/db/store";
@@ -10,6 +11,7 @@ import { toDateKey } from "@/lib/format";
 import { GreetingLetter } from "@/components/print/GreetingLetter";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "近隣挨拶文" };
 
 /**
  * リフォーム現場の近隣挨拶文 (お客様のご要望 2026-11-27「■3」): 案件 (受注) の顧客名・担当者名・工事日程を入れた下書き → 画面で直して印刷 (A4 縦)。
