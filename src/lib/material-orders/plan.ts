@@ -86,9 +86,11 @@ export function fusumaPaper(text: string, qty: number, unit: string | undefined)
   const sides: 1 | 2 = /両面/.test(t) ? 2 : 1;
   const size: FusumaPaper["size"] = /天袋|天ウラ|天裏|地袋|小襖|小サイズ|天井?袋/.test(t) ? "small" : /中(?:ウラ|裏|襖|サイズ|袋)/.test(t) ? "mid" : "std";
   const countable = qty > 0 && (!unit || /^(枚|本|面|組|ヶ所|か所|箇所)$/.test(unit));
-  const perCode = codes.length >= 2 ? 1 : sides;
+  const stock = /在庫/.test(t);
+  // 品番が 2 つ (裏表で違う紙) か、両面の片方が在庫 (「のぞみ186/在庫クロス」) なら 1 つの品番は片面ぶん
+  const perCode = codes.length >= 2 || (sides === 2 && stock) ? 1 : sides;
   const sheets = countable ? Math.ceil(qty / SIZE_PER_SHEET[size]) * perCode : undefined;
-  return { codes, sides, size, sheets, stock: /在庫/.test(t) };
+  return { codes, sides, size, sheets, stock };
 }
 
 /* ---------------- 受注から自動で出す行 ---------------- */
@@ -106,6 +108,7 @@ export interface AutoMaterial {
 }
 
 const SIZE_LABEL = { std: "", mid: "中サイズ", small: "小サイズ" } as const;
+const NOT_PAPER = /ベニア|加工|修理|補修|骨|枠|戸車|レール|調整|処分/;
 const CLOTH = /クロス|壁紙/;
 
 /** 受注 1 件の見積の明細から、発注が要る材料 (襖紙・カーテン・クロス) */
@@ -115,6 +118,8 @@ export function autoMaterials(o: Pick<Order, "id">, q: Pick<Quote, "items"> | un
     const k = lineKind(it.name, it.spec)?.kind;
     const text = `${it.name} ${it.spec ?? ""}`.trim();
     const where = `${text} (${it.qty}${it.unit})`;
+    // 紙を張らない作業 (ベニアの交換・加工・修理・骨・枠・戸車) は襖紙にしない (要るときは手で足す)
+    if ((k === "fusuma" || k === "butsuma") && NOT_PAPER.test(text) && !paperCodes(text).length) continue;
     if (k === "fusuma" || k === "butsuma") {
       const p = fusumaPaper(text, k === "butsuma" ? 0 : it.qty, it.unit);
       const note = [p.sides === 2 ? "両面" : "片面", SIZE_LABEL[p.size], p.stock ? "在庫の記載あり" : "", p.sheets === undefined ? "枚数は手で入力" : ""].filter(Boolean).join("・");
