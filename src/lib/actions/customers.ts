@@ -4,7 +4,10 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { addAudit, diffChanges, getDb, mutate, newId, nowIso, nextCustomerCode } from "@/lib/db/store";
 import type { Customer, Database, User } from "@/lib/db/types";
-import { approverRole, canApplyCustomerChange, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
+import { approverRole, canApplyCustomerChange, canDeleteCustomerDirect, canEditCaseStore, canRequestCustomerDelete, canSeeAllStores } from "@/lib/auth/permissions";
+import { customerDeleteBlocker, pendingCustomerDelete } from "@/lib/customer-delete";
+import { runCustomerDelete } from "@/lib/customer-delete-run";
+import { canLinkToCustomer } from "@/lib/customer-link";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation, type DuplicateInput, type DuplicateResult } from "@/lib/duplicates";
 import { userCanCreateCustomer } from "@/lib/ops-settings";
 import { CHANNEL_LABEL } from "@/lib/constants";
@@ -248,4 +251,69 @@ export async function addCommLog(customerId: string, formData: FormData) {
   revalidatePath(back);
   const returnTo = safeReturn(str(formData, "returnTo"), back);
   redirect(withMsg(returnTo, "対応履歴を記録しました。"));
+}
+
+/**
+ * 顧客の削除 (二重に登録した・誤って登録したお客様。お客様のご要望 2026-11-27。src/lib/customer-delete.ts)。確認の画面 (「本当に削除しますか？」) から呼ぶ。
+ * 売上の紐付いたお客様は削除しない。記録があれば残すほうのお客様 (targetId) に移してから削除する。
+ * 店長以上 (店長・本部・管理者) はすぐに削除、店舗スタッフは所属店舗の店長へ削除の申請 (承認で削除)
+ */
+export async function deleteCustomer(id: string, formData: FormData) {
+  const user = await requireActionUser();
+  const back = `/customers/${id}`;
+  const reason = [str(formData, "reasonChoice"), str(formData, "reason")].filter(Boolean).join(" / ").slice(0, 200);
+  const targetId = str(formData, "targetId") || undefined;
+  const db0 = getDb();
+  const c0 = db0.customers.find((x) => x.id === id);
+  if (!c0) fail("/customers", "顧客が見つかりません (すでに削除された可能性があります)。");
+  const direct = canDeleteCustomerDirect(user, c0.storeId);
+  if (!direct && !canRequestCustomerDelete(user, c0.storeId)) fail(back, "このお客様を削除する権限がありません (そのお客様の店舗の社員・店長・本部・管理者が削除できます)。");
+  if (!reason) fail(back, "削除の理由を選んでください (例: 二重に登録)。");
+  const t0 = targetId ? db0.customers.find((x) => x.id === targetId) : undefined;
+  if (t0 && !canLinkToCustomer(db0, user, t0)) fail(back, "統合先に選んだお客様を見る権限がありません。");
+  let approvalId = "";
+  let role = "";
+  let moved = 0;
+  let toLabel = "";
+  await mutate((db) => {
+    const c = db.customers.find((x) => x.id === id);
+    if (!c) fail("/customers", "顧客が見つかりません (すでに削除された可能性があります)。");
+    const to = targetId ? db.customers.find((x) => x.id === targetId) : undefined;
+    const blocker = customerDeleteBlocker(db, c, to, targetId);
+    if (blocker) fail(back, blocker);
+    const now = nowIso();
+    toLabel = to ? `${to.code} ${to.name} 様` : "";
+    if (direct) {
+      moved = runCustomerDelete(db, c, to, { actorId: user.id, at: now, reason }).movedTotal;
+      return;
+    }
+    if (pendingCustomerDelete(db, c.id)) fail(back, "このお客様はすでに削除を申請しています (店長の承認待ち)。");
+    const r = approverRole(db.users, c.storeId, false, user.id);
+    role = r;
+    approvalId = newId("ap");
+    db.approvals.push({
+      id: approvalId,
+      type: "customer_delete",
+      targetId: c.id,
+      title: `${c.code} ${c.name} 様${to ? ` (→ ${to.code} ${to.name} 様に統合)` : ""}`,
+      amount: 0,
+      storeId: c.storeId,
+      requestedBy: user.id,
+      requiredRole: r,
+      status: "pending",
+      requestComment: reason,
+      changes: to ? [{ field: "mergeInto", before: null, after: to.id }] : undefined,
+      createdAt: now,
+    });
+    addAudit(db, { userId: user.id, action: "submit", entity: "customer", entityId: c.id, entityLabel: `${c.code} ${c.name}`, summary: `顧客の削除を申請 (${to ? `記録を ${to.code} ${to.name} 様に移して削除 · ` : ""}理由: ${reason})`, storeId: c.storeId });
+  });
+  revalidatePath("/customers");
+  if (approvalId) {
+    await notifyNewApprovals([approvalId], user.id);
+    revalidatePath(back);
+    redirect(withMsg(back, `${c0.code} ${c0.name} 様の削除を${role === "admin" ? "管理者" : "店長"}へ申請しました。承認されると${toLabel ? `記録を ${toLabel}に移して` : ""}削除されます。`));
+  }
+  revalidatePath("/", "layout");
+  if (targetId) redirect(withMsg(`/customers/${targetId}`, `${c0.code} ${c0.name} 様を削除しました。${moved ? `記録 ${moved} 件をこのお客様 (${toLabel}) に移しました。` : ""}削除したお客様の画面のリンクは、このお客様の画面に移ります。`));
+  redirect(withMsg("/customers", `${c0.code} ${c0.name} 様を削除しました。誰がいつ削除したかは変更履歴に残ります。`));
 }

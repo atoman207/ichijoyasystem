@@ -345,6 +345,19 @@ export function canRestoreInquiry(user: User): boolean {
   return user.role === "admin";
 }
 
+/**
+ * 顧客の削除 (二重登録・誤って登録したお客様。売上の紐付いたお客様は不可。src/lib/customer-delete.ts。お客様のご要望 2026-11-27):
+ * 店長以上 (店長・本部・管理者) は承認なしで削除 (記録があれば残すほうのお客様に移して削除)。店長は全店舗のお客様 (canEditCaseStore)
+ */
+export function canDeleteCustomerDirect(user: User, storeId: StoreId): boolean {
+  return (user.role === "admin" || user.role === "hq_staff" || user.role === "store_manager") && canEditCaseStore(user, storeId);
+}
+
+/** 顧客の削除の申請: 店舗スタッフ (所属店舗のお客様。所属店舗の店長が承認する = approverRole) */
+export function canRequestCustomerDelete(user: User, storeId: StoreId): boolean {
+  return user.role === "store_staff" && canEditCaseStore(user, storeId);
+}
+
 /** 請求書の発行 (受注から): 店長・本部・管理者 (その店舗の請求書。canAccessStore と合わせて使う) */
 export function canIssueInvoice(user: User): boolean {
   return canManageFinance(user) || isManagerOrAbove(user);

@@ -925,7 +925,9 @@ export type ApprovalType =
   /** 案件の施工店舗 (= 売上の店舗) の変更。予定表から申請し、今の施工店舗の店長が承認する (src/lib/case-store.ts) */
   | "store_change"
   /** 問い合わせの削除 (店舗スタッフの申請。所属店舗の店長が承認。店長以上は承認なしで削除。src/lib/inquiry-delete.ts) */
-  | "inquiry_delete";
+  | "inquiry_delete"
+  /** 顧客の削除 (二重登録・誤って登録したお客様。店舗スタッフの申請。所属店舗の店長が承認。changes の mergeInto = 記録を移す統合先。src/lib/customer-delete.ts) */
+  | "customer_delete";
 
 /** returned = 差戻し (修正して再申請) / rejected = 却下 / cancelled = 取下げ */
 export type ApprovalStatus = "pending" | "approved" | "returned" | "rejected" | "cancelled";

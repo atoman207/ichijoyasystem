@@ -222,6 +222,7 @@ export const APPROVAL_TYPE_LABEL: Record<ApprovalType, string> = {
   handover_change: "引取・納品日の変更",
   store_change: "施工店舗の変更",
   inquiry_delete: "問い合わせの削除",
+  customer_delete: "顧客の削除 (二重登録・誤登録)",
 };
 
 /** 承認の判断の説明 (承認・差戻し・却下で記録の扱いが変わる) */

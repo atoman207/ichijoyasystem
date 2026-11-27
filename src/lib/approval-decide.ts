@@ -12,6 +12,8 @@ import { propagateCustomerAddress } from "@/lib/maps/store";
 import { closedReason } from "@/lib/mgmt/close";
 import { applyCaseStoreChange, caseChainOf, storeChangeBlocker } from "@/lib/case-store";
 import { applyInquiryDelete, inquiryDeleteBlocker } from "@/lib/inquiry-delete";
+import { approvalMergeTarget, customerDeleteBlocker } from "@/lib/customer-delete";
+import { runCustomerDelete } from "@/lib/customer-delete-run";
 import { approvalSettings, manYen } from "@/lib/approval-rules";
 import { addChangeNotice, caseTarget, noticeLines, quoteItemLines } from "@/lib/change-notices";
 
@@ -300,6 +302,23 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
         addAudit(db, { userId, action: "delete", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `問い合わせの削除を承認して削除 (申請 ${db.users.find((u) => u.id === a.requestedBy)?.name ?? "-"} さん${a.requestComment ? ` · 理由: ${a.requestComment}` : ""}${events ? ` · 予定 ${events} 件もあわせて削除` : ""})`, storeId: inq.storeId, changes: [{ field: "status", before: INQUIRY_STATUS[prev].label, after: "削除済み" }] });
       } else {
         addAudit(db, { userId, action: "reject", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `問い合わせの削除の申請を${word}${note}`, storeId: inq.storeId });
+      }
+      break;
+    }
+    case "customer_delete": {
+      // 顧客の削除 (店舗スタッフの申請。src/lib/customer-delete.ts)。承認で、記録を統合先に移して削除する
+      const c = db.customers.find((x) => x.id === a.targetId);
+      if (!c) return;
+      if (decision === "approved") {
+        const targetId = approvalMergeTarget(a);
+        const to = targetId ? db.customers.find((x) => x.id === targetId) : undefined;
+        const blocker = customerDeleteBlocker(db, c, to, targetId);
+        if (blocker) fail(back, `${blocker} この申請は却下してください。`);
+        // 申請の取り下げ (applyCustomerDelete) からこの申請を外す
+        a.status = "approved";
+        runCustomerDelete(db, c, to, { actorId: userId, at: now, reason: a.requestComment ?? "", requestedBy: a.requestedBy, approvalId: a.id });
+      } else {
+        addAudit(db, { userId, action: "reject", entity: "customer", entityId: c.id, entityLabel: `${c.code} ${c.name}`, summary: `顧客の削除の申請を${word}${note}`, storeId: c.storeId });
       }
       break;
     }

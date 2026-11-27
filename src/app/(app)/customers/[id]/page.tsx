@@ -7,7 +7,10 @@ import { RecordViewRequest } from "@/components/features/RecordViewRequest";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { canAccessStore, canEditCaseStore, canReadStoreRecords } from "@/lib/auth/permissions";
+import { canAccessStore, canDeleteCustomerDirect, canEditCaseStore, canReadStoreRecords, canRequestCustomerDelete } from "@/lib/auth/permissions";
+import { approvalMergeTarget, customerDeletePlan, deletedCustomerOf, pendingCustomerDelete } from "@/lib/customer-delete";
+import { canLinkToCustomer } from "@/lib/customer-link";
+import { DeleteCustomerCard, type MergeCandidate } from "@/components/customers/DeleteCustomer";
 import { customerTimeline, userName } from "@/lib/db/queries";
 import { fmtDate, fmtDateTime, yen } from "@/lib/format";
 import { CHANNEL_LABEL, INQUIRY_STATUS, INVOICE_STATUS, ORDER_STATUS, QUOTE_STATUS } from "@/lib/constants";
@@ -38,7 +41,15 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
   const user = await requireUser();
   const db = getDb();
   const c = db.customers.find((x) => x.id === id);
-  if (!c) notFound();
+  if (!c) {
+    // 削除したお客様 (二重登録の統合など。src/lib/customer-delete.ts): 通知・チャットなどの古いリンクは統合先の画面へ
+    const gone = deletedCustomerOf(db, id);
+    if (gone?.mergedInto && db.customers.some((x) => x.id === gone.mergedInto)) {
+      redirect(`/customers/${gone.mergedInto}?msg=${encodeURIComponent(`${gone.label} 様は二重登録のため ${fmtDate(gone.at)} に ${userName(gone.userId)} さんが削除し、このお客様に統合しました。`)}`);
+    }
+    if (gone) redirect(`/customers?err=${encodeURIComponent(`${gone.label} 様は ${fmtDate(gone.at)} に ${userName(gone.userId)} さんが削除しました。`)}`);
+    notFound();
+  }
   // ほかの店舗の顧客は閲覧のみ。見られる範囲は閲覧の範囲の設定 (src/lib/access-policy.ts) と案件の進み具合で決まる (src/lib/case-access.ts)
   const info = customerAccessInfo(db, user, c);
   const store = db.stores.find((s) => s.id === c.storeId);
@@ -73,6 +84,19 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
   // 問い合わせ (案件) をこのお客様にひも付ける (お客様のご要望 2026-11-24「■6」): 電話・お名前・地区が合う未登録の問い合わせを最初から候補に出す
   const canLink = !viewOnly && canEditCaseStore(user, c.storeId);
   const linkCandidates = canLink ? linkableInquiries(db, user, c, "") : [];
+  // 顧客の削除 (二重登録・誤登録。お客様のご要望 2026-11-27): 売上のないお客様。記録があれば残すほうのお客様 (重複の候補・検索) に移して削除
+  const deleteMode = viewOnly ? undefined : canDeleteCustomerDirect(user, c.storeId) ? "direct" : canRequestCustomerDelete(user, c.storeId) ? "request" : undefined;
+  const deletePlan = deleteMode ? customerDeletePlan(db, c.id) : undefined;
+  const pendingDelete = pendingCustomerDelete(db, c.id);
+  const pendingDeleteTarget = pendingDelete ? db.customers.find((x) => x.id === approvalMergeTarget(pendingDelete)) : undefined;
+  const pendingDeleteText = pendingDelete
+    ? `${userName(pendingDelete.requestedBy)} さんが ${fmtDateTime(pendingDelete.createdAt)} に削除を申請しました${pendingDeleteTarget ? ` (記録を ${pendingDeleteTarget.code} ${pendingDeleteTarget.name} 様に移して削除)` : ""}${pendingDelete.requestComment ? ` · 理由: ${pendingDelete.requestComment}` : ""}。${pendingDelete.requiredRole === "admin" ? "管理者" : "店長"}の承認のあとに削除されます`
+    : "";
+  const mergeCandidates: MergeCandidate[] = dupRows.flatMap((m) => {
+    const x = db.customers.find((y) => y.id === m.id);
+    if (!x || !canLinkToCustomer(db, user, x)) return [];
+    return [{ id: x.id, code: x.code, name: x.name, address: x.address, phone: x.phone, storeName: db.stores.find((s) => s.id === x.storeId)?.name ?? x.storeId, note: `${m.label}: ${m.reasons.join("・")}` }];
+  });
 
   return (
     <div>
@@ -103,6 +127,13 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
         <Card className="mb-4 border-warn/40 bg-warn-soft/40">
           <CardHeader title="承認待ち: 顧客の重要情報の変更" description={`${pendingChange.requiredRole === "admin" ? "管理者" : "店長"}の承認が必要 · 申請 ${userName(pendingChange.requestedBy)} ${fmtDateTime(pendingChange.createdAt)}${pendingChange.requestComment ? ` · 理由: ${pendingChange.requestComment}` : ""}`} />
           <ApprovalDecision approval={pendingChange} user={user} returnTo={returnTo} approveLabel="変更を承認する" />
+        </Card>
+      )}
+
+      {pendingDelete && (
+        <Card className="mb-4 border-critical/40 bg-critical-soft/30">
+          <CardHeader title="承認待ち: このお客様の削除 (二重登録・誤登録)" description={pendingDeleteText} />
+          <ApprovalDecision approval={pendingDelete} user={user} returnTo={returnTo} approveLabel={pendingDeleteTarget ? "承認して統合・削除する" : "承認して削除する"} />
         </Card>
       )}
 
@@ -248,7 +279,7 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
           )}
           {dupRows.length > 0 && (
             <Card className="border-warn/40 bg-warn-soft/30">
-              <CardHeader title="重複の可能性がある顧客" description="同じお客様が別の顧客として登録されていないか確認してください (全店舗の顧客と照合)" />
+              <CardHeader title="重複の可能性がある顧客" description={<>同じお客様が別の顧客として登録されていないか確認してください (全店舗の顧客と照合){deleteMode && <>。二重に登録していたら、下の<a href="#delete" className="text-accent hover:underline">「このお客様を削除する」</a>で記録をまとめて片方を削除できます</>}</>} />
               <ul className="space-y-2 text-xs">
                 {dupRows.map((m) => (
                   <li key={m.id}>
@@ -260,6 +291,18 @@ export default async function CustomerDetailPage({ params, searchParams }: { par
               </ul>
             </Card>
           )}
+        </div>
+      )}
+      {deleteMode && deletePlan && (
+        <div className="mt-4">
+          <DeleteCustomerCard
+            customer={{ id: c.id, code: c.code, name: c.name, address: c.address, phone: c.phone }}
+            mode={deleteMode}
+            blockers={deletePlan.blockers}
+            records={deletePlan.records.map((r) => ({ label: r.label, count: r.count }))}
+            candidates={mergeCandidates}
+            pending={pendingDelete ? pendingDeleteText : undefined}
+          />
         </div>
       )}
       <div className="mt-4 space-y-4">

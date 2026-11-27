@@ -25,7 +25,7 @@
     "chatbot:catalog": "node scripts/chatbot/extract-ui.mjs",
     "test:hr": "node scripts/tests/hr/leave.test.mjs && node scripts/tests/hr/attendance.test.mjs && node scripts/tests/hr/timecard.test.mjs",
     "test:office": "node scripts/tests/office/office.test.mjs",
-    "test:cases": "node scripts/tests/cases/case-group.test.mjs",
+    "test:cases": "node scripts/tests/cases/case-group.test.mjs && node scripts/tests/cases/customer-delete.test.mjs",
     "test:notify": "node scripts/tests/notify/seen.test.mjs && node scripts/tests/notify/toast.test.mjs",
     "test:accounts": "node scripts/tests/accounts/accounts.test.mjs",
     "test:inbound": "node scripts/tests/inbound/inbound.test.mjs",

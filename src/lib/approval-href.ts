@@ -19,6 +19,9 @@ export function approvalHref(a: Pick<Approval, "type" | "targetId">): string {
       return `/customers/${a.targetId}`;
     case "inquiry_delete":
       return `/inquiries/${a.targetId}`;
+    case "customer_delete":
+      // 削除したあとは顧客の画面が統合先へ移る (src/lib/customer-delete.ts の deletedCustomerOf)
+      return `/customers/${a.targetId}`;
     case "store_change":
       // 案件のいちばん進んだ記録 (o_ = 受注 / q_ = 見積 / inq_ = 問い合わせ)
       return a.targetId.startsWith("o_") ? `/orders/${a.targetId}` : a.targetId.startsWith("q_") ? `/quotes/${a.targetId}` : a.targetId.startsWith("inq_") ? `/inquiries/${a.targetId}` : "/approvals";
