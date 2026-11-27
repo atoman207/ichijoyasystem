@@ -164,7 +164,7 @@ function parseEventForm(
 
   const active = new Set(db.users.filter((u) => u.active).map((u) => u.id));
   const assigneeIds = [...new Set(fd.getAll("assigneeIds").map(String))].filter((id) => active.has(id));
-  if (assigneeIds.length === 0 && !companyWide) fail(back, "担当者を 1 人以上選んでください (全社共通の予定は省略できます)。");
+  // 担当者なし (「なし」= 未定) も登録できる (お客様のご要望 2026-11-27「■2」。予定表では「担当未定」の行に出る)
 
   let customerId = caseRef?.customerId ?? (fixed ? fixed.customerId : str(fd, "customerId") || undefined);
   if (!caseRef && !fixed && customerId && customerId !== current?.customerId) {
@@ -458,7 +458,6 @@ function parsePairMove(db: Database, user: User, current: ScheduleEvent, fd: For
   if (str(fd, "pairAssigneesSent") === "1") {
     const active = new Set(db.users.filter((u) => u.active).map((u) => u.id));
     assigneeIds = [...new Set(fd.getAll("pairAssigneeIds").map(String))].filter((a) => active.has(a)).slice(0, QUICK_MAX_ASSIGNEES);
-    if (!assigneeIds.length) fail(back, "関連する予定 (納品・引取) の担当者を 1 人以上選んでください。");
   }
   return { ev, hv, when: { date, start, end, slot }, assigneeIds };
 }
@@ -731,7 +730,6 @@ export async function addPairedDelivery(id: string, formData: FormData) {
   const slot: "am" | "pm" | undefined = !startTime && (mode === "am" || mode === "pm") ? mode : undefined;
   const active = new Set(db.users.filter((u) => u.active).map((u) => u.id));
   const assigneeIds = [...new Set(formData.getAll("assigneeIds").map(String))].filter((a) => active.has(a)).slice(0, QUICK_MAX_ASSIGNEES);
-  if (!assigneeIds.length) fail(returnTo, "納品の担当者を 1 人以上選んでください。");
   const allowOverlap = str(formData, "allowOverlap") === "1";
   const memo = str(formData, "memo").slice(0, 2000) || undefined;
   const when = periodLabel({ date, startTime, endTime, slot });

@@ -351,7 +351,7 @@ function quickWork(db: Database, user: User, e: ScheduleEvent): QuickWork | unde
     } else {
       const can = canIssueFor(db, o);
       const allowed = canIssueInvoice(user) && canAccessStore(user, o.storeId);
-      docs.invoiceIssue = { ok: can.ok && allowed, pre: can.pre, reason: !can.ok ? can.reason : allowed ? undefined : "請求書の発行は店長・本部・管理者 (その店舗) が行えます。", orderId: o.id, total: o.total };
+      docs.invoiceIssue = { ok: can.ok && allowed, pre: can.pre, reason: !can.ok ? can.reason : allowed ? undefined : "請求書の発行は店長・本部・管理者 (その店舗) が行えます。", orderId: o.id, total: o.total, needsSetup: can.needsSetup };
       docs.receipt = { wanted: w.wanted, auto: w.auto, reason: w.reason, canSetWanted, orderId: o.id, issued: [], checks: [] };
     }
   }

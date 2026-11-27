@@ -175,6 +175,8 @@ export type ServiceCategory =
   | "amido"
   | "curtain"
   | "cloth"
+  /** リフォーム (お客様のご要望 2026-11-27「■2」) */
+  | "reform"
   | "other";
 
 export type InquiryStatus =
@@ -195,11 +197,27 @@ export interface OrderWorkStaff {
   delivery: string[];
   /** 施工 (リフォーム・取付など) */
   install: string[];
+  /** 「なし」を選んだ作業 (お客様のご要望 2026-11-27「■2」。その作業はしていない = 担当を決めた)。以前の保存にはない */
+  none?: ("survey" | "pickup" | "delivery" | "install")[];
   /** 施工完了・売上確定のときに確かめた日時・人 */
   confirmedAt?: string;
   confirmedBy?: string;
   updatedAt?: string;
   updatedBy?: string;
+}
+
+/** ポスティング (チラシの配布) の実績 (受注ごと。誰が何枚。配れなかったときは none) */
+export interface OrderPosting {
+  /** done = 配った / none = 配れてない */
+  status: "done" | "none";
+  /** 配った人と枚数 (複数人) */
+  entries: { userId: string; count: number }[];
+  /** 配った日 (作業日報の日。空 = 売上計上日、なければ登録した日) */
+  date?: string;
+  /** 配った地域 (町名) */
+  area?: string;
+  updatedAt: string;
+  updatedBy: string;
 }
 
 export interface InquiryDeleted {
@@ -579,6 +597,8 @@ export interface Order {
    * 施工完了・売上確定のときに確かめて保存し、この値をインセンティブ (アンケートの ②③ の担当) と経営ダッシュボードの担当に使う (お客様のご要望 2026-11-25「④」)
    */
   workStaff?: OrderWorkStaff;
+  /** ポスティング (チラシの配布) の実績 (お客様のご要望 2026-11-27「■3」。売上登録・請求書の発行の前に登録。作業日報に出す。src/lib/sales-ready.ts) */
+  posting?: OrderPosting;
   /** 仕様: pending = 一部の仕様が未確定 */
   specStatus?: "pending" | "fixed";
   specNote?: string;

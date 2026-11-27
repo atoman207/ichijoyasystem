@@ -2,37 +2,32 @@ import "server-only";
 import type { Database, MapDocument, MapLocation, MapRefType, User } from "@/lib/db/types";
 import { canAccessStore, canEditCaseStore, canSeeAllCustomerRecords, canSeeAllStores } from "@/lib/auth/permissions";
 import { policyReader } from "@/lib/access-policy";
-import { customerAccess, orderAccess, quoteAccess } from "@/lib/case-access";
 import { toDateKey } from "@/lib/format";
 import { locationReferences, mapIndex } from "./resolve";
 
 /**
  * 地図・住宅地図の閲覧と操作の権限
  * ------------------------------------------------------------
- * - 画面の記録 (顧客・見積・受注) を見られる人 = その店舗のメンバーと全店舗ロール、閲覧の範囲の設定でほかの店舗の記録を見られる人 (src/lib/case-access.ts。閲覧のみ)
+ * - 見る (Google マップ・住宅地図・場所の画面・PDF): 全社員 (有効なアカウント)。所属店舗・担当者・閲覧の範囲の設定に関係なく、すべての案件の地図を見られる
+ *   (お客様のご要望 2026-11-27「■1 地図の閲覧権限」: 店舗をまたいで引取・納品・工事に行くため)
  * - 登録・差し替え・位置の修正 = 記録を変更できる人 (その店舗のメンバー・全店舗ロール・店長は全店舗の顧客・見積・受注 = canEditCaseStore)
- * - 予定: その店舗のメンバー・担当者・登録者 (予定表は全社で見られるが、住宅地図は担当する人だけ)
- * - 場所・PDF を直接開くとき (URL): その場所を参照する記録のどれかを見られる人 (記録の画面と同じ判定)、またはその場所の今後の予定の担当者
+ * - 予定の地図の登録: その店舗のメンバー・担当者・登録者
  * - 場所・PDF の変更 (場所の画面): その場所を参照する記録の地図を変更できる人 (canEditLocation・canEditMapDocument)。
  *   閲覧の範囲の設定は見る範囲だけを広げ、変更の判定には使わない
  */
 
-/** 画面の記録から、その記録の地図 (場所・住宅地図) を見られるか (記録を見られる人。ほかの店舗の記録は閲覧のみ) */
+/** 画面の記録から、その記録の地図 (場所・住宅地図) を見られるか: 全社員 (記録があれば。お客様のご要望 2026-11-27「■1」) */
 export function canViewRecordMap(user: User, db: Database, type: MapRefType, id: string): boolean {
-  if (type === "event") return canHandleRecordMap(user, db, type, id);
+  if (!user.active) return false;
   switch (type) {
-    case "customer": {
-      const c = db.customers.find((x) => x.id === id);
-      return Boolean(c && customerAccess(db, user, c) !== "none");
-    }
-    case "quote": {
-      const q = db.quotes.find((x) => x.id === id);
-      return Boolean(q && quoteAccess(db, user, q) !== "none");
-    }
-    case "order": {
-      const o = db.orders.find((x) => x.id === id);
-      return Boolean(o && orderAccess(db, user, o) !== "none");
-    }
+    case "event":
+      return db.schedule.some((x) => x.id === id);
+    case "customer":
+      return db.customers.some((x) => x.id === id);
+    case "quote":
+      return db.quotes.some((x) => x.id === id);
+    case "order":
+      return db.orders.some((x) => x.id === id);
   }
   return false;
 }
@@ -66,8 +61,9 @@ export function canEditRecordMap(user: User, db: Database, type: MapRefType, id:
   return user.active && canHandleRecordMap(user, db, type, id);
 }
 
-/** 場所を見られるか (場所の画面・PDF を直接開くとき) */
+/** 場所を見られるか (場所の画面・PDF を直接開くとき): 全社員 (お客様のご要望 2026-11-27「■1」) */
 export function canViewLocation(user: User, db: Database, loc: MapLocation): boolean {
+  if (user.active) return true;
   if (canSeeAllStores(user)) return true;
   // 閲覧の範囲 = 全社員 (既定) なら、全店舗の場所を見られる (src/lib/access-policy.ts)
   if (canSeeAllCustomerRecords(policyReader(db, user))) return true;
@@ -89,8 +85,9 @@ export function canEditLocation(user: User, db: Database, loc: MapLocation): boo
   return locationReferences(db, loc, { today }).some((r) => (r.type === "event" ? (canAccessStore(user, r.storeId) || r.assigneeIds?.includes(user.id)) && (r.date ?? "") >= today : canEditRecordMap(user, db, r.type, r.id)));
 }
 
-/** PDF を見られるか: 結び付いた場所のどれかを見られる人 (結び付きのない PDF は登録した店舗) */
+/** PDF を見られるか: 全社員 (お客様のご要望 2026-11-27「■1」。取り消した PDF は呼び出し側で除く) */
 export function canViewMapDocument(user: User, db: Database, doc: MapDocument): boolean {
+  if (user.active) return true;
   if (canSeeAllStores(user)) return true;
   const idx = mapIndex(db);
   const locIds = idx.locationsByDoc.get(doc.id) ?? [];

@@ -195,7 +195,6 @@ export function EventForm({
   const timeError = !v.allDay && v.startTime && v.endTime && toMinutes(v.endTime) <= toMinutes(v.startTime) ? "終了時刻は開始時刻より後にしてください" : "";
   const endDateError = v.endDate && v.endDate < v.date ? "終了日は開始日以降にしてください" : "";
   const repeatError = repeat !== "none" && (!isDateKey(until) || until <= v.date) ? "繰り返しの終了日を開始日より後に設定してください" : "";
-  const assigneeError = v.assigneeIds.length === 0 && !v.companyWide ? "担当者を 1 人以上選んでください" : "";
   const titleError = !v.title.trim() && !selectedCase ? "件名を入力してください" : "";
   const occurrences = repeat !== "none" && !repeatError ? repeatDates(v.date, repeat, until) : [v.date];
 
@@ -222,7 +221,7 @@ export function EventForm({
   const conflictKey = conflicts.map((c) => `${c.userId}:${c.eventId}:${c.day}`).join(",");
   const ack = conflictKey !== "" && ackFor === conflictKey;
   const blocked = conflicts.length > 0 && !ack;
-  const invalid = Boolean(timeError || endDateError || repeatError || assigneeError || titleError || !isDateKey(v.date));
+  const invalid = Boolean(timeError || endDateError || repeatError || titleError || !isDateKey(v.date));
 
   const store = stores.find((s) => s.id === v.storeId);
   const preview = isDateKey(v.date)
@@ -462,7 +461,7 @@ export function EventForm({
               required={!v.companyWide}
               hint={`店舗をまたいで選べます (応援など)。右の数字は ${isDateKey(v.date) ? shortDate(v.date) : "選択日"} の予定の入り具合です`}
             />
-            {assigneeError && <p className="mt-1 text-xs text-critical-ink">{assigneeError}</p>}
+            {v.assigneeIds.length === 0 && !v.companyWide && <p className="mt-1 text-xs text-ink-3">担当者: なし (未定)。予定表では「担当未定」の行に出ます</p>}
           </Card>
 
           {/* 場所・お客様・メモ */}
@@ -596,7 +595,7 @@ export function EventForm({
             </dl>
             <SubmitButton disabled={invalid || blocked} label={mode === "create" ? (occurrences.length > 1 ? `予定を ${occurrences.length} 件登録する` : "予定を登録する") : "変更を保存する"} />
             {blocked && <p className="mt-2 text-center text-[11px] text-critical-ink">重複を解消するか、「重複を承知で…」にチェックしてください</p>}
-            {invalid && !blocked && <p className="mt-2 text-center text-[11px] text-ink-3">{titleError || assigneeError || timeError || endDateError || repeatError || "日付を入力してください"}</p>}
+            {invalid && !blocked && <p className="mt-2 text-center text-[11px] text-ink-3">{titleError || timeError || endDateError || repeatError || "日付を入力してください"}</p>}
             <Link href={cancelHref} className={buttonClass("ghost", "md", "mt-2 w-full")}>
               キャンセル
             </Link>

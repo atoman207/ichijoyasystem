@@ -30,6 +30,8 @@ import type { TaxMode } from "@/lib/quote-calc";
 import { itemCategoryProps } from "@/lib/mgmt/categories";
 import { dokoChoiceInfo } from "@/lib/mgmt/costing";
 import { attachmentsOf } from "@/lib/attachments";
+import { staffChoiceGroups } from "@/lib/staff-choices";
+import { StaffOptions } from "@/components/features/StaffOptions";
 import { Button, Card, CardHeader, Field, Flash, FormActions, Input, LinkButton, Note, PageHeader, Select, Textarea } from "@/components/ui";
 
 /** 手書きの見積書の撮影から開くとき、AI の読み取り (最大 50 秒・行が足りなければ読み直し) を待つ */
@@ -92,7 +94,8 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
   const taxModeDefault: TaxMode = ex.taxMode === "税抜" || (ex.taxMode !== "税込" && ex.taxIncluded === false) ? "excluded" : "included";
   const siteDefaults = doc ? toSiteInfo({ ...ex, remarks: ex.note }) : undefined;
   const canRegisterCustomer = userCanCreateCustomer(db, user);
-  const staff = db.users.filter((u) => u.active).sort((a, b) => Number(b.storeId === (customer?.storeId ?? user.storeId)) - Number(a.storeId === (customer?.storeId ?? user.storeId)));
+  // 見積担当の選択肢: 施工店舗 (案件の店舗) の社員 → 本部 → ほかの店舗 + なし (お客様のご要望 2026-11-27「■2」)
+  const quoteStore = contextStore ?? customer?.storeId ?? user.storeId;
   const docCategoryValue = sp.category ? category : (docCategory ?? category);
   // ほかの画面 (予定表の小さな画面・案件の画面) から開いたとき: 保存のあとその画面に戻る (お客様のご要望 2026-11-25「②」)
   const returnTo = sp.returnTo && sp.returnTo.startsWith("/") && !sp.returnTo.startsWith("//") ? sp.returnTo : undefined;
@@ -219,7 +222,7 @@ export default async function NewQuotePage({ searchParams }: { searchParams: Pro
         <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
           <Field label="見積担当 (現場で見積をした社員)">
             <Select name="estimatorId" defaultValue={estimatorDefault}>
-              {staff.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              <StaffOptions groups={staffChoiceGroups(db, quoteStore, [estimatorDefault])} />
             </Select>
           </Field>
           <label className="flex items-center gap-2 self-end pb-2 text-sm text-ink">

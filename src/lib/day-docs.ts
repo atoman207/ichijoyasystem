@@ -3,7 +3,7 @@ import { caseChainOf } from "@/lib/case-store";
 import { invoiceAccessInfo, orderAccessInfo, quoteAccessInfo } from "@/lib/case-access";
 import { canAccessStore, canIssueInvoice, canIssueReceipt, canOutputDocument } from "@/lib/auth/permissions";
 import { liveInvoicesOfOrder } from "@/lib/billing";
-import { PRE_ISSUE_STATUSES } from "@/lib/invoice-rules";
+import { canIssueFor } from "@/lib/invoice-rules";
 import { activeReceipts, receiptChecks, receiptDraft, receiptWanted, type ReceiptCheck, type ReceiptWanted } from "@/lib/receipts";
 import { outputsOf } from "@/lib/doc-outputs";
 import { periodLabel } from "@/lib/calendar";
@@ -35,7 +35,8 @@ export interface DayDocRow {
   order?: { id: string; number: string; status: Order["status"]; total: number; deliveryOutputs: number; canPrintDelivery: boolean };
   invoice?: { id: string; number: string; total: number; paidAmount: number; outputs: number; canPrint: boolean };
   /** 請求書がないとき: 発行して印刷できるか */
-  invoiceIssue?: { ok: boolean; pre: boolean; reason?: string };
+  /** needsSetup = 作業の担当・ポスティングが未登録 (受注の画面で登録すると発行できる。src/lib/sales-ready.ts) */
+  invoiceIssue?: { ok: boolean; pre: boolean; reason?: string; needsSetup?: boolean };
   receipt?: {
     wanted: ReceiptWanted;
     issued: { id: string; number: string; amount: number; outputs: number }[];
@@ -102,9 +103,10 @@ export function dayDocRows(db: Database, user: User, date: string, store: StoreI
         };
         row.checks = receiptChecks(db, inv, o);
       } else {
-        const issueOk = o.status === "completed" || PRE_ISSUE_STATUSES.includes(o.status);
+        // 発行できる状態・担当者とポスティングの登録 (src/lib/invoice-rules.ts の canIssueFor。お客様のご要望 2026-11-27「■3」)
+        const ci = canIssueFor(db, o);
         const can = canIssueInvoice(user) && canAccessStore(user, o.storeId);
-        row.invoiceIssue = issueOk ? (can ? { ok: true, pre: o.status !== "completed" } : { ok: false, pre: false, reason: "請求書の発行は店長・本部・管理者 (その店舗) が行えます" }) : { ok: false, pre: false, reason: o.status === "pending_approval" || o.status === "returned" ? "契約の承認待ち" : "この状態の案件は請求書を発行できません" };
+        row.invoiceIssue = !ci.ok ? { ok: false, pre: false, reason: ci.reason, needsSetup: ci.needsSetup } : can ? { ok: true, pre: ci.pre } : { ok: false, pre: false, reason: "請求書の発行は店長・本部・管理者 (その店舗) が行えます" };
         row.receipt = {
           wanted,
           issued: [],

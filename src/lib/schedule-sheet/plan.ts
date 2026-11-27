@@ -527,7 +527,8 @@ function eventFields(it: PlanItem, links: { customerId?: string; inquiryId?: str
 }
 
 const CATEGORY_WORDS: [RegExp, ServiceCategory][] = [
-  [/クロス|壁紙|フローリング|床|工事|リフォーム|塗装|大工|内装/, "cloth"],
+  [/クロス|壁紙/, "cloth"],
+  [/リフォーム|フローリング|床|工事|塗装|大工|内装/, "reform"],
   [/カーテン|ブラインド|ロールスクリーン/, "curtain"],
 ];
 

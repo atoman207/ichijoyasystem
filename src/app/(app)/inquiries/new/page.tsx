@@ -1,7 +1,7 @@
 import Link from "@/components/ui/Link";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { staffForStore } from "@/lib/staff-choices";
+import { staffChoiceGroups } from "@/lib/staff-choices";
 import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/permissions";
 import { customerOptions } from "@/lib/db/queries";
 import { createInquiry } from "@/lib/actions/inquiries";
@@ -43,8 +43,8 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
   const initialChoice = initialCases ? initialCaseChoice(initialCases, presetCase && presetCase.customerId === preset?.id ? presetCase.id : undefined) : "new";
   // 担当者の選択肢: 自店舗の社員 + 本部の社員 (全店舗共通。お客様のご要望 2026-11-24「④」)。案件に追加するときの案件の担当も選べるように
   const owners = initialCases ? [...initialCases.open, ...initialCases.past].map((c) => c.ownerId).filter((x): x is string => Boolean(x)) : [];
-  const base = allStores ? db.users.filter((u) => u.active) : staffForStore(db, user.storeId, owners);
-  const users = base.map((u) => ({ id: u.id, label: `${u.name}${u.title ? ` (${u.title})` : ""}` }));
+  // 施工店舗 (自店舗) の社員 → 本部 → ほかの店舗 (お客様のご要望 2026-11-27「■2」)
+  const users = staffChoiceGroups(db, user.storeId, owners);
   const promotions = promotionOptions(db.promotions ?? [], (sid) => sid === "hq" || canAccessStore(user, sid));
   return (
     <div className="max-w-3xl">

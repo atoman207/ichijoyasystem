@@ -14,6 +14,7 @@ const CATEGORY_WORDS: Record<ServiceCategory, string[]> = {
   amido: ["網戸", "あみど", "アミド"],
   curtain: ["カーテン", "ブラインド"],
   cloth: ["クロス", "壁紙"],
+  reform: ["リフォーム", "フローリング", "クッションフロア", "内装"],
   other: ["諸経費"],
 };
 

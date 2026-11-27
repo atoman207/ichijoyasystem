@@ -3,7 +3,9 @@ import { PdfLink } from "@/components/features/PdfLink";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { staffForStore } from "@/lib/staff-choices";
+import { staffChoiceGroups, staffForStore } from "@/lib/staff-choices";
+import { postingLabel, salesReadiness } from "@/lib/sales-ready";
+import { PostingFields } from "@/components/features/PostingFields";
 import { areaStoreOf } from "@/lib/store-area";
 import { canAccessStore, canEditProduction, canManageFinance, canManagePurchaseOrders, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
 import { TatamiRoomsCard } from "@/components/schedule/TatamiRoomsCard";
@@ -11,7 +13,7 @@ import { saveOrderTatamiRooms } from "@/lib/actions/tatami-rooms";
 import { ROOMS_SOURCE_LABEL, orderRooms, quoteRooms } from "@/lib/tatami-rooms";
 import { orderChain, userName } from "@/lib/db/queries";
 import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, requestOrderChange, resubmitOrder, saveWorkStaff, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
-import { WORK_ROLES, WORK_ROLE_LABEL, workStaffOf } from "@/lib/work-staff";
+import { WORK_ROLES, WORK_ROLE_LABEL, deliveryStaffOf, workStaffOf } from "@/lib/work-staff";
 import { WorkStaffFields } from "@/components/features/WorkStaffFields";
 import { CaseChangeHistory } from "@/components/features/CaseChangeHistory";
 import { CaseStoreCard } from "@/components/features/CaseStoreCard";
@@ -64,9 +66,10 @@ import { batchTerms, closingDateCovering, isBatchInvoice, termsText } from "@/li
 
 const STEPS = ["pending_approval", "confirmed", "scheduled", "in_progress", "completed", "invoiced", "paid"] as const;
 
-export default async function OrderDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string }> }) {
+export default async function OrderDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string; returnTo?: string }> }) {
   const { id } = await params;
-  const { msg, err } = await searchParams;
+  const sp = await searchParams;
+  const { msg, err } = sp;
   const user = await requireUser();
   /** 管理者・店長の申請は承認を省略して、そのまま反映される (permissions.ts の skipsApproval) */
   const own = skipsApproval(user, "order");
@@ -134,7 +137,18 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   // 作業の担当 (実績。src/lib/work-staff.ts): 保存した値、なければ予定表の予定の担当者から
   const workStaff = workStaffOf(db, o);
   const wsIds = WORK_ROLES.flatMap((r) => workStaff[r]);
-  const workStaffChoices = staffForStore(db, o.storeId, wsIds).map((u) => ({ id: u.id, label: u.name }));
+  // 施工店舗の社員 → 本部 → ほかの店舗 (お客様のご要望 2026-11-27「■2」)
+  const staffGroups = staffChoiceGroups(db, o.storeId, wsIds);
+  // 売上登録 (施工完了・請求書の発行) の前に決めること: 作業の担当とポスティング (お客様のご要望 2026-11-27「■3」)
+  const ready = salesReadiness(o);
+  const postingDefaultDate = o.posting?.date ?? o.salesDate ?? toDateKey(new Date());
+  const postingName = (id: string) => db.users.find((u) => u.id === id)?.name ?? "-";
+  const staffPostingFields = (require: boolean) => (
+    <div className="space-y-3">
+      <WorkStaffFields groups={staffGroups} value={workStaff} require={require} />
+      <PostingFields groups={staffGroups} value={o.posting} defaultDate={postingDefaultDate} defaultUserIds={o.posting ? [] : deliveryStaffOf(workStaff).slice(0, 3)} />
+    </div>
+  );
   const AMOUNT_LABEL: [keyof NonNullable<typeof o.amounts>, string][] = [["tatami", "畳"], ["fusuma", "襖"], ["shoji", "障子"], ["amido", "網戸"], ["curtain", "カーテン"], ["cloth", "クロス・工事"], ["own", "自社商品"], ["misc", "諸経費"], ["discount", "値引"]];
 
   // 案件ごとの請求書の発行 (まとめ請求のお客様は折りたたんで出す)
@@ -142,6 +156,12 @@ export default async function OrderDetailPage({ params, searchParams }: { params
     <Note>この案件の請求書は {store?.name ?? "案件の店舗"} の店長・本部スタッフ・管理者が発行します。</Note>
   ) : canManageFinance(user) || isManagerOrAbove(user) ? (
     <form action={createInvoiceFromOrder.bind(null, o.id)} className="flex flex-wrap items-end gap-2">
+      {/* 売上登録 (請求書の発行) の前に担当者とポスティングを同じ画面で確定する (お客様のご要望 2026-11-27「■3」) */}
+      <div className="w-full rounded-xl border border-accent/30 bg-accent-soft/20 p-3">
+        <div className="mb-1 text-sm font-semibold text-ink">作業の担当とポスティングを確かめてください</div>
+        <p className="mb-2 text-[11px] text-ink-3">未入力のままでは請求書を発行できません。作業ごとに担当者 (いなければ「なし」)、ポスティングの枚数 (配っていなければ「配れてない」)。作業日報にも出ます。</p>
+        {staffPostingFields(true)}
+      </div>
       <Field label="支払期限 (日後)"><Input type="number" name="dueDays" defaultValue={customer?.type === "corporate" ? 30 : 14} className="w-28" /></Field>
       <Field label="送付方法">
         <Select name="sentVia" defaultValue={customer?.type === "corporate" ? "email" : customer?.preferredChannel === "line" ? "line" : "mail"}>
@@ -340,16 +360,24 @@ export default async function OrderDetailPage({ params, searchParams }: { params
 
           <Card id="work-staff">
             <CardHeader
-              title="作業の担当 (実績)"
-              description={workStaff.source === "saved" ? `${workStaff.confirmedAt ? `施工完了で確定 (${fmtDateTime(workStaff.confirmedAt)}・${userName(workStaff.confirmedBy)})` : `保存済み (${fmtDateTime(workStaff.updatedAt ?? "")}・${userName(workStaff.updatedBy)})`}。この担当をインセンティブ (アンケートの担当) と経営の集計に使います` : "予定表の予定の担当者から自動で出しています。施工完了のときに確かめて確定します (この画面でいつでも直せます)"}
+              title="作業の担当・ポスティング (実績)"
+              description={`${workStaff.source === "saved" ? `${workStaff.confirmedAt ? `確定 (${fmtDateTime(workStaff.confirmedAt)}・${userName(workStaff.confirmedBy)})` : `保存済み (${fmtDateTime(workStaff.updatedAt ?? "")}・${userName(workStaff.updatedBy)})`}` : "予定表の予定の担当者から自動で出しています"}。作業の担当とポスティングを確定しないと、売上登録 (施工完了・請求書の発行) ができません。インセンティブ・経営の集計・作業日報に使います`}
             />
-            <Dl columns={2} items={WORK_ROLES.map((r) => [WORK_ROLE_LABEL[r], workStaff[r].map((id) => userName(id)).join("・") || "-"] as [string, string])} />
+            <Dl
+              columns={2}
+              items={[
+                ...WORK_ROLES.map((r) => [WORK_ROLE_LABEL[r], workStaff[r].map((id) => userName(id)).join("・") || ((workStaff.none ?? []).includes(r) ? "なし" : "-")] as [string, string]),
+                ["ポスティング", `${postingLabel(o.posting, postingName)}${o.posting?.area ? ` · ${o.posting.area}` : ""}${o.posting?.date ? ` · ${fmtDate(o.posting.date)}` : ""}`],
+              ]}
+            />
+            {!ready.ok && o.status !== "cancelled" && <div className="mt-2"><Note tone="warn">売上登録の前に、{[!ready.staff ? "作業の担当 (いなければ「なし」)" : "", !ready.posting ? "ポスティング (配っていなければ「配れてない」)" : ""].filter(Boolean).join("と")}を登録してください。</Note></div>}
             {!viewOnly && !lock.locked && o.status !== "cancelled" && (
-              <details className="mt-3">
-                <summary className="cursor-pointer text-sm font-medium text-accent">担当を変更する</summary>
+              <details className="mt-3" open={!ready.ok}>
+                <summary className="cursor-pointer text-sm font-medium text-accent">{ready.ok ? "担当・ポスティングを変更する" : "担当・ポスティングを登録する"}</summary>
                 <form action={saveWorkStaff.bind(null, o.id)} className="mt-2 space-y-3">
-                  <WorkStaffFields staff={workStaffChoices} value={workStaff} />
-                  <Button type="submit" size="sm">作業の担当を保存</Button>
+                  {sp.returnTo && <input type="hidden" name="returnTo" value={sp.returnTo} />}
+                  {staffPostingFields(false)}
+                  <Button type="submit" size="sm">作業の担当・ポスティングを保存</Button>
                 </form>
               </details>
             )}
@@ -608,9 +636,9 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               <form action={completeOrder.bind(null, o.id)} className="space-y-3">
                 {/* 作業の担当を確かめてから完了にする (インセンティブの集計の起点。お客様のご要望 2026-11-25「④」) */}
                 <div className="rounded-xl border border-accent/30 bg-accent-soft/20 p-3">
-                  <div className="mb-1 text-sm font-semibold text-ink">作業の担当を確かめてください</div>
-                  <p className="mb-2 text-[11px] text-ink-3">{workStaff.source === "saved" ? "保存した担当です。" : "予定表の予定の担当者から入れています。"}実際に作業した人に直してください (複数名可)。完了の登録と一緒に確定し、インセンティブ (アンケートの担当) と経営の集計に使います。</p>
-                  <WorkStaffFields staff={workStaffChoices} value={workStaff} />
+                  <div className="mb-1 text-sm font-semibold text-ink">作業の担当とポスティングを確かめてください</div>
+                  <p className="mb-2 text-[11px] text-ink-3">{workStaff.source === "saved" ? "保存した担当です。" : "予定表の予定の担当者から入れています。"}実際に作業した人に直してください (複数名可・いなければ「なし」)。ポスティングの枚数 (配っていなければ「配れてない」) も入れます。未入力のままでは売上に計上できません。完了の登録と一緒に確定し、インセンティブ (アンケートの担当)・経営の集計・作業日報に使います。</p>
+                  {staffPostingFields(true)}
                 </div>
                 <div className="flex flex-wrap items-end gap-2">
                   <Field label="施工完了日 (= 売上計上日)"><Input type="date" name="completedAt" defaultValue={toDateKey(new Date())} /></Field>

@@ -287,7 +287,7 @@ function categoryKeys(wanted: string[] | undefined): Set<AmountKey> | null {
   for (const w of wanted) {
     const n = norm(w);
     for (const k of AMOUNT_KEYS) if (k === w || norm(AMOUNT_LABEL[k]).includes(n) || n.includes(norm(AMOUNT_LABEL[k]).slice(0, 2))) out.add(k);
-    if (/クロス|壁紙/.test(w)) out.add("cloth");
+    if (/クロス|壁紙|リフォーム|工事/.test(w)) out.add("cloth");
     if (/カーテン|ブラインド/.test(w)) out.add("curtain");
     if (/値引/.test(w)) out.add("discount");
   }

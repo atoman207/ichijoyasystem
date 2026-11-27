@@ -137,9 +137,18 @@ export function AssigneePicker({
             </span>
           );
         })}
-        {selected.length === 0 && <span className="text-xs text-ink-3">まだ選ばれていません</span>}
+        {selected.length === 0 && <span className="text-xs text-ink-3">なし (担当者を決めない)</span>}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {/* 「なし」= 担当者を決めない (お客様のご要望 2026-11-27「■2」。予定表では「担当未定」の行に出る) */}
+        <button
+          type="button"
+          onClick={() => onChange([])}
+          aria-pressed={selected.length === 0}
+          className={clsx("inline-flex items-center gap-1 rounded-lg border border-dashed px-2 py-1 text-xs", selected.length === 0 ? "border-accent bg-accent-soft font-medium text-accent-ink" : "border-line text-ink-2 hover:bg-subtle")}
+        >
+          なし
+        </button>
         {!selected.includes(currentUserId) && byId.has(currentUserId) && (
           <button type="button" onClick={() => onChange([...selected, currentUserId])} className="inline-flex items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs text-ink-2 hover:bg-subtle">
             <UserPlus className="h-3.5 w-3.5" />
@@ -152,11 +161,7 @@ export function AssigneePicker({
             {storeName(storeId)}のメンバー全員
           </button>
         )}
-        {selected.length > 0 && (
-          <button type="button" onClick={() => onChange([])} className="rounded-lg px-2 py-1 text-xs text-ink-3 hover:bg-subtle hover:text-ink">
-            すべて外す
-          </button>
-        )}
+
       </div>
       <div className="mt-2 rounded-xl border border-line">
         <div className="relative border-b border-line">

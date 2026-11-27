@@ -265,7 +265,8 @@ export async function createQuote(formData: FormData) {
       ...taxFields(taxMode),
       siteInfo: siteInfoFromForm(formData),
       paperNo: str(formData, "paperNo") || undefined,
-      estimatorId: estimator && db.users.some((u) => u.id === estimator) ? estimator : user.id,
+      // 「なし」(none) = 見積担当を決めない (経営ダッシュボード・インセンティブの営業担当は作成者)
+      estimatorId: estimator === "none" ? undefined : estimator && db.users.some((u) => u.id === estimator) ? estimator : user.id,
       ...(siteFieldsOf(formData) ?? {}),
       handedOver: handedOver || undefined,
       issuedAt: handedOver && /^\d{4}-\d{2}-\d{2}$/.test(quoteDate) ? quoteDate : undefined,
@@ -327,7 +328,8 @@ export async function updateQuote(id: string, formData: FormData) {
       q.taxIncluded = taxIncluded || undefined;
       q.taxExempt = taxExempt || undefined;
       const est = str(formData, "estimatorId");
-      if (est && db.users.some((u) => u.id === est)) q.estimatorId = est;
+      if (est === "none") delete q.estimatorId;
+      else if (est && db.users.some((u) => u.id === est)) q.estimatorId = est;
       q.title = str(formData, "title") || q.title;
       q.category = choice(formData, "category", CATEGORY_LABEL, q.category);
       q.validUntil = str(formData, "validUntil") || q.validUntil;

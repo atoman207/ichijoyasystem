@@ -3,6 +3,8 @@ import { compareEvents, dateRange, dayOfWeek, isDateKey, monthEnd } from "@/lib/
 import { isClosedDay } from "@/lib/schedule-capacity";
 import { loadMasters, type WorkType } from "@/lib/scheduling/masters";
 import { resolveJob, type SpecSource } from "@/lib/scheduling/spec";
+import { workRoleOfKind } from "@/lib/work-staff";
+import { toDateKey } from "@/lib/format";
 
 /**
  * 作業日報 (F-11) の自動集計
@@ -13,7 +15,8 @@ import { resolveJob, type SpecSource } from "@/lib/scheduling/spec";
  * - 枚数: 予定の計画と同じ読み取り (src/lib/scheduling/spec.ts の resolveJob。作業の内容 > 件名・メモ「畳 表替え6」>
  *   同じ案件の予定の件名・メモ > 受注の明細 > 見積の明細)。表替え・裏返しは「表」、新調は「新」。
  *   襖・障子・網戸の「新」は作業種別の名前か、件名・メモ・明細の「襖 新調」のような書き方で見分ける
- * - 担当: 予定の担当者
+ * - 担当: 予定の担当者。受注の作業の担当を確定したら (売上登録の前。src/lib/sales-ready.ts) その担当 (引取・納品・施工・現地見積)
+ * - チラシの配布: 受注のポスティングの実績 (誰が何枚。配った日・受注の店舗。お客様のご要望 2026-11-27「■3」) + 手入力 (work_report_days)
  * - 予定からわからない項目 (チラシの配布人・枚数・地域、来店数) は手入力 (work_report_days)
  * - 見出しの集計: 畳 総数 (引取の畳の表 + 新) と 襖類 (係数後 = 襖 + 障子 × 0.5 + 網戸 × 0.4。係数は設定) を
  *   人 (引取・納品の担当者の人数)・日 (引取・納品のあった日数)・人日 (日ごとの担当者の人数の合計) で割った値
@@ -231,6 +234,11 @@ export function buildWorkReport(db: ReportDb, storeId: StoreId, month: string): 
       }
     }
     const customer = e.customerId ? customers.get(e.customerId) : order ? customers.get(order.customerId) : undefined;
+    // 確定した作業の担当 (売上登録の前に確定。「なし」を選んだ作業は担当なし)。確定していなければ予定の担当者
+    const role = workRoleOfKind(e.kind);
+    const ws = order?.workStaff?.confirmedAt ? order.workStaff : undefined;
+    const decided = ws && role && (ws[role].length > 0 || (ws.none ?? []).includes(role)) ? ws[role] : undefined;
+    const ids = decided ?? e.assigneeIds ?? [];
     return {
       eventId: e.id,
       kind: e.kind,
@@ -244,14 +252,24 @@ export function buildWorkReport(db: ReportDb, storeId: StoreId, month: string): 
       orderNumber: order?.number,
       units,
       otherNote: other.join("・"),
-      assigneeIds: e.assigneeIds ?? [],
-      assignees: (e.assigneeIds ?? []).map((id) => users.get(id) ?? id),
+      assigneeIds: ids,
+      assignees: ids.map((id) => users.get(id) ?? id),
       source: job.source,
       noQty: job.items.length === 0,
     };
   };
 
   const lines = events.map(toLine);
+  // 受注のポスティングの実績 (配った日・受注の店舗。1 人 1 行)
+  const posted = new Map<string, WorkReportFlyer[]>();
+  for (const o of db.orders) {
+    const p = o.posting;
+    if (o.storeId !== storeId || p?.status !== "done" || o.status === "cancelled") continue;
+    const date = p.date ?? o.salesDate ?? toDateKey(new Date(p.updatedAt));
+    if (date < from || date > to) continue;
+    const rows = p.entries.filter((x) => x.count > 0).map((x) => ({ distributor: users.get(x.userId) ?? x.userId, userIds: [x.userId], copies: x.count, area: p.area, orderId: o.id, orderNumber: o.number }));
+    posted.set(date, [...(posted.get(date) ?? []), ...rows]);
+  }
   const entries = new Map<string, WorkReportDay>();
   for (const w of db.workReportDays ?? []) if (w.storeId === storeId && w.date >= from && w.date <= to) entries.set(w.date, w);
 
@@ -266,7 +284,7 @@ export function buildWorkReport(db: ReportDb, storeId: StoreId, month: string): 
       deliveries: of("delivery"),
       surveys: of("survey"),
       installs: of("install"),
-      flyers: w?.flyers ?? [],
+      flyers: [...(w?.flyers ?? []), ...(posted.get(date) ?? [])],
       visitors: w?.visitors,
       note: w?.note,
       entryId: w?.id,

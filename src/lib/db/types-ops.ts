@@ -40,6 +40,9 @@ export interface WorkReportFlyer {
   copies: number;
   /** 配布した地域 (町名。例: 合志市須屋)。部数あたりの反応の集計に使う */
   area?: string;
+  /** 受注のポスティングの実績から (お客様のご要望 2026-11-27「■3」。作業日報で計算して出す行。手入力の行にはない) */
+  orderId?: string;
+  orderNumber?: string;
 }
 
 /** 作業日報の手入力 (店舗 × 日に 1 行。ID は wr_<storeId>_<YYYY-MM-DD>) */

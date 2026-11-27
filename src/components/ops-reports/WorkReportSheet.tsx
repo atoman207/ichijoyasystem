@@ -113,7 +113,10 @@ export function WorkReportSheet({ report, links = true, print = false }: { repor
                 <td className={td}><Staff line={p} /></td>
                 <td className={clsx(td, "min-w-[6rem]")}><Inline line={r.survey} links={links} /></td>
                 <td className={clsx(td, "min-w-[6rem]")}><Inline line={r.install} links={links} /></td>
-                <td className={td}>{r.flyer?.distributor}</td>
+                <td className={td}>
+                  {r.flyer?.distributor}
+                  {r.flyer?.orderNumber && <span className="ml-1 text-[9px] text-ink-3">({r.flyer.orderNumber})</span>}
+                </td>
                 <td className={clsx(td, n)}>{r.flyer ? r.flyer.copies.toLocaleString("ja-JP") : ""}</td>
                 <td className={clsx(td, "text-[10px]")}>{r.flyer?.area}</td>
                 <td className={clsx(td, "min-w-[7rem]")}><Site line={d} links={links} /></td>

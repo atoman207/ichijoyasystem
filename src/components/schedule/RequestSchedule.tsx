@@ -121,7 +121,7 @@ export function RequestScheduleForm({
         <input type="checkbox" name="close" value="1" checked={close} onChange={(e) => setClose(e.target.checked)} className="mt-0.5 h-4 w-4" />
         <span>登録したら、この依頼を報告・対応完了にする (依頼した人に知らせます)</span>
       </label>
-      <Button type="submit" disabled={!date || sel.length === 0} data-testid="request-schedule-submit">
+      <Button type="submit" disabled={!date} data-testid="request-schedule-submit">
         <CalendarPlus />
         {mode === "move" ? (close ? "日時を変更して完了にする" : "日時を変更する") : close ? "予定を登録して完了にする" : "予定を登録する"}
       </Button>

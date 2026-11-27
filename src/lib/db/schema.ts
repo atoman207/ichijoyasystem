@@ -296,6 +296,8 @@ export const TABLES: TableDef[] = [
       ["tatamiRooms", "jsonb"],
       // 2026-11-25: 作業の担当 (現地見積・引取・納品・施工の実績。施工完了で確かめる。src/lib/work-staff.ts)
       ["workStaff", "jsonb"],
+      // 2026-11-27: ポスティングの実績 (誰が何枚・配れてない。売上登録の前に登録。src/lib/sales-ready.ts)
+      ["posting", "jsonb"],
     ],
     orderBy: ["created_at"],
     indexes: [["store_id"], ["status"], ["customer_id"], ["sales_date"]],

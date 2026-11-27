@@ -114,7 +114,7 @@ export function ScheduleQuickAdd(p: ScheduleQuickAddProps) {
         </div>
       )}
 
-      <AssigneePicker users={p.users} stores={p.stores} selected={assignees} onChange={setAssignees} busy={date ? report?.busy : undefined} currentUserId={p.currentUserId} storeId={p.storeId} required hint="担当者の予定と重なるときは赤く表示します" />
+      <AssigneePicker users={p.users} stores={p.stores} selected={assignees} onChange={setAssignees} busy={date ? report?.busy : undefined} currentUserId={p.currentUserId} storeId={p.storeId} hint="担当者の予定と重なるときは赤く表示します。決まっていなければ「なし」" />
 
       <label className="block">
         <span className="label">作業内容 (任意・予定表に表示)</span>
@@ -149,7 +149,7 @@ export function ScheduleQuickAdd(p: ScheduleQuickAddProps) {
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" size="sm" disabled={!date || !assignees.length}>
+        <Button type="submit" size="sm" disabled={!date}>
           {kindLabel(kind)}の日程を登録
         </Button>
         <Link href={p.fullHref} className="text-xs text-ink-3 hover:text-accent hover:underline">

@@ -45,6 +45,13 @@ function readMedia(formData: FormData, back: string, fallback?: MediaKey): Media
  * 手入力の問い合わせの画面で選んだお客様の案件 (進行中・最近の完了。「新規案件 / この案件に問い合わせを追加」の候補。お客様のご要望 2026-11-26「■5」)。
  * 見られないお客様は null
  */
+/** 担当者の選択 (「なし」= none。お客様のご要望 2026-11-27「■2」)。空 (送っていない) は fallback */
+function pickedAssignee(fd: FormData, fallback: string | undefined): string | undefined {
+  const v = str(fd, "assignedUserId");
+  if (v === "none") return undefined;
+  return v || fallback;
+}
+
 export async function loadCustomerCases(customerId: string): Promise<{ open: CaseOption[]; past: CaseOption[]; pastTotal: number } | null> {
   const user = await requireActionUser();
   const db = getDb();
@@ -111,7 +118,7 @@ export async function createInquiry(formData: FormData) {
         postalCode: withPostal(addr, ""),
         address: addr,
         storeId: cStore,
-        assignedUserId: str(formData, "assignedUserId") || user.id,
+        assignedUserId: pickedAssignee(formData, user.id),
         preferredChannel: "phone" as const,
         firstContactChannel: choice(formData, "channel", CHANNEL_LABEL, "phone"),
         tags: [],
@@ -149,7 +156,7 @@ export async function createInquiry(formData: FormData) {
       summary,
       detail: str(formData, "detail"),
       status: "new",
-      assignedUserId: str(formData, "assignedUserId") || user.id,
+      assignedUserId: pickedAssignee(formData, user.id),
       receivedAt: receivedAt.toISOString(),
       nextAction: str(formData, "nextAction") || undefined,
       nextActionDue: str(formData, "nextActionDue") || undefined,
@@ -203,7 +210,8 @@ export async function updateInquiry(id: string, formData: FormData) {
     const before = { ...inq };
     const status = str(formData, "status") as InquiryStatus;
     if (status && isKeyOf(INQUIRY_STATUS, status)) inq.status = status;
-    inq.assignedUserId = str(formData, "assignedUserId") || inq.assignedUserId;
+    const assigneeBefore = inq.assignedUserId;
+    inq.assignedUserId = pickedAssignee(formData, inq.assignedUserId);
     inq.category = choice(formData, "category", CATEGORY_LABEL, inq.category);
     inq.nextAction = str(formData, "nextAction") || undefined;
     inq.nextActionDue = str(formData, "nextActionDue") || undefined;
@@ -225,8 +233,9 @@ export async function updateInquiry(id: string, formData: FormData) {
       if (!db.stores.some((s) => s.id === storeId)) fail(back, "担当店舗が正しくありません。");
       inq.storeId = storeId as Inquiry["storeId"];
       const assignee = db.users.find((u) => u.id === inq.assignedUserId);
-      // 担当者が回した先の店舗の人でなければ外す (回した先の店舗で担当を決める)
-      if (assignee && assignee.storeId !== inq.storeId && !canSeeAllStores(assignee) && !isCommonStaff(db, assignee)) inq.assignedUserId = undefined;
+      // 担当者が回した先の店舗の人でなければ外す (回した先の店舗で担当を決める)。同じ画面でほかの店舗の担当者を選び直したときは、その人のまま
+      // (お客様のご要望 2026-11-27「■2」: ほかの店舗の社員も担当にできる)
+      if (assignee && assignee.id === assigneeBefore && assignee.storeId !== inq.storeId && !canSeeAllStores(assignee) && !isCommonStaff(db, assignee)) inq.assignedUserId = undefined;
       moved = !canEditCaseStore(user, inq.storeId);
     }
     inq.updatedAt = nowIso();

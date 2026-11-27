@@ -318,7 +318,7 @@ function importInquiries(db: Database, user: User, body: string[][], idx: Record
     const channel: Channel | undefined = chRaw ? pick(CHANNEL_LABEL, chRaw, { 来店: "visit", 対面: "visit", 訪問: "visit", ウェブ: "web", ホームページ: "web", 手紙: "mail", ハガキ: "mail", はがき: "mail", fax: "mail" }) : "phone";
     if (!channel) return add({ row, status: "error", label, message: `経路「${chRaw}」が分かりません (電話・来店・対面・郵送・メール・LINE・Web など)。` });
     const catRaw = get("category");
-    const category: ServiceCategory | undefined = catRaw ? pick(CATEGORY_LABEL, catRaw, { ふすま: "fusuma", しょうじ: "shoji", たたみ: "tatami", カーテン: "curtain", ブラインド: "curtain", クロス: "cloth", 壁紙: "cloth" }) : "other";
+    const category: ServiceCategory | undefined = catRaw ? pick(CATEGORY_LABEL, catRaw, { ふすま: "fusuma", しょうじ: "shoji", たたみ: "tatami", カーテン: "curtain", ブラインド: "curtain", クロス: "cloth", 壁紙: "cloth", リフォーム: "reform" }) : "other";
     if (!category) return add({ row, status: "error", label, message: `種別「${catRaw}」が分かりません (畳・襖・障子・網戸・カーテン・クロス・その他)。` });
     const stRaw = get("status");
     const status: InquiryStatus | undefined = stRaw ? pick(Object.fromEntries(Object.entries(INQUIRY_STATUS).map(([k, v]) => [k, v.label])) as Record<InquiryStatus, string>, stRaw, STATUS_ALIAS) : "new";

@@ -201,8 +201,16 @@ const DD = await imp("lib/day-docs.ts");
   const row = rowsStaff.find((r) => r.key === "o_rc1");
   ok(Boolean(row), "その日の納品の案件が並ぶ");
   eq([row?.invoiceIssue?.ok, row?.receipt?.wanted.wanted, row?.receipt?.canIssue, row?.quote?.canPrint], [false, true, false, true], "店舗スタッフ: 請求書は発行できない (店長・本部・管理者)・領収書は現金払いで「発行する」・見積書は出力できる");
+  // 売上登録 (請求書の発行) の前に作業の担当とポスティングを決める (お客様のご要望 2026-11-27「■3」)
+  const notReady = DD.dayDocRows(db(), u("u_rc_mgr"), today, S).find((r) => r.key === "o_rc1");
+  ok(notReady?.invoiceIssue?.ok === false && /ポスティング/.test(notReady?.invoiceIssue?.reason ?? ""), "担当者・ポスティングが未登録の案件は請求書を発行しない");
+  await store.mutate((x) => {
+    const o = x.orders.find((o) => o.id === "o_rc1");
+    o.workStaff = { survey: ["u_rc_staff"], pickup: ["u_rc_staff"], delivery: ["u_rc_staff"], install: [], none: ["install"], confirmedAt: now, confirmedBy: "u_rc_mgr" };
+    o.posting = { status: "none", entries: [], updatedAt: now, updatedBy: "u_rc_mgr" };
+  });
   const rowMgr = DD.dayDocRows(db(), u("u_rc_mgr"), today, S).find((r) => r.key === "o_rc1");
-  eq([rowMgr?.invoiceIssue?.ok, rowMgr?.invoiceIssue?.pre, rowMgr?.receipt?.canIssue], [true, true, true], "店長: 施工完了の前でも請求書を発行して印刷できる (事前発行)");
+  eq([rowMgr?.invoiceIssue?.ok, rowMgr?.invoiceIssue?.pre, rowMgr?.receipt?.canIssue], [true, true, true], "店長: 施工完了の前でも請求書を発行して印刷できる (事前発行。担当者・ポスティングを登録したあと)");
 
   // まとめて印刷 (店長): 請求書と領収書を発行してまとめる
   const r1 = await act(u("u_rc_mgr"), () => DDA.prepareDayDocs(form({ date: today, store: S, case: ["o_rc1"], "orderId:o_rc1": "o_rc1", "quoteId:o_rc1": "q_rc1", "invoice:o_rc1": "1", "receipt:o_rc1": "1", "rwDefault:o_rc1": "1", "method:o_rc1": "cash", "quote:o_rc1": "1" })));

@@ -12,6 +12,8 @@ import { DuplicateWatcher } from "@/components/features/DuplicateWatcher";
 import { PromotionSelect, type PromotionOption } from "@/components/ops-reports/MediaFields";
 import { CaseChoice } from "./CaseChoice";
 import { Button, Field, FormActions, Input, LinkButton, Select, Textarea } from "@/components/ui";
+import { StaffOptions } from "@/components/features/StaffOptions";
+import type { StaffChoiceGroup } from "@/lib/staff-choices";
 
 export interface InquiryFormCustomer {
   id: string;
@@ -55,7 +57,8 @@ export function InquiryForm({
   stores: { id: StoreId; name: string }[];
   userStoreId: StoreId;
   canChooseAny: boolean;
-  users: { id: string; label: string }[];
+  /** 担当者の選択肢 (施工店舗 → 本部 → ほかの店舗。src/lib/staff-choices.ts の staffChoiceGroups) */
+  users: StaffChoiceGroup[];
   defaultAssigneeId: string;
   promotions: PromotionOption[];
   /** お客様が多く、上の検索で候補を絞る画面 */
@@ -89,7 +92,7 @@ export function InquiryForm({
   const choice = loaded && (raw === "new" || [...loaded.open, ...loaded.past].some((c) => c.id === raw && c.canAdd)) ? raw : "new";
   const setCaseChoice = (v: string) => setChoices((m) => ({ ...m, [customerId]: v }));
   const option = loaded && choice !== "new" ? [...loaded.open, ...loaded.past].find((c) => c.id === choice) : undefined;
-  const owner = option?.ownerId && users.some((u) => u.id === option.ownerId) ? option.ownerId : undefined;
+  const owner = option?.ownerId && users.some((g) => g.users.some((u) => u.id === option.ownerId)) ? option.ownerId : undefined;
   const assignee = assigneePicked ?? owner ?? defaultAssigneeId;
   const mediaValue = media ?? option?.media ?? "";
 
@@ -192,12 +195,7 @@ export function InquiryForm({
         />
         <Field label="担当者">
           <Select name="assignedUserId" value={assignee} onChange={(e) => setAssigneePicked(e.target.value)}>
-            {users.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.label}
-                {u.id === owner ? " (案件の担当)" : ""}
-              </option>
-            ))}
+            <StaffOptions groups={users} mark={owner ? { [owner]: " (案件の担当)" } : undefined} />
           </Select>
         </Field>
       </div>

@@ -209,12 +209,14 @@ const C3 = { ...C1, id: "cust_t3", code: "C-90003", name: "地図 三郎", addre
 await store.mutate((d) => { d.customers.push(C3); d.orders.push({ ...mkOrder("ord_c3", "O-2099-0008", C3.id, C3.address, "paid"), closedAt: now }); }); // 全処理完了 = 進行中の案件ではない
 const r3 = await D.registerMapDocument({ user: koshiStaff, target: { type: "customer", id: C3.id }, file: { name: "幾久富.pdf", bytes: await makePdf("kikutomi map") }, meta: { provider: "zenrin", kind: "residential", licenseConfirmed: true }, source: "upload" });
 db = store.getDb();
-ok(!AC.canViewRecordMap(nishiStaff, db, "customer", C3.id) && !AC.canViewMapDocument(nishiStaff, db, r3.document), "policy open: other-store staff cannot open the PDF of a customer with only finished cases");
+// お客様のご要望 2026-11-27「■1」: 地図は所属店舗・担当・閲覧の範囲の設定に関係なく全社員が見られる (変更はできない)
+ok(AC.canViewRecordMap(nishiStaff, db, "customer", C3.id) && AC.canViewMapDocument(nishiStaff, db, r3.document) && !AC.canEditMapDocument(nishiStaff, db, r3.document), "all staff can open the map of any case (even finished, other store; view only)");
 ok(AC.canViewMapDocument(koshiStaff, db, r3.document) && AC.canEditMapDocument(koshiStaff, db, r3.document), "own-store staff can open and edit that PDF");
 ok(AC.canViewRecordMap(chuoStaff, db, "event", "ev_chuo"), "assigned staff of another store can view the event map");
 ok(AC.canViewMapDocument(chuoStaff, db, db.mapDocuments.find((d) => d.id === r2.document.id)), "…and open that PDF while assigned to an upcoming event there");
 const unassigned = db.users.find((u) => u.role === "store_staff" && u.storeId === "nishi" && u.active);
-ok(!AC.canViewRecordMap(unassigned, db, "event", "ev_case"), "unassigned staff of another store cannot view event map");
+ok(AC.canViewRecordMap(unassigned, db, "event", "ev_case") && !AC.canEditRecordMap(unassigned, db, "event", "ev_case"), "unassigned staff of another store can view the event map (all staff) but cannot register maps");
+ok(!AC.canViewRecordMap({ ...unassigned, active: false }, db, "event", "ev_case"), "inactive accounts cannot view maps");
 ok(AC.canViewMapDocument(admin, db, r6.document), "admin can view all");
 ok(perms.canRemoveMapDocument(koshiStaff, r6.document), "uploader can remove");
 ok(!perms.canRemoveMapDocument(chuoStaff, r6.document), "other-store staff cannot remove");
@@ -227,7 +229,7 @@ db = store.getDb();
 ok(AC.canViewMapDocument(chuoStaff, db, r3.document) && AC.canEditLocation(chuoStaff, db, R.placeOf(db, "customer", C3.id).location), "assigned to an upcoming appointment at a finished customer's house → can open and update that map");
 await store.mutate((d) => { d.schedule.find((e) => e.id === "ev_c3").date = past; });
 db = store.getDb();
-ok(!AC.canViewMapDocument(chuoStaff, db, r3.document) && !AC.canEditLocation(chuoStaff, db, R.placeOf(db, "customer", C3.id).location), "assignment-based access ends after the appointment date");
+ok(AC.canViewMapDocument(chuoStaff, db, r3.document) && !AC.canEditLocation(chuoStaff, db, R.placeOf(db, "customer", C3.id).location), "after the appointment date: still viewable (all staff) but no longer editable via the assignment");
 await store.mutate((d) => { d.schedule = d.schedule.filter((e) => e.id !== "ev_c3"); });
 db = store.getDb();
 // 閲覧の範囲 = 全社員 (初期設定): 全店舗の地図を閲覧のみで見られる

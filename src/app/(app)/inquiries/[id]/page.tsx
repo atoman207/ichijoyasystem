@@ -10,7 +10,8 @@ import Link from "@/components/ui/Link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
-import { staffForStore } from "@/lib/staff-choices";
+import { staffChoiceGroups } from "@/lib/staff-choices";
+import { StaffOptions } from "@/components/features/StaffOptions";
 import { areaStoreOf } from "@/lib/store-area";
 import { canAccessStore, canDeleteInquiryDirect, canEditCaseStore, canRequestInquiryDelete, canRestoreInquiry, canSeeAllStores, canViewAuditEntry } from "@/lib/auth/permissions";
 import { userName } from "@/lib/db/queries";
@@ -65,8 +66,6 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   const delMode = deleted || info.access !== "edit" ? undefined : canDeleteInquiryDirect(user, inq.storeId) ? ("direct" as const) : canRequestInquiryDelete(user, inq.storeId) ? ("request" as const) : undefined;
   const delBlocked = delMode ? inquiryDeleteBlocker(db, inq) : undefined;
   const delPending = pendingInquiryDelete(db, inq.id);
-  // 担当者の選択肢: 担当店舗の社員 + 本部の社員 (全店舗共通。お客様のご要望 2026-11-24「④」)
-  const users = canSeeAllStores(user) ? db.users.filter((u) => u.active) : staffForStore(db, inq.storeId, [inq.assignedUserId]);
   // 住所 (お客様の住所・受付で聞いた住所) の担当エリアの店舗 (お客様のご要望 2026-11-24「③」。src/lib/store-area.ts)
   const areaStore = areaStoreOf(db, inquiryContact(inq, customer).address);
   const isAiChannel = (ch: string) => ch === "ai_phone" || ch === "ai_chat" || ch === "ai_voice";
@@ -386,8 +385,8 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
                 </Select>
               </Field>
               <Field label="担当者">
-                <Select name="assignedUserId" defaultValue={inq.assignedUserId}>
-                  {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                <Select name="assignedUserId" defaultValue={inq.assignedUserId ?? "none"}>
+                  <StaffOptions groups={staffChoiceGroups(db, inq.storeId, [inq.assignedUserId])} />
                 </Select>
               </Field>
               <Field

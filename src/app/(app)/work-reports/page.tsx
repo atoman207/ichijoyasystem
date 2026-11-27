@@ -165,8 +165,22 @@ export default async function WorkReportsPage({ searchParams }: { searchParams: 
                 </thead>
                 <tbody>
                   {report.days.map((d) => {
-                    const lines = [...d.flyers, { distributor: "", userIds: [], copies: 0, area: "" }];
-                    return lines.map((f, i) => (
+                    // 受注のポスティングの実績 (受注の画面で登録。ここでは変えない) は読むだけ。手入力の行だけを送る
+                    const fromOrders = d.flyers.filter((f) => f.orderId);
+                    const lines = [...d.flyers.filter((f) => !f.orderId), { distributor: "", userIds: [], copies: 0, area: "" }];
+                    const orderRows = fromOrders.map((f, i) => (
+                      <tr key={`${d.date}-o${i}`} className="text-ink-2">
+                        <td />
+                        <td />
+                        <td className="px-2 py-1">{f.distributor}</td>
+                        <td className="px-2 py-1 text-right tnum">{f.copies.toLocaleString("ja-JP")}</td>
+                        <td className="px-2 py-1">{f.area ?? ""}</td>
+                        <td className="px-2 py-1 text-[11px] text-ink-3">
+                          受注 <Link href={`/orders/${f.orderId}#work-staff`} className="text-accent hover:underline">{f.orderNumber}</Link> のポスティング
+                        </td>
+                      </tr>
+                    ));
+                    const manualRows = lines.map((f, i) => (
                       <tr key={`${d.date}-${i}`} className={i === 0 ? "border-t border-line" : ""}>
                         {i === 0 && (
                           <td rowSpan={lines.length} className={`px-2 py-1 align-top whitespace-nowrap tnum ${d.weekday === 0 ? "text-critical" : d.weekday === 6 ? "text-info" : ""}`}>
@@ -189,6 +203,7 @@ export default async function WorkReportsPage({ searchParams }: { searchParams: 
                         )}
                       </tr>
                     ));
+                    return [...manualRows, ...orderRows];
                   })}
                 </tbody>
               </table>

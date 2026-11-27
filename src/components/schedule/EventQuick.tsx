@@ -270,13 +270,21 @@ function StaffDot({ s, size = "sm" }: { s: Pick<QuickStaff, "id" | "name" | "ava
 
 const GROUP_LABEL = (storeName: string) => ({ store: `${storeName} (この予定の店舗)`, common: "本部 (全店舗共通)", other: "ほかの店舗 (配送・施工の応援)" });
 
-/** 担当者を選ぶ (予定の店舗の社員を先に、本部・ほかの店舗の社員も選べる。最大 4 名) */
+/** 担当者を選ぶ (予定の店舗の社員を先に、本部・ほかの店舗の社員も選べる。最大 QUICK_MAX_ASSIGNEES 名。「なし」= 担当者を決めない。お客様のご要望 2026-11-27「■2」) */
 export function StaffPicker({ staff, selected, onChange, storeName, busy }: { staff: QuickStaff[]; selected: string[]; onChange: (ids: string[]) => void; storeName: string; busy?: ConflictReport["busy"] }) {
   const full = selected.length >= QUICK_MAX_ASSIGNEES;
   const labels = GROUP_LABEL(storeName);
   const toggle = (id: string) => onChange(selected.includes(id) ? selected.filter((x) => x !== id) : full ? selected : [...selected, id]);
   return (
     <div className="mt-1.5 space-y-1.5 rounded-xl border border-line bg-panel p-2" data-testid="staff-picker">
+      <button
+        type="button"
+        onClick={() => onChange([])}
+        aria-pressed={selected.length === 0}
+        className={clsx("inline-flex items-center rounded-full border border-dashed px-2.5 py-0.5 text-xs transition", selected.length === 0 ? "border-accent bg-accent-soft font-medium text-accent-ink" : "border-line bg-panel text-ink-2 hover:border-accent/50")}
+      >
+        なし (担当者を決めない)
+      </button>
       {(["store", "common", "other"] as const).map((g) => {
         const list = staff.filter((s) => s.group === g);
         if (!list.length) return null;
@@ -407,13 +415,13 @@ function AssigneeRow({ data, returnTo }: { data: EventQuickData; returnTo: strin
           <ConflictNote report={report} />
           {data.handover && <p className="text-[11px] text-ink-3">受注の引取・納品と連動する予定です。担当者はこの予定だけ変わります (日程の申請はいりません)。</p>}
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="submit" size="sm" disabled={sel.length === 0}>
+            <Button type="submit" size="sm">
               担当者を保存
             </Button>
             <button type="button" onClick={() => setSel(data.assigneeIds)} className="text-xs text-ink-2 hover:underline">
               元に戻す
             </button>
-            {sel.length === 0 && <span className="text-[11px] text-critical-ink">1 人以上選んでください</span>}
+            {sel.length === 0 && <span className="text-[11px] text-ink-3">担当者: なし (未定)</span>}
           </div>
         </form>
       )}
@@ -498,7 +506,7 @@ function DeliveryForm({ data, returnTo, onCancel }: { data: EventQuickData; retu
       <ConflictNote report={report} label="重複を承知で登録する" />
       <p className="text-[11px] text-ink-3">{pair.addMode === "order" ? "受注の引取・納品の日程にこの品目の納品日を入れ、予定表に納品の予定を作ります。" : "同じ案件の納品の予定として予定表に登録します。"}</p>
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" size="sm" disabled={!date || sel.length === 0}>
+        <Button type="submit" size="sm" disabled={!date}>
           <CalendarPlus />
           納品予定を登録
         </Button>
@@ -1399,7 +1407,7 @@ function NewCaseBlock({ data, returnTo }: { data: EventQuickData; returnTo: stri
           )}
         </fieldset>
         <p className="text-[11px] leading-relaxed text-ink-3">問い合わせとして登録し、担当店舗・本部・管理者に知らせます。見積・受注はこの案件の画面から作れます。</p>
-        <Button type="submit" size="sm" disabled={Boolean(date) && sel.length === 0} data-testid="new-case-submit">
+        <Button type="submit" size="sm" data-testid="new-case-submit">
           <CalendarPlus />
           新しい案件を登録
         </Button>

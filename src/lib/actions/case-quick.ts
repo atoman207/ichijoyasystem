@@ -189,7 +189,6 @@ export async function quickNewCase(formData: FormData) {
   const db0 = getDb();
   const active = new Set(db0.users.filter((u) => u.active).map((u) => u.id));
   const assigneeIds = [...new Set(formData.getAll("assigneeIds").map(String))].filter((a) => active.has(a)).slice(0, QUICK_MAX_ASSIGNEES);
-  if (date && !assigneeIds.length) fail(ret, "予定の担当者を 1 人以上選んでください (予定を登録しないときは日付を空にしてください)。");
   const customer = db0.customers.find((c) => c.id === str(formData, "customerId"));
   if (!customer) fail(ret, "お客様が見つかりません。");
   if (!canLinkToCustomer(db0, user, customer)) fail(ret, "このお客様は閲覧の範囲の外のため、案件を登録できません。");

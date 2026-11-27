@@ -20,10 +20,11 @@ import { propagateOrderSite } from "@/lib/maps/store";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
 import { closedReason } from "@/lib/mgmt/close";
 import { usesBatchBilling } from "@/lib/billing";
-import type { Database, Order, OrderWorkStaff, User } from "@/lib/db/types";
+import type { Database, Order, OrderPosting, OrderWorkStaff, User } from "@/lib/db/types";
 import { WORK_ROLES, WORK_ROLE_LABEL, deliveryStaffOf, sameWorkStaff, workStaffFromForm, workStaffOf } from "@/lib/work-staff";
 import { addChangeNotice, caseTarget } from "@/lib/change-notices";
 import { safeReturn } from "./guards";
+import { postingFromForm, postingLabel, roleLabels, salesReadiness, undecidedRoles, workStaffNoneFromForm } from "@/lib/sales-ready";
 
 /**
  * 作業の担当 (実績) を受注に保存する (mutate の中)。施工完了・売上確定の後なら確かめた日時を残す (confirmed)。
@@ -71,12 +72,49 @@ function applyWorkStaff(db: Database, user: User, o: Order, next: Omit<OrderWork
   return changedRoles.length;
 }
 
+/** ポスティングの実績を保存する (mutate の中。変わったときだけ変更履歴) */
+function applyPosting(db: Database, user: User, o: Order, next: OrderPosting, note = "") {
+  const name = (id: string) => db.users.find((u) => u.id === id)?.name ?? "-";
+  const before = postingLabel(o.posting, name);
+  const after = postingLabel(next, name);
+  const same = before === after && (o.posting?.date ?? "") === (next.date ?? "") && (o.posting?.area ?? "") === (next.area ?? "");
+  o.posting = next;
+  o.updatedAt = next.updatedAt;
+  if (same) return;
+  addAudit(db, { userId: user.id, action: "update", entity: "order", entityId: o.id, entityLabel: o.number, summary: `ポスティングを登録: ${after}${next.area ? ` (${next.area})` : ""}${note ? ` ${note}` : ""}`, storeId: o.storeId, changes: [{ field: "posting", before, after }] });
+}
+
+/**
+ * フォームの作業の担当 (workStaff.<役割>・workStaff.<役割>.none) とポスティング (posting.*) を受注に入れる (mutate の中)。
+ * require = 売上登録 (施工完了・請求書の発行): 作業ごとに担当者か「なし」・ポスティングの枚数か「配れてない」がそろわなければ断る
+ * (お客様のご要望 2026-11-27「■3」。src/lib/sales-ready.ts)
+ */
+function applyStaffAndPosting(db: Database, user: User, o: Order, fd: FormData, back: string, opts: { require: boolean; confirm: boolean; note?: string }) {
+  const active = new Set(db.users.filter((u) => u.active).map((u) => u.id));
+  if (str(fd, "workStaffSent") === "1") {
+    const base = workStaffFromForm(fd, active);
+    const next = { ...base, none: workStaffNoneFromForm(fd).filter((r) => !base[r].length) };
+    const gaps = undecidedRoles(next);
+    if (opts.require && gaps.length) fail(back, `${roleLabels(gaps)}の担当者を選ぶか「なし」を選んでください (売上登録の前に作業の担当を確定します)。`);
+    applyWorkStaff(db, user, o, next, { confirm: opts.confirm && !gaps.length, note: opts.note });
+  }
+  const pr = postingFromForm(fd, active, user.id, nowIso());
+  if (pr.error) fail(back, pr.error);
+  if (pr.posting) applyPosting(db, user, o, pr.posting, opts.note);
+  if (opts.require) {
+    const r = salesReadiness(o);
+    if (!r.ok) fail(back, r.reason ?? "作業の担当とポスティングを登録してください。");
+  }
+}
+
 /** 作業の担当 (現地見積・引取・納品・施工。複数可) を変える (受注の画面の「作業の担当」。お客様のご要望 2026-11-25「④」) */
 export async function saveWorkStaff(id: string, formData: FormData) {
   const user = await requireActionUser();
   const ret = safeReturn(str(formData, "returnTo"), `/orders/${id}#work-staff`);
   let changed = 0;
   let confirm = false;
+  let gapsText = "";
+  let postingOk = false;
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
@@ -85,14 +123,28 @@ export async function saveWorkStaff(id: string, formData: FormData) {
     const lock = completedCaseLock(db, user, o);
     if (lock.locked) fail(ret, completedLockMessage(lock.reason));
     const active = new Set(db.users.filter((u) => u.active).map((u) => u.id));
-    const next = workStaffFromForm(formData, active);
-    if (o.workStaff && sameWorkStaff(o.workStaff, next)) fail(ret, "変更はありませんでした。");
-    confirm = ["completed", "invoiced", "paid"].includes(o.status);
-    changed = applyWorkStaff(db, user, o, next, { confirm });
+    const base = workStaffFromForm(formData, active);
+    const next = { ...base, none: workStaffNoneFromForm(formData).filter((r) => !base[r].length) };
+    const gaps = undecidedRoles(next);
+    // 作業ごとに担当者か「なし」を決めたら確定 (売上登録・請求書の発行の条件。お客様のご要望 2026-11-27「■3」)
+    confirm = !gaps.length;
+    const sameStaff = Boolean(o.workStaff && sameWorkStaff(o.workStaff, next) && [...(o.workStaff.none ?? [])].sort().join() === [...next.none].sort().join() && Boolean(o.workStaff.confirmedAt) === confirm);
+    const strip = (p?: OrderPosting) => (p ? JSON.stringify({ ...p, updatedAt: "", updatedBy: "" }) : "");
+    const prevPosting = strip(o.posting);
+    if (!sameStaff) changed = applyWorkStaff(db, user, o, next, { confirm });
+    const pr = postingFromForm(formData, active, user.id, nowIso());
+    if (pr.error) fail(ret, pr.error);
+    if (pr.posting) applyPosting(db, user, o, pr.posting);
+    const postingChanged = Boolean(pr.posting) && strip(pr.posting) !== prevPosting;
+    if (sameStaff && !postingChanged) fail(ret, "変更はありませんでした。");
+    gapsText = gaps.length ? roleLabels(gaps) : "";
+    postingOk = salesReadiness(o).posting;
   });
   revalidatePath(`/orders/${id}`);
   revalidatePath("/kpi");
-  redirect(withMsg(ret, `作業の担当を${confirm ? "確定" : "保存"}しました${changed ? ` (${changed} 件の作業の担当を変更)` : ""}。${confirm ? "この担当をインセンティブ (アンケートの担当) と経営の集計に使います。" : "施工完了のときにもう一度確かめられます。"}`));
+  revalidatePath("/work-reports");
+  const rest = [gapsText ? `${gapsText}の担当者 (いなければ「なし」)` : "", !postingOk ? "ポスティング" : ""].filter(Boolean);
+  redirect(withMsg(ret, `作業の担当・ポスティングを保存しました${changed ? ` (${changed} 件の作業の担当を変更)` : ""}。${confirm ? "作業の担当を確定しました (インセンティブ・経営の集計・作業日報に使います)。" : ""}${rest.length ? `売上登録 (施工完了・請求書の発行) の前に、${rest.join("と")}を登録してください。` : "売上登録・請求書の発行ができます。"}`));
 }
 
 /** 施工予定 (施工期間・時間帯・施工担当・現場住所) を設定し、予定表の「施工」の予定と連動させる */
@@ -195,11 +247,9 @@ export async function completeOrder(id: string, formData: FormData) {
     o.completedAt = date;
     o.salesDate = date;
     o.updatedAt = nowIso();
-    // 作業の担当 (現地見積・引取・納品・施工) を確かめて残す (お客様のご要望 2026-11-25「④ 施工完了・売上確定時の担当者を正しいデータとして」)
-    if (str(formData, "workStaffSent") === "1") {
-      const active = new Set(db.users.filter((u) => u.active).map((u) => u.id));
-      applyWorkStaff(db, user, o, workStaffFromForm(formData, active), { confirm: true, note: "(施工完了の登録)" });
-    }
+    // 作業の担当 (現地見積・引取・納品・施工) を確かめて残す (お客様のご要望 2026-11-25「④ 施工完了・売上確定時の担当者を正しいデータとして」)。
+    // 担当者とポスティングがそろわなければ売上に計上しない (お客様のご要望 2026-11-27「■3」)
+    applyStaffAndPosting(db, user, o, formData, back, { require: true, confirm: true, note: "(施工完了の登録)" });
     o.progressNotes.push({ id: newId("pn"), at: nowIso(), userId: user.id, kind: "complete", body: str(formData, "body") || "施工完了。お客様確認済み。" });
     addAudit(db, { userId: user.id, action: "status", entity: "order", entityId: id, entityLabel: o.number, summary: `施工完了を登録 (売上計上日 ${date} / ¥${o.total.toLocaleString("ja-JP")})`, storeId: o.storeId });
   });
@@ -220,6 +270,8 @@ export async function createInvoiceFromOrder(id: string, formData: FormData) {
     assertStore(user, o.storeId, back);
     if (o.status !== "completed") fail(back, "施工完了後に請求書を発行できます (納品・施工の日にお渡しする請求書は、予定表の「帳票をまとめて印刷」で発行できます)。");
     if (o.invoiceId) fail(back, "すでに請求書が発行されています。");
+    // 担当者とポスティングを同じ画面で確定してから発行する (お客様のご要望 2026-11-27「■3」)
+    applyStaffAndPosting(db, user, o, formData, `${back}#invoice`, { require: true, confirm: true, note: "(請求書の発行)" });
     const customer = db.customers.find((c) => c.id === o.customerId);
     const today = toDateKey(new Date());
     const dueDays = Number(str(formData, "dueDays")) || (customer?.type === "corporate" ? 30 : 14);

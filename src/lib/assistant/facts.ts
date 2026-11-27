@@ -73,7 +73,7 @@ export interface OrderFact {
 
 const EMPTY_AMOUNTS = (): OrderAmounts => ({ tatami: 0, fusuma: 0, shoji: 0, amido: 0, curtain: 0, cloth: 0, own: 0, misc: 0, discount: 0 });
 
-const CATEGORY_TO_AMOUNT: Record<string, AmountKey> = { tatami: "tatami", fusuma: "fusuma", shoji: "shoji", amido: "amido", curtain: "curtain", cloth: "cloth", other: "misc" };
+const CATEGORY_TO_AMOUNT: Record<string, AmountKey> = { tatami: "tatami", fusuma: "fusuma", shoji: "shoji", amido: "amido", curtain: "curtain", cloth: "cloth", reform: "cloth", other: "misc" };
 
 const num = (s: string) => Number(s.replace(/,/g, ""));
 const ITEM_RE = /^(\S+)\s+(.*?)\s*(-?\d+(?:\.\d+)?)×¥(-?[\d,]+)=¥(-?[\d,]+)$/;

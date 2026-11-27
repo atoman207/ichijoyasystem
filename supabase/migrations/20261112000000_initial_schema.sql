@@ -238,7 +238,8 @@ create table if not exists orders (
   receipt_name text,
   handovers jsonb,
   tatami_rooms jsonb,
-  work_staff jsonb
+  work_staff jsonb,
+  posting jsonb
 );
 comment on table orders is '受注・施工 (売上)';
 
@@ -1992,6 +1993,7 @@ alter table orders add column if not exists receipt_name text;
 alter table orders add column if not exists handovers jsonb;
 alter table orders add column if not exists tatami_rooms jsonb;
 alter table orders add column if not exists work_staff jsonb;
+alter table orders add column if not exists posting jsonb;
 alter table invoices add column if not exists number text not null unique;
 alter table invoices add column if not exists order_id text not null references orders(id);
 alter table invoices add column if not exists customer_id text not null references customers(id);

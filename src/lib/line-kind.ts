@@ -113,6 +113,7 @@ function kindOfProduct(category: string | undefined): LineInfo | undefined {
     case "curtain":
       return { kind: category };
     case "cloth":
+    case "reform":
       return { kind: "reform" };
   }
   return undefined;

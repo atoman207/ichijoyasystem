@@ -208,7 +208,14 @@ export function CaseWorkSection({ work, eventId, returnTo: listReturn, onReload 
                   {docs.invoiceIssue.pre && <span className="text-[11px] text-ink-3">施工完了の前に発行します (納品・施工の日にお渡し。売上は施工完了の日)。</span>}
                 </form>
               ) : (
-                <p className="text-[11px] text-ink-3">請求書は未発行です{docs.invoiceIssue.reason ? ` (${docs.invoiceIssue.reason})` : ""}。</p>
+                <p className="text-[11px] text-ink-3">
+                  請求書は未発行です{docs.invoiceIssue.reason ? ` (${docs.invoiceIssue.reason})` : ""}。
+                  {docs.invoiceIssue.needsSetup && (
+                    <a href={`/orders/${docs.invoiceIssue.orderId}?returnTo=${encodeURIComponent(returnTo)}#work-staff`} className="ml-1 font-medium text-accent underline">
+                      作業の担当・ポスティングを登録する
+                    </a>
+                  )}
+                </p>
               ))}
             {docs.receipt && (
               <div className="space-y-1.5 rounded-lg border border-line p-2">

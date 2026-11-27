@@ -161,7 +161,11 @@ const hqUser = db().users.find((u) => u.active && u.storeId === "hq");
 const list = SC.staffForStore(db(), manager.storeId);
 ok(hqUser && SC.isCommonStaff(db(), hqUser) && !SC.isCommonStaff(db(), manager), "本部の社員 = 全店舗共通");
 ok(list.some((u) => u.id === hqUser.id) && list.filter((u) => u.storeId === manager.storeId).length > 0 && list[0].storeId === manager.storeId, "店舗の選択肢: 店舗の社員が先、本部の社員も出る");
-ok(!list.some((u) => u.storeId === other.id), "ほかの店舗の社員は出さない (今の担当を除く)");
+// お客様のご要望 2026-11-27「■2」: ほかの店舗の社員も選べる (施工店舗 → 本部 → ほかの店舗の順)
+const firstOther = list.findIndex((u) => u.storeId === other.id);
+ok(firstOther > list.findLastIndex((u) => u.storeId === manager.storeId) && firstOther > list.findIndex((u) => u.id === hqUser.id), "ほかの店舗の社員も出す (施工店舗・本部の社員の後)");
+const groups = SC.staffChoiceGroups(db(), manager.storeId);
+ok(groups[0].primary && groups[0].storeId === manager.storeId && /施工店舗/.test(groups[0].label) && groups.some((g) => g.storeId === other.id), "選択肢のまとまり: 施工店舗が先頭・ほかの店舗も");
 const otherMember = db().users.find((u) => u.active && u.storeId === other.id);
 ok(SC.staffForStore(db(), manager.storeId, [otherMember.id]).some((u) => u.id === otherMember.id), "今の担当 (ほかの店舗) は残す");
 

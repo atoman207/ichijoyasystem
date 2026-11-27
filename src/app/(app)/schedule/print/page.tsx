@@ -131,7 +131,14 @@ export default async function SchedulePrintPage({ searchParams }: { searchParams
                           発行して印刷 ({yen(r.order.total)}{r.invoiceIssue.pre ? " · 施工完了の前に発行" : ""})
                         </label>
                       ) : (
-                        <p className="text-ink-3">未発行 · {r.invoiceIssue?.reason}</p>
+                        <p className="text-ink-3">
+                          未発行 · {r.invoiceIssue?.reason}
+                          {r.invoiceIssue?.needsSetup && r.order && (
+                            <Link href={`/orders/${r.order.id}#work-staff`} className="ml-1 font-medium text-accent underline">
+                              作業の担当・ポスティングを登録
+                            </Link>
+                          )}
+                        </p>
                       )
                     ) : (
                       <p className="text-ink-3">受注の前の案件です</p>

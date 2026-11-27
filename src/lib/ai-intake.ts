@@ -242,6 +242,7 @@ const CATEGORY_WORDS: [ServiceCategory, RegExp][] = [
   ["amido", /網戸|あみど|アミド/],
   ["curtain", /カーテン|ブラインド/],
   ["cloth", /クロス|壁紙/],
+  ["reform", /リフォーム|フローリング|クッションフロア|内装|改装|改修/],
 ];
 
 function categoryOf(input: IntakeInput): ServiceCategory {

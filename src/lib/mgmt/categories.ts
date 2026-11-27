@@ -53,6 +53,7 @@ export const ORDER_CATEGORY_TO_ITEM: Record<Order["category"], string> = {
   amido: "fusuma",
   curtain: "curtain",
   cloth: "reform",
+  reform: "reform",
   other: "other",
 };
 
@@ -60,7 +61,7 @@ export const ORDER_CATEGORY_TO_ITEM: Record<Order["category"], string> = {
  * 見積・問い合わせの種別 (ServiceCategory) → 管理会計の品目。商品・明細の品目の既定に使う
  * (「その他」は諸経費: 売上の分析 facts.ts で種別「その他」の明細を「諸経費・雑工事」に入れているのと同じ)
  */
-export const SERVICE_TO_ITEM: Record<ServiceCategory, string> = { tatami: "tatami", fusuma: "fusuma", shoji: "fusuma", amido: "fusuma", curtain: "curtain", cloth: "reform", other: "misc" };
+export const SERVICE_TO_ITEM: Record<ServiceCategory, string> = { tatami: "tatami", fusuma: "fusuma", shoji: "fusuma", amido: "fusuma", curtain: "curtain", cloth: "reform", reform: "reform", other: "misc" };
 
 /** 品目の ID として使えるか (既定の 7 区分と、設定で足した品目) */
 export function isItemCategory(db: Pick<Database, "itemCategories">, id: string | undefined): id is string {
