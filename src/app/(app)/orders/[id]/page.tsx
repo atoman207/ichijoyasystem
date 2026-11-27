@@ -6,6 +6,7 @@ import { getDb } from "@/lib/db/store";
 import { staffChoiceGroups, staffForStore } from "@/lib/staff-choices";
 import { postingLabel, salesReadiness } from "@/lib/sales-ready";
 import { PostingFields } from "@/components/features/PostingFields";
+import { MaterialOrdersCard } from "@/components/material-orders/MaterialOrdersCard";
 import { areaStoreOf } from "@/lib/store-area";
 import { canAccessStore, canEditProduction, canManageFinance, canManagePurchaseOrders, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
 import { TatamiRoomsCard } from "@/components/schedule/TatamiRoomsCard";
@@ -65,6 +66,9 @@ import { OrderCasePostsCard } from "@/components/case-posts/CasePostParts";
 import { batchTerms, closingDateCovering, isBatchInvoice, termsText } from "@/lib/billing";
 
 const STEPS = ["pending_approval", "confirmed", "scheduled", "in_progress", "completed", "invoiced", "paid"] as const;
+
+// 材料の発注の「手書きの発注一覧を撮影して読み取る」(AI) のため
+export const maxDuration = 60;
 
 export default async function OrderDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ msg?: string; err?: string; returnTo?: string }> }) {
   const { id } = await params;
@@ -382,6 +386,9 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               </details>
             )}
           </Card>
+
+          {/* 材料の発注 (お客様のご要望 2026-11-27「■5」。材料発注の一覧と同じデータ・同じ操作) */}
+          <MaterialOrdersCard db={db} user={user} orderIds={[o.id]} returnTo={`/orders/${o.id}`} />
 
           <CasePlanCard recordType="order" recordId={o.id} user={user} />
           <CaseScheduleCard

@@ -158,3 +158,50 @@ export interface TatamiProductionEvent {
   to?: string;
   note?: string;
 }
+
+/* ================================================================== */
+/* 材料発注 (お客様のご要望 2026-11-27「■4〜■6」。src/lib/material-orders)                         */
+/* ================================================================== */
+
+/** 発注状況: 未発注 / 発注済み / 在庫使用 / 別途発注 (リフォームの細かな材木など) / 発注不要 (材工共で外部の業者に頼むときなど) */
+export type MaterialOrderStatus = "unordered" | "ordered" | "stock" | "separate" | "not_needed";
+/** 材料の品目 (襖紙・カーテン・クロスは受注から自動。リフォームは案件ごとに手入力・写真の読み取り) */
+export type MaterialOrderCategory = "fusuma" | "curtain" | "cloth" | "reform" | "tatami" | "shoji" | "amido" | "other";
+
+/**
+ * 材料発注の行。受注から自動で出す行 (襖紙・カーテン・クロス) は人が決めたこと (状況・発注者・発注数量・メモ) だけを保存する
+ * (key = auto:<受注 ID>:<明細 ID>:<品番の番号>)。案件にひも付かない在庫補充・リフォームの手配・手書きの発注一覧の読み取りは行ごと保存 (key なし)
+ */
+export interface MaterialOrder {
+  id: string;
+  /** 受注から自動で出す行の印 (手入力・読み取りの行は空) */
+  key?: string;
+  /** 案件 (受注)。在庫補充は空 */
+  orderId?: string;
+  storeId: StoreId;
+  category: MaterialOrderCategory;
+  /** 材料名 (例: 襖紙 のぞみ) */
+  name: string;
+  /** 品番 (例: のぞみ177) */
+  code?: string;
+  /** 自動で計算した必要数量 (保存したときの値。見積の数量が変わったかを確かめる) */
+  qtyAuto?: number;
+  /** 発注する数量 (手で変えた値。空 = 自動の必要数量) */
+  qty?: number;
+  unit?: string;
+  /** 寸法・施工箇所・仕様 */
+  spec?: string;
+  status: MaterialOrderStatus;
+  /** 発注先・外注業者 */
+  supplierName?: string;
+  /** 必要な日 (リフォームの手配など。空 = 案件の納品・工事の日) */
+  neededBy?: string;
+  orderedBy?: string;
+  orderedAt?: string;
+  note?: string;
+  source: "auto" | "manual" | "ai";
+  createdBy: string;
+  createdAt: string;
+  updatedBy?: string;
+  updatedAt: string;
+}

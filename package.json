@@ -42,6 +42,7 @@
     "test:sales": "node scripts/tests/sales/reconcile.test.mjs",
     "test:case-access": "node scripts/tests/case-access/case-access.test.mjs",
     "test:posts-tidy": "node scripts/tests/posts-tidy/posts-tidy.test.mjs",
+    "test:materials": "node scripts/tests/materials/material-orders.test.mjs",
     "test:finance": "node scripts/tests/finance/finance.test.mjs && node scripts/tests/finance/receipts.test.mjs && node scripts/tests/finance/sales-ready.test.mjs",
     "test:carryover": "node scripts/tests/carryover/carryover.test.mjs",
     "test:chat": "node scripts/tests/chat/chat.test.mjs && node scripts/tests/chat/carryover.test.mjs",

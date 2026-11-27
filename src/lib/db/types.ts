@@ -15,7 +15,7 @@ import type { AttendanceDay, AttendanceLine, AttendanceMonth, AttendanceRequest,
 export type * from "./types-hr";
 import type { Condolence, OfficeImprovement } from "./types-office";
 export type * from "./types-office";
-import type { MediaKey, Promotion, TatamiProduction, WorkReportDay } from "./types-ops";
+import type { MaterialOrder, MediaKey, Promotion, TatamiProduction, WorkReportDay } from "./types-ops";
 export type * from "./types-ops";
 import type { DocDraft } from "./types-drafts";
 export type * from "./types-drafts";
@@ -1953,6 +1953,8 @@ export interface Database {
   promotions: Promotion[];
   /* 畳製造予定 (types-ops.ts。src/lib/production) */
   tatamiProduction: TatamiProduction[];
+  /* 材料発注 (types-ops.ts。src/lib/material-orders) */
+  materialOrders: MaterialOrder[];
   /* 事務 (types-office.ts。事務改善シート・慶弔リスト) */
   officeImprovements: OfficeImprovement[];
   condolences: Condolence[];

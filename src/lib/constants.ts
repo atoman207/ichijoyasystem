@@ -410,6 +410,7 @@ export const ENTITY_LABEL: Record<string, string> = {
   leave_grant: "有給の付与",
   work_report: "作業日報",
   production: "畳製造予定",
+  material_order: "材料発注",
   holiday: "休日カレンダー",
   promotion: "販促の記録",
   office_improvement: "事務改善シート",

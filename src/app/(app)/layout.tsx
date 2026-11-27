@@ -29,6 +29,8 @@ import { docDraftAttention } from "@/lib/doc-drafts";
 import { casePostAttention } from "@/lib/case-posts";
 import { pendingReceptionIds } from "@/lib/reception";
 import { seenKey } from "@/lib/notify-seen";
+import { materialRows } from "@/lib/material-orders/plan";
+import { canViewMaterialOrders } from "@/lib/auth/permissions";
 import { INBOUND_BELL_DAYS, INBOUND_CHANNEL_LABEL, inboundBellGroups, inboundForUser, inboundLine, inboundListHref } from "@/lib/inbound/feed";
 import { chatState } from "@/lib/chat/inbox";
 import { prefsOf } from "@/lib/chat/repo";
@@ -53,6 +55,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   // ヘッダーの数字は確認していない記録の数だけを出す (記録ごとのキー。src/lib/notify-seen.ts・AppShell)
   const approvalKeys = n.pendingApprovals.map((a) => seenKey("apv", a.id));
   const inquiryKeys = n.newInquiryIds.map((id) => seenKey("inq", id));
+  const materialKeys = canViewMaterialOrders(user) ? materialRows(getDb(), toDateKey(new Date()), { storeId: canSeeAllStores(user) ? "all" : user.storeId }).filter((r) => r.status === "unordered").map((r) => seenKey("mo", r.key)) : [];
   const receptionKeys = pendingReceptionIds(getDb(), user).map((id) => seenKey("rcp", id));
   const invoiceKeys = n.overdueInvoiceIds.map((id) => seenKey("inv", id));
   const conflictKeys = [...new Set(n.conflictPairs)].map((pair) => seenKey("cf", pair));
@@ -88,6 +91,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     { href: "/cases", label: "案件の進捗 (問い合わせ〜入金・全処理完了)", short: "案件進捗", icon: "cases", group: "営業・施工" },
     { href: "/schedule", label: "予定表", icon: "schedule", group: "営業・施工", badge: conflictKeys.length || undefined, seenKeys: conflictKeys, pinned: true },
     { href: "/work-reports", label: "作業日報 (引取・納品の件数・枚数の月次集計)", short: "作業日報", icon: "workReport", group: "営業・施工" },
+    // 材料発注 (お客様のご要望 2026-11-27「■4」): 数字 = 未発注の材料 (自店舗。本部・管理者は全店舗)
+    { href: "/material-orders", label: "材料発注 (襖紙・カーテン・クロス・リフォームの手配・在庫補充)", short: "材料発注", icon: "materialOrders", group: "営業・施工", badge: materialKeys.length || undefined, seenKeys: materialKeys },
     { href: "/invoices", label: "請求・入金", icon: "invoices", group: "経理", badge: n.overdueInvoices || undefined, seenKeys: invoiceKeys },
     { href: "/finance", label: "入出金の予定 (未入金・支払待ち)", short: "入出金予定", icon: "finance", group: "経理" },
     { href: "/expenses", label: "経費精算", icon: "expenses", group: "経理" },

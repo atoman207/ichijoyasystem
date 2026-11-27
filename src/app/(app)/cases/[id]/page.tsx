@@ -24,6 +24,7 @@ import { CaseRequestsCard } from "@/components/features/CaseRequestsCard";
 import { CaseChangeHistory } from "@/components/features/CaseChangeHistory";
 import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
+import { MaterialOrdersCard } from "@/components/material-orders/MaterialOrdersCard";
 import { formStores, formUsers } from "@/components/schedule/form-data";
 
 /**
@@ -35,6 +36,8 @@ import { formStores, formUsers } from "@/components/schedule/form-data";
  */
 
 export const dynamic = "force-dynamic";
+// 材料の発注の「手書きの発注一覧を撮影して読み取る」(AI) のため
+export const maxDuration = 60;
 
 const QUICK_KINDS: ScheduleKind[] = ["pickup", "delivery", "install", "site", "visit", "measure", "survey", "onsite_quote", "site_survey"];
 
@@ -224,6 +227,9 @@ export default async function CasePage({ params, searchParams }: { params: Promi
               </ul>
             )}
           </Card>
+
+          {/* 材料の発注 (お客様のご要望 2026-11-27「■5」「■6」。材料発注の一覧と同じデータ・同じ操作) */}
+          <MaterialOrdersCard db={db} user={user} orderIds={liveOrders.map((o) => o.id)} returnTo={returnTo} />
 
           {/* 予定 (この案件の問い合わせ・見積・受注の予定。登録すると予定表にも載る) */}
           <CaseScheduleCard

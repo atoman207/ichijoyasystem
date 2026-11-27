@@ -1211,6 +1211,19 @@ export function canEditProduction(user: User): boolean {
   return Boolean(user.active);
 }
 
+/** 材料発注の一覧・案件の材料を見る (お客様のご要望 2026-11-27「■4」「■5」): 全社員 (店舗をまたいで発注・施工するため) */
+export function canViewMaterialOrders(user: User): boolean {
+  return Boolean(user.active);
+}
+
+/**
+ * 材料発注の状況 (発注済み・在庫使用など)・数量・手入力の行・写真の読み取りを変える: その店舗の社員・店長 (全店舗)・本部・管理者
+ * (本部の事務がまとめて発注することがある。canEditCaseStore = 店長は全店舗)
+ */
+export function canEditMaterialOrder(user: User, storeId: StoreId): boolean {
+  return Boolean(user.active) && (canSeeAllStores(user) || canEditCaseStore(user, storeId));
+}
+
 /**
  * 予定表 (スプレッドシート) の予定を新システムへ取り込む (予定表 →「スプレッドシートの取込」。本部スタッフ・管理者)。
  * 顧客・案件 (問い合わせ) の登録と、以前に移行した予定の書き換え・削除をまとめて行うため、全店舗を扱える人だけ

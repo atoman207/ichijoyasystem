@@ -24,6 +24,8 @@ const VIEW_PATHS: Record<string, (id: string) => string[]> = {
   atr: () => ["/attendance?tab=requests"],
   atm: () => ["/attendance?tab=sheet", "/attendance?tab=stamp", "/attendance?tab="],
   heri: () => ["/heri"],
+  // 材料発注: 未発注の材料 (一覧を開くと確認したことになる)
+  mo: () => ["/material-orders"],
   su: () => ["/staff"],
   dr: (id) => [`/ai/drafts/${id}`],
   cp: (id) => [`/materials/cases/${id}`],

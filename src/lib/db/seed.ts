@@ -194,6 +194,7 @@ export function createSeed(now = new Date()): Database {
     condolences: [],
     workReportDays: [],
     tatamiProduction: [],
+    materialOrders: [],
     promotions: [],
     docDrafts: [],
     changeNotices: [],

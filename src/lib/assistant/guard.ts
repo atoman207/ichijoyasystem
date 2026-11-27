@@ -244,6 +244,7 @@ export const NAV_ITEMS: { href: string; label: string; short?: string }[] = [
   { href: "/office", label: "事務 (事務改善シート・慶弔リスト)", short: "事務" },
   { href: "/heri", label: "縁在庫 (品番 × 場所の数量・入庫・振り分け・使用・棚卸)", short: "縁在庫" },
   { href: "/work-reports", label: "作業日報 (引取・納品の件数・枚数の月次集計)", short: "作業日報" },
+  { href: "/material-orders", label: "材料発注 (襖紙・カーテン・クロス・リフォームの手配・在庫補充)", short: "材料発注" },
   { href: "/promotions", label: "販促と媒体の分析 (チラシ・イベント・DM の反応)", short: "販促分析" },
 ];
 

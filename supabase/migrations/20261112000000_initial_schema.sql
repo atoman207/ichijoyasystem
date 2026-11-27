@@ -1585,6 +1585,33 @@ create table if not exists tatami_production (
 );
 comment on table tatami_production is '畳製造予定 (製造日の変更・繰り越し・製造日未定・製造済み・手で足した製造の予定。予定そのものは受注の引取日・採寸日から計算)';
 
+-- 材料発注 (襖紙・カーテン・クロスは受注から自動で出し、発注状況・発注者・発注数量だけを保存。在庫補充・リフォームの手配・手書きの発注一覧の読み取りは行ごと)
+create table if not exists material_orders (
+  id text primary key,
+  key text unique,
+  order_id text,
+  store_id text not null references stores(id),
+  category text not null,
+  name text not null,
+  code text,
+  qty_auto numeric,
+  qty numeric,
+  unit text,
+  spec text,
+  status text not null check (status in ('unordered','ordered','stock','separate','not_needed')),
+  supplier_name text,
+  needed_by date,
+  ordered_by text,
+  ordered_at timestamptz,
+  note text,
+  source text not null check (source in ('auto','manual','ai')),
+  created_by text not null,
+  created_at timestamptz not null,
+  updated_by text,
+  updated_at timestamptz not null
+);
+comment on table material_orders is '材料発注 (襖紙・カーテン・クロスは受注から自動で出し、発注状況・発注者・発注数量だけを保存。在庫補充・リフォームの手配・手書きの発注一覧の読み取りは行ごと)';
+
 -- 販促の記録 (チラシ・イベント・点検の DM・テレアポ。地域ごとの部数)
 create table if not exists promotions (
   id text primary key,
@@ -2964,6 +2991,27 @@ alter table tatami_production add column if not exists created_by text not null;
 alter table tatami_production add column if not exists created_at timestamptz not null;
 alter table tatami_production add column if not exists updated_by text;
 alter table tatami_production add column if not exists updated_at timestamptz not null;
+alter table material_orders add column if not exists key text unique;
+alter table material_orders add column if not exists order_id text;
+alter table material_orders add column if not exists store_id text not null references stores(id);
+alter table material_orders add column if not exists category text not null;
+alter table material_orders add column if not exists name text not null;
+alter table material_orders add column if not exists code text;
+alter table material_orders add column if not exists qty_auto numeric;
+alter table material_orders add column if not exists qty numeric;
+alter table material_orders add column if not exists unit text;
+alter table material_orders add column if not exists spec text;
+alter table material_orders add column if not exists status text not null check (status in ('unordered','ordered','stock','separate','not_needed'));
+alter table material_orders add column if not exists supplier_name text;
+alter table material_orders add column if not exists needed_by date;
+alter table material_orders add column if not exists ordered_by text;
+alter table material_orders add column if not exists ordered_at timestamptz;
+alter table material_orders add column if not exists note text;
+alter table material_orders add column if not exists source text not null check (source in ('auto','manual','ai'));
+alter table material_orders add column if not exists created_by text not null;
+alter table material_orders add column if not exists created_at timestamptz not null;
+alter table material_orders add column if not exists updated_by text;
+alter table material_orders add column if not exists updated_at timestamptz not null;
 alter table promotions add column if not exists number text not null unique;
 alter table promotions add column if not exists kind text not null check (kind in ('flyer','event','dm','teleapo','other'));
 alter table promotions add column if not exists title text not null;
@@ -3300,6 +3348,9 @@ create index if not exists work_report_days_load_order_idx on work_report_days (
 create index if not exists tatami_production_store_id_date_idx on tatami_production (store_id, date);
 create index if not exists tatami_production_order_id_idx on tatami_production (order_id);
 create index if not exists tatami_production_load_order_idx on tatami_production (date, created_at, id);
+create index if not exists material_orders_store_id_status_idx on material_orders (store_id, status);
+create index if not exists material_orders_order_id_idx on material_orders (order_id);
+create index if not exists material_orders_load_order_idx on material_orders (created_at, id);
 create index if not exists promotions_store_id_start_date_idx on promotions (store_id, start_date);
 create index if not exists promotions_kind_idx on promotions (kind);
 create index if not exists promotions_load_order_idx on promotions (start_date, id);
@@ -3544,6 +3595,9 @@ grant select, insert, update, delete on table work_report_days to service_role;
 alter table tatami_production enable row level security;
 revoke all on table tatami_production from anon, authenticated;
 grant select, insert, update, delete on table tatami_production to service_role;
+alter table material_orders enable row level security;
+revoke all on table material_orders from anon, authenticated;
+grant select, insert, update, delete on table material_orders to service_role;
 alter table promotions enable row level security;
 revoke all on table promotions from anon, authenticated;
 grant select, insert, update, delete on table promotions to service_role;

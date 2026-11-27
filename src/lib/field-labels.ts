@@ -66,6 +66,7 @@ const BY_ENTITY: Record<string, Record<string, string>> = {
   attendance: { clockIn: "出勤", clockOut: "退勤", skipBreaks: "外した休憩", note: "メモ" },
   attendance_request: { kind: "種類", date: "日付", clockIn: "出勤", clockOut: "退勤", skipBreaks: "外す休憩", slot: "区分", reason: "理由", status: "状態" },
   work_report: { visitors: "来店数", flyers: "チラシの配布 (配布人・枚数・地域)", note: "メモ" },
+  material_order: { status: "発注状況", qty: "発注数量", supplierName: "発注先", neededBy: "必要な日", note: "メモ", name: "材料名", code: "品番", unit: "単位", spec: "寸法・施工箇所" },
   production: { date: "製造日", undecided: "製造日未定", status: "状態", title: "案件・内容", spec: "仕様", qty: "畳数", herinashi: "へり無し畳", rooms: "畳の仕様 (部屋ごと)", note: "メモ" },
   holiday: { label: "休業日の名前", closed: "休業日", holiday: "祝日", dates: "日付" },
   promotion: { kind: "販促の種類", title: "名前", startDate: "配布日・開始日", endDate: "終了日", areas: "地域と部数", copies: "部数・件数", cost: "費用", media: "媒体", vendor: "配布業者・依頼先", note: "メモ", status: "状態" },
