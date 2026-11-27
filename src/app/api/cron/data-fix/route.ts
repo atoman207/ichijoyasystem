@@ -26,6 +26,8 @@ import { attendanceTablesMissing } from "@/lib/hr/tables";
 import { attendanceEmployees, attendanceSettings, staffCategory } from "@/lib/hr/timecard";
 import { monthIncentives } from "@/lib/hr/incentive-month";
 import { kpiSettings } from "@/lib/kpi-settings";
+import { parseSalesCsv } from "@/lib/sales-ledger";
+import { applySlipRelink, planSlipRelink, relinkCsv } from "@/lib/sales-relink";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,6 +69,10 @@ export const maxDuration = 60;
  *     以前の表の取込 と同じ処理 = src/lib/hr/attendance.ts の applyAttendanceWorkbook。締めの過ぎた月は確定、一番新しい表から社員番号・パートの時給・
  *     宛名・会社名の行・アカウントのない社員を設定に入れる)。社員の名前・番号はコードに書かず、本文 (JSON) = { file: .xlsx の base64, name: ファイル名 } で受け取る。
  *     確認のときは、表の備考のインセンティブとシステムの計算 (口コミ・点検など) の違いも返す。既定は確認だけ、apply=1 で書き込み、変更履歴
+ *   task = slip-customers: 売上台帳から移行した受注を、ひも付いた販売管理ソフト (コンパス) の伝票の得意先のお客様に付け替える (お客様のご連絡 2026-11-28
+ *     「コンパスには売上履歴があるが新システムにはない」。同じ名字・地区の何人かの受注を持つ台帳のお客様 = src/lib/sales-relink.ts)。本文 = 売上明細の CSV
+ *     (Shift_JIS か UTF-8。Content-Type: text/csv) か JSON { file: CSV の base64 }。お客様の項目は変えない・売上台帳との二重計上のまとめ (sales-reconcile) はしない。
+ *     既定は確認だけ (件数・金額・例)、csv=1 で一覧の CSV、apply=1 で書き込み (受注ごと・削除した台帳のお客様ごとに変更履歴)
  *   task = avatars: 社員の顔写真を登録する (お客様のご要望 2026-11-26「顔写真は弊社ホームページのスタッフ紹介から」)。写真と社員はコードに書かず、
  *     本文 (JSON) = { photos: [{ userId, name (確かめ用。社員の名前と同じ), image (JPEG・PNG・WebP の base64。512 KB まで), note? }] } で受け取る。
  *     今の写真と同じ中身なら何もしない。前の写真は以前の写真に残し、ファイルは消さない (src/lib/avatar-photos.ts)。既定は確認だけ、apply=1 で書き込み、社員ごとに変更履歴
@@ -90,6 +96,7 @@ export async function POST(req: Request) {
   if (task === "user-names") return userNamesFix(url, req);
   if (task === "attendance-workbook") return attendanceWorkbookFix(url, req);
   if (task === "site-marks") return siteMarksFix(url);
+  if (task === "slip-customers") return slipCustomersFix(url, req);
   if (task !== "quote-line-units") return NextResponse.json({ error: "unknown task" }, { status: 400 });
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? from;
@@ -616,4 +623,57 @@ async function siteMarksFix(url: URL) {
     return { recs: recs.length, events: events.length };
   });
   return NextResponse.json({ ok: true, applied: true, ...found, done, at: nowIso() });
+}
+
+/** 売上明細の CSV (Shift_JIS・UTF-8) を本文から読む */
+async function readSalesCsvBody(req: Request): Promise<string | null> {
+  const type = req.headers.get("content-type") ?? "";
+  let buf: Buffer;
+  if (type.includes("application/json")) {
+    const body = (await req.json().catch(() => null)) as { file?: unknown } | null;
+    buf = typeof body?.file === "string" ? Buffer.from(body.file, "base64") : Buffer.alloc(0);
+  } else buf = Buffer.from(await req.arrayBuffer());
+  if (!buf.length || buf.length > 80 * 1024 * 1024) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buf);
+  } catch {
+    return new TextDecoder("shift_jis").decode(buf);
+  }
+}
+
+async function slipCustomersFix(url: URL, req: Request) {
+  const apply = url.searchParams.get("apply") === "1";
+  const text = await readSalesCsvBody(req);
+  if (!text) return NextResponse.json({ error: "本文に販売管理ソフトの売上明細の CSV (80 MB まで) を送ってください" }, { status: 400 });
+  let slips;
+  try {
+    slips = parseSalesCsv(text).slips.map((s) => ({ no: s.no, customerCode: s.customerCode }));
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+  }
+  const db0 = await syncDb();
+  const plan = planSlipRelink(db0, slips);
+  if (url.searchParams.get("csv") === "1") {
+    const byId = new Map(db0.customers.map((c) => [c.id, c]));
+    return new NextResponse(relinkCsv(plan, (id) => byId.get(id)), { headers: { "Content-Type": "text/csv; charset=utf-8" } });
+  }
+  const summary = {
+    slips: slips.length,
+    moves: plan.moves.length,
+    amount: plan.moves.reduce((a, m) => a + (m.total || 0), 0),
+    customersReceiving: new Set(plan.moves.map((m) => m.toId)).size,
+    ledgerCustomers: new Set(plan.moves.map((m) => m.fromId)).size,
+    emptied: plan.emptied.length,
+    ambiguous: plan.ambiguous,
+    missingCustomer: plan.missingCustomer,
+    sample: plan.moves.slice(0, 20),
+  };
+  if (!apply || !plan.moves.length) return NextResponse.json({ ok: true, applied: false, ...summary });
+  const result = await mutate((db) => {
+    const now = nowIso();
+    const r = applySlipRelink(db, planSlipRelink(db, slips), { now, userId: SYSTEM_USER, audit: (e) => addAudit(db, { userId: SYSTEM_USER, ...e }) });
+    addAudit(db, { userId: SYSTEM_USER, action: "update", entity: "data", entityId: "sales-relink", entityLabel: "売上台帳の受注の付け替え", summary: `売上台帳の受注 ${r.moved} 件を販売管理ソフトの伝票の得意先のお客様に付け替え (つながる記録 ${r.related} 件・空になった台帳のお客様 ${r.removed} 人を削除)`, storeId: "hq" });
+    return r;
+  });
+  return NextResponse.json({ ok: true, applied: true, ...summary, result });
 }

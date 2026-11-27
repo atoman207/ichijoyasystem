@@ -39,7 +39,7 @@
     "kpi:import-workbook": "node scripts/ops/import-survey-workbook.mjs",
     "test:capture": "node scripts/tests/capture/quote-calc.test.mjs && node scripts/tests/capture/camera-pick.test.mjs && node scripts/tests/capture/quote-inputs.test.mjs && node scripts/tests/capture/quote-rows.test.mjs && node scripts/tests/capture/quote-case.test.mjs",
     "test:capture-ui": "node scripts/tests/capture/camera.e2e.mjs",
-    "test:sales": "node scripts/tests/sales/reconcile.test.mjs",
+    "test:sales": "node scripts/tests/sales/reconcile.test.mjs && node scripts/tests/sales/relink.test.mjs",
     "test:case-access": "node scripts/tests/case-access/case-access.test.mjs",
     "test:posts-tidy": "node scripts/tests/posts-tidy/posts-tidy.test.mjs",
     "test:materials": "node scripts/tests/materials/material-orders.test.mjs && node scripts/tests/materials/print-sheet.test.mjs",

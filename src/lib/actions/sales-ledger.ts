@@ -7,6 +7,7 @@ import { addAudit, getDb, mutate } from "@/lib/db/store";
 import { canImportData } from "@/lib/auth/permissions";
 import { applySalesSlips, normalizeSlip, type SalesImportReport, type SalesSlip } from "@/lib/sales-ledger";
 import { applyReconcile, planReconcile } from "@/lib/sales-reconcile";
+import { applySlipRelink, planSlipRelink } from "@/lib/sales-relink";
 import { requireActionUser } from "./guards";
 
 /**
@@ -62,13 +63,18 @@ export async function importSalesSlips(input: unknown[], meta: { fileName: strin
       const rec = applyReconcile(db, planReconcile(db), { now });
       r.duplicatesMerged = rec.ordersRemoved;
       r.customersMerged += rec.customersMerged;
+      // 売上台帳の受注を、ひも付いた伝票の得意先のお客様に付け替える (同じ名字・地区の何人かの受注を持つ台帳のお客様。src/lib/sales-relink.ts。
+      // お客様のご連絡 2026-11-28「コンパスには売上履歴があるが新システムにはない」)
+      const rel = applySlipRelink(db, planSlipRelink(db, slips as SalesSlip[]), { now, userId: user.id, audit: (e) => addAudit(db, { userId: user.id, ...e }) });
+      r.ordersRelinked = rel.moved;
+      r.customersMerged += rel.removed;
       addAudit(db, {
         userId: user.id,
         action: "import",
         entity: "data",
         entityId: "sales-ledger",
         entityLabel: "売上明細",
-        summary: `売上明細 (${fileName}) を取込${part}: 伝票 ${r.slips - r.unchanged} 枚 / 顧客 新規 ${r.customersCreated}・更新 ${r.customersUpdated}・統合 ${r.customersMerged} / 受注 新規 ${r.ordersCreated}・更新 ${r.ordersUpdated}・ひも付け ${r.ordersLinked}${r.duplicatesMerged ? `・売上台帳と二重の受注をまとめた ${r.duplicatesMerged}` : ""}`,
+        summary: `売上明細 (${fileName}) を取込${part}: 伝票 ${r.slips - r.unchanged} 枚 / 顧客 新規 ${r.customersCreated}・更新 ${r.customersUpdated}・統合 ${r.customersMerged} / 受注 新規 ${r.ordersCreated}・更新 ${r.ordersUpdated}・ひも付け ${r.ordersLinked}${r.duplicatesMerged ? `・売上台帳と二重の受注をまとめた ${r.duplicatesMerged}` : ""}${r.ordersRelinked ? `・売上台帳の受注を伝票の得意先に付け替え ${r.ordersRelinked}` : ""}`,
       });
       return r;
     });
