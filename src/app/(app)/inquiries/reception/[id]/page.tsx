@@ -79,7 +79,7 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
       code: c.code,
       storeName: storeName(c.storeId),
     });
-    const customers: ReviewCustomer[] = m.customers.map((c) => ({ id: c.customer.id, label: custLabel(c.customer), level: c.level, reason: c.reason, ...view(c.customer) }));
+    const customers: ReviewCustomer[] = m.customers.map((c) => ({ id: c.customer.id, label: custLabel(c.customer), level: c.level, reason: c.reason, ...view(c.customer), ...(c.placeholder ? { placeholder: true } : {}) }));
     // 紐付けたお客様・この画面で登録した新規顧客 (選んだあとは選び直さない。お客様のご要望 2026-11-25「問い合わせ登録時の顧客登録・紐付け」)
     chosen = preset ? { id: preset.id, ...view(preset), created: ex._customerCreated === preset.id, fromCustomer: !ex._customerCreated && ex._fromCustomer === true } : undefined;
     // 案件: 住所・電話で一致したお客様の案件 + お名前で一致したお客様の案件 (選んだときに出す)
@@ -99,7 +99,8 @@ export default async function ReceptionDetailPage({ params, searchParams }: { pa
     const suppliers = [...m.suppliers, ...db.suppliers.filter((s) => !matchedSuppliers.has(s.id))].slice(0, 400).map((s) => ({ id: s.id, name: s.name, matched: matchedSuppliers.has(s.id) }));
     // 紐付けたお客様の案件 (新規案件か、既存の案件に問い合わせを追加か。お客様のご要望 2026-11-26「■5」。src/lib/case-choice.ts)
     const today = toDateKey(new Date());
-    caseOptions = preset ? caseOptionsForCustomer(db, user, preset.id, today, { map: caseMap }) : undefined;
+    // 予定表 (スプレッドシート) から移行した、同じお客様らしい仮のお客様の案件も出す (選ぶとこのお客様の案件にする。お客様のご連絡 2026-11-27)
+    caseOptions = preset ? caseOptionsForCustomer(db, user, preset.id, today, { map: caseMap, placeholders: true }) : undefined;
     // 初めに選んでおく案件: 前に選んだ案件 → URL の caseId (案件の画面から) → AI が番号・内容で選んだ案件 → 進行中が 1 件だけならその案件 → 新規案件
     const hinted = aiCaseKey ? caseMap.caseOf(aiCaseKey.split(":")[1]) : undefined;
     const urlCase = sp.caseId ? caseMap.caseOf(sp.caseId) : undefined;

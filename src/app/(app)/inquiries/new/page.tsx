@@ -39,7 +39,7 @@ export default async function NewInquiryPage({ searchParams }: { searchParams: P
     fallbackStoreId: allStores || canAccessStore(user, c.storeId) ? c.storeId : user.storeId,
   }));
   const preset = customerId ? customers.find((c) => c.id === customerId) : undefined;
-  const initialCases = preset ? caseOptionsForCustomer(db, user, preset.id, today) : undefined;
+  const initialCases = preset ? caseOptionsForCustomer(db, user, preset.id, today, { placeholders: true }) : undefined;
   const initialChoice = initialCases ? initialCaseChoice(initialCases, presetCase && presetCase.customerId === preset?.id ? presetCase.id : undefined) : "new";
   // 担当者の選択肢: 自店舗の社員 + 本部の社員 (全店舗共通。お客様のご要望 2026-11-24「④」)。案件に追加するときの案件の担当も選べるように
   const owners = initialCases ? [...initialCases.open, ...initialCases.past].map((c) => c.ownerId).filter((x): x is string => Boolean(x)) : [];

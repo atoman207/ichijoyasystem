@@ -4,9 +4,8 @@ import { useRef, useState, useTransition, type ReactNode } from "react";
 import clsx from "clsx";
 import Link from "@/components/ui/Link";
 import { Camera, ClipboardCheck, FileImage, FileText, ImagePlus, Keyboard, LoaderCircle, Printer, Receipt as ReceiptIcon } from "lucide-react";
-import { Button, buttonClass } from "@/components/ui";
+import { buttonClass } from "@/components/ui";
 import { captureCaseQuote } from "@/lib/actions/capture";
-import { issueCaseInvoice } from "@/lib/actions/day-docs";
 import { setReceiptWanted } from "@/lib/actions/receipts";
 import { deleteAttachment } from "@/lib/actions/attachments";
 import { prepareFile } from "@/components/attachments/image-prep";
@@ -191,32 +190,27 @@ export function CaseWorkSection({ work, eventId, returnTo: listReturn, onReload 
                 </PdfLink>
               )}
               {docs.invoice && docs.invoice.canPrint && (
-                <PdfLink href={`/api/pdf/invoices/${docs.invoice.id}`} returnTo={returnTo} className={buttonClass("secondary", "sm")}>
+                <PdfLink href={`/api/pdf/invoices/${docs.invoice.id}`} returnTo={returnTo} className={buttonClass(docs.sales?.confirmed ? "primary" : "secondary", "sm")} testId="case-invoice">
                   <FileText />
                   請求書 {docs.invoice.number} {yen(docs.invoice.total)}
                   {docs.invoice.outputs ? ` · 出力 ${docs.invoice.outputs} 回` : ""}
                 </PdfLink>
               )}
+              {/* 売上確定・請求書発行 (お客様のご要望 2026-11-27「■1」): 確定の前はこのボタン、確定のあとは「請求書」と「修正」 */}
+              {docs.sales && !docs.sales.confirmed && docs.sales.canUse && (
+                <Link href={`/orders/${docs.sales.orderId}/sales?returnTo=${encodeURIComponent(returnTo)}`} className={buttonClass("primary", "sm")} data-testid="case-sales">
+                  <ClipboardCheck />
+                  {docs.sales.batch || docs.invoice ? "売上確定" : "売上確定・請求書発行"} ({yen(docs.sales.total)})
+                </Link>
+              )}
+              {docs.sales?.confirmed && docs.sales.canUse && (
+                <Link href={`/orders/${docs.sales.orderId}/sales?returnTo=${encodeURIComponent(returnTo)}`} className={buttonClass("ghost", "sm")} data-testid="case-sales-fix">
+                  修正 (内容・金額・担当・ポスティング)
+                </Link>
+              )}
             </div>
-            {docs.invoiceIssue &&
-              (docs.invoiceIssue.ok ? (
-                <form action={issueCaseInvoice.bind(null, docs.invoiceIssue.orderId)} className="flex flex-wrap items-center gap-2">
-                  <input type="hidden" name="returnTo" value={returnTo} />
-                  <Button type="submit" size="sm" variant="secondary">
-                    請求書を発行 ({yen(docs.invoiceIssue.total)})
-                  </Button>
-                  {docs.invoiceIssue.pre && <span className="text-[11px] text-ink-3">施工完了の前に発行します (納品・施工の日にお渡し。売上は施工完了の日)。</span>}
-                </form>
-              ) : (
-                <p className="text-[11px] text-ink-3">
-                  請求書は未発行です{docs.invoiceIssue.reason ? ` (${docs.invoiceIssue.reason})` : ""}。
-                  {docs.invoiceIssue.needsSetup && (
-                    <a href={`/orders/${docs.invoiceIssue.orderId}?returnTo=${encodeURIComponent(returnTo)}#work-staff`} className="ml-1 font-medium text-accent underline">
-                      作業の担当・ポスティングを登録する
-                    </a>
-                  )}
-                </p>
-              ))}
+            {docs.sales && !docs.sales.canUse && docs.sales.reason && <p className="text-[11px] text-ink-3">{docs.sales.reason}</p>}
+            {docs.sales?.confirmed && docs.sales.batch && !docs.invoice && <p className="text-[11px] text-ink-3">売上確定済み。まとめ請求のお客様のため、請求書は締め日にまとめて発行します。</p>}
             {docs.receipt && (
               <div className="space-y-1.5 rounded-lg border border-line p-2">
                 <div className="flex flex-wrap items-center gap-2">

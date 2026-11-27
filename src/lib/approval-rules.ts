@@ -12,6 +12,9 @@ import { APPROVAL_RULES } from "@/lib/constants";
  * - scheduleChange: 予定・引取納品の日程の変更・削除に承認を必要とする (既定 = 不要)
  * - smallChangeLimit: この差額以下の工事金額の変更 (仕様の変更を含む) は承認なし (既定 1 万円)
  * - noticeHq: 案件の変更のお知らせを本部・管理者にも届ける (既定 = 届ける。src/lib/change-notices.ts)
+ * - changeBell: 変更のお知らせ (日程・仕様・金額などの変更) と「予定の担当になりました・予定が変更されました」をベル・トーストで知らせる (既定 = 知らせない)
+ * - autoReminders: 期限を過ぎた依頼の自動の再通知・日程未定の連絡予定日の当日の知らせを送る (既定 = 送らない)
+ *   (どちらもお客様のご要望 2026-11-27「■2 日程・仕様・金額の変更・予定時刻になったことを知らせる通知は不要」。記録 (変更のお知らせの一覧・案件の変更履歴・期限超過の表示) は残す)
  */
 export interface ApprovalSettings {
   quoteAdminThreshold: number;
@@ -29,6 +32,10 @@ export interface ApprovalSettings {
   smallChangeLimit: number;
   /** 案件の変更のお知らせを、担当店舗に加えて本部と管理者にも届ける (既定 = 届ける。お客様のご要望 2026-11-25「⑥ 当面は本部と管理者にも」) */
   noticeHq: boolean;
+  /** 変更のお知らせと予定の担当・変更をベル (とトースト) に出す (既定 = 出さない。お客様のご要望 2026-11-27「■2」) */
+  changeBell: boolean;
+  /** 期限を過ぎた依頼の自動の再通知と、日程未定の連絡予定日の知らせ (既定 = 送らない。お客様のご要望 2026-11-27「■2」) */
+  autoReminders: boolean;
 }
 
 export const APPROVAL_SETTINGS_ID = "approval";
@@ -46,6 +53,8 @@ export function approvalSettings(db: Pick<Database, "settings">): ApprovalSettin
     scheduleChange: v.scheduleChange === true,
     smallChangeLimit: typeof v.smallChangeLimit === "number" && Number.isFinite(v.smallChangeLimit) && v.smallChangeLimit >= 0 ? Math.round(v.smallChangeLimit) : SMALL_CHANGE_LIMIT,
     noticeHq: v.noticeHq === undefined ? true : v.noticeHq === true,
+    changeBell: v.changeBell === true,
+    autoReminders: v.autoReminders === true,
   };
 }
 

@@ -184,7 +184,8 @@ r = await decide(admin, ap.id, "rejected");
 eq([db().approvals.find((a) => a.id === ap.id).status, db().orders.find((o) => o.id === oSt.id).storeId], ["rejected", M], "却下 → 変わらない");
 
 section("案件のない予定は予定の店舗だけ (承認なし)");
-r = await act(staffUser, () => SA.createScheduleEvent(form({ title: "社内の打合せ", kind: "meeting", date: future(3), allDay: "1", storeId: M, assigneeIds: [staffUser.id], returnTo: ret })));
+// 日付は今日から数える (サンプルデータの朝の会議と重なる日があるので重複を承知で登録する)
+r = await act(staffUser, () => SA.createScheduleEvent(form({ title: "社内の打合せ", kind: "meeting", date: future(3), allDay: "1", storeId: M, assigneeIds: [staffUser.id], allowOverlap: "1", returnTo: ret })));
 const evMeet = db().schedule.find((x) => x.title === "社内の打合せ");
 r = await act(staffUser, () => SA.changeEventStore(evMeet.id, form({ storeId: other.id, returnTo: ret })));
 eq([db().schedule.find((x) => x.id === evMeet.id).storeId, /予定の店舗/.test(r.msg ?? "")], [other.id, true], `予定の店舗だけをすぐに変える (${r.msg ?? r.err})`);

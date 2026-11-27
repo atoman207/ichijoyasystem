@@ -234,9 +234,11 @@ export interface QuickDocs {
   invoice?: { id: string; number: string; total: number; paidAmount: number; outputs: number; canPrint: boolean; href: string };
   /** 納品書 (受注。請求書と同じ内容で表題が「納品書」) */
   delivery?: { orderId: string; number: string; outputs: number; canPrint: boolean };
-  /** 請求書がないとき: 発行できるか (店長・本部・管理者。施工完了の前も) */
-  /** needsSetup = 作業の担当・ポスティングが未登録 (受注の画面で登録すると発行できる。src/lib/sales-ready.ts) */
-  invoiceIssue?: { ok: boolean; pre: boolean; reason?: string; orderId: string; total: number; needsSetup?: boolean };
+  /**
+   * 売上確定・請求書発行 (お客様のご要望 2026-11-27「■1」。/orders/<ID>/sales)。confirmed = 売上確定済み (ボタンは「請求書」と「修正」)、
+   * canUse = 担当店舗の社員・本部・管理者 (permissions.ts の canConfirmSales)、batch = まとめ請求のお客様 (確定だけ)
+   */
+  sales?: { orderId: string; confirmed: boolean; canUse: boolean; batch: boolean; total: number; reason?: string };
   receipt?: {
     wanted: boolean;
     auto: boolean;

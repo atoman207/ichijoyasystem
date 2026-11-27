@@ -8,12 +8,12 @@ import { postingLabel, salesReadiness } from "@/lib/sales-ready";
 import { PostingFields } from "@/components/features/PostingFields";
 import { MaterialOrdersCard } from "@/components/material-orders/MaterialOrdersCard";
 import { areaStoreOf } from "@/lib/store-area";
-import { canAccessStore, canEditProduction, canManageFinance, canManagePurchaseOrders, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
+import { canAccessStore, canConfirmSales, canEditProduction, canManageFinance, canManagePurchaseOrders, canRegisterPurchase, canSeeAllStores, isManagerOrAbove, skipsApproval } from "@/lib/auth/permissions";
 import { TatamiRoomsCard } from "@/components/schedule/TatamiRoomsCard";
 import { saveOrderTatamiRooms } from "@/lib/actions/tatami-rooms";
 import { ROOMS_SOURCE_LABEL, orderRooms, quoteRooms } from "@/lib/tatami-rooms";
 import { orderChain, userName } from "@/lib/db/queries";
-import { addProgress, cancelOrder, completeOrder, createInvoiceFromOrder, requestOrderChange, resubmitOrder, saveWorkStaff, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
+import { addProgress, cancelOrder, createInvoiceFromOrder, requestOrderChange, resubmitOrder, saveWorkStaff, updateOrderInfo, updateOrderSchedule } from "@/lib/actions/orders";
 import { WORK_ROLES, WORK_ROLE_LABEL, deliveryStaffOf, workStaffOf } from "@/lib/work-staff";
 import { WorkStaffFields } from "@/components/features/WorkStaffFields";
 import { CaseChangeHistory } from "@/components/features/CaseChangeHistory";
@@ -80,7 +80,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const db = getDb();
   const o = db.orders.find((x) => x.id === id);
   if (!o) notFound();
-  // 施工完了・請求済・入金済の受注 (確定した売上) の変更は、店長でも管理者の承認 (approval-decide.ts の touchesConfirmedSales)
+  // 施工完了・請求済・入金済の受注 (確定した売上) の施工完了日・売上計上日の変更は、店長でも管理者の承認 (approval-decide.ts の touchesConfirmedSales)。
+  // 金額だけの修正は店長が自分の権限で直せる (お客様のご要望 2026-11-27「■1」)
   const salesConfirmed = ["completed", "invoiced", "paid"].includes(o.status);
   const ownChange = skipsApproval(user, "order_change") && (user.role === "admin" || !salesConfirmed);
   // ほかの店舗の記録は閲覧のみ (見られる範囲は閲覧の範囲の設定と案件の進み具合。承認制で申請できるときはお客様の画面の「閲覧の申請」へ。src/lib/case-access.ts)
@@ -195,6 +196,12 @@ export default async function OrderDetailPage({ params, searchParams }: { params
             {o.status !== "cancelled" && <PdfLink href={`/api/pdf/delivery/${o.id}`} className={buttonClass("ghost", "sm")}>納品書 PDF</PdfLink>}
             {chain.invoice && chain.invoice.status !== "void" && <PdfLink href={`/api/pdf/invoices/${chain.invoice.id}`} className={buttonClass("secondary", "sm")}>請求書 PDF</PdfLink>}
             {chain.invoice && chain.invoice.status !== "void" && <LinkButton href={`/invoices/${chain.invoice.id}#receipts`} variant="ghost" size="sm">領収書</LinkButton>}
+            {/* 売上確定・請求書発行 (お客様のご要望 2026-11-27「■1」。確定のあとは同じ画面で修正) */}
+            {canConfirmSales(user, o.storeId) && (active || salesConfirmed) && (
+              <LinkButton href={`/orders/${o.id}/sales`} variant={active ? "primary" : "secondary"} size="sm">
+                {active ? (batchBilling || chain.invoice ? "売上確定" : "売上確定・請求書発行") : "売上・請求書の修正"}
+              </LinkButton>
+            )}
           </>
         }
       />
@@ -640,19 +647,15 @@ export default async function OrderDetailPage({ params, searchParams }: { params
           {active && (
             <Card id="complete">
               <CardHeader title="施工完了 → 売上計上" description={`完了を登録すると、施工完了日を売上計上日として売上に計上します (経営ダッシュボード・会計データとも)。${batchBilling ? "このお客様はまとめ請求のため、請求書は締め日にまとめて発行します" : "続けて請求書を発行できます (請求書の発行日は別に持ちます)"}`} />
-              <form action={completeOrder.bind(null, o.id)} className="space-y-3">
-                {/* 作業の担当を確かめてから完了にする (インセンティブの集計の起点。お客様のご要望 2026-11-25「④」) */}
-                <div className="rounded-xl border border-accent/30 bg-accent-soft/20 p-3">
-                  <div className="mb-1 text-sm font-semibold text-ink">作業の担当とポスティングを確かめてください</div>
-                  <p className="mb-2 text-[11px] text-ink-3">{workStaff.source === "saved" ? "保存した担当です。" : "予定表の予定の担当者から入れています。"}実際に作業した人に直してください (複数名可・いなければ「なし」)。ポスティングの枚数 (配っていなければ「配れてない」) も入れます。未入力のままでは売上に計上できません。完了の登録と一緒に確定し、インセンティブ (アンケートの担当)・経営の集計・作業日報に使います。</p>
-                  {staffPostingFields(true)}
-                </div>
-                <div className="flex flex-wrap items-end gap-2">
-                  <Field label="施工完了日 (= 売上計上日)"><Input type="date" name="completedAt" defaultValue={toDateKey(new Date())} /></Field>
-                  <Field label="メモ" className="w-full @xl:w-72"><Input name="body" placeholder="施工完了。お客様確認済み。" /></Field>
-                  <Button type="submit">施工完了を登録</Button>
-                </div>
-              </form>
+              {/* 売上確定 (施工完了) と請求書の発行は「売上確定・請求書発行」の画面で 1 回に (お客様のご要望 2026-11-27「■1」) */}
+              <div className="flex flex-wrap items-center gap-3 rounded-xl border border-accent/30 bg-accent-soft/20 p-3">
+                <p className="min-w-0 flex-1 text-xs text-ink-2">施工内容・明細と金額・担当者・ポスティングを確かめて、売上確定{batchBilling ? "" : "と請求書の発行"}を 1 回で行います。{ready.ok ? "" : " 担当者・ポスティングは未入力です (その画面で入れられます)。"}</p>
+                {canConfirmSales(user, o.storeId) ? (
+                  <LinkButton href={`/orders/${o.id}/sales`} size="sm">{batchBilling || chain.invoice ? "売上確定" : "売上確定・請求書発行"} ({yen(o.total)})</LinkButton>
+                ) : (
+                  <span className="text-xs text-ink-3">担当店舗の社員・本部・管理者が確定します</span>
+                )}
+              </div>
               {isManagerOrAbove(user) && (
                 <form action={cancelOrder.bind(null, o.id)} className="mt-4 flex flex-wrap items-end gap-2 border-t border-line pt-3">
                   <Field label="キャンセル理由" className="w-full @xl:w-72"><Input name="reason" /></Field>
@@ -677,8 +680,12 @@ export default async function OrderDetailPage({ params, searchParams }: { params
                 </details>
               ) : (
                 <>
-                  <CardHeader title="請求書を発行" description="見積の内訳から自動作成。送付方法はお客様の希望に合わせて。請求書の発行日は今日 (売上計上日とは別)" />
-                  {perOrderInvoice}
+                  <CardHeader title="請求書を発行" description="見積の内訳から自動作成。請求書の発行日は今日 (売上計上日とは別)" />
+                  {canConfirmSales(user, o.storeId) ? (
+                    <LinkButton href={`/orders/${o.id}/sales`} size="sm">売上・請求書の画面で請求書を発行</LinkButton>
+                  ) : (
+                    perOrderInvoice
+                  )}
                 </>
               )}
             </Card>

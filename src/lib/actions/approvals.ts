@@ -30,9 +30,9 @@ export async function decideApproval(approvalId: string, decision: Decision, for
     if (a.status !== "pending") fail(returnTo, "この依頼はすでに処理済みです。");
     if (a.requestedBy === user.id) fail(returnTo, "自分が申請した依頼は承認・差戻し・却下できません。他の承認者に依頼してください。");
     if (!canApprove(user, a)) fail(returnTo, `この依頼は${a.requiredRole === "admin" ? "管理者" : "店長"}のみ判断できます。`);
-    if (decision === "approved" && a.type === "quote_amend" && quoteInvoiced(db, a.targetId)) {
-      fail(returnTo, "請求書を発行済みの案件のため、金額変更を反映できません。入金前であれば請求書を無効化してから承認するか、差し戻してください。");
-    }
+    // 入金の記録がある・まとめ請求の請求書の案件は金額の変更を反映しない (受注 1 件の入金前の請求書は反映のときに直す。src/lib/invoice-sync.ts)
+    const invoiceBlock = decision === "approved" && a.type === "quote_amend" ? quoteInvoiced(db, a.targetId) : undefined;
+    if (invoiceBlock) fail(returnTo, `${invoiceBlock} (または差し戻してください)`);
     a.status = decision;
     a.decidedBy = user.id;
     a.decidedAt = nowIso();

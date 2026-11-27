@@ -59,6 +59,13 @@
   --color-info-soft: #e9f2fd;
   --color-info-ink: #1c5cab;
   --color-neutral-soft: #eef0f5;
+  /* 予定の午前・午後 (お客様のご要望 2026-11-27「■3」: 予定表の時間を色で分ける。src/components/schedule/TimeText.tsx) */
+  --color-am: #e07a1f; /* 午前 = オレンジ */
+  --color-am-soft: #fff0df;
+  --color-am-ink: #9a4a00;
+  --color-pm: #2f6fd6; /* 午後 = 青 */
+  --color-pm-soft: #e5eefc;
+  --color-pm-ink: #1b4c9c;
 
   --shadow-card: 0 1px 2px rgba(29, 34, 51, 0.04), 0 6px 20px -8px rgba(29, 34, 51, 0.08);
   --shadow-lift: 0 14px 30px -12px rgba(29, 34, 51, 0.2), 0 2px 6px rgba(29, 34, 51, 0.05);
@@ -355,5 +362,20 @@ body {
 @media (display-mode: standalone) {
   .hide-in-app {
     display: none !important;
+  }
+}
+
+/*
+  日ごとの予定表 (src/components/schedule/DaySheet.tsx) をスマートフォンで横向きにしたとき:
+  スプレッドシートの予定表と同じに 左 = 引取・見積など / 右 = 納品 を横に並べる (お客様のご要望 2026-11-27「■4」)。
+  高さの低い横長の画面 (スマートフォンの横向き) だけ。それぞれの列を container にして、列の幅に合う 1 予定 1 行の表示にする
+*/
+@media (orientation: landscape) and (max-height: 600px) {
+  .phone-pair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+  .phone-pair > * {
+    container-type: inline-size;
   }
 }

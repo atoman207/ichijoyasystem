@@ -4,6 +4,7 @@ import { notificationsFor, storeById, storeName, userName } from "@/lib/db/queri
 import { lineText, noticeTime, unreadNotices } from "@/lib/change-notices";
 import { canApproveSignup, canExportAccounting, canExportData, canManageMaps, canManageSettings, canManageUsers, canRegisterPurchase, canSeeAllStores, canTriageFax, canViewFax, canViewRegistry, canViewReports, canViewSuppliers } from "@/lib/auth/permissions";
 import { getDb } from "@/lib/db/store";
+import { approvalSettings } from "@/lib/approval-rules";
 import { avatarUrl } from "@/lib/account-rules";
 import { ROLE_LABEL, APPROVAL_TYPE_LABEL } from "@/lib/constants";
 import { AppShell, type NavItem, type NotificationItem } from "@/components/layout/AppShell";
@@ -179,7 +180,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       notifications.push({ kind: "task", title: t.title, detail: t.detail, href: threadLink(t.threadId), keys: [seenKey("th", t.threadId, t.title)] });
     }
   }
-  for (const e of n.assignedEvents) {
+  // 日程・仕様・金額の変更と予定の担当のお知らせは、設定 → 承認ルールでオンにしたときだけベルに出す (既定 = 出さない。お客様のご要望 2026-11-27「■2」)
+  const changeBell = approvalSettings(getDb()).changeBell;
+  for (const e of changeBell ? n.assignedEvents : []) {
     notifications.push({
       kind: "schedule",
       title: `${e.updated ? "予定が変更されました" : "予定の担当になりました"}: ${e.title}`,
@@ -253,7 +256,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     }
   }
   // 案件の変更のお知らせ (予定・明細・金額・担当・お客様の付け替えなど。担当店舗・本部・管理者。src/lib/change-notices.ts)
-  {
+  if (changeBell) {
     const changes = unreadNotices(getDb(), user);
     for (const c of changes.slice(0, 4)) {
       notifications.push({ kind: "change", title: `${c.topic}: ${[c.number, c.title].filter(Boolean).join(" ")}`.slice(0, 80), detail: `${c.lines.slice(0, 2).map(lineText).join(" / ")} · ${userName(c.actorId)} ${noticeTime(c.at)}`, href: `/notices/${c.id}/open`, keys: [seenKey("chg", c.id, c.at)] });

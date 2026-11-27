@@ -6,6 +6,7 @@ import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord, type Outgoing } from "@/lib/notify/send";
 import { storeRequestNotices } from "@/lib/notify/store-line";
 import { REQUEST_PURPOSE, dueFollowups, dueLabel, jstDate } from "@/lib/inquiry-flow";
+import { approvalSettings } from "@/lib/approval-rules";
 
 /**
  * 期限を過ぎた問い合わせの依頼の自動の再通知 (お客様のご要望 2026-11-24「■ 問い合わせ受付後の業務フロー ②」)
@@ -30,6 +31,8 @@ export interface FollowupResult {
 
 export async function runInquiryFollowups(now = new Date()): Promise<FollowupResult> {
   const db0 = await syncDb();
+  // 自動の再通知は設定 → 承認ルールでオンにしたときだけ (既定 = 送らない。お客様のご要望 2026-11-27「■2」。期限超過の表示は問い合わせ一覧に残る)
+  if (!approvalSettings(db0).autoReminders) return { sent: 0, threads: [], holds: [] };
   if (!dueFollowups(db0, now).length) return { sent: 0, threads: [], holds: [] };
   const outgoing: Outgoing[] = [];
   const result: FollowupResult = { sent: 0, threads: [], holds: [] };

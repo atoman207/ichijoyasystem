@@ -8,13 +8,16 @@ import { MATERIAL_CATEGORY, MATERIAL_STATUS, MATERIAL_STATUSES, groupByCase, nee
 import { ATTACHMENT_CATEGORY } from "@/lib/attachment-category";
 import { shortDate } from "@/lib/calendar";
 import { fmtDateTime } from "@/lib/format";
+import { caseDatesText, caseFiles, printSheetOf } from "@/lib/material-orders/print-sheet";
+import { MaterialPrintButton } from "./MaterialPrint";
 import { PendingButton } from "@/components/ui/PendingButton";
 import { StatusBadge, StoreTag, buttonClass } from "@/components/ui";
 
 /**
  * 材料発注の行 (案件ごと)。材料発注の一覧 (/material-orders) と案件・受注の画面の「材料の発注」で共通 (お客様のご要望 2026-11-27「■4」「■5」)。
  * 未発注は赤 (必要な日が 3 日以内は「急ぎ」)、発注済みは緑。「発注済み」を押すと押した人が発注者になる。
- * showCase = 案件の見出し (店舗・お客様・日程・見積・手書き見積書の原本・現場図面) を出す (一覧)
+ * showCase = 案件の見出し (店舗・お客様・日程・見積・手書き見積書の原本・現場図面) を出す (一覧)。
+ * 案件ごとに「見積・図面を印刷」(見積の内容・発注する材料・手書き見積書の原本・現場図面をその場で印刷。お客様のご要望 2026-11-27)
  */
 export function MaterialList({ db, user, rows, returnTo, showCase }: { db: Database; user: User; rows: MaterialRow[]; returnTo: string; showCase: boolean }) {
   const name = (id?: string) => (id ? (db.users.find((u) => u.id === id)?.name ?? "-") : "-");
@@ -27,7 +30,15 @@ export function MaterialList({ db, user, rows, returnTo, showCase }: { db: Datab
         const open = g.rows.filter((r) => r.status === "unordered");
         return (
           <div key={g.key} className={clsx("rounded-xl border bg-panel", open.some((r) => r.urgent) ? "border-critical/50" : open.length ? "border-warn/40" : "border-line")}>
-            {showCase && <CaseHead db={db} row={r0} />}
+            {showCase ? (
+              <CaseHead db={db} row={r0} rows={g.rows} />
+            ) : (
+              r0.orderId && (
+                <div className="flex justify-end border-b border-line px-3 py-1.5">
+                  <MaterialPrintButton sheet={printSheetOf(db, r0, g.rows)} />
+                </div>
+              )
+            )}
             <ul className="divide-y divide-line">
               {g.rows.map((r) => (
                 <MaterialRowView key={r.key} r={r} canEdit={canEdit} returnTo={returnTo} orderedByName={name(r.orderedBy)} />
@@ -53,16 +64,13 @@ export function MaterialList({ db, user, rows, returnTo, showCase }: { db: Datab
 }
 
 /** 案件の見出し: 店舗・お客様・案件・日程と、発注に必要な情報 (見積の明細・手書き見積書の原本・現場図面・採寸図) をその場で */
-function CaseHead({ db, row }: { db: Database; row: MaterialRow }) {
+function CaseHead({ db, row, rows }: { db: Database; row: MaterialRow; rows: MaterialRow[] }) {
   const store = db.stores.find((s) => s.id === row.storeId);
   const quote = row.quoteId ? db.quotes.find((q) => q.id === row.quoteId) : undefined;
   const order = row.orderId ? db.orders.find((o) => o.id === row.orderId) : undefined;
   // 手書き見積書の原本 (取込書類の写真) と、案件の現場図面・採寸図・資料
-  const originals = quote?.documentId ? db.attachments.filter((a) => a.parentType === "document" && a.parentId === quote.documentId) : [];
-  const drawings = db.attachments.filter(
-    (a) => ((a.parentType === "quote" && a.parentId === quote?.id) || (a.parentType === "order" && a.parentId === order?.id) || (a.parentType === "inquiry" && quote?.inquiryId && a.parentId === quote.inquiryId)) && (a.category === "site_plan" || a.category === "measure" || a.category === "doc"),
-  );
-  const dates = [row.pickup ? `引取 ${shortDate(row.pickup)}` : "", row.delivery ? `納品 ${shortDate(row.delivery)}` : "", row.install ? `工事 ${shortDate(row.install)}` : ""].filter(Boolean).join(" · ");
+  const { originals, drawings } = caseFiles(db, quote, order);
+  const dates = caseDatesText(row);
   return (
     <div className="border-b border-line px-3 py-2">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -75,6 +83,11 @@ function CaseHead({ db, row }: { db: Database; row: MaterialRow }) {
           <span className="font-semibold text-ink">案件なし (在庫補充など)</span>
         )}
         {dates && <span className="text-xs text-ink-2">{dates}</span>}
+        {row.orderId && (quote || originals.length > 0 || drawings.length > 0) && (
+          <span className="ml-auto">
+            <MaterialPrintButton sheet={printSheetOf(db, row, rows)} />
+          </span>
+        )}
       </div>
       {(quote || originals.length > 0 || drawings.length > 0) && (
         <details className="mt-1">

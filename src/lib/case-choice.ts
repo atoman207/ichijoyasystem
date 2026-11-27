@@ -5,6 +5,8 @@ import { CHANNEL_LABEL } from "@/lib/constants";
 import { buildCaseMap, caseHref, customerCaseSummaries, summarizeCase, type CaseMap, type CaseMembers, type CaseSummary } from "@/lib/case-group";
 import { caseIndex } from "@/lib/case-status";
 import { canEditCaseStore } from "@/lib/auth/permissions";
+import { canLinkToCustomer } from "@/lib/customer-link";
+import { placeholderPlace, placeholdersForCustomer } from "@/lib/placeholder-match";
 import { isMediaKey } from "@/lib/media";
 import { toDateKey } from "@/lib/format";
 
@@ -42,6 +44,11 @@ export interface CaseOption {
   ownerId?: string;
   /** 案件の媒体 (最初の問い合わせの媒体。追加する問い合わせの媒体の初期値) */
   media?: MediaKey;
+  /**
+   * 予定表 (スプレッドシート) から移行した、同じお客様らしい仮のお客様の案件 (お客様のご連絡 2026-11-27)。
+   * 追加すると、案件と予定を選んだお客様に付け替える (src/lib/placeholder-customer.ts の adoptPlaceholderCase)
+   */
+  placeholder?: { id: string; code: string; name: string; place: string; reason: string; next?: string };
 }
 
 export interface CaseRecordRef {
@@ -125,18 +132,41 @@ export function caseOptionsForCustomer(
   user: User,
   customerId: string,
   today = toDateKey(new Date()),
-  opts: { excludeCaseId?: string; map?: CaseMap } = {},
+  opts: { excludeCaseId?: string; map?: CaseMap; placeholders?: boolean } = {},
 ): { open: CaseOption[]; past: CaseOption[]; pastTotal: number } {
   const map = opts.map ?? buildCaseMap(db);
   const { open, past } = customerCaseSummaries(db, customerId, today, map);
   const since = yearsBefore(today, PAST_CASE_YEARS);
   const keep = (s: CaseSummary) => s.id !== opts.excludeCaseId;
   const recent = past.filter((s) => keep(s) && (s.lastAt || s.startedAt) >= since);
+  const own = open.filter(keep).map((s) => toOption(db, user, s, map.members(s.id)));
   return {
-    open: open.filter(keep).map((s) => toOption(db, user, s, map.members(s.id))),
+    open: opts.placeholders ? [...own, ...placeholderCaseOptions(db, user, customerId, today, map, new Set([...own.map((c) => c.id), ...(opts.excludeCaseId ? [opts.excludeCaseId] : [])]))] : own,
     past: recent.slice(0, PAST_CASE_LIMIT).map((s) => toOption(db, user, s, map.members(s.id))),
     pastTotal: recent.length,
   };
+}
+
+/**
+ * 予定表 (スプレッドシート) から移行した、同じお客様らしい仮のお客様の進行中の案件 (お客様のご連絡 2026-11-27)。
+ * 予定表の案件は名字と地区で仮に作ったお客様についているため、選んだお客様の案件には出なかった。
+ * 選んだお客様の お名前・電話・住所 と仮のお客様の 名字・地区・電話 で照合する (src/lib/placeholder-match.ts)
+ */
+export function placeholderCaseOptions(db: Database, user: User, customerId: string, today: string, map: CaseMap, skip: Set<string> = new Set()): CaseOption[] {
+  const c = db.customers.find((x) => x.id === customerId);
+  if (!c) return [];
+  const out: CaseOption[] = [];
+  for (const m of placeholdersForCustomer(db, c, { visible: (x) => canLinkToCustomer(db, user, x), today, limit: 3 })) {
+    for (const s of customerCaseSummaries(db, m.customer.id, today, map).open) {
+      if (skip.has(s.id)) continue;
+      skip.add(s.id);
+      out.push({
+        ...toOption(db, user, s, map.members(s.id)),
+        placeholder: { id: m.customer.id, code: m.customer.code, name: m.customer.name, place: placeholderPlace(m.customer), reason: m.reason, ...(m.upcoming.first ? { next: m.upcoming.first } : {}) },
+      });
+    }
+  }
+  return out;
 }
 
 /**
@@ -147,7 +177,9 @@ export function initialCaseChoice(options: { open: CaseOption[]; past: CaseOptio
   const all = [...options.open, ...options.past];
   if (preferred === "new") return "new";
   if (preferred && all.some((c) => c.id === preferred && c.canAdd)) return preferred;
-  return options.open.length === 1 && options.open[0].canAdd ? options.open[0].id : "new";
+  // 予定表から移行した仮のお客様の案件は自動では選ばない (同じお客様か、人が確かめて選ぶ)
+  const own = options.open.filter((c) => !c.placeholder);
+  return own.length === 1 && own[0].canAdd ? own[0].id : "new";
 }
 
 export interface CaseAdd {

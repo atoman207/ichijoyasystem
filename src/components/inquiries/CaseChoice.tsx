@@ -10,6 +10,8 @@ import { Badge } from "@/components/ui";
  * 既存のお客様の進行中の案件 (工事内容・進み具合・最後の動き・金額・店舗) と、最近の完了した案件 (クレーム・手直しの連絡。たたんで表示) を出し、
  * 「新規案件として登録」か「この案件に問い合わせを追加」を選ぶ。案件のカードの「案件を開く」は別のタブで案件の画面 (/cases/<ID>)。
  * 選んだ値は hidden の name (既定 caseId) で送る: "new" = 新規案件 / 案件の ID。候補は src/lib/case-choice.ts の caseOptionsForCustomer
+ * 予定表 (スプレッドシート) から移行した、同じお客様らしい仮のお客様の案件 (CaseOption.placeholder) は印を付けて出し、
+ * 選ぶと案件と予定をこのお客様に付け替える (お客様のご連絡 2026-11-27)
  */
 export function CaseChoice({
   name = "caseId",
@@ -38,6 +40,8 @@ export function CaseChoice({
   what?: string;
 }) {
   const all = [...open, ...past];
+  const ownOpen = open.filter((c) => !c.placeholder);
+  const moved = open.length - ownOpen.length;
   const selected = all.find((c) => c.id === value);
   const pastSelected = past.some((c) => c.id === value);
   const radio = `${name}Pick`;
@@ -54,12 +58,19 @@ export function CaseChoice({
                 {c.stageLabel}
               </Badge>
               {suggestedId === c.id && <span className="rounded bg-accent px-1.5 text-[10px] font-semibold text-white">提案</span>}
+              {c.placeholder && <span className="rounded bg-warn-soft px-1.5 text-[10px] font-semibold text-warn-ink">予定表から移行</span>}
               <span className="text-[11px] text-ink-3">{c.storeName}</span>
             </span>
             <span className="mt-0.5 block font-medium text-ink">{c.title || "(工事内容の記入なし)"}</span>
             <span className="block text-[11px] text-ink-2">
               {[c.detail, c.lastAt ? `最後の動き ${fmtDate(c.lastAt)}` : "", c.amount !== undefined && c.amountLabel ? `${c.amountLabel} ${yen(c.amount)}` : "", `問い合わせ ${c.counts.inquiries}・見積 ${c.counts.quotes}・受注 ${c.counts.orders}`].filter(Boolean).join(" · ")}
             </span>
+            {c.placeholder && (
+              <span className="mt-1 block rounded bg-warn-soft/50 px-2 py-1 text-[11px] text-ink-2" data-testid="case-choice-placeholder">
+                予定表 (スプレッドシート) から移行した予定の案件です。仮の登録「{c.placeholder.name}」{c.placeholder.place ? ` (${c.placeholder.place})` : ""} {c.placeholder.code} についています ({c.placeholder.reason}
+                {c.placeholder.next ? `・次の予定 ${fmtDate(c.placeholder.next)}` : ""})。同じお客様なら選んでください。{what}を追加すると、この案件と予定を {customerName} 様の案件にします (仮の登録は削除します)。
+              </span>
+            )}
             {!c.canAdd && <span className="mt-0.5 block text-[11px] text-warn-ink">{c.storeName}の案件のため、ここからは追加できません (店舗に依頼してください)</span>}
             <span className="mt-1 flex flex-wrap items-center gap-3">
               {c.canAdd && <span className={`text-xs font-medium ${on ? "text-accent-ink" : "text-ink-2"}`}>{on ? `✓ この案件に${what}を追加` : `この案件に${what}を追加`}</span>}
@@ -78,9 +89,10 @@ export function CaseChoice({
       <div>
         <h3 className="text-sm font-semibold text-ink">{step ? `${step} ` : ""}案件: 新しいご依頼ですか？ すでにある案件のご連絡ですか？</h3>
         <p className="mt-0.5 text-xs text-ink-2">
-          {open.length === 0
-            ? `${customerName} 様の進行中の案件はありません。新しいご依頼として登録します (完了した工事へのクレーム・手直しのご連絡は、下の「完了した案件」から選べます)。`
-            : `${customerName} 様の進行中の案件が ${open.length} 件あります。工事内容・進み具合を確かめて、同じ件なら「この案件に${what}を追加」、新しいご依頼なら「新規案件として登録」を選んでください。`}
+          {ownOpen.length === 0
+            ? `${customerName} 様の進行中の案件はありません。${moved ? "" : "新しいご依頼として登録します "}(完了した工事へのクレーム・手直しのご連絡は、下の「完了した案件」から選べます)。`
+            : `${customerName} 様の進行中の案件が ${ownOpen.length} 件あります。工事内容・進み具合を確かめて、同じ件なら「この案件に${what}を追加」、新しいご依頼なら「新規案件として登録」を選んでください。`}
+          {moved > 0 && ` 予定表 (スプレッドシート) から移行した、同じお客様らしい案件が ${moved} 件あります (下の「予定表から移行」)。予定表に入っている件のご連絡なら、その案件を選んでください。`}
         </p>
       </div>
       <label className={`flex cursor-pointer gap-2 rounded-lg border p-3 text-sm ${value === "new" ? "border-accent bg-accent-soft ring-1 ring-accent/30" : "border-line bg-panel hover:border-accent/40"}`} data-testid="case-choice-new">
@@ -106,7 +118,7 @@ export function CaseChoice({
         </details>
       )}
       <p className={`rounded-lg px-3 py-2 text-xs ${value === "new" ? "bg-subtle text-ink-2" : "bg-accent-soft text-accent-ink"}`} data-testid="case-choice-summary">
-        {selected ? `→ 案件 ${selected.number} (${selected.title || "工事内容の記入なし"}) に${what}を追加します${selected.open ? "" : " (完了した案件へのご連絡)"}。${what === "問い合わせ" ? "問い合わせ一覧と案件の画面の両方に出ます。" : "案件の予定 (見積・現調・引取・納品) とつながり、受注にしたときに予定を二重にしません。"}` : "→ 新しい案件として登録します。"}
+        {selected ? `→ 案件 ${selected.number} (${selected.title || "工事内容の記入なし"}) に${what}を追加します${selected.open ? "" : " (完了した案件へのご連絡)"}${selected.placeholder ? ` (予定表から移行した案件を ${customerName} 様の案件にします)` : ""}。${what === "問い合わせ" ? "問い合わせ一覧と案件の画面の両方に出ます。" : "案件の予定 (見積・現調・引取・納品) とつながり、受注にしたときに予定を二重にしません。"}` : "→ 新しい案件として登録します。"}
       </p>
     </section>
   );

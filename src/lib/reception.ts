@@ -4,6 +4,7 @@ import { customerHasPhone, phoneDigits } from "@/lib/customer-contacts";
 import { canAccessStore, canEditCaseStore, canReadStoreRecords } from "@/lib/auth/permissions";
 import { policyReader } from "@/lib/access-policy";
 import { addressMatch, areaInAddress, nameMatch } from "@/lib/customer-match";
+import { isPlaceholderCustomer, placeholderMatches } from "@/lib/placeholder-match";
 import { isMediaKey } from "@/lib/media";
 
 /**
@@ -329,6 +330,11 @@ export interface CustomerCandidate {
   /** address = 住所で一致 (いちばんの目印) / phone = 電話 / name = お名前など */
   level: "phone" | "address" | "name";
   reason: string;
+  /**
+   * 予定表 (スプレッドシート) から移行した予定の仮のお客様 (名字と地区だけで登録。タグ「予定表から登録」)。
+   * 画面は別にまとめて出し、紐付けるとメモの電話番号・住所で正式なお客様にする (お客様のご連絡 2026-11-27)
+   */
+  placeholder?: boolean;
 }
 
 export type ReceptionAction = "inquiry" | "case" | "record" | "dismiss";
@@ -356,7 +362,7 @@ const OPEN_INQUIRY = new Set(["new", "in_progress", "quoted"]);
 const OPEN_QUOTE = new Set(["draft", "pending_approval", "approved", "sent"]);
 const DAY = 86_400_000;
 
-type MatchDb = Pick<Database, "customers" | "suppliers" | "inquiries" | "quotes" | "orders" | "stores" | "settings">;
+type MatchDb = Pick<Database, "customers" | "suppliers" | "inquiries" | "quotes" | "orders" | "stores" | "settings"> & Partial<Pick<Database, "schedule">>;
 
 function caseOfInquiry(db: MatchDb, id: string, reason: string): CaseCandidate | undefined {
   const i = db.inquiries.find((x) => x.id === id);
@@ -446,6 +452,15 @@ export function matchReception(db: MatchDb, user: User, f: ReceptionFields, toda
     }
     if (cand) scored.push(cand);
   }
+  // 予定表 (スプレッドシート) から移行した予定の仮のお客様 (名字と地区だけ。お客様のご連絡 2026-11-27): 名字・町名・電話のほか、
+  // 手書きの名字を読み違えても町名とメモの日程の日 (予定の日) が合えば候補にする
+  const todayKey = new Date(today.getTime() + 9 * 3600e3).toISOString().slice(0, 10);
+  const phMatches = placeholderMatches(
+    { customers: db.customers, schedule: db.schedule ?? [] },
+    { name: f.customerName, kana: f.kana, phones: [f.phone, f.otherPhone], addresses: [f.address, f.siteAddress], dates: (f.appointments ?? []).map((a) => a.date) },
+    { visible, today: todayKey },
+  );
+  const phReason = new Map(phMatches.map((m) => [m.customer.id, m.reason]));
   const rank = { address: 0, phone: 1, name: 2 } as const;
   scored.sort((a, b) => rank[a.level] - rank[b.level] || b.score - a.score || (b.customer.updatedAt ?? "").localeCompare(a.customer.updatedAt ?? ""));
   // 名字だけの候補は多いことがある (同じ名字の方が何十人も) → 同じ町名・最近の取引の順に上位だけ
@@ -453,7 +468,11 @@ export function matchReception(db: MatchDb, user: User, f: ReceptionFields, toda
     ...scored.filter((c) => c.level === "address").slice(0, 8),
     ...scored.filter((c) => c.level === "phone").slice(0, 8),
     ...scored.filter((c) => c.level === "name").slice(0, 8),
-  ].map(({ customer, level, reason }) => ({ customer, level, reason }));
+  ].map(({ customer, level, reason }) => (isPlaceholderCustomer(customer) ? { customer, level, reason: phReason.get(customer.id) ?? `予定表から移行した仮の登録・${reason}`, placeholder: true } : { customer, level, reason }));
+  for (const m of phMatches) {
+    if (customers.some((c) => c.customer.id === m.customer.id)) continue;
+    customers.push({ customer: m.customer, level: m.phone ? "phone" : "name", reason: m.reason, placeholder: true });
+  }
   const nameTotal = scored.filter((c) => c.level === "name").length;
 
   const suppliers = phones.length || f.companyName
@@ -466,6 +485,10 @@ export function matchReception(db: MatchDb, user: User, f: ReceptionFields, toda
   if (hinted && canAccessStore(user, hinted.storeId)) cases.push(hinted);
   for (const c of customers.filter((x) => x.level === "address" || x.level === "phone").slice(0, 5)) {
     for (const k of customerCases(db, c.customer.id, today)) if (!cases.some((x) => caseKey(x) === caseKey(k)) && canAccessStore(user, k.storeId)) cases.push(k);
+  }
+  // 予定表から移行した予定の案件 (仮のお客様の案件。メモの件は予定表に入っている案件のことが多い)
+  for (const m of phMatches.slice(0, 3)) {
+    for (const k of customerCases(db, m.customer.id, today)) if (!cases.some((x) => caseKey(x) === caseKey(k)) && canAccessStore(user, k.storeId)) cases.push({ ...k, reason: "予定表から移行した予定の案件" });
   }
 
   // 自動で選ぶお客様: 住所一致が 1 件 → それを優先。なければ電話一致が 1 件だけ。複数なら選ばず人が確かめる
@@ -522,6 +545,11 @@ export function matchReception(db: MatchDb, user: User, f: ReceptionFields, toda
   if (nameTotal > 8 && !customers.some((c) => c.level !== "name")) warnings.push(`名字が同じお客様が ${nameTotal} 人います (同じ町名・最近の取引の順に 8 人を出しています)。見つからないときは「既存のお客様を検索」で住所・電話番号から探してください。`);
   if (!f.address?.trim() && (phoneHits.length > 0 || customers.some((c) => c.level === "name"))) {
     warnings.push("住所が読み取れていません。メモの住所を入力すると、既存のお客様と正しく結びつけやすくなります。");
+  }
+  if (phMatches.length && !pickedCustomer) {
+    const m = phMatches[0];
+    const place = m.customer.area || m.customer.address;
+    warnings.push(`予定表 (スプレッドシート) から移行した予定のお客様「${m.customer.name}」様${place ? ` (${place.slice(0, 20)})` : ""}が仮に登録されています${phMatches.length > 1 ? ` (ほか ${phMatches.length - 1} 件)` : ""}。同じお客様なら、新規顧客として登録せずに「予定表から移行した予定のお客様」から紐付けてください (予定と案件がそのままつながります)。`);
   }
   if (pickedCustomer?.tradeStopped) warnings.push(`「${pickedCustomer.name}」様は取引停止のお客様です。対応の前に店長に確かめてください。`);
   if (otherStores.length) {

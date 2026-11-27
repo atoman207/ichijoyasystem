@@ -19,7 +19,9 @@ import { canAccessStore, canEditCaseStore, canSeeAllStores } from "@/lib/auth/pe
 import { createInquiryRequest } from "@/lib/inquiry-requests";
 import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib/duplicates";
 import { newCaseStore } from "@/lib/store-area";
-import { addInquiryPhone, canLinkToCustomer } from "@/lib/customer-link";
+import { addInquiryPhone, canLinkToCustomer, isPlaceholderCustomer } from "@/lib/customer-link";
+import { adoptPlaceholderCase, fillPlaceholderFromFields } from "@/lib/placeholder-customer";
+import { placeholderMatches } from "@/lib/placeholder-match";
 import { withPostal } from "@/lib/postal/lookup";
 import { isCommonStaff } from "@/lib/staff-choices";
 import { dueAtFrom } from "@/lib/inquiry-flow";
@@ -389,8 +391,10 @@ async function chooseReceptionCustomer(user: User, id: string, formData: FormDat
       if (!c) fail(back, "選んだお客様が見つかりません。");
       if (!canLinkToCustomer(d, user, c)) fail(back, "このお客様は閲覧の範囲の外のため紐付けられません。店舗または本部に依頼してください。");
       x._customerId = c.id;
+      // 予定表 (スプレッドシート) から移行した仮のお客様 (名字と地区だけ): メモの電話番号・住所などを足して正式なお客様にする (お客様のご連絡 2026-11-27)
+      const filled = isPlaceholderCustomer(c) ? fillPlaceholderFromFields(d, user, c, { name: f.customerName, kana: f.kana, phone: f.phone, address: f.address }) : undefined;
       addAudit(d, { userId: user.id, action: "update", entity: "document", entityId: id, entityLabel: doc.fileName, summary: `受付を既存の顧客 ${c.code} ${c.name} に紐付け`, storeId: doc.storeId });
-      message = `${c.name} 様 (${c.code}) に紐付けました。新しいご依頼か、すでにある案件のご連絡かを選んで、内容を確かめてから登録してください。`;
+      message = `${c.name} 様 (${c.code}) に紐付けました。${filled ? `${filled} ` : ""}新しいご依頼か、すでにある案件のご連絡かを選んで、内容を確かめてから登録してください。`;
       return;
     }
     // 新規顧客として登録 (この時点で顧客を保存する)
@@ -399,6 +403,12 @@ async function chooseReceptionCustomer(user: User, id: string, formData: FormDat
     const dup = findDuplicateCustomers(d, { name, phone: f.phone, otherPhones: [f.otherPhone].filter(Boolean), email: f.email, postalCode: f.postalCode, address: f.address });
     if (needsConfirmation(dup) && formData.get("confirmDuplicate") !== "on") {
       fail(back, `同じお客様の可能性がある顧客があります (${candidateLabel(dup)})。同じお客様なら候補の「このお客様に紐付ける」を、別のお客様なら「上の候補とは別のお客様です」にチェックしてから「新規顧客として登録」を押してください。`);
+    }
+    // 予定表 (スプレッドシート) から移行した予定の仮のお客様 (名字と地区だけ) と同じ人らしいとき: 二重にしないように確かめる (お客様のご連絡 2026-11-27)
+    const sheet = placeholderMatches(d, { name: f.customerName, kana: f.kana, phones: [f.phone, f.otherPhone], addresses: [f.address, f.siteAddress], dates: f.appointments.map((a) => a.date) }, { visible: (c) => canLinkToCustomer(d, user, c) });
+    if (sheet.length && formData.get("confirmDuplicate") !== "on") {
+      const m = sheet[0];
+      fail(back, `予定表から移行した予定のお客様「${m.customer.name}」様 (${m.customer.code}・${m.reason}) が仮に登録されています。同じお客様なら「予定表から移行した予定のお客様」の「このお客様に紐付ける」を、別のお客様なら「上の候補とは別のお客様です」にチェックしてから「新規顧客として登録」を押してください。`);
     }
     const now = nowIso();
     // お客様の店舗: 確認の画面の担当店舗 (手で選んだとき) > お客様の住所の担当エリア > 受付の店舗
@@ -533,9 +543,11 @@ export async function registerReception(formData: FormData) {
     // お客様のない問い合わせは登録しない (お客様のご要望 2026-11-25「③」)
     const customerId = meta0.customerId ?? (intent === "case" ? add0?.customerId : undefined) ?? "";
     if (!customerId) return saveAndFail(user, id, f, channel, formData, back, "先に上の「お客様・案件の確認」で、既存のお客様に紐付けるか「新規顧客として登録」を押してください (問い合わせは必ずお客様に紐付けて保存します)。入力した内容は保存しました。");
-    if (add0?.customerId && add0.customerId !== customerId) return saveAndFail(user, id, f, channel, formData, back, `案件 ${add0.number} は、紐付けたお客様の案件ではありません。案件を選び直すか、お客様を確かめてください。入力した内容は保存しました。`);
+    // 予定表から移行した仮のお客様の案件は、選んだお客様の案件にする (下の adoptPlaceholderCase。お客様のご連絡 2026-11-27)
+    if (add0?.customerId && add0.customerId !== customerId && !isPlaceholderCustomer(db0.customers.find((c) => c.id === add0.customerId))) return saveAndFail(user, id, f, channel, formData, back, `案件 ${add0.number} は、紐付けたお客様の案件ではありません。案件を選び直すか、お客様を確かめてください。入力した内容は保存しました。`);
     const createdCustomer = meta0.customerId && (doc0.extracted as Record<string, unknown>)?._customerCreated === meta0.customerId ? db0.customers.find((c) => c.id === meta0.customerId)?.code ?? "" : "";
     let appointmentNote = "";
+    let adoptNote = "";
     const addedPhones: string[] = [];
     // 担当者: 選んだ人 → (案件番号で追加するとき) 知らせる担当者 → 案件の担当 → 自分
     const pickedAssignee = str(formData, "assignedUserId") || (intent === "case" ? str(formData, "notifyUserId") : "");
@@ -547,11 +559,19 @@ export async function registerReception(formData: FormData) {
       assertOpen(doc, back);
       const found = caseRef ? caseForAdd(d, user, caseRef, undefined, { record: pickedRecord }) : undefined;
       if (found && "error" in found) fail(back, found.error);
-      const add: CaseAdd | undefined = found;
+      let add: CaseAdd | undefined = found;
       const customer = d.customers.find((c) => c.id === customerId);
       if (!customer) fail(back, "選んだお客様が見つかりません。");
       // 紐付けられるお客様 = 顧客の一覧で見られるお客様 (ほかの店舗・本部で登録したお客様も。src/lib/customer-link.ts)
       if (!canLinkToCustomer(d, user, customer)) fail(back, "このお客様は閲覧の範囲の外のため紐付けられません。店舗または本部に依頼してください。");
+      // 予定表 (スプレッドシート) から移行した仮のお客様の案件に追加: 案件と予定をこのお客様の案件にする (お客様のご連絡 2026-11-27
+      // 「既存案件への紐付けができませんでした」。予定表の案件は名字と地区で仮に作ったお客様についている)
+      if (add?.customerId && add.customerId !== customer.id) {
+        const r = adoptPlaceholderCase(d, user, add.caseId, customer);
+        if (!r.adopted) fail(back, r.error ?? `案件 ${add.number} は、紐付けたお客様の案件ではありません。`);
+        adoptNote = r.note ? ` ${r.note}` : "";
+        add = { ...add, customerId: customer.id };
+      }
       // 担当店舗 (確認の画面で 1 回だけ選ぶ。お客様のご要望 2026-11-26「■2」): storeAuto = 1 は手で選んでいない (住所・案件で決める)
       const requested = str(formData, "storeId");
       const auto = str(formData, "storeAuto") === "1";
@@ -659,7 +679,7 @@ export async function registerReception(formData: FormData) {
       if (add) {
         // 既存の案件に追加したときは案件の画面へ (案件の問い合わせ・見積・受注・予定がまとめて見える)
         href = add.href;
-        message = `問い合わせ ${inq.number} を ${customer.name} 様の案件 ${add.number}${add.open ? "" : " (完了した案件)"} に追加しました${phonesNote}${handoffNote}。${appointmentNote}`;
+        message = `問い合わせ ${inq.number} を ${customer.name} 様の案件 ${add.number}${add.open ? "" : " (完了した案件)"} に追加しました${phonesNote}${handoffNote}。${adoptNote}${appointmentNote}`;
       } else {
         href = `/inquiries/${inqId}`;
         message = `問い合わせ ${inq.number} を${customer.name} 様${createdCustomer ? ` (新規顧客 ${createdCustomer})` : ""}の新しい案件として登録しました${phonesNote}${handoffNote}。${appointmentNote}`;

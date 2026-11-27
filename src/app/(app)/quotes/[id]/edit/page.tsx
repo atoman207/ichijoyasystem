@@ -24,9 +24,10 @@ export default async function EditQuotePage({ params, searchParams }: { params: 
   const db = getDb();
   const q = db.quotes.find((x) => x.id === id);
   if (!q) notFound();
-  // 施工完了した受注の見積の金額変更は、店長でも管理者の承認 (確定した売上。approval-decide.ts の touchesConfirmedSales)
+  // 売上確定のあと (施工完了・請求済・入金済) の明細・金額の修正: 一般社員は店長の承認、店長・管理者は自分の権限で反映 (お客様のご要望 2026-11-27「■1」。
+  // 差額が小さい変更の承認の省略はしない。approval-decide.ts の salesAmountCorrection)
   const confirmed = db.orders.some((o) => o.quoteId === q.id && ["completed", "invoiced", "paid"].includes(o.status));
-  const ownAmend = skipsApproval(user, "quote_amend") && (user.role === "admin" || !confirmed);
+  const ownAmend = skipsApproval(user, "quote_amend");
   // 承認なしで反映する差額 (設定 → 承認ルール。既定 1 万円。お客様のご要望 2026-11-25「⑥」)
   const small = approvalSettings(db).smallChangeLimit;
   if (!canEditCaseStore(user, q.storeId)) redirect("/quotes?err=" + encodeURIComponent("この見積を編集する権限がありません。"));
@@ -42,7 +43,7 @@ export default async function EditQuotePage({ params, searchParams }: { params: 
       <Flash err={err} />
       <PageHeader title={`${q.number} を編集`} description={`${customerName(q.customerId)} 様 · ${q.title} · 第${q.version}版`} back={{ href: `/quotes/${id}`, label: "見積詳細" }} />
       {amend ? (
-        <Note tone="warn">この見積は確定済み (承認済・送付済・受注) です。変更は第{q.version + 1}版として記録され、変更前の版は「版の履歴」に残ります (PDF も出力できます)。仕様だけの変更と、変更前後の差額が{manYen(small)}以下の変更は承認なしですぐに反映し、それを超える変更は承認者 (店長または管理者) の承認後に反映されます{confirmed ? "。施工完了・売上確定の案件の変更は管理者の承認です" : ""}。変更は担当店舗・本部・管理者にお知らせします。</Note>
+        <Note tone="warn">この見積は確定済み (承認済・送付済・受注) です。変更は第{q.version + 1}版として記録され、変更前の版は「版の履歴」に残ります (PDF も出力できます)。仕様だけの変更と、変更前後の差額が{manYen(small)}以下の変更は承認なしですぐに反映し、それを超える変更は承認者 (店長または管理者) の承認後に反映されます{confirmed ? "。売上確定のあとの変更は、差額にかかわらず店長の承認 (店長・管理者は承認不要) で、受注・請求書 (入金前) にも反映します" : ""}。変更は担当店舗・本部・管理者にお知らせします。</Note>
       ) : (
         <Note>{own ? "下書きの見積です。内容を修正して保存するか、そのまま確定できます (承認不要)。" : "下書きの見積です。内容を修正して保存するか、そのまま承認を申請できます。"}</Note>
       )}
@@ -86,7 +87,7 @@ export default async function EditQuotePage({ params, searchParams }: { params: 
           <FormActions>
             <LinkButton href={`/quotes/${id}`} variant="secondary">キャンセル</LinkButton>
             {amend ? (
-              <Button type="submit" name="intent" value="amend">{ownAmend ? "変更を反映する (承認不要)" : `変更を保存する (${manYen(small)}を超える変更は承認申請)`}</Button>
+              <Button type="submit" name="intent" value="amend">{ownAmend ? "変更を反映する (承認不要)" : confirmed ? "変更を保存する (店長の承認を申請)" : `変更を保存する (${manYen(small)}を超える変更は承認申請)`}</Button>
             ) : (
               <>
                 <Button type="submit" name="intent" value="draft" variant="secondary">下書き保存</Button>

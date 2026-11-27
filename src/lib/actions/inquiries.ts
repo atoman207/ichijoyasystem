@@ -13,7 +13,8 @@ import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib
 import { linkInquiryLogs } from "@/lib/ai-intake";
 import { DUE_CHOICES, REQUEST_PURPOSE, dueAtFrom, dueLabel, type DueChoice } from "@/lib/inquiry-flow";
 import { closeScheduleRequests, createInquiryRequest } from "@/lib/inquiry-requests";
-import { addInquiryPhone, canLinkToCustomer, detachFromOtherCustomerCase, moveCaseToCustomer, moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
+import { addInquiryPhone, canLinkToCustomer, detachFromOtherCustomerCase, isPlaceholderCustomer, moveCaseToCustomer, moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
+import { adoptPlaceholderCase } from "@/lib/placeholder-customer";
 import { caseChainOf } from "@/lib/case-store";
 import { addChangeNotice, caseTarget, noticeLines } from "@/lib/change-notices";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
@@ -57,7 +58,8 @@ export async function loadCustomerCases(customerId: string): Promise<{ open: Cas
   const db = getDb();
   const c = db.customers.find((x) => x.id === String(customerId ?? ""));
   if (!c || !canLinkToCustomer(db, user, c)) return null;
-  return caseOptionsForCustomer(db, user, c.id, toDateKey(new Date()));
+  // 予定表 (スプレッドシート) から移行した、同じお客様らしい仮のお客様の案件も出す (選ぶとこのお客様の案件にする。お客様のご連絡 2026-11-27)
+  return caseOptionsForCustomer(db, user, c.id, toDateKey(new Date()), { placeholders: true });
 }
 
 /** 店舗の LINE グループ (店舗別・問い合わせを知らせる) に新しい問い合わせを送る。送れなくても問い合わせの登録は取り消さない */
@@ -89,13 +91,21 @@ export async function createInquiry(formData: FormData) {
   let areaNote = "";
   let createdCode = "";
   let caseDone: { href: string; number: string; customer: string; open: boolean } | undefined;
+  let adoptNote = "";
   await mutate((db) => {
     let customer = db.customers.find((c) => c.id === str(formData, "customerId"));
     const found = addTo ? caseForAdd(db, user, addTo) : undefined;
     if (found && "error" in found) fail(back, found.error);
-    const add: CaseAdd | undefined = found;
+    let add: CaseAdd | undefined = found;
     if (add && !customer) fail(back, "既存の案件に追加するときは、その案件のお客様を「既存顧客を選択」で選んでください。");
-    if (add && customer && add.customerId && add.customerId !== customer.id) fail(back, `案件 ${add.number} は、選んだお客様の案件ではありません。案件を選び直してください。`);
+    if (add && customer && add.customerId && add.customerId !== customer.id) {
+      // 予定表 (スプレッドシート) から移行した仮のお客様の案件: 案件と予定を選んだお客様の案件にする (お客様のご連絡 2026-11-27)
+      const owner = add.customerId;
+      const r = isPlaceholderCustomer(db.customers.find((c) => c.id === owner)) ? adoptPlaceholderCase(db, user, add.caseId, customer) : undefined;
+      if (!r?.adopted) fail(back, r?.error ?? `案件 ${add.number} は、選んだお客様の案件ではありません。案件を選び直してください。`);
+      adoptNote = r.note ? ` ${r.note}` : "";
+      add = { ...add, customerId: customer.id };
+    }
     // 紐付けられるお客様 = 顧客の一覧で見られるお客様 (ほかの店舗・本部で登録したお客様も。src/lib/customer-link.ts)
     if (customer && !canLinkToCustomer(db, user, customer)) fail(back, "このお客様は閲覧の範囲の外のため選べません。店舗または本部に依頼してください。");
     // 既存のお客様を選ばなかったときは、新規顧客として登録する (問い合わせは必ずお客様に紐付けて保存する。お客様のご要望 2026-11-25「問い合わせ登録時の顧客登録・紐付け」③)
@@ -191,7 +201,7 @@ export async function createInquiry(formData: FormData) {
   // 既存の案件に追加したときは案件の画面へ (案件の問い合わせ・見積・受注・予定がまとめて見える)
   if (caseDone) {
     revalidatePath(caseDone.href);
-    redirect(withMsg(caseDone.href, `問い合わせ ${inqNo} を ${caseDone.customer} 様の案件 ${caseDone.number}${caseDone.open ? "" : " (完了した案件)"} に追加しました。`));
+    redirect(withMsg(caseDone.href, `問い合わせ ${inqNo} を ${caseDone.customer} 様の案件 ${caseDone.number}${caseDone.open ? "" : " (完了した案件)"} に追加しました。${adoptNote}`));
   }
   redirect(withMsg(`/inquiries/${id}`, `問い合わせを登録しました${createdCode ? ` (新規顧客 ${createdCode} も登録し、このお客様の履歴として保存しました)` : ""}。${areaNote}届いた書類・写真は下の「資料・写真」から添付できます。`));
 }
@@ -567,6 +577,7 @@ export async function mergeInquiryIntoCase(id: string, formData: FormData) {
   if (!targetRef) fail(back, "追加する案件を選んでください。");
   let href = back;
   let label = "";
+  let adoptNote = "";
   await mutate((db) => {
     const inq = db.inquiries.find((x) => x.id === id);
     if (!inq) fail("/inquiries", "問い合わせが見つかりません。");
@@ -578,9 +589,17 @@ export async function mergeInquiryIntoCase(id: string, formData: FormData) {
     // caseKey (<種類>:<ID>) で記録を選んだときは、その記録に内容を書き残す
     const found = caseForAdd(db, user, targetRef, map, { record: !str(formData, "caseId") && key.includes(":") });
     if ("error" in found) fail(back, found.error);
-    const add: CaseAdd = found;
+    let add: CaseAdd = found;
     if (add.caseId === own) fail(back, "この問い合わせの案件です。");
-    if (add.customerId !== inq.customerId) fail(back, "同じお客様の案件にだけ追加できます。");
+    if (add.customerId !== inq.customerId) {
+      // 予定表 (スプレッドシート) から移行した仮のお客様の案件: 案件と予定をこの問い合わせのお客様の案件にする (お客様のご連絡 2026-11-27)
+      const to = db.customers.find((c) => c.id === inq.customerId);
+      const owner = add.customerId;
+      const r = to && isPlaceholderCustomer(db.customers.find((c) => c.id === owner)) ? adoptPlaceholderCase(db, user, add.caseId, to) : undefined;
+      if (!r?.adopted) fail(back, r?.error ?? "同じお客様の案件にだけ追加できます。");
+      adoptNote = r.note ? ` ${r.note}` : "";
+      add = { ...add, customerId: inq.customerId };
+    }
     // この問い合わせから始まった案件にほかの記録 (追加した問い合わせ・見積・受注) があるときは、案件ごと動いてしまうので断る
     const ownMembers = own === inq.id ? map.members(own) : undefined;
     if (ownMembers && ownMembers.inquiries.length + ownMembers.quotes.length + ownMembers.orders.length > 1) fail(back, "この問い合わせの案件には、ほかの問い合わせ・見積・受注があるため、別の案件に追加できません。");
@@ -616,7 +635,7 @@ export async function mergeInquiryIntoCase(id: string, formData: FormData) {
   revalidatePath(href);
   revalidatePath("/inquiries");
   revalidatePath("/schedule");
-  redirect(withMsg(href, `問い合わせを${label}に追加しました (問い合わせは一覧にも案件の画面にも残ります。内容はこの案件のやりとりにも残しました)。`));
+  redirect(withMsg(href, `問い合わせを${label}に追加しました (問い合わせは一覧にも案件の画面にも残ります。内容はこの案件のやりとりにも残しました)。${adoptNote}`));
 }
 
 /**

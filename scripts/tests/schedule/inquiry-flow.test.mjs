@@ -207,7 +207,15 @@ await store.mutate((x) => {
   x.threads.push({ id: "th_late", title: "訪問日程の打ち合わせ", kind: "request", storeId: "koshi", createdBy: hq.id, participants: [hq.id, koshiStaff.id], relatedType: "inquiry", relatedId: "inq_f4", status: "open", createdAt: nowIso, updatedAt: nowIso, assigneeIds: [koshiStaff.id], purpose: "schedule", dueAt: jst("2026-11-24T09:00:00").toISOString(), taskStatus: "requested" });
 });
 const FU = await imp("lib/inquiry-followup.ts");
+// 自動の再通知は既定で送らない (お客様のご要望 2026-11-27「■2」)。設定 → 承認ルールでオンにしたときだけ
 let res = await FU.runInquiryFollowups(jst("2026-11-24T10:00:00"));
+ok(res.sent === 0 && !res.threads.length && !db().threads.find((t) => t.id === "th_late").remindCount, "既定 (自動の再通知 オフ) では期限を過ぎても送らない");
+await store.mutate((x) => {
+  const cur = x.settings.find((s) => s.id === "approval");
+  if (cur) cur.value = { ...cur.value, autoReminders: true };
+  else x.settings.push({ id: "approval", value: { autoReminders: true }, updatedAt: nowIso, updatedBy: hq.id });
+});
+res = await FU.runInquiryFollowups(jst("2026-11-24T10:00:00"));
 const late1 = db().threads.find((t) => t.id === "th_late");
 ok(res.threads.includes("th_late") && late1.remindCount === 1, "期限を過ぎた依頼に再通知 (1 回目)");
 const rm = db().messages.filter((m) => m.threadId === "th_late").at(-1);

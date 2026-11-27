@@ -7,6 +7,7 @@ import { linkInquiryLogs } from "@/lib/ai-intake";
 import { caseChainOf, type CaseChain } from "@/lib/case-store";
 import { invoiceCoversOrder, liveInvoicesOfOrder } from "@/lib/billing";
 import { buildCaseMap } from "@/lib/case-group";
+import { isPlaceholderCustomer } from "@/lib/placeholder-match";
 
 /**
  * 問い合わせ (受付) を紐付けられるお客様: 顧客の一覧で見られるお客様 (閲覧の範囲の設定。初期設定は全社員が全店舗) と、変更できる店舗のお客様。
@@ -43,12 +44,8 @@ export function canLinkToCustomer(db: Pick<Database, "settings">, user: User, c:
  * - 見積・受注のあとの案件は moveCaseToCustomer で見積・受注・予定もまとめて付け替える (請求書を発行した案件は付け替えない)
  */
 
-export const PLACEHOLDER_TAG = "予定表から登録";
-
-/** 予定表の取込で仮に作った顧客 (電話・住所なし) */
-export function isPlaceholderCustomer(c: Pick<Customer, "tags"> | undefined): boolean {
-  return Boolean(c?.tags?.includes(PLACEHOLDER_TAG));
-}
+// 予定表の取込で仮に作った顧客のタグと判定 (画面の部品からも読めるよう、import のない src/lib/placeholder-match.ts に置いた)
+export { PLACEHOLDER_TAG, isPlaceholderCustomer } from "@/lib/placeholder-match";
 
 /**
  * この問い合わせ (案件) のお客様を付け替えられないときの理由 (付け替えられるなら undefined)。

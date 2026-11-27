@@ -16,6 +16,7 @@ import { approvalMergeTarget, customerDeleteBlocker } from "@/lib/customer-delet
 import { runCustomerDelete } from "@/lib/customer-delete-run";
 import { approvalSettings, manYen } from "@/lib/approval-rules";
 import { addChangeNotice, caseTarget, noticeLines, quoteItemLines } from "@/lib/change-notices";
+import { amendBlockedByInvoice, syncInvoiceToOrder } from "@/lib/invoice-sync";
 
 /**
  * 承認の反映 (承認・差戻し・却下で申請の対象を変える処理)
@@ -119,6 +120,9 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
             o.workDetails = q.workDetails;
             notes.push("施工内容を見積の第" + q.version + "版に合わせて更新");
           }
+          // 売上確定のあとの修正: 受注 1 件の請求書も同じ明細・金額に直す (お客様のご要望 2026-11-27「■1」。入金の記録・まとめ請求は前に断っている)
+          const invNo = syncInvoiceToOrder(db, o, userId, pc.reason);
+          if (invNo) notes.push(`請求書 ${invNo} の明細・金額も変更`);
           o.updatedAt = now;
           o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `見積 ${q.number} 第${q.version}版の承認により${notes.length ? notes.join("、") : "内容を更新"} (理由: ${pc.reason})` });
         }
@@ -212,7 +216,8 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
         assertUnchanged("order", o as unknown as Record<string, unknown>, a.changes ?? [], back);
         if (a.changes?.some((c) => c.field === "total")) {
           if (o.quoteId) fail(back, "見積から作った受注の金額は、見積の金額変更で直します。この申請は却下してください。");
-          if (db.invoices.some((i) => i.id === o.invoiceId && i.status !== "void")) fail(back, "請求書を発行済みの案件のため、契約金額を変更できません。入金前であれば請求書を無効化してから承認してください。");
+          const blocked = amendBlockedByInvoice(db, { orderId: o.id });
+          if (blocked) fail(back, blocked);
         }
         // 売上計上日の変更: 申請のあとに管理会計で月次確定した月にはかけない (src/lib/mgmt/close.ts)
         const sales = a.changes?.find((c) => c.field === "salesDate");
@@ -224,7 +229,9 @@ export function applyDecision(db: Database, a: Approval, decision: Decision, use
         }
         applyChanges(o as unknown as Record<string, unknown>, a.changes ?? []);
         o.updatedAt = now;
-        o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `契約内容の変更が承認されました: ${describe("order", a.changes ?? [])}` });
+        // 契約金額の変更: 受注 1 件の請求書 (入金前) も同じ金額に直す (お客様のご要望 2026-11-27「■1」)
+        const invNo = a.changes?.some((c) => c.field === "total") ? syncInvoiceToOrder(db, o, userId, a.requestComment ?? "契約金額の変更") : undefined;
+        o.progressNotes.push({ id: `pn_${Date.now()}`, at: now, userId, kind: "change", body: `契約内容の変更が承認されました: ${describe("order", a.changes ?? [])}${invNo ? ` (請求書 ${invNo} の金額も変更)` : ""}` });
         addChangeNotice(db, a.requestedBy, caseTarget(db, o.id), "契約内容の変更", [...noticeLines(db, "order", a.changes), ...(a.requestComment ? [{ label: "理由", before: "", after: a.requestComment }] : []), ...(userId !== a.requestedBy ? [{ label: "承認", before: "", after: db.users.find((u) => u.id === userId)?.name ?? "-" }] : [])]);
         addAudit(db, { userId, action: "approve", entity: "order", entityId: o.id, entityLabel: o.number, summary: `契約内容の変更を承認 (${(a.changes ?? []).map((c) => fieldLabel("order", c.field)).join("・")})`, storeId: o.storeId, changes: a.changes });
       } else {
@@ -358,9 +365,22 @@ export function releaseQuoteFromOrder(db: Database, orderId: string) {
   }
 }
 
-/** 見積から作った受注に有効な請求書があるか (あれば金額変更を反映しない。受注と請求書の金額が食い違うため) */
-export function quoteInvoiced(db: Database, quoteId: string): boolean {
-  return db.orders.some((o) => o.quoteId === quoteId && o.status !== "cancelled" && db.invoices.some((i) => i.id === o.invoiceId && i.status !== "void"));
+/**
+ * 見積の金額変更を反映できない請求書があるか (入金の記録がある・まとめ請求)。理由の文を返す (なければ undefined)。
+ * 受注 1 件の入金前の請求書は反映のときに同じ明細・金額に直す (src/lib/invoice-sync.ts。お客様のご要望 2026-11-27「■1」。以前は請求書があれば断っていた)
+ */
+export function quoteInvoiced(db: Database, quoteId: string): string | undefined {
+  return amendBlockedByInvoice(db, { quoteId });
+}
+
+/**
+ * 売上確定のあとの金額の修正 (見積の明細・金額の変更、見積のない受注の契約金額の変更)。お客様のご要望 2026-11-27「■1」:
+ * 一般社員の修正は店長の承認、店長以上 (店長・管理者) は自分の権限で修正できる。施工完了日・売上計上日・施工店舗の変更は管理者の承認のまま
+ */
+export function salesAmountCorrection(a: Pick<Approval, "type" | "changes">): boolean {
+  if (a.type === "quote_amend") return true;
+  if (a.type === "order_change") return (a.changes ?? []).length > 0 && (a.changes ?? []).every((c) => c.field === "total");
+  return false;
 }
 
 /** 承認を省略したときの画面の言葉 (「…し、反映しました」) */
@@ -412,10 +432,11 @@ export function settleOwnApproval(db: Database, a: Approval, user: Pick<User, "i
   const own = skipsApproval(user, a.type);
   const small = !own && smallAmountChange(db, a);
   if (!own && !small) return false;
-  // 店長の申請でも、確定した売上・入金に関わる変更は管理者の承認を待つ
-  if (user.role !== "admin" && touchesConfirmedSales(db, a)) return false;
+  // 店長の申請でも、確定した売上・入金に関わる変更は管理者の承認を待つ。ただし売上確定のあとの金額の修正は店長が自分の権限で直せる (2026-11-27)
+  if (user.role !== "admin" && touchesConfirmedSales(db, a) && !salesAmountCorrection(a)) return false;
   const note = small ? `差額が${manYen(approvalSettings(db).smallChangeLimit)}以下の変更のため承認を省略` : `${user.role === "admin" ? "管理者" : "店長"}の申請のため承認を省略`;
-  if (a.type === "quote_amend" && quoteInvoiced(db, a.targetId)) fail(back, "請求書を発行済みの案件のため、金額変更を反映できません。入金前であれば請求書を無効化してから変更してください。");
+  const blocked = a.type === "quote_amend" ? quoteInvoiced(db, a.targetId) : undefined;
+  if (blocked) fail(back, blocked);
   a.status = "approved";
   a.decidedBy = user.id;
   a.decidedAt = nowIso();

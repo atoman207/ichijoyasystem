@@ -41,15 +41,17 @@ export async function updateApprovalSettings(formData: FormData) {
   const customerChange = formData.get("customerChange") === "on";
   const scheduleChange = formData.get("scheduleChange") === "on";
   const noticeHq = formData.get("noticeHq") === "on";
+  const changeBell = formData.get("changeBell") === "on";
+  const autoReminders = formData.get("autoReminders") === "on";
   const smallChangeLimit = formData.has("smallChangeLimit") ? Math.round(numField(formData, "smallChangeLimit")) : undefined;
   if (smallChangeLimit !== undefined && (!(smallChangeLimit >= 0) || smallChangeLimit > 1_000_000)) fail(back, "承認なしで反映する差額は 0 円〜100 万円で入力してください。");
   await mutate((db) => {
     const before = approvalSettings(db);
-    const value = { quoteAdminThreshold: quote, expenseAdminThreshold: expense, customerChange, scheduleChange, noticeHq, smallChangeLimit: smallChangeLimit ?? before.smallChangeLimit };
+    const value = { quoteAdminThreshold: quote, expenseAdminThreshold: expense, customerChange, scheduleChange, noticeHq, changeBell, autoReminders, smallChangeLimit: smallChangeLimit ?? before.smallChangeLimit };
     saveSetting(db, APPROVAL_SETTINGS_ID, value, user.id);
-    const changes = diffChanges(before, approvalSettings(db), ["quoteAdminThreshold", "expenseAdminThreshold", "customerChange", "scheduleChange", "smallChangeLimit", "noticeHq"]);
+    const changes = diffChanges(before, approvalSettings(db), ["quoteAdminThreshold", "expenseAdminThreshold", "customerChange", "scheduleChange", "smallChangeLimit", "noticeHq", "changeBell", "autoReminders"]);
     if (!changes.length) fail(back, "変更はありませんでした。");
-    const label: Record<string, string> = { quoteAdminThreshold: "見積・契約の管理者承認の基準額", expenseAdminThreshold: "経費の管理者承認の基準額", customerChange: "顧客の重要情報の変更の承認", scheduleChange: "予定の変更・削除の承認", smallChangeLimit: "承認なしの工事金額の変更の差額", noticeHq: "変更のお知らせを本部・管理者にも" };
+    const label: Record<string, string> = { quoteAdminThreshold: "見積・契約の管理者承認の基準額", expenseAdminThreshold: "経費の管理者承認の基準額", customerChange: "顧客の重要情報の変更の承認", scheduleChange: "予定の変更・削除の承認", smallChangeLimit: "承認なしの工事金額の変更の差額", noticeHq: "変更のお知らせを本部・管理者にも", changeBell: "変更・予定の担当のお知らせをベルに出す", autoReminders: "期限を過ぎた依頼の自動の再通知" };
     addAudit(db, { userId: user.id, action: "update", entity: "settings", entityId: APPROVAL_SETTINGS_ID, entityLabel: "承認ルール", summary: `承認ルールを変更 (${changes.map((c) => `${label[c.field]}: ${typeof c.after === "number" ? manYen(c.after) : c.after ? "必要" : "不要"}`).join(" / ")})`, changes });
   });
   revalidatePath("/", "layout");

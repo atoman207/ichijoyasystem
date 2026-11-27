@@ -28,7 +28,8 @@ import { quoteCompletedLock, completedLockMessage } from "@/lib/case-access";
 import { autoUnit } from "@/lib/line-kind";
 import { buildCaseMap, quoteLinkForCase } from "@/lib/case-group";
 import { scheduleCheckLink } from "@/lib/msg-link";
-import { resolvePlaceholderCustomer } from "@/lib/placeholder-customer";
+import { adoptPlaceholderCase, resolvePlaceholderCustomer } from "@/lib/placeholder-customer";
+import { isPlaceholderCustomer } from "@/lib/placeholder-match";
 
 /**
  * 案件に見積を足すときのつながり (お客様のご要望 2026-11-26「■4」「■6」: 1 つの案件に見積を複数)。
@@ -223,7 +224,13 @@ export async function createQuote(formData: FormData) {
     const caseIdIn = str(formData, "caseId") === "new" ? "" : str(formData, "caseId");
     const caseLink = caseIdIn ? caseQuoteLink(db, caseIdIn) : undefined;
     if (caseIdIn && !caseLink) fail(back, "見積を足す案件が見つかりません。案件の画面から開き直してください。");
-    if (caseLink?.customerId && caseLink.customerId !== customerId) fail(back, "案件のお客様と違うお客様が選ばれています。案件のお客様を選ぶか、お客様の画面から見積を作成してください。");
+    if (caseLink?.customerId && caseLink.customerId !== customerId) {
+      // 予定表 (スプレッドシート) から移行した仮のお客様の案件 (同じお客様らしい案件を選んだとき): 案件と予定をこのお客様の案件にする (お客様のご連絡 2026-11-27)
+      const owner = caseLink.customerId;
+      const adopt = isPlaceholderCustomer(db.customers.find((c) => c.id === owner)) ? adoptPlaceholderCase(db, user, caseIdIn, customer) : undefined;
+      if (!adopt?.adopted) fail(back, adopt?.error ?? "案件のお客様と違うお客様が選ばれています。案件のお客様を選ぶか、お客様の画面から見積を作成してください。");
+      if (adopt.note) customerNote = [customerNote, adopt.note].filter(Boolean).join(" ");
+    }
     const inquiryId = str(formData, "inquiryId") || caseLink?.inquiryId || "";
     // 店舗のロールの見積は自店舗。ただし、ほかの店舗の問い合わせ・案件から作る見積 (店長) は、その問い合わせ・案件の店舗の見積にする
     const fromInquiry = inquiryId ? db.inquiries.find((i) => i.id === inquiryId) : undefined;

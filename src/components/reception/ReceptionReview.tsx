@@ -34,6 +34,8 @@ export interface ReviewCustomer {
   phone: string;
   code: string;
   storeName: string;
+  /** 予定表 (スプレッドシート) から移行した予定の仮のお客様 (名字と地区だけの登録。お客様のご連絡 2026-11-27) */
+  placeholder?: boolean;
 }
 
 export interface ChosenCustomer {
@@ -381,7 +383,7 @@ export function ReceptionReview({
             <span className="label">お客様 (案件の候補を絞る)</span>
             <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="field">
               <option value="">(すべての候補の案件を表示)</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.level === "address" ? "【住所】" : c.level === "phone" ? "【電話】" : "【名前】"} {c.label} — {c.reason}</option>)}
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.placeholder ? "【予定表】" : c.level === "address" ? "【住所】" : c.level === "phone" ? "【電話】" : "【名前】"} {c.label} — {c.reason}</option>)}
             </select>
           </label>
         )}
@@ -456,10 +458,12 @@ export function ReceptionReview({
  * 問い合わせの登録は、お客様が決まってから (actions/reception.ts の registerReception)
  */
 function MatchPanel({ customers, fields, chosen }: { customers: ReviewCustomer[]; canCreateCustomer: boolean; fields: ReceptionFields; chosen?: ChosenCustomer }) {
-  // 候補の順 (お客様のご要望 2026-11-24): ① 住所の一致 → ② 電話番号の一致 → ③ 名字の一致
-  const byAddress = customers.filter((c) => c.level === "address");
-  const byPhone = customers.filter((c) => c.level === "phone");
-  const byName = customers.filter((c) => c.level === "name");
+  // 候補の順 (お客様のご要望 2026-11-24): ① 住所の一致 → ② 電話番号の一致 → ③ 名字の一致。
+  // 予定表 (スプレッドシート) から移行した予定の仮のお客様は、いちばん上に分けて出す (お客様のご連絡 2026-11-27)
+  const fromSheet = customers.filter((c) => c.placeholder);
+  const byAddress = customers.filter((c) => c.level === "address" && !c.placeholder);
+  const byPhone = customers.filter((c) => c.level === "phone" && !c.placeholder);
+  const byName = customers.filter((c) => c.level === "name" && !c.placeholder);
   const strong = [...byAddress, ...byPhone];
   const btn = "inline-flex min-h-10 items-center justify-center rounded-lg px-3 py-2 text-sm font-medium";
   const LEVEL: Record<ReviewCustomer["level"], { label: string; cls: string }> = {
@@ -471,7 +475,7 @@ function MatchPanel({ customers, fields, chosen }: { customers: ReviewCustomer[]
   const card = (c: ReviewCustomer, primary: boolean) => (
     <li key={c.id} className={`rounded-lg border bg-panel p-3 ${primary ? "border-accent/60 ring-1 ring-accent/30" : "border-line"}`} data-testid="reception-candidate">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${LEVEL[c.level].cls}`}>{LEVEL[c.level].label}</span>
+        <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${c.placeholder ? "bg-warn-soft text-warn-ink" : LEVEL[c.level].cls}`}>{c.placeholder ? "予定表から移行 (仮の登録)" : LEVEL[c.level].label}</span>
         <span className="text-base font-semibold text-ink">{c.name} 様</span>
         <span className="text-[11px] text-ink-3">{c.code} · {c.storeName}</span>
       </div>
@@ -479,7 +483,7 @@ function MatchPanel({ customers, fields, chosen }: { customers: ReviewCustomer[]
       {c.phone && <div className="text-xs text-ink-2 tnum">{c.phone}</div>}
       <div className="mt-0.5 text-[11px] text-ink-3">{c.reason}</div>
       <button type="submit" name="quick" value={`link:${c.id}`} formNoValidate className={`${btn} mt-2 w-full ${primary ? "bg-accent text-white hover:bg-accent-hover" : "border border-accent/50 bg-panel text-accent-ink hover:bg-accent-soft"}`}>
-        このお客様に紐付ける
+        {c.placeholder ? "このお客様に紐付ける (メモの電話・住所で正式に登録)" : "このお客様に紐付ける"}
       </button>
     </li>
   );
@@ -515,10 +519,21 @@ function MatchPanel({ customers, fields, chosen }: { customers: ReviewCustomer[]
         <p className="text-sm font-medium text-ink">電話番号が一致するお客様がいます。このお客様に紐付けますか？ (住所を確かめてください)</p>
       ) : byName.length ? (
         <p className="text-sm text-ink">住所・電話番号が一致するお客様は見つかりませんでした。名字が同じお客様がいます (住所を確かめて、同じお客様なら紐付けてください){fields.address ? "" : "。住所が読み取れていません。住所を直して「修正を保存」すると探し直します"}。</p>
+      ) : fromSheet.length ? (
+        <p className="text-sm font-medium text-ink">予定表 (スプレッドシート) から移行した予定のお客様が見つかりました。同じお客様なら紐付けてください (新規顧客として登録すると、同じお客様が二重になります)。</p>
       ) : (
         <p className="text-sm text-ink">既存のお客様は見つかりませんでした{fields.address ? "" : " (住所が読み取れていません。住所を直して「修正を保存」すると探し直します)"}。新しいお客様なら「新規顧客として登録」を押してください。</p>
       )}
       <p className="text-[11px] text-ink-3">お客様を決めると、そのお客様の進行中の案件・完了した案件が出ます。新しいご依頼か、すでにある案件のご連絡 (日程の変更・クレーム・手直しなど) かを、そこで選びます。</p>
+      {fromSheet.length > 0 && (
+        <div className="rounded-lg border border-warn/50 bg-warn-soft/30 p-3" data-testid="reception-sheet-candidates">
+          <p className="text-xs font-semibold text-warn-ink">予定表 (スプレッドシート) から移行した予定のお客様</p>
+          <p className="mb-2 mt-0.5 text-[11px] text-ink-2">
+            予定表には名字と地区しかないため、仮に登録したお客様です (予定と案件はこのお客様についています)。同じお客様なら「このお客様に紐付ける」を押してください。メモの電話番号・住所を足して正式なお客様にし、予定表の案件をそのまま選べます。名字は手書きの読み違いのことがあるので、町名と予定の日で確かめてください。
+          </p>
+          <ul className="grid grid-cols-1 gap-2 @xl:grid-cols-2">{fromSheet.slice(0, 4).map((c, i) => card(c, !byAddress.length && !byPhone.length && i === 0))}</ul>
+        </div>
+      )}
       {byAddress.length > 0 && (
         <div>
           <p className="mb-1 text-xs font-semibold text-good-ink">① 住所が一致</p>
@@ -562,7 +577,7 @@ function MatchPanel({ customers, fields, chosen }: { customers: ReviewCustomer[]
             上の候補・検索のお客様とは別のお客様です
           </label>
         )}
-        <button type="submit" name="quick" value="new" formNoValidate className={`${btn} w-full ${strong.length ? "border border-line bg-panel text-ink hover:bg-subtle" : "bg-accent text-white hover:bg-accent-hover"}`} data-testid="reception-new-customer">
+        <button type="submit" name="quick" value="new" formNoValidate className={`${btn} w-full ${strong.length || fromSheet.length ? "border border-line bg-panel text-ink hover:bg-subtle" : "bg-accent text-white hover:bg-accent-hover"}`} data-testid="reception-new-customer">
           新規顧客として登録 (顧客情報を保存)
         </button>
         <p className="mt-1 text-[11px] text-ink-3">下の欄のお名前・ふりがな・電話・住所で、この時点で顧客を登録します。登録したあとは、続けて問い合わせを登録します (お客様を選び直す必要はありません)。</p>

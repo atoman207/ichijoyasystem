@@ -137,7 +137,7 @@ export default async function InquiryDetailPage({ params, searchParams }: { para
   // 問い合わせのお客様の登録は誰でも (問い合わせは必ずお客様に紐付けて残す。お客様のご要望 2026-11-25。二重登録は重複の確認で防ぐ)
   const canCreateCustomer = true;
   // 案件 = src/lib/case-group.ts。この問い合わせの案件は除き、進行中の案件と最近の完了した案件 (クレーム・手直し) を出す (お客様のご要望 2026-11-26「■5」)
-  const caseOpts = customer && canLink && !quote && !inq.caseId ? caseOptionsForCustomer(db, user, customer.id, toDateKey(new Date()), { excludeCaseId: caseIdOf(db, inq.id) }) : undefined;
+  const caseOpts = customer && canLink && !quote && !inq.caseId ? caseOptionsForCustomer(db, user, customer.id, toDateKey(new Date()), { excludeCaseId: caseIdOf(db, inq.id), placeholders: true }) : undefined;
   const otherCases = caseOpts?.open ?? [];
   const pastCases = caseOpts?.past ?? [];
   const scheduleKinds: ScheduleKind[] = order ? ["pickup", "delivery", "install", "site", "visit", "measure"] : ["survey", "onsite_quote", "site_survey", "measure", "visit", "pickup", "delivery", "install", "site"];
@@ -566,6 +566,11 @@ function MergeRow({ c }: { c: CaseOption }) {
         </Link>{" "}
         <span className="text-ink-2">{c.title}</span>
         <span className="block text-[11px] text-ink-3">{[c.stageLabel, c.detail, c.lastAt ? `最後の動き ${fmtDate(c.lastAt)}` : "", c.storeName].filter(Boolean).join(" · ")}</span>
+        {c.placeholder && (
+          <span className="mt-0.5 block text-[11px] text-warn-ink">
+            予定表から移行: 仮の登録「{c.placeholder.name}」{c.placeholder.place ? ` (${c.placeholder.place})` : ""} の案件 ({c.placeholder.reason})。追加すると、この案件と予定をこのお客様の案件にします
+          </span>
+        )}
       </span>
       {c.canAdd ? (
         <Button type="submit" name="caseId" value={c.id} size="sm" variant="secondary">

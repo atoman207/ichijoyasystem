@@ -28,14 +28,13 @@ import { CASE_REQUEST_KIND, CASE_REQUEST_KINDS, caseRequestsOf } from "@/lib/cas
 import type { ScheduleKind } from "@/lib/db/types";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
 import { canLinkToCustomer, caseRelinkBlocker, isPlaceholderCustomer } from "@/lib/customer-link";
-import { liveInvoicesOfOrder } from "@/lib/billing";
+import { liveInvoicesOfOrder, usesBatchBilling } from "@/lib/billing";
 import { taxModeOf } from "@/lib/quote-calc";
 import { WORK_ROLES, WORK_ROLE_LABEL, workStaffOf } from "@/lib/work-staff";
 import type { QuickWork } from "@/components/schedule/quick-types";
 import { ATTACHMENT_ACCEPT, canAddToParent, canViewAttachment, resolveParent, toView } from "@/lib/attachments";
-import { canIssueInvoice, canIssueReceipt, canOutputDocument } from "@/lib/auth/permissions";
+import { canConfirmSales, canIssueReceipt, canOutputDocument } from "@/lib/auth/permissions";
 import { invoiceAccessInfo, orderAccessInfo, quoteAccessInfo } from "@/lib/case-access";
-import { canIssueFor } from "@/lib/invoice-rules";
 import { partLabel, receiptChecks, receiptDraft, receiptHeading, receiptWanted } from "@/lib/receipts";
 import { outputsOf } from "@/lib/doc-outputs";
 import { quoteOrderPlan } from "@/lib/quote-order-plan";
@@ -349,12 +348,18 @@ function quickWork(db: Database, user: User, e: ScheduleEvent): QuickWork | unde
         checks: receiptChecks(db, inv, o),
       };
     } else {
-      const can = canIssueFor(db, o);
-      const allowed = canIssueInvoice(user) && canAccessStore(user, o.storeId);
-      docs.invoiceIssue = { ok: can.ok && allowed, pre: can.pre, reason: !can.ok ? can.reason : allowed ? undefined : "請求書の発行は店長・本部・管理者 (その店舗) が行えます。", orderId: o.id, total: o.total, needsSetup: can.needsSetup };
       docs.receipt = { wanted: w.wanted, auto: w.auto, reason: w.reason, canSetWanted, orderId: o.id, issued: [], checks: [] };
     }
+    // 売上確定・請求書発行 (お客様のご要望 2026-11-27「■1」): 確定の前は「売上確定・請求書発行」、確定のあとは「請求書」と「修正」
+    const confirmedSales = ["completed", "invoiced", "paid"].includes(o.status);
+    const openOrder = ["confirmed", "scheduled", "in_progress"].includes(o.status);
+    if (confirmedSales || openOrder) {
+      const canUse = canConfirmSales(user, o.storeId);
+      docs.sales = { orderId: o.id, confirmed: confirmedSales, canUse, batch: usesBatchBilling(customer), total: o.total, reason: canUse ? undefined : "売上確定・請求書の発行は担当店舗の社員・本部・管理者が行えます。" };
+    } else if (o.status === "pending_approval" || o.status === "returned") {
+      docs.sales = { orderId: o.id, confirmed: false, canUse: false, batch: false, total: o.total, reason: "契約の承認のあとに売上確定できます。" };
+    }
   }
-  if (docs.quote || docs.invoice || docs.invoiceIssue || docs.delivery) out.docs = docs;
+  if (docs.quote || docs.invoice || docs.sales || docs.delivery) out.docs = docs;
   return out;
 }

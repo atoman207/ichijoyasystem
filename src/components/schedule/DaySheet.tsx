@@ -139,7 +139,7 @@ function SideTable({ side, rows, totals, ctx, set }: { side: SheetSide; rows: Sh
             return (
               <tbody key={b.id}>
                 <tr className="border-t border-line">
-                  <th colSpan={14} scope="rowgroup" className={clsx("px-1.5 py-0.5 text-left text-[10px] font-semibold", b.id === "am" ? "bg-info-soft/60 text-info-ink" : b.id === "pm" ? "bg-accent-soft/60 text-accent-ink" : "bg-subtle text-ink-2")}>
+                  <th colSpan={14} scope="rowgroup" className={clsx("px-1.5 py-0.5 text-left text-[10px] font-semibold", b.id === "am" ? "bg-am-soft text-am-ink" : b.id === "pm" ? "bg-pm-soft text-pm-ink" : "bg-subtle text-ink-2")}>
                     {b.label} <span className="font-normal tnum">{list.length} 件</span>
                   </th>
                 </tr>
@@ -155,7 +155,7 @@ function SideTable({ side, rows, totals, ctx, set }: { side: SheetSide; rows: Sh
                   const names = staffNames(ctx, e.assigneeIds);
                   return (
                     <tr key={e.id} className={clsx("border-t border-line align-top hover:bg-subtle/60", r.hold && "opacity-70")}>
-                      <td className="px-1 py-1 whitespace-nowrap text-ink-2 tnum">{r.time}</td>
+                      <td className={clsx("px-1 py-1 font-semibold whitespace-nowrap tnum", r.band === "am" ? "text-am-ink" : r.band === "pm" ? "text-pm-ink" : "text-ink-2")}>{r.time}</td>
                       <td className="truncate px-1 py-1 text-ink-2" title={r.town}>
                         {r.town}
                       </td>
@@ -209,7 +209,7 @@ function SideTable({ side, rows, totals, ctx, set }: { side: SheetSide; rows: Sh
         {bands.map((b) => {
           const list = rows.filter((r) => r.band === b.id);
           return [
-            <li key={`h-${b.id}`} className={clsx("px-2 py-1 text-[11px] font-semibold", b.id === "am" ? "bg-info-soft/60 text-info-ink" : b.id === "pm" ? "bg-accent-soft/60 text-accent-ink" : "bg-subtle text-ink-2")}>
+            <li key={`h-${b.id}`} className={clsx("px-2 py-1 text-[11px] font-semibold", b.id === "am" ? "bg-am-soft text-am-ink" : b.id === "pm" ? "bg-pm-soft text-pm-ink" : "bg-subtle text-ink-2")}>
               {b.label} <span className="font-normal tnum">{list.length} 件</span>
             </li>,
             ...(list.length === 0
@@ -225,7 +225,7 @@ function SideTable({ side, rows, totals, ctx, set }: { side: SheetSide; rows: Sh
                   return (
                     <li key={e.id} className={clsx("px-2 py-1.5", r.hold && "opacity-70")}>
                       <Link href={eventHref(e)} data-ev={e.id} aria-label={rowLabel(ctx, r)} className="flex min-w-0 items-center gap-1.5 text-[13px]">
-                        <span className="w-11 shrink-0 text-[11px] text-ink-2 tnum">{r.time || "-"}</span>
+                        <span className={clsx("w-11 shrink-0 text-[11px] font-semibold tnum", r.band === "am" ? "text-am-ink" : r.band === "pm" ? "text-pm-ink" : "text-ink-2")}>{r.time || "-"}</span>
                         <KindMark kind={e.kind} />
                         <span className="min-w-0 truncate font-medium text-ink">
                           {r.town ? `（${r.town}）` : ""}
@@ -478,7 +478,8 @@ export function DaySheetView({
                 )}
               </span>
             </header>
-            <div className="grid grid-cols-1 gap-4 @7xl:grid-cols-2">
+            {/* 広い画面は左 = 引取など・右 = 納品。スマートフォンを横向きにしたときも左右に並べる (お客様のご要望 2026-11-27「■4」。globals.css の .phone-pair) */}
+            <div className="phone-pair grid grid-cols-1 gap-4 @7xl:grid-cols-2" data-testid="day-sheet-pair">
               <SideTable side="left" rows={left} totals={s.totals.left} ctx={ctx} set={set} />
               <SideTable side="right" rows={right} totals={s.totals.right} ctx={ctx} set={set} />
             </div>

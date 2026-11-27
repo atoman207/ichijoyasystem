@@ -20,92 +20,12 @@ import { propagateOrderSite } from "@/lib/maps/store";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
 import { closedReason } from "@/lib/mgmt/close";
 import { usesBatchBilling } from "@/lib/billing";
-import type { Database, Order, OrderPosting, OrderWorkStaff, User } from "@/lib/db/types";
-import { WORK_ROLES, WORK_ROLE_LABEL, deliveryStaffOf, sameWorkStaff, workStaffFromForm, workStaffOf } from "@/lib/work-staff";
-import { addChangeNotice, caseTarget } from "@/lib/change-notices";
+import type { OrderPosting } from "@/lib/db/types";
+import { sameWorkStaff, workStaffFromForm } from "@/lib/work-staff";
 import { safeReturn } from "./guards";
-import { postingFromForm, postingLabel, roleLabels, salesReadiness, undecidedRoles, workStaffNoneFromForm } from "@/lib/sales-ready";
-
-/**
- * 作業の担当 (実績) を受注に保存する (mutate の中)。施工完了・売上確定の後なら確かめた日時を残す (confirmed)。
- * 案件にひも付いたアンケート (はがき) の ②③ の担当もこの値にそろえる (移行したはがきは変えない)。変わった役割の数を返す
- */
-function applyWorkStaff(db: Database, user: User, o: Order, next: Omit<OrderWorkStaff, "confirmedAt" | "confirmedBy" | "updatedAt" | "updatedBy">, opts: { confirm: boolean; note?: string }): number {
-  const now = nowIso();
-  const before = workStaffOf(db, o);
-  const names = (ids: string[]) => ids.map((id) => db.users.find((u) => u.id === id)?.name ?? "-").join("・") || "(なし)";
-  const changedRoles = WORK_ROLES.filter((r) => [...before[r]].sort().join() !== [...next[r]].sort().join());
-  const firstSave = !o.workStaff;
-  o.workStaff = { ...next, confirmedAt: opts.confirm ? now : o.workStaff?.confirmedAt, confirmedBy: opts.confirm ? user.id : o.workStaff?.confirmedBy, updatedAt: now, updatedBy: user.id };
-  o.updatedAt = now;
-  if (changedRoles.length || firstSave) {
-    addAudit(db, {
-      userId: user.id,
-      action: "update",
-      entity: "order",
-      entityId: o.id,
-      entityLabel: o.number,
-      summary: `作業の担当を${opts.confirm ? "確定" : "変更"} (${WORK_ROLES.map((r) => `${WORK_ROLE_LABEL[r]}: ${names(next[r])}`).join(" / ")})${opts.note ? ` ${opts.note}` : ""}`,
-      storeId: o.storeId,
-      changes: WORK_ROLES.filter((r) => changedRoles.includes(r) || firstSave).map((r) => ({ field: `workStaff.${r}`, before: before[r], after: next[r] })),
-    });
-    if (changedRoles.length) {
-      o.progressNotes.push({ id: newId("pn"), at: now, userId: user.id, kind: "change", body: `作業の担当を${opts.confirm ? "確定" : "変更"}: ${changedRoles.map((r) => `${WORK_ROLE_LABEL[r]} ${names(before[r])} → ${names(next[r])}`).join(" / ")}` });
-      addChangeNotice(db, user.id, caseTarget(db, o.id), "作業の担当の変更", changedRoles.map((r) => ({ label: `${WORK_ROLE_LABEL[r]}の担当`, before: names(before[r]), after: names(next[r]) })));
-    }
-  }
-  // アンケートの ②③ の担当 (インセンティブの集計の起点。お客様のご要望 2026-11-25「④」)
-  const delivery = deliveryStaffOf(next);
-  for (const sv of db.surveys) {
-    if (sv.orderId !== o.id || sv.source === "import") continue;
-    const b = { salesUserId: sv.salesUserId, deliveryUserIds: [...(sv.deliveryUserIds ?? [])] };
-    if (next.survey.length) sv.salesUserId = next.survey[0];
-    if (delivery.length) {
-      sv.deliveryUserIds = delivery;
-      sv.craftsmanUserId = delivery[0];
-    }
-    const ch = diffChanges(b, { salesUserId: sv.salesUserId, deliveryUserIds: sv.deliveryUserIds ?? [] }, ["salesUserId", "deliveryUserIds"]);
-    if (!ch.length) continue;
-    sv.updatedAt = now;
-    addAudit(db, { userId: user.id, action: "update", entity: "survey", entityId: sv.id, entityLabel: `はがき No.${sv.postcardNo ?? "-"}`, summary: `受注 ${o.number} の作業の担当に合わせてアンケートの担当を変更`, storeId: sv.storeId, changes: ch });
-  }
-  return changedRoles.length;
-}
-
-/** ポスティングの実績を保存する (mutate の中。変わったときだけ変更履歴) */
-function applyPosting(db: Database, user: User, o: Order, next: OrderPosting, note = "") {
-  const name = (id: string) => db.users.find((u) => u.id === id)?.name ?? "-";
-  const before = postingLabel(o.posting, name);
-  const after = postingLabel(next, name);
-  const same = before === after && (o.posting?.date ?? "") === (next.date ?? "") && (o.posting?.area ?? "") === (next.area ?? "");
-  o.posting = next;
-  o.updatedAt = next.updatedAt;
-  if (same) return;
-  addAudit(db, { userId: user.id, action: "update", entity: "order", entityId: o.id, entityLabel: o.number, summary: `ポスティングを登録: ${after}${next.area ? ` (${next.area})` : ""}${note ? ` ${note}` : ""}`, storeId: o.storeId, changes: [{ field: "posting", before, after }] });
-}
-
-/**
- * フォームの作業の担当 (workStaff.<役割>・workStaff.<役割>.none) とポスティング (posting.*) を受注に入れる (mutate の中)。
- * require = 売上登録 (施工完了・請求書の発行): 作業ごとに担当者か「なし」・ポスティングの枚数か「配れてない」がそろわなければ断る
- * (お客様のご要望 2026-11-27「■3」。src/lib/sales-ready.ts)
- */
-function applyStaffAndPosting(db: Database, user: User, o: Order, fd: FormData, back: string, opts: { require: boolean; confirm: boolean; note?: string }) {
-  const active = new Set(db.users.filter((u) => u.active).map((u) => u.id));
-  if (str(fd, "workStaffSent") === "1") {
-    const base = workStaffFromForm(fd, active);
-    const next = { ...base, none: workStaffNoneFromForm(fd).filter((r) => !base[r].length) };
-    const gaps = undecidedRoles(next);
-    if (opts.require && gaps.length) fail(back, `${roleLabels(gaps)}の担当者を選ぶか「なし」を選んでください (売上登録の前に作業の担当を確定します)。`);
-    applyWorkStaff(db, user, o, next, { confirm: opts.confirm && !gaps.length, note: opts.note });
-  }
-  const pr = postingFromForm(fd, active, user.id, nowIso());
-  if (pr.error) fail(back, pr.error);
-  if (pr.posting) applyPosting(db, user, o, pr.posting, opts.note);
-  if (opts.require) {
-    const r = salesReadiness(o);
-    if (!r.ok) fail(back, r.reason ?? "作業の担当とポスティングを登録してください。");
-  }
-}
+import { postingFromForm, roleLabels, salesReadiness, undecidedRoles, workStaffNoneFromForm } from "@/lib/sales-ready";
+import { applyPosting, applyStaffAndPosting, applyWorkStaff } from "@/lib/order-staff-save";
+import { amendBlockedByInvoice } from "@/lib/invoice-sync";
 
 /** 作業の担当 (現地見積・引取・納品・施工。複数可) を変える (受注の画面の「作業の担当」。お客様のご要望 2026-11-25「④」) */
 export async function saveWorkStaff(id: string, formData: FormData) {
@@ -384,13 +304,17 @@ export async function requestOrderChange(id: string, formData: FormData) {
       if (!Number.isFinite(total) || total <= 0) fail(back, "契約金額を正しく入力してください。");
       if (Math.round(total) !== o.total) {
         if (o.quoteId) fail(back, "見積から作った受注の金額は、見積の画面で「金額・内容の変更を申請」から直してください (版として残ります)。");
-        if (db.invoices.some((i) => i.id === o.invoiceId && i.status !== "void")) fail(back, "請求書を発行済みのため、契約金額は変更できません。入金前であれば本部で請求書を無効化してから申請してください。");
+        // 入金の記録がある・まとめ請求の請求書は直さない。受注 1 件の入金前の請求書は承認のときに同じ金額に直す (src/lib/invoice-sync.ts)
+        const blocked = amendBlockedByInvoice(db, { orderId: o.id });
+        if (blocked) fail(back, blocked);
         changes.push({ field: "total", before: o.total, after: Math.round(total) });
       }
     }
     if (!changes.length) fail(back, "変更する項目がありません。");
     const newTotal = (changes.find((c) => c.field === "total")?.after as number | undefined) ?? o.total;
-    const r = approverRole(db.users, o.storeId, Math.max(o.total, newTotal) >= approvalSettings(db).quoteAdminThreshold, user.id);
+    // 売上確定のあとの金額だけの修正は店長の承認 (金額の基準で管理者に回さない。お客様のご要望 2026-11-27「■1」)
+    const salesFix = ["completed", "invoiced", "paid"].includes(o.status) && changes.every((c) => c.field === "total");
+    const r = approverRole(db.users, o.storeId, !salesFix && Math.max(o.total, newTotal) >= approvalSettings(db).quoteAdminThreshold, user.id);
     role = r;
     approvalId = newId("ap");
     const now = nowIso();

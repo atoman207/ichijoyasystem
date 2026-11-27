@@ -363,6 +363,15 @@ export function canIssueInvoice(user: User): boolean {
   return canManageFinance(user) || isManagerOrAbove(user);
 }
 
+/**
+ * 売上確定・請求書発行の画面 (施工内容・明細と金額・作業の担当・ポスティング → 売上確定と請求書の発行、確定のあとの修正) を使えるか:
+ * 担当店舗 (施工店舗) の社員 (店舗スタッフを含む)・本部・管理者 (お客様のご要望 2026-11-27「■1」: 帳票の「売上確定・請求書発行」のボタン)。
+ * 確定のあとの金額の修正は、一般社員は店長の承認、店長・管理者は承認なし (src/lib/sales-lines.ts・approval-decide.ts の salesAmountCorrection)
+ */
+export function canConfirmSales(user: User, storeId: StoreId): boolean {
+  return user.active && canAccessStore(user, storeId);
+}
+
 /** 予定表は全社で共有する (予定の重複防止・人員配置の調整・社内の情報共有のため、全ロールが全店舗の予定を閲覧) */
 export function canViewCompanySchedule(user: User): boolean {
   return user.active;

@@ -291,7 +291,8 @@ await store.mutate((x) => {
 let ws = WSF.workStaffOf(db(), db().orders.find((x) => x.id === "o_cc_a"));
 eq([ws.source, ws.survey, ws.pickup], ["auto", [manager.id], [staffUser.id]], "保存の前は予定表の予定の担当者から自動");
 await store.mutate((x) => { x.surveys.push({ id: "sv_cc", receivedAt: now, storeId: M, orderId: "o_cc_a", salesUserId: staffUser.id, deliveryUserIds: [staffUser.id], source: "capture", createdAt: now, updatedAt: now }); });
-r = await act(staffUser, () => OA.completeOrder("o_cc_a", form({ completedAt: now.slice(0, 10), workStaffSent: "1", "workStaff.survey": manager.id, "workStaff.pickup": [staffUser.id], "workStaff.delivery": [staffUser.id, manager.id] })));
+// 施工完了 (売上登録) は作業ごとに担当者か「なし」とポスティングが要る (2026-11-27「■3」)
+r = await act(staffUser, () => OA.completeOrder("o_cc_a", form({ completedAt: now.slice(0, 10), workStaffSent: "1", "workStaff.survey": manager.id, "workStaff.pickup": [staffUser.id], "workStaff.delivery": [staffUser.id, manager.id], "workStaff.install.none": "1", postingSent: "1", "posting.status": "none" })));
 o = db().orders.find((x) => x.id === "o_cc_a");
 eq([r.err, o.status, o.workStaff?.survey, o.workStaff?.delivery, Boolean(o.workStaff?.confirmedAt)], [null, "completed", [manager.id], [staffUser.id, manager.id], true], `施工完了で作業の担当を確定 (複数名) (${r.msg ?? r.err})`);
 const sv = db().surveys.find((x) => x.id === "sv_cc");
@@ -383,8 +384,9 @@ ok(db().schedule.filter((x) => x.inquiryId === "inq_cc_req").length === 1, "新�
 // 登録できなかったときは依頼は完了にしない
 r = await act(staffUser, () => CQ.sendCaseRequest(form({ caseId: "inq_cc_req", kind: "other", target: "users", assigneeIds: [manager.id], note: "訪問の日程を", returnTo: ret })));
 rt = db().threads.filter((x) => x.caseRequest).at(-1);
-r = await act(manager, () => CQ.scheduleFromRequest(rt.id, form({ mode: "new", kind: "survey", date: future(43), timeMode: "allday", close: "1" })));
-eq([Boolean(r.err), r.path, db().threads.find((x) => x.id === rt.id).taskStatus], [true, `/messages/${rt.id}`, "requested"], `担当者がいないなど登録できないときは依頼の画面に戻り、依頼はそのまま (${r.err})`);
+// 予定は担当者なしでも登録できる (2026-11-27「■2」) ので、日付の誤りで登録できないときを確かめる
+r = await act(manager, () => CQ.scheduleFromRequest(rt.id, form({ mode: "new", kind: "survey", date: "2026-13-40", timeMode: "allday", assigneeIds: [manager.id], close: "1" })));
+eq([Boolean(r.err), r.path, db().threads.find((x) => x.id === rt.id).taskStatus], [true, `/messages/${rt.id}`, "requested"], `日付の誤りなど登録できないときは依頼の画面に戻り、依頼はそのまま (${r.err})`);
 r = await act(manager, () => CQ.scheduleFromRequest(rt.id, form({ mode: "new", kind: "survey", date: future(43), timeMode: "allday", assigneeIds: [manager.id], allowOverlap: "1" })));
 eq([r.err, db().threads.find((x) => x.id === rt.id).taskStatus], [null, "requested"], "「完了にする」を外せば予定だけ登録 (依頼は対応中のまま)");
 // 問い合わせの「担当へ依頼」(案件にひも付いた業務依頼) にも同じ情報を出す
@@ -420,18 +422,22 @@ cr = SF.placeCandidates(db(), { address: "熊本県テスト市本町1-2-3", sto
 ok(!cr.days.some((d) => d.date === future(43)), "休業日は候補にしない");
 // 近隣 (目安の距離): 熊本の町名の位置で比べる (社内の計算。外部の地図サービスは使わない)
 const a1 = "熊本県合志市須屋100-1", a2 = "熊本県合志市幾久富1909-1";
+// 日曜は休業日なので候補に出ない: 今日から数えた日が日曜なら次の日にする (日付によって失敗しないように)
+const notSunday = (n) => [n, n + 1].map(future).find((d) => new Date(`${d}T00:00:00Z`).getUTCDay() !== 0);
+const nearDay = notSunday(50);
+const busyDay = notSunday(nearDay === future(50) ? 51 : 52);
 const g1 = GEO.geocodeAddress(a1), g2 = GEO.geocodeAddress(a2);
 await store.mutate((x) => {
-  x.schedule.push({ id: "ev_cc_near", title: "近隣テスト", kind: "survey", date: future(50), storeId: M, assigneeIds: [staffUser.id], location: a1, source: "manual", createdAt: now, updatedAt: now, createdBy: staffUser.id });
-  for (const n of [1, 2, 3, 4]) x.schedule.push({ id: `ev_cc_busy${n}`, title: `多い日${n}`, kind: "visit", date: future(51), storeId: M, assigneeIds: [staffUser.id], location: "熊本県玉名市岩崎1", source: "manual", createdAt: now, updatedAt: now, createdBy: staffUser.id });
+  x.schedule.push({ id: "ev_cc_near", title: "近隣テスト", kind: "survey", date: nearDay, storeId: M, assigneeIds: [staffUser.id], location: a1, source: "manual", createdAt: now, updatedAt: now, createdBy: staffUser.id });
+  for (const n of [1, 2, 3, 4]) x.schedule.push({ id: `ev_cc_busy${n}`, title: `多い日${n}`, kind: "visit", date: busyDay, storeId: M, assigneeIds: [staffUser.id], location: "熊本県玉名市岩崎1", source: "manual", createdAt: now, updatedAt: now, createdBy: staffUser.id });
 });
 cr = SF.placeCandidates(db(), { address: a2, storeId: M, today: today0, days: 60 });
-const dNear = cr.days.find((d) => d.date === future(50));
+const dNear = cr.days.find((d) => d.date === nearDay);
 if (g1 && g2) {
   const km = GEO.roadKm(g1, g2);
   ok(km <= 6 ? dNear?.tier === "near" && dNear.near[0]?.id === "ev_cc_near" : dNear?.tier !== "near", `近隣の予定 (道のりの目安 ${km.toFixed(1)} km。6 km 以内なら近くに予定あり)`);
 } else ok(Boolean(dNear), "位置の目安がないときも日の一覧は出す");
-const dBusy = cr.days.find((d) => d.date === future(51));
+const dBusy = cr.days.find((d) => d.date === busyDay);
 ok(dBusy && dBusy.count >= 4 && (dBusy.tier === "busy" || dBusy.tier === "near"), "予定が 4 件以上で近くに予定のない日は「予定が多い日」");
 ok(SF.rankCandidates(cr.days)[0].tier !== "busy" && SF.rankCandidates(cr.days).at(-1).tier !== "same", "おすすめの順: 同じ町名 → 近く → 少ない → なし → 多い");
 ok(SF.placeCandidates(db(), { address: "", today: today0 }).days.length === 0, "住所が空なら候補なし");

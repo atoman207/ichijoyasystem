@@ -1,5 +1,6 @@
 import Link from "@/components/ui/Link";
 import clsx from "clsx";
+import { AmPmCounts, TimeText } from "./TimeText";
 import { CircleCheck, Factory, Globe, Link2, Plus, TriangleAlert } from "lucide-react";
 import type { ScheduleEvent, Store, StoreId } from "@/lib/db/types";
 import type { CaseRef } from "@/lib/db/schedule";
@@ -221,7 +222,7 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
       >
         <KindMark kind={e.kind} />
         {ctx.showStore && store && <span className="shrink-0 font-medium text-ink-2">{store.shortName}</span>}
-        <span className="shrink-0 font-medium text-ink-2 tnum">{shortTime(e)}</span>
+        <TimeText e={e} text={shortTime(e)} className="px-0.5 font-medium" />
         <span className="min-w-0 truncate">{titleOf(ctx, e)}</span>
         <WorkTokens tokens={tokens} />
         {variant === "month" && <StaffMarks ids={e.assigneeIds} ctx={ctx} max={3} size={15} className="ml-auto hidden @5xl:inline-flex" />}
@@ -253,7 +254,7 @@ export function EventChip({ e, ctx, day, variant, personId }: { e: ScheduleEvent
             {store.shortName}
           </span>
         )}
-        <span className="min-w-0 font-semibold tnum">{dayTimeLabel(e, day)}</span>
+        <TimeText e={e} text={dayTimeLabel(e, day)} className="min-w-0" />
         {conflict && <ConflictBadge className="ml-auto" />}
       </span>
       <span className="mt-0.5 block font-medium">
@@ -411,7 +412,10 @@ export function WeekView({ days, events, ctx }: { days: string[]; events: Schedu
                 <span className="text-[11px] text-ink-3 @3xl:hidden">{Number(d.slice(5, 7))}月</span>
               </Link>
               {holiday && <span className="min-w-0 truncate text-[10px] text-critical-ink">{holiday}</span>}
-              <span className="ml-auto text-[11px] text-ink-3 tnum">{list.length > 0 ? `${list.length} 件` : ""}</span>
+              <span className="ml-auto flex items-center gap-1.5 text-[11px] text-ink-3 tnum">
+                <AmPmCounts list={list} />
+                {list.length > 0 ? `${list.length} 件` : ""}
+              </span>
             </header>
             {(ctx.production?.byDay.get(d) || (ctx.loadOf?.(d)?.workload ?? 0) > 0) && (
               <div className="mb-1.5 flex flex-wrap gap-1">
@@ -771,7 +775,10 @@ export function ListView({ days, events, ctx }: { days: string[]; events: Schedu
               </Link>
               {d === ctx.today && <span className="rounded-full bg-accent px-1.5 text-[10px] text-white">今日</span>}
               {holiday && <span className="font-normal text-critical-ink">{holiday}</span>}
-              <span className="ml-auto font-normal text-ink-3 tnum">{list.length} 件</span>
+              <span className="ml-auto flex items-center gap-1.5 font-normal text-ink-3 tnum">
+                <AmPmCounts list={list} />
+                {list.length} 件
+              </span>
             </h3>
             <ul className="divide-y divide-line">
               {list.map((e) => (
@@ -793,7 +800,7 @@ function ListRow({ e, d, ctx }: { e: ScheduleEvent; d: string; ctx: CalendarCont
     <li className={clsx("grid gap-x-4 gap-y-1 px-4 py-2.5 text-sm @3xl:grid-cols-[132px_112px_minmax(0,1fr)_minmax(0,220px)] @3xl:items-start", conflict && "bg-critical-soft/30")}>
       <div className="flex items-center gap-2 text-xs font-semibold text-ink tnum @3xl:pt-0.5">
         <span className={clsx("h-4 w-1 rounded-full", kindStyle(e.kind).bar)} aria-hidden />
-        {dayTimeLabel(e, d)}
+        <TimeText e={e} text={dayTimeLabel(e, d)} />
       </div>
       <div className="flex flex-wrap items-center gap-1">
         <KindBadge kind={e.kind} />
@@ -891,7 +898,7 @@ function PairLink({ e, ctx }: { e: ScheduleEvent; ctx: CalendarContext }) {
   return (
     <Link href={eventHref(e)} data-ev={e.id} className={clsx("inline-flex min-w-0 items-center gap-1 rounded-md border-l-[3px] px-1.5 py-0.5 text-ink hover:underline", kindStyle(e.kind).soft, kindStyle(e.kind).border)}>
       <KindIcon kind={e.kind} className={clsx("h-3 w-3", kindStyle(e.kind).ink)} />
-      <span className="shrink-0 tnum text-ink-2">{timeLabel(e)}</span>
+      <TimeText e={e} text={timeLabel(e)} className="font-normal" />
       <span className="truncate">{titleOf(ctx, e)}</span>
     </Link>
   );

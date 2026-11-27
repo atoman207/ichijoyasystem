@@ -309,6 +309,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 <Field label="承認なしで反映する工事金額の変更の差額 (以下。0 = 使わない)" hint="確定した見積・契約金額の変更で、変更前と変更後の差がこの金額以下なら、誰の承認もなしでその場で反映します (仕様だけの変更を含む)"><Input name="smallChangeLimit" type="number" min={0} step={1000} defaultValue={rules.smallChangeLimit} required /></Field>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="scheduleChange" defaultChecked={rules.scheduleChange} className="h-4 w-4" /> 予定 (受注の引取・納品の日程を含む) の変更・削除に店長の承認を必要とする (オフ = 承認なしで反映し、担当店舗にお知らせ)</label>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="noticeHq" defaultChecked={rules.noticeHq} className="h-4 w-4" /> 案件の変更のお知らせを、担当店舗に加えて本部と管理者にも届ける</label>
+                <label className="flex items-start gap-2 text-sm"><input type="checkbox" name="changeBell" defaultChecked={rules.changeBell} className="mt-0.5 h-4 w-4" /> <span>日程・仕様・金額などの変更のお知らせと「予定の担当になりました・予定が変更されました」を、ヘッダーのベル (トースト) に出す <span className="block text-[11px] text-ink-3">オフ (既定) でも記録は残ります (変更のお知らせの一覧・案件の画面の変更履歴)。お客様のご要望 2026-11-27「■2」</span></span></label>
+                <label className="flex items-start gap-2 text-sm"><input type="checkbox" name="autoReminders" defaultChecked={rules.autoReminders} className="mt-0.5 h-4 w-4" /> <span>依頼の期限 (日時) を過ぎたときの自動の再通知と、日程未定の連絡予定日の当日の知らせを送る <span className="block text-[11px] text-ink-3">オフ (既定) でも問い合わせ一覧の「期限超過」は出ます</span></span></label>
                 <Button type="submit" size="sm">保存</Button>
                 <p className="text-[11px] text-ink-3">変更は、これから申請するものに使われます (申請済みの承認者は変わりません)。変更は変更履歴に残ります。</p>
               </form>
