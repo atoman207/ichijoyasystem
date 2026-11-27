@@ -1,7 +1,7 @@
 import type { Customer, Database, User } from "@/lib/db/types";
 import { canEditCaseStore } from "@/lib/auth/permissions";
 import { addAudit, diffChanges, nowIso } from "@/lib/db/store";
-import { PLACEHOLDER_TAG, canLinkToCustomer, caseRelinkBlocker, customerReferenced, isPlaceholderCustomer, moveCaseToCustomer } from "@/lib/customer-link";
+import { PLACEHOLDER_TAG, canLinkToCustomer, caseRelinkBlocker, customerReferenced, isPlaceholderCustomer, moveCaseToCustomer, moveWholeCaseToCustomer, wholeCaseOf, wholeCaseRelinkBlocker } from "@/lib/customer-link";
 import { caseChainOf } from "@/lib/case-store";
 import { domesticPhone } from "@/lib/ai-intake";
 import { postalForSave } from "@/lib/postal/lookup";
@@ -76,11 +76,12 @@ export function resolvePlaceholderCustomer(db: Database, user: User, f: Placehol
   if (!to) return { customerId: f.customerId, error: "紐付けるお客様が見つかりません。" };
   if (to.id === ph.id) return { customerId: ph.id };
   if (!canLinkToCustomer(db, user, to)) return { customerId: to.id, error: "このお客様には紐付けられません (閲覧の範囲の外のお客様です)。" };
-  const chain = f.caseRecordId ? caseChainOf(db, f.caseRecordId) : undefined;
-  if (chain) {
-    const blocker = caseRelinkBlocker(db, chain);
+  // 案件のすべての記録 (問い合わせ・見積・受注) をまとめて付け替える (src/lib/customer-link.ts の moveWholeCaseToCustomer)
+  const whole = f.caseRecordId ? wholeCaseOf(db, f.caseRecordId) : undefined;
+  if (whole) {
+    const blocker = wholeCaseRelinkBlocker(db, whole);
     if (blocker) return { customerId: to.id, error: blocker };
-    moveCaseToCustomer(db, chain, to, user.id);
+    moveWholeCaseToCustomer(db, whole, to, user.id);
   }
   // 案件につながっていない仮のお客様の予定 (取込の予定のうちお客様だけにひも付いたもの) も同じお客様にする
   for (const e of db.schedule) {

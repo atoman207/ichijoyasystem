@@ -1,4 +1,4 @@
-import type { Customer, Database, Inquiry, User } from "@/lib/db/types";
+import type { Customer, Database, Inquiry, Order, Quote, User } from "@/lib/db/types";
 import { canEditCaseStore, canReadStoreRecords } from "@/lib/auth/permissions";
 import { policyReader } from "@/lib/access-policy";
 import { addAudit, newId, nowIso } from "@/lib/db/store";
@@ -53,8 +53,8 @@ export { PLACEHOLDER_TAG, isPlaceholderCustomer } from "@/lib/placeholder-match"
  * moveCaseToCustomer)。請求書を発行した案件は、請求書の宛名がずれるので付け替えない
  */
 export function relinkBlocker(db: Pick<Database, "quotes" | "orders" | "inquiries" | "invoices">, inq: Pick<Inquiry, "id" | "quoteId">): string | undefined {
-  const chain = caseChainOf(db, inq.id);
-  return chain ? caseRelinkBlocker(db, chain) : undefined;
+  const w = wholeCaseOf(db, inq.id);
+  return w ? wholeCaseRelinkBlocker(db, w) : undefined;
 }
 
 /** 案件のお客様を付け替えられないときの理由 */
@@ -68,48 +68,102 @@ export function caseRelinkBlocker(db: Pick<Database, "invoices">, c: CaseChain):
 /**
  * 案件 (問い合わせ → 見積 → 受注) を顧客 to に付け替える (mutate の中で呼ぶ)。問い合わせ・見積・受注・予定・資料・やりとり・アンケートの記録はそのままで、
  * お客様 (customerId) だけを変える。予定・資料は、お客様が空か前のお客様のものだけを移す (ほかのお客様を選んである予定は変えない)。
- * 変更履歴は記録ごとにここで残す。前のお客様が予定表の取込で作った仮の顧客で、記録が何も残らなければ消す
+ * 変更履歴は記録ごとにここで残す。前のお客様が予定表の取込で作った仮の顧客で、記録が何も残らなければ消す。
+ * 1 本のつながり (問い合わせ → 見積 → 受注) だけ。案件のすべての記録 (追加の見積・受注・問い合わせ) は moveWholeCaseToCustomer
  */
 export function moveCaseToCustomer(db: Database, c: CaseChain, to: Customer, userId: string): MoveResult & { records: number } {
   const fromId = c.order?.customerId ?? c.quote?.customerId ?? c.inquiry?.customerId;
+  return moveRecordsToCustomer(db, { inquiries: c.inquiry ? [c.inquiry] : [], quotes: c.quote ? [c.quote] : [], orders: c.order ? [c.order] : [] }, c.head.number, fromId, to, userId);
+}
+
+/**
+ * 案件 (src/lib/case-group.ts の buildCaseMap の案件。どの記録の ID からでも) のうち、付け替える記録。
+ * お客様のご連絡 2026-11-27「登録済みの案件を削除することなく、見積・受注・施工予定などの情報を保持したまま、正しい顧客に紐付け直す」:
+ * 1 つの案件に問い合わせ・見積 (受注にならなかった見積を含む)・受注 (追加工事を含む) がいくつもあるため、つながり 1 本ではなく案件のすべての記録を動かす。
+ * 動かすのは、選んだ記録と同じお客様 (かお客様なし) の記録だけ (ほかのお客様の記録は案件にあっても変えない)
+ */
+export interface WholeCase {
+  caseId: string;
+  /** 案件の番号 (最初の記録の番号) */
+  number: string;
+  storeId: string;
+  fromId?: string;
+  inquiries: Inquiry[];
+  quotes: Quote[];
+  orders: Order[];
+}
+
+export function wholeCaseOf(db: Pick<Database, "inquiries" | "quotes" | "orders">, recordId: string): WholeCase | undefined {
+  const start = caseChainOf(db, recordId);
+  if (!start) return undefined;
+  const map = buildCaseMap(db);
+  const caseId = map.caseOf(recordId) ?? start.head.id;
+  const m = map.members(caseId);
+  const fromId = start.order?.customerId ?? start.quote?.customerId ?? start.inquiry?.customerId;
+  const same = (cid: string | undefined) => !cid || cid === fromId;
+  const inquiries = (m?.inquiries ?? (start.inquiry ? [start.inquiry] : [])).filter((x) => same(x.customerId));
+  const quotes = (m?.quotes ?? (start.quote ? [start.quote] : [])).filter((x) => same(x.customerId));
+  const orders = (m?.orders ?? (start.order ? [start.order] : [])).filter((x) => same(x.customerId));
+  const root = [...(m?.orders ?? []), ...(m?.quotes ?? []), ...(m?.inquiries ?? [])].find((x) => x.id === caseId);
+  return { caseId, number: root?.number ?? start.head.number, storeId: root?.storeId ?? start.head.storeId, fromId, inquiries, quotes, orders };
+}
+
+/** 案件をまとめて付け替えられないときの理由 (請求書を発行した受注がある)。キャンセルした受注は案件の記録として一緒に動かす */
+export function wholeCaseRelinkBlocker(db: Pick<Database, "invoices">, w: WholeCase): string | undefined {
+  const issued = w.orders.find((o) => o.status !== "cancelled" && liveInvoicesOfOrder(db.invoices, o).length);
+  if (issued) return `請求書を発行済みの受注 (${issued.number}) があるため、お客様は付け替えられません (請求書の宛名とずれるため)。入金前であれば本部・管理者が請求書を無効にしてから付け替えてください。`;
+  return undefined;
+}
+
+/** 案件のすべての記録 (問い合わせ・見積・受注) と、その予定・資料・やりとり・アンケートを to に付け替える (mutate の中で呼ぶ) */
+export function moveWholeCaseToCustomer(db: Database, w: WholeCase, to: Customer, userId: string): MoveResult & { records: number } {
+  return moveRecordsToCustomer(db, w, w.number, w.fromId, to, userId);
+}
+
+function moveRecordsToCustomer(db: Database, recs: { inquiries: Inquiry[]; quotes: Quote[]; orders: Order[] }, caseNumber: string, fromId: string | undefined, to: Customer, userId: string): MoveResult & { records: number } {
   const from = fromId ? db.customers.find((x) => x.id === fromId) : undefined;
   const now = nowIso();
   const movable = (cid: string | undefined) => !cid || (fromId !== undefined && cid === fromId);
   let records = 0;
   let events = 0;
   const label = `${from ? `${from.code} ${from.name}` : "(なし)"} → ${to.code} ${to.name}`;
-  if (c.inquiry && c.inquiry.customerId !== to.id) {
-    const before = c.inquiry.customerId ?? null;
-    const r = moveInquiryToCustomer(db, c.inquiry, to, userId, { keepPlaceholder: true });
+  for (const inq of recs.inquiries) {
+    if (inq.customerId === to.id) continue;
+    const before = inq.customerId ?? null;
+    const r = moveInquiryToCustomer(db, inq, to, userId, { keepPlaceholder: true });
     events += r.events;
     records++;
-    addAudit(db, { userId, action: "update", entity: "inquiry", entityId: c.inquiry.id, entityLabel: c.inquiry.number, summary: `顧客を付け替え (${label})`, storeId: c.inquiry.storeId, changes: [{ field: "customerId", before, after: to.id }] });
+    addAudit(db, { userId, action: "update", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `顧客を付け替え (${label})`, storeId: inq.storeId, changes: [{ field: "customerId", before, after: to.id }] });
   }
-  for (const [entity, r] of [["quote", c.quote], ["order", c.order]] as const) {
-    if (!r || r.customerId === to.id) continue;
-    const before = r.customerId;
-    r.customerId = to.id;
-    r.updatedAt = now;
-    records++;
-    addAudit(db, { userId, action: "update", entity, entityId: r.id, entityLabel: r.number, summary: `顧客を付け替え (${label})`, storeId: r.storeId, changes: [{ field: "customerId", before, after: to.id }] });
+  for (const [entity, list] of [["quote", recs.quotes], ["order", recs.orders]] as const) {
+    for (const r of list) {
+      if (r.customerId === to.id) continue;
+      const before = r.customerId;
+      r.customerId = to.id;
+      r.updatedAt = now;
+      records++;
+      addAudit(db, { userId, action: "update", entity, entityId: r.id, entityLabel: r.number, summary: `顧客を付け替え (${label})`, storeId: r.storeId, changes: [{ field: "customerId", before, after: to.id }] });
+    }
   }
-  const ids = new Set([c.quote?.id, c.order?.id].filter(Boolean) as string[]);
+  const quoteIds = new Set(recs.quotes.map((q) => q.id));
+  const orderIds = new Set(recs.orders.map((o) => o.id));
+  const ids = new Set([...quoteIds, ...orderIds]);
   for (const e of db.schedule) {
-    if (!((c.order && e.orderId === c.order.id) || (c.quote && e.quoteId === c.quote.id)) || !movable(e.customerId) || e.customerId === to.id) continue;
+    if (!((e.orderId && orderIds.has(e.orderId)) || (e.quoteId && quoteIds.has(e.quoteId))) || !movable(e.customerId) || e.customerId === to.id) continue;
     e.customerId = to.id;
     e.updatedAt = now;
     events++;
   }
   for (const a of db.attachments) if ((a.parentType === "quote" || a.parentType === "order") && ids.has(a.parentId) && movable(a.customerId)) a.customerId = to.id;
   for (const l of db.commLogs) if ((l.relatedType === "quote" || l.relatedType === "order") && l.relatedId && ids.has(l.relatedId) && fromId && l.customerId === fromId) l.customerId = to.id;
-  if (c.order) for (const sv of db.surveys) if (sv.orderId === c.order.id && movable(sv.customerId)) sv.customerId = to.id;
-  if (c.order) for (const inv of db.invoices) if (invoiceCoversOrder(inv, c.order.id) && inv.status === "void" && movable(inv.customerId)) inv.customerId = to.id;
+  for (const sv of db.surveys) if (sv.orderId && orderIds.has(sv.orderId) && movable(sv.customerId)) sv.customerId = to.id;
+  for (const inv of db.invoices) if (inv.status === "void" && recs.orders.some((o) => invoiceCoversOrder(inv, o.id)) && movable(inv.customerId)) inv.customerId = to.id;
   to.updatedAt = now;
   let removed: Customer | undefined;
   if (from && from.id !== to.id && isPlaceholderCustomer(from) && !customerReferenced(db, from.id)) {
     db.customers = db.customers.filter((x) => x.id !== from.id);
     removed = from;
-    addAudit(db, { userId, action: "delete", entity: "customer", entityId: from.id, entityLabel: `${from.code} ${from.name}`, summary: `予定表の取込で仮に作った顧客を削除 (案件 ${c.head.number} を ${to.code} ${to.name} に付け替えたため。ほかの記録はありません)`, storeId: from.storeId });
+    addAudit(db, { userId, action: "delete", entity: "customer", entityId: from.id, entityLabel: `${from.code} ${from.name}`, summary: `予定表の取込で仮に作った顧客を削除 (案件 ${caseNumber} を ${to.code} ${to.name} に付け替えたため。ほかの記録はありません)`, storeId: from.storeId });
   }
   return { from, events, removed, records };
 }

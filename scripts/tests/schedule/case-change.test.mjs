@@ -266,6 +266,44 @@ r = await act(staffUser, () => CQ.relinkCase("o_cc_a", form({ customerId: "c_cc_
 ok(/請求書を発行済み/.test(r.err ?? ""), "請求書を発行した案件は付け替えない");
 await store.mutate((x) => { x.invoices = x.invoices.filter((i) => i.id !== "inv_cc"); });
 
+// 1 つの案件に問い合わせ・見積・受注がいくつもあるとき (お客様のご連絡 2026-11-27「登録済みの案件を削除することなく…正しい顧客に紐付け直す」)
+await store.mutate((x) => {
+  const mk = (id, code, name) => x.customers.push({ id, code, name, kana: "", type: "individual", phone: "", postalCode: "", address: "熊本県テスト市南町7", storeId: M, preferredChannel: "phone", firstContactChannel: "phone", tags: [], notes: "", createdAt: now, updatedAt: now });
+  mk("c_cc_w1", "C-90011", "間違い 一郎");
+  mk("c_cc_w2", "C-90012", "本当 二郎");
+  const it = [{ id: "qi_w", name: "畳表替え", qty: 4, unit: "枚", unitPrice: 10000, amount: 40000 }];
+  x.inquiries.push({ id: "inq_cc_w", number: "INQ-CC-W", customerId: "c_cc_w1", contactName: "間違い", channel: "phone", storeId: M, category: "tatami", summary: "表替え", detail: "", status: "quoted", receivedAt: now, createdBy: staffUser.id, updatedAt: now, quoteId: "q_cc_w1", media: "flyer" });
+  x.inquiries.push({ id: "inq_cc_w2", number: "INQ-CC-W2", customerId: "c_cc_w1", contactName: "間違い", channel: "phone", storeId: M, category: "fusuma", summary: "追加で襖も", detail: "", status: "new", receivedAt: now, createdBy: staffUser.id, updatedAt: now, caseId: "inq_cc_w", media: "repeat" });
+  x.quotes.push({ id: "q_cc_w1", number: "Q-CC-W1", version: 1, customerId: "c_cc_w1", inquiryId: "inq_cc_w", storeId: M, title: "表替え", category: "tatami", items: it, subtotal: 40000, discount: 0, tax: 3636, total: 40000, taxIncluded: true, status: "accepted", validUntil: "2099-12-31", createdBy: staffUser.id, createdAt: now, updatedAt: now, orderId: "o_cc_w" });
+  x.quotes.push({ id: "q_cc_w2", number: "Q-CC-W2", version: 1, customerId: "c_cc_w1", inquiryId: "inq_cc_w", storeId: M, title: "表替え (別の仕様)", category: "tatami", items: it, subtotal: 40000, discount: 0, tax: 3636, total: 40000, taxIncluded: true, status: "lost", validUntil: "2099-12-31", createdBy: staffUser.id, createdAt: now, updatedAt: now });
+  x.orders.push({ id: "o_cc_w", number: "O-CC-W", quoteId: "q_cc_w1", customerId: "c_cc_w1", storeId: M, title: "表替え", category: "tatami", contractDate: now.slice(0, 10), total: 40000, status: "confirmed", workerIds: [], siteAddress: "", progressNotes: [], createdBy: staffUser.id, createdAt: now, updatedAt: now });
+  x.orders.push({ id: "o_cc_w9", number: "O-CC-W9", caseId: "inq_cc_w", customerId: "c_cc_b", storeId: M, title: "ほかのお客様の記録", category: "tatami", contractDate: now.slice(0, 10), total: 10000, status: "confirmed", workerIds: [], siteAddress: "", progressNotes: [], createdBy: staffUser.id, createdAt: now, updatedAt: now });
+  const ev = (id, extra) => x.schedule.push({ id, title: "間違い 一郎", kind: "survey", date: future(40), storeId: M, assigneeIds: [], customerId: "c_cc_w1", source: "manual", createdBy: staffUser.id, createdAt: now, updatedAt: now, ...extra });
+  ev("ev_cc_w1", { quoteId: "q_cc_w2" });
+  ev("ev_cc_w2", { inquiryId: "inq_cc_w2" });
+  ev("ev_cc_w3", { orderId: "o_cc_w", kind: "pickup" });
+});
+const cust = (id) => [...db().inquiries, ...db().quotes, ...db().orders].find((x) => x.id === id)?.customerId;
+const LINK = await imp("lib/customer-link.ts");
+const w = LINK.wholeCaseOf(db(), "o_cc_w");
+eq([w?.caseId, w?.inquiries.length, w?.quotes.length, w?.orders.length], ["inq_cc_w", 2, 2, 1], "受注の ID から案件のすべての記録 (追加の問い合わせ・受注にならなかった見積も。ほかのお客様の記録は除く)");
+await store.mutate((x) => { x.invoices.push({ id: "inv_cc_w", number: "INV-CC-W", orderId: "o_cc_w", customerId: "c_cc_w1", storeId: M, status: "issued", issueDate: now.slice(0, 10), dueDate: "2099-12-31", items: [], subtotal: 40000, tax: 0, total: 40000, paidAmount: 0, createdBy: admin.id, createdAt: now, updatedAt: now }); });
+r = await act(staffUser, () => CQ.relinkCase("q_cc_w2", form({ customerId: "c_cc_w2", returnTo: ret })));
+ok(/請求書を発行済みの受注 \(O-CC-W\)/.test(r.err ?? "") && cust("q_cc_w2") === "c_cc_w1", `同じ案件のほかの受注に請求書があれば、どの記録からでも付け替えない (${r.err})`);
+await store.mutate((x) => { x.invoices = x.invoices.filter((i) => i.id !== "inv_cc_w"); });
+r = await act(staffUser, () => CQ.relinkCase("o_cc_w", form({ customerId: "c_cc_w2", returnTo: ret })));
+eq([r.err, ...["inq_cc_w", "inq_cc_w2", "q_cc_w1", "q_cc_w2", "o_cc_w"].map(cust)], [null, "c_cc_w2", "c_cc_w2", "c_cc_w2", "c_cc_w2", "c_cc_w2"], `受注の画面から: 案件のすべての問い合わせ・見積・受注を付け替える (${r.msg ?? r.err})`);
+eq(["ev_cc_w1", "ev_cc_w2", "ev_cc_w3"].map((id) => db().schedule.find((e) => e.id === id)?.customerId), ["c_cc_w2", "c_cc_w2", "c_cc_w2"], "受注にならなかった見積・追加の問い合わせ・受注の予定もすべて移す");
+eq(cust("o_cc_w9"), "c_cc_b", "案件にあるほかのお客様の記録は変えない");
+ok(/問い合わせ 2 件・見積 2 件・受注 1 件・予定 3 件/.test(r.msg ?? ""), `何を付け替えたかを知らせる (${r.msg})`);
+ok(db().quotes.some((x) => x.id === "q_cc_w2") && db().orders.find((x) => x.id === "o_cc_w")?.total === 40000, "案件は削除せず、見積・受注の内容はそのまま");
+// 案件の画面 (案件の ID) からも戻せる
+r = await act(staffUser, () => CQ.relinkCase("inq_cc_w", form({ customerId: "c_cc_w1", returnTo: "/cases/inq_cc_w" })));
+eq([r.err, ...["inq_cc_w", "inq_cc_w2", "q_cc_w1", "q_cc_w2", "o_cc_w"].map(cust)], [null, "c_cc_w1", "c_cc_w1", "c_cc_w1", "c_cc_w1", "c_cc_w1"], `案件の画面 (案件の ID) から付け替え直す (${r.msg ?? r.err})`);
+// 問い合わせの画面の「案件ごと」も同じ
+r = await act(manager, () => IA.linkInquiryFromForm(form({ inquiryId: "inq_cc_w", customerId: "c_cc_w2", scope: "case", returnTo: "/inquiries/inq_cc_w" })));
+eq([r.err, ...["inq_cc_w", "inq_cc_w2", "q_cc_w2", "o_cc_w"].map(cust)], [null, "c_cc_w2", "c_cc_w2", "c_cc_w2", "c_cc_w2"], `問い合わせの画面 (案件ごと) も案件のすべての記録 (${r.msg ?? r.err})`);
+
 /* ================================================================== */
 section("⑨ 依頼主の住所と施工現場の住所 / ⑩ 同じお客様の新しい案件");
 r = await act(staffUser, () => CQ.quickNewCase(form({ customerId: "c_cc_corp", summary: "テスト邸 和室 表替え", siteAddress: "熊本県テスト市南町7-8-9", media: "business", category: "tatami", kind: "survey", date: future(15), timeMode: "am", assigneeIds: [staffUser.id], allowOverlap: "1", returnTo: ret })));

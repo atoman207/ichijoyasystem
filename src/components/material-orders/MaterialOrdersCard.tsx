@@ -1,7 +1,7 @@
 import Link from "@/components/ui/Link";
 import type { Database, User } from "@/lib/db/types";
 import { canEditMaterialOrder, canViewMaterialOrders } from "@/lib/auth/permissions";
-import { addMaterialRow, addMaterialsFromQuote, readMaterialPhoto } from "@/lib/actions/material-orders";
+import { addMaterialRow, addMaterialsFromQuote, importReformOrderSheet, readMaterialPhoto } from "@/lib/actions/material-orders";
 import { MATERIAL_CATEGORIES, MATERIAL_CATEGORY, materialRows, reformLines, statusCounts } from "@/lib/material-orders/plan";
 import { materialTableReady } from "@/lib/material-orders/tables";
 import { aiEnabled } from "@/lib/ai/ocr";
@@ -66,11 +66,21 @@ export function MaterialOrdersCard({ db, user, orderIds, returnTo }: { db: Datab
                   </PendingButton>
                 </form>
               )}
+              <form action={importReformOrderSheet} encType="multipart/form-data" className="space-y-1.5">
+                <input type="hidden" name="returnTo" value={`${returnTo}#materials`} />
+                <input type="hidden" name="orderId" value={o.id} />
+                <div className="text-xs font-semibold text-ink">リフォーム発注管理票 (.xlsx) を取り込む</div>
+                <p className="text-[11px] text-ink-3">業者・工事・材料等・数量・単位・発注日・施工・納品日・備考の表 (社内の「リフォーム発注管理票」と同じ様式)。原本シートを読み、発注日がある行は「発注済み」にします。</p>
+                <input type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="block text-xs" required />
+                <PendingButton type="submit" className={buttonClass("secondary", "sm")}>
+                  表を取り込む
+                </PendingButton>
+              </form>
               <form action={readMaterialPhoto} encType="multipart/form-data" className="space-y-1.5">
                 <input type="hidden" name="returnTo" value={`${returnTo}#materials`} />
                 <input type="hidden" name="orderId" value={o.id} />
                 <div className="text-xs font-semibold text-ink">手書きの発注一覧を撮影して読み取る</div>
-                <p className="text-[11px] text-ink-3">工程表・発注一覧の写真か PDF。AI が材料名・品番・数量・発注先・必要な日を読み取り、「写真から読み取り (要確認)」として足します。内容を確かめて直してください。{!ai && " (AI の設定がないため使えません)"}</p>
+                <p className="text-[11px] text-ink-3">発注管理票・工程表・発注一覧の写真か PDF。AI が材料名・品番・数量・発注先・必要な日を読み取り、「写真から読み取り (要確認)」として足します。内容を確かめて直してください。{!ai && " (AI の設定がないため使えません)"}</p>
                 <input type="file" name="file" accept="image/*,application/pdf" capture="environment" className="block text-xs" disabled={!ai} required />
                 <PendingButton type="submit" className={buttonClass("secondary", "sm")} disabled={!ai}>
                   読み取って足す

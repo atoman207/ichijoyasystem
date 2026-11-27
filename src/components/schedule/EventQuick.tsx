@@ -1134,7 +1134,7 @@ function CaseEditSection({ data, returnTo }: { data: EventQuickData; returnTo: s
           ) : (
             <>
               <p className="mb-2 text-[11px] leading-relaxed text-ink-2">
-                いまのお客様: {ce.relink.current ?? "(未登録)"}。正しいお客様を検索して「付け替える」を押すと、問い合わせ・見積・受注・予定などの内容はそのままで、紐付け先だけが変わります。
+                いまのお客様: {ce.relink.current ?? "(未登録)"}。正しいお客様を検索して「付け替える」を押すと、この案件の問い合わせ・見積・受注・予定・資料をすべてまとめて、内容はそのままで紐付け先だけが変わります。
               </p>
               <CaseCustomerSearch action={relinkCase.bind(null, ce.caseId!)} returnTo={returnTo} />
             </>

@@ -7,7 +7,7 @@ import type { Inquiry, Order, Quote, ScheduleKind } from "@/lib/db/types";
 import { canEditCaseStore } from "@/lib/auth/permissions";
 import { buildCaseMap, caseHref, summarizeCase } from "@/lib/case-group";
 import { caseIndex, STAGE_TONE } from "@/lib/case-status";
-import { customerAccessInfo, inquiryAccessInfo, invoiceAccessInfo, orderAccessInfo, quoteAccessInfo } from "@/lib/case-access";
+import { completedCaseLock, completedLockMessage, customerAccessInfo, inquiryAccessInfo, invoiceAccessInfo, orderAccessInfo, quoteAccessInfo } from "@/lib/case-access";
 import { logRecordView } from "@/lib/record-views";
 import { liveInvoicesOfOrder } from "@/lib/billing";
 import { activeReceipts } from "@/lib/receipts";
@@ -26,6 +26,9 @@ import { AttachmentsCard } from "@/components/attachments/AttachmentsCard";
 import { CaseScheduleCard } from "@/components/schedule/CaseSchedule";
 import { MaterialOrdersCard } from "@/components/material-orders/MaterialOrdersCard";
 import { formStores, formUsers } from "@/components/schedule/form-data";
+import { CaseCustomerSearch } from "@/components/features/LinkSearch";
+import { relinkCase } from "@/lib/actions/case-quick";
+import { wholeCaseOf, wholeCaseRelinkBlocker } from "@/lib/customer-link";
 
 /**
  * 案件の画面 (お客様のご要望 2026-11-26「■4 顧客と案件の定義・管理イメージ」「■6 一つの案件に対する複数見積」)
@@ -65,6 +68,11 @@ export default async function CasePage({ params, searchParams }: { params: Promi
   const customerInfo = customer ? customerAccessInfo(db, user, customer) : undefined;
   if (customer && customerInfo && customerInfo.access !== "none") logRecordView(user, customerInfo, { entity: "customer", id: customer.id, label: customer.name, storeId: customer.storeId }, db.auditLogs);
   const canEdit = canEditCaseStore(user, s.storeId);
+  // 紐付け先のお客様を直す (お客様のご連絡 2026-11-27「登録済みの案件を削除することなく…正しい顧客に紐付け直す」): 案件のすべての記録をまとめて付け替える
+  const whole = wholeCaseOf(db, caseId);
+  const relinkLock = whole?.orders.map((o) => ({ o, l: completedCaseLock(db, user, o) })).find((x) => x.l.locked);
+  const relinkBlocked = whole ? (relinkLock ? `${relinkLock.o.number}: ${completedLockMessage(relinkLock.l.reason)}` : wholeCaseRelinkBlocker(db, whole)) : "案件が見つかりません。";
+  const canRelink = Boolean(whole) && [...(whole?.inquiries ?? []), ...(whole?.quotes ?? []), ...(whole?.orders ?? [])].every((r) => canEditCaseStore(user, r.storeId));
   const returnTo = caseHref(caseId);
   const users = new Map(db.users.map((u) => [u.id, u]));
   const userName = (uid?: string) => (uid ? users.get(uid)?.name ?? "" : "");
@@ -358,6 +366,21 @@ export default async function CasePage({ params, searchParams }: { params: Promi
               </div>
             ) : (
               <p className="text-sm text-ink-3">お客様が登録されていません。問い合わせの画面の「お客様の確認」で登録・紐付けできます。</p>
+            )}
+            {customer && canRelink && (
+              <details className="mt-3 border-t border-line pt-2" id="relink" data-testid="case-relink">
+                <summary className="cursor-pointer text-xs font-medium text-accent">紐付け先のお客様を直す</summary>
+                {relinkBlocked ? (
+                  <p className="mt-1 text-xs text-ink-3">{relinkBlocked}</p>
+                ) : (
+                  <div className="mt-2">
+                    <p className="mb-2 text-[11px] text-ink-3">
+                      別のお客様に紐付いているときは、正しいお客様を検索して「付け替える」を押してください。この案件の問い合わせ {whole?.inquiries.length ?? 0} 件・見積 {whole?.quotes.length ?? 0} 件・受注 {whole?.orders.length ?? 0} 件と予定・資料をまとめて、内容はそのままで紐付け先だけが変わります (案件は削除しません)。
+                    </p>
+                    <CaseCustomerSearch action={relinkCase.bind(null, caseId)} returnTo={returnTo} />
+                  </div>
+                )}
+              </details>
             )}
           </Card>
 

@@ -4,8 +4,7 @@ import { CaseStoreCard } from "@/components/features/CaseStoreCard";
 import { CaseRequestsCard } from "@/components/features/CaseRequestsCard";
 import { CaseCustomerSearch } from "@/components/features/LinkSearch";
 import { relinkCase } from "@/lib/actions/case-quick";
-import { caseRelinkBlocker } from "@/lib/customer-link";
-import { caseChainOf } from "@/lib/case-store";
+import { wholeCaseOf, wholeCaseRelinkBlocker } from "@/lib/customer-link";
 import Link from "@/components/ui/Link";
 import { CaseViewBanner, CompletedLockBanner, ReadOnlyArea } from "@/components/features/CaseAccess";
 import { quoteAccessInfo, quoteCompletedLock, deniedHref } from "@/lib/case-access";
@@ -61,8 +60,9 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
   const viewOnly = info.access === "view";
   logRecordView(user, info, { entity: "quote", id: q.id, label: q.number, storeId: q.storeId }, db.auditLogs);
   const lock = quoteCompletedLock(db, user, q);
-  const relinkChain = caseChainOf(db, q.id);
-  const relinkBlocked = relinkChain ? caseRelinkBlocker(db, relinkChain) : undefined;
+  // 紐付け先のお客様を直すときは案件のすべての記録をまとめて付け替える (お客様のご連絡 2026-11-27)
+  const relinkWhole = wholeCaseOf(db, q.id);
+  const relinkBlocked = relinkWhole ? wholeCaseRelinkBlocker(db, relinkWhole) : undefined;
   const customer = db.customers.find((c) => c.id === q.customerId);
   const store = db.stores.find((s) => s.id === q.storeId);
   const chain = quoteChain(db, q);
@@ -348,7 +348,7 @@ export default async function QuoteDetailPage({ params, searchParams }: { params
                 <summary className="cursor-pointer text-xs font-medium text-accent">紐付け先のお客様を直す</summary>
                 {relinkBlocked ? <p className="mt-1 text-xs text-ink-3">{relinkBlocked}</p> : (
                   <div className="mt-2">
-                    <p className="mb-2 text-[11px] text-ink-3">正しいお客様を検索して「付け替える」を押すと、問い合わせ・見積・受注・予定などの内容はそのままで、紐付け先だけが変わります。</p>
+                    <p className="mb-2 text-[11px] text-ink-3">正しいお客様を検索して「付け替える」を押すと、この案件の問い合わせ・見積・受注・予定・資料をすべてまとめて、内容はそのままで紐付け先だけが変わります。</p>
                     <CaseCustomerSearch action={relinkCase.bind(null, q.id)} returnTo={`/quotes/${q.id}`} />
                   </div>
                 )}

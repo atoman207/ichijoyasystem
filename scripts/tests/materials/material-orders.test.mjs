@@ -201,6 +201,28 @@ section("完了した受注 (自動の行は出さない・発注済みの記録
   ok(P.materialRows(db(), today, { orderIds: ["o_mo"] }).some((r) => r.status === "ordered"), "案件の画面には発注済みの記録");
 }
 
+section("リフォーム発注管理票 (.xlsx)");
+{
+  const RS = await imp("lib/material-orders/reform-sheet.ts");
+  const file = path.join(root, "source", "11_取引先・仕入先", "発注書・発注管理", "リフォーム発注管理票.xlsx");
+  ok(fs.existsSync(file), "ソース登録簿にリフォーム発注管理票.xlsx がある");
+  const sheets = RS.parseReformOrderWorkbook(fs.readFileSync(file));
+  ok(sheets.length >= 6, `原本 + 記入例のシート (${sheets.length})`);
+  ok(sheets.some((s) => s.sheetName === "原本"), "空の原本シートも含む");
+  const ex1 = sheets.find((s) => s.sheetName.includes("記入例①"));
+  ok(ex1 && /Ａ様|A様/.test(ex1.title ?? ""), "記入例①の工事名");
+  ok(ex1.lines.some((l) => l.supplierName === "田中材木" && l.name.includes("カナエル") && l.qty === 15 && l.unit === "坪"), "記入例① 田中材木のフローリング");
+  ok(ex1.lines.some((l) => l.supplierName === "菅本建設" && /大工/.test(l.name)), "業者の引き継ぎ (菅本建設)");
+  const picked = RS.pickReformImportSheet(sheets);
+  ok(picked && picked.lines.length > 0, "取込は行のあるシート (空の原本なら記入例)");
+  // 原本に行を入れたシートだけを渡すと原本を選ぶ
+  const asFilled = sheets.map((s) => (s.sheetName === "原本" ? { ...s, lines: picked.lines } : s));
+  ok(/^原本/.test(RS.pickReformImportSheet(asFilled)?.sheetName ?? ""), "行のある原本シートを優先");
+  eq(RS.parseLooseDate("12/20", 2026), "2026-12-20", "月日だけの日付");
+  const sched = path.join(root, "source", "09_事務手続き・書式", "工事予定・工程表", "工事予定日・工程表.xlsx");
+  ok(fs.existsSync(sched), "ソース登録簿に工事予定日・工程表.xlsx がある");
+}
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   console.log("FAILED:\n - " + fails.join("\n - "));

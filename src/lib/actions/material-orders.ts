@@ -10,6 +10,7 @@ import { isDateKey } from "@/lib/calendar";
 import { MATERIAL_CATEGORIES, MATERIAL_CATEGORY, MATERIAL_STATUS, MATERIAL_STATUSES, materialRows, reformLines, type MaterialRow } from "@/lib/material-orders/plan";
 import { materialTableMissing } from "@/lib/material-orders/tables";
 import { readMaterialList, type ReadMaterial } from "@/lib/ai/material-list";
+import { parseReformOrderWorkbook, pickReformImportSheet } from "@/lib/material-orders/reform-sheet";
 import { fail, requireActionUser, safeReturn, str, withErr, withMsg } from "./guards";
 
 /**
@@ -300,4 +301,71 @@ export async function readMaterialPhoto(formData: FormData) {
   });
   revalidate(orderId);
   redirect(withMsg(ret, `発注一覧から ${Math.min(rows.length, 80)} 件を読み取りました。内容 (品番・数量・発注先・必要な日) を確かめて直してください。`));
+}
+
+/**
+ * リフォーム発注管理票 (.xlsx) を取り込む (source/11_取引先・仕入先/発注書・発注管理/ と同じ様式)。
+ * 業者・工事・材料等・数量・単位・発注日・施工・納品日・備考を材料発注の行にする。発注日がある行は「発注済み」
+ */
+export async function importReformOrderSheet(formData: FormData) {
+  const user = await requireActionUser();
+  const ret = back(formData);
+  await ready(ret);
+  const orderId = str(formData, "orderId");
+  const db0 = getDb();
+  const o = db0.orders.find((x) => x.id === orderId);
+  if (!o) fail(ret, "受注が見つかりません。");
+  if (!canEditMaterialOrder(user, o.storeId)) fail(ret, "この店舗の材料の発注を登録する権限がありません。");
+  const file = formData.get("file");
+  if (!(file instanceof File) || !file.size) fail(ret, "リフォーム発注管理票 (.xlsx) を選んでください。");
+  if (!/\.xlsx$/i.test(file.name)) fail(ret, ".xlsx のファイルを選んでください。");
+  if (file.size > 8 * 1024 * 1024) fail(ret, "ファイルが大きすぎます (8 MB まで)。");
+  let sheets;
+  try {
+    sheets = parseReformOrderWorkbook(Buffer.from(await file.arrayBuffer()));
+  } catch (e) {
+    fail(ret, (e as Error).message || "ファイルを読めませんでした。");
+  }
+  const sheetName = str(formData, "sheet");
+  const picked = sheetName ? sheets.find((s) => s.sheetName === sheetName) : pickReformImportSheet(sheets);
+  if (!picked?.lines.length) fail(ret, "発注管理票の行が見つかりません (「原本」か記入例のシートを確かめてください)。");
+  const now = nowIso();
+  let n = 0;
+  await mutate((db) => {
+    for (const r of picked!.lines.slice(0, 120)) {
+      if (r.neededBy && !isDateKey(r.neededBy)) r.neededBy = undefined;
+      db.materialOrders.push({
+        id: newId("mo"),
+        orderId: o.id,
+        storeId: o.storeId,
+        category: r.category,
+        name: r.name,
+        qty: r.qty,
+        unit: r.unit,
+        spec: r.deliveryPlace ? `納品場所:${r.deliveryPlace}`.slice(0, 300) : undefined,
+        status: r.status,
+        supplierName: r.supplierName,
+        neededBy: r.neededBy,
+        orderedBy: r.status === "ordered" ? user.id : undefined,
+        orderedAt: r.status === "ordered" ? (r.orderedOn ? `${r.orderedOn}T00:00:00+09:00` : now) : undefined,
+        note: ["発注管理票から取込", picked!.title ? `工事名:${picked!.title}` : "", r.note].filter(Boolean).join(" · ").slice(0, 300),
+        source: "manual",
+        createdBy: user.id,
+        createdAt: now,
+        updatedAt: now,
+      });
+      n++;
+    }
+    addAudit(db, {
+      userId: user.id,
+      action: "import",
+      entity: "material_order",
+      entityId: o.id,
+      entityLabel: o.number,
+      summary: `材料発注: リフォーム発注管理票「${picked!.sheetName}」から ${n} 件を取込 (受注 ${o.number}${picked!.title ? `・${picked!.title}` : ""})`,
+      storeId: o.storeId,
+    });
+  });
+  revalidate(orderId);
+  redirect(withMsg(ret, `発注管理票「${picked.sheetName}」から ${n} 件を取り込みました。内容を確かめてください。`));
 }

@@ -21,7 +21,7 @@ import { CaseStoreCard } from "@/components/features/CaseStoreCard";
 import { CaseRequestsCard } from "@/components/features/CaseRequestsCard";
 import { CaseCustomerSearch } from "@/components/features/LinkSearch";
 import { relinkCase } from "@/lib/actions/case-quick";
-import { caseRelinkBlocker } from "@/lib/customer-link";
+import { wholeCaseOf, wholeCaseRelinkBlocker } from "@/lib/customer-link";
 import { fmtDate, fmtDateTime, toDateKey, yen } from "@/lib/format";
 import { APPROVAL_TYPE_LABEL, CATEGORY_LABEL, CHANNEL_LABEL, INVOICE_STATUS, ORDER_STATUS, PROGRESS_KIND_LABEL, QUOTE_STATUS } from "@/lib/constants";
 import { customerPhonesText } from "@/lib/customer-contacts";
@@ -92,7 +92,9 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const ownStore = canAccessStore(user, o.storeId);
   logRecordView(user, info, { entity: "order", id: o.id, label: o.number, storeId: o.storeId }, db.auditLogs);
   const lock = completedCaseLock(db, user, o);
-  const relinkBlocked = caseRelinkBlocker(db, { order: o, head: { type: "order", id: o.id, number: o.number, title: o.title, storeId: o.storeId } });
+  // 紐付け先のお客様を直すときは案件のすべての記録をまとめて付け替える (お客様のご連絡 2026-11-27)
+  const relinkWhole = wholeCaseOf(db, o.id);
+  const relinkBlocked = relinkWhole ? wholeCaseRelinkBlocker(db, relinkWhole) : undefined;
   const customer = db.customers.find((c) => c.id === o.customerId);
   // まとめ請求のお客様 (締め日ごとに 1 枚の請求書。src/lib/billing.ts)
   const bTerms = batchTerms(customer);
@@ -732,7 +734,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
                 <summary className="cursor-pointer text-xs font-medium text-accent">紐付け先のお客様を直す</summary>
                 {relinkBlocked ? <p className="mt-1 text-xs text-ink-3">{relinkBlocked}</p> : (
                   <div className="mt-2">
-                    <p className="mb-2 text-[11px] text-ink-3">正しいお客様を検索して「付け替える」を押すと、問い合わせ・見積・受注・予定などの内容はそのままで、紐付け先だけが変わります。</p>
+                    <p className="mb-2 text-[11px] text-ink-3">正しいお客様を検索して「付け替える」を押すと、この案件の問い合わせ・見積・受注・予定・資料をすべてまとめて、内容はそのままで紐付け先だけが変わります。</p>
                     <CaseCustomerSearch action={relinkCase.bind(null, o.id)} returnTo={`/orders/${o.id}`} />
                   </div>
                 )}

@@ -13,9 +13,8 @@ import { candidateLabel, findDuplicateCustomers, needsConfirmation } from "@/lib
 import { linkInquiryLogs } from "@/lib/ai-intake";
 import { DUE_CHOICES, REQUEST_PURPOSE, dueAtFrom, dueLabel, type DueChoice } from "@/lib/inquiry-flow";
 import { closeScheduleRequests, createInquiryRequest } from "@/lib/inquiry-requests";
-import { addInquiryPhone, canLinkToCustomer, detachFromOtherCustomerCase, isPlaceholderCustomer, moveCaseToCustomer, moveInquiryToCustomer, relinkBlocker } from "@/lib/customer-link";
+import { addInquiryPhone, canLinkToCustomer, detachFromOtherCustomerCase, isPlaceholderCustomer, moveInquiryToCustomer, moveWholeCaseToCustomer, relinkBlocker, wholeCaseOf } from "@/lib/customer-link";
 import { adoptPlaceholderCase } from "@/lib/placeholder-customer";
-import { caseChainOf } from "@/lib/case-store";
 import { addChangeNotice, caseTarget, noticeLines } from "@/lib/change-notices";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
 import { taskNotices } from "@/lib/notify/events";
@@ -364,19 +363,20 @@ export async function linkInquiryToCustomer(id: string, customerId: string, retu
     const caseBefore = inq.caseId ?? null;
     const detached = detachFromOtherCustomerCase(db, inq, c.id);
     const detachNote = detached ? `既存の案件 ${detached} (前のお客様の案件) からは外しました。` : "";
-    // 見積・受注のあとの案件: 見積・受注・予定もまとめて付け替える (お客様のご要望 2026-11-25「⑤」)
+    // 見積・受注のあとの案件: 案件のすべての記録 (追加の問い合わせ・見積・受注も) と予定をまとめて付け替える (お客様のご要望 2026-11-25「⑤」・2026-11-27)
     // scope = inquiry: 問い合わせだけを付け替える (見積・受注は今のお客様のまま。お客様のご要望 2026-11-25「④ 問い合わせ内容だけを正しい顧客へ」)
-    const chain = inq.quoteId && scope === "case" ? caseChainOf(db, inq.id) : undefined;
-    if (chain && (chain.quote || chain.order)) {
-      if (chain.order) {
-        const lock = completedCaseLock(db, user, chain.order);
-        if (lock.locked) fail(back, completedLockMessage(lock.reason));
+    const whole = scope === "case" && inq.customerId ? wholeCaseOf(db, inq.id) : undefined;
+    if (whole && whole.inquiries.length + whole.quotes.length + whole.orders.length > 1) {
+      for (const o of whole.orders) {
+        const lock = completedCaseLock(db, user, o);
+        if (lock.locked) fail(back, `${o.number}: ${completedLockMessage(lock.reason)}`);
       }
+      if ([...whole.inquiries, ...whole.quotes, ...whole.orders].some((r) => !canEditCaseStore(user, r.storeId))) fail(back, "この案件を変更する権限がありません。");
       const fromC = db.customers.find((x) => x.id === inq.customerId);
-      const rc = moveCaseToCustomer(db, chain, c, user.id);
+      const rc = moveWholeCaseToCustomer(db, whole, c, user.id);
       addChangeNotice(db, user.id, caseTarget(db, inq.id), "お客様の付け替え", [{ label: "お客様", before: fromC ? `${fromC.name} 様 (${fromC.code})` : "(未登録)", after: `${c.name} 様 (${c.code})` }]);
       if (detached) addAudit(db, { userId: user.id, action: "update", entity: "inquiry", entityId: inq.id, entityLabel: inq.number, summary: `お客様の付け替えで既存の案件 ${detached} から外しました`, storeId: inq.storeId, changes: [{ field: "caseId", before: caseBefore, after: null }] });
-      message = `案件 ${chain.head.number} (問い合わせ・見積・受注) を ${c.name} 様に付け替えました。${rc.events ? `予定 ${rc.events} 件も移しました。` : ""}${rc.removed ? `仮の顧客 (${rc.removed.code}) は記録がなくなったため削除しました。` : ""}${detachNote}`;
+      message = `案件 ${whole.number} (問い合わせ・見積・受注 ${rc.records} 件) を ${c.name} 様に付け替えました。${rc.events ? `予定 ${rc.events} 件も移しました。` : ""}${rc.removed ? `仮の顧客 (${rc.removed.code}) は記録がなくなったため削除しました。` : ""}${detachNote}`;
       return;
     }
     const before = inq.customerId ?? null;

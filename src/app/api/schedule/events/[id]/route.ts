@@ -27,7 +27,7 @@ import { CATEGORY_LABEL, SCHEDULE_KIND, TASK_STATUS } from "@/lib/constants";
 import { CASE_REQUEST_KIND, CASE_REQUEST_KINDS, caseRequestsOf } from "@/lib/case-requests";
 import type { ScheduleKind } from "@/lib/db/types";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
-import { canLinkToCustomer, caseRelinkBlocker, isPlaceholderCustomer } from "@/lib/customer-link";
+import { canLinkToCustomer, isPlaceholderCustomer, wholeCaseOf, wholeCaseRelinkBlocker } from "@/lib/customer-link";
 import { liveInvoicesOfOrder, usesBatchBilling } from "@/lib/billing";
 import { taxModeOf } from "@/lib/quote-calc";
 import { WORK_ROLES, WORK_ROLE_LABEL, workStaffOf } from "@/lib/work-staff";
@@ -240,7 +240,9 @@ function quickCase(db: Database, user: User, e: ScheduleEvent, resolver: ReturnT
       out.orderTotal = chain.order.total;
       out.orderHref = `/orders/${chain.order.id}`;
     }
-    const blocker = caseRelinkBlocker(db, chain);
+    // 付け替えは案件のすべての記録をまとめて (src/lib/customer-link.ts の wholeCaseOf。お客様のご連絡 2026-11-27)
+    const whole = wholeCaseOf(db, chain.head.id);
+    const blocker = whole ? wholeCaseRelinkBlocker(db, whole) : undefined;
     out.relink = { canRelink: canEdit && !blocker, blocked: canEdit ? blocker : undefined, current: customer ? `${customer.name} 様 (${customer.code})` : undefined };
     if (chain.order) {
       const ws = workStaffOf(db, chain.order);

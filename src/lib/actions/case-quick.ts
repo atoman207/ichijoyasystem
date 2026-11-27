@@ -13,7 +13,7 @@ import { dueAtFrom } from "@/lib/inquiry-flow";
 import { taskNotices } from "@/lib/notify/events";
 import { sendAndRecord } from "@/lib/notify/send";
 import { caseChainOf } from "@/lib/case-store";
-import { canLinkToCustomer, caseRelinkBlocker, moveCaseToCustomer } from "@/lib/customer-link";
+import { canLinkToCustomer, moveWholeCaseToCustomer, wholeCaseOf, wholeCaseRelinkBlocker } from "@/lib/customer-link";
 import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
 import { addChangeNotice, caseTarget } from "@/lib/change-notices";
 import { syncOrderEvent } from "@/lib/db/schedule";
@@ -30,7 +30,8 @@ import { placeTextOrEmpty } from "@/lib/maps/address";
 /**
  * 予定表の小さな画面から案件を直す・足す (お客様のご要望 2026-11-25「予定表を起点に、案件の確認・変更・追加をその画面で」)
  * ------------------------------------------------------------
- * - relinkCase: 紐付け間違いの修正。問い合わせ・見積・受注・予定などの情報はそのままに、お客様だけを付け替える (「⑤」)
+ * - relinkCase: 紐付け間違いの修正。問い合わせ・見積・受注・予定などの情報はそのままに、お客様だけを付け替える (「⑤」)。
+ *   案件のすべての記録 (追加の問い合わせ・受注にならなかった見積・追加工事の受注も) をまとめて (お客様のご連絡 2026-11-27)
  * - setCaseSite: 施工現場の住所 (依頼主の住所と別) を案件に登録する。予定表の町名・地図はこの住所を使う (「⑨」)
  * - quickAmendLines: 明細 (仕様・枚数・単価) の修正・追加・部分キャンセル。見積の変更 (版として残る) と同じ処理 (「③」)
  * - quickNewCase: 同じお客様 (取引先) の新しい案件 (問い合わせ) と、必要なら最初の予定を登録する (「⑩」)
@@ -39,7 +40,7 @@ import { placeTextOrEmpty } from "@/lib/maps/address";
 
 const back = (fd: FormData, fallback: string) => safeReturn(str(fd, "returnTo"), fallback);
 
-/** 案件のお客様を付け替える (caseId = 問い合わせ・見積・受注のどれか) */
+/** 案件のお客様を付け替える (caseId = 案件のどの記録の ID でも。案件のすべての記録をまとめて) */
 export async function relinkCase(caseId: string, formData: FormData) {
   const user = await requireActionUser();
   const ret = back(formData, "/schedule");
@@ -47,25 +48,27 @@ export async function relinkCase(caseId: string, formData: FormData) {
   if (!customerId) fail(ret, "付け替える先のお客様を選んでください。");
   let message = "";
   await mutate((db) => {
-    const chain = caseChainOf(db, caseId);
-    if (!chain) fail(ret, "案件が見つかりません。");
-    if (!canEditCaseStore(user, chain.head.storeId)) fail(ret, "この案件を変更する権限がありません。");
-    if (chain.order) {
-      const lock = completedCaseLock(db, user, chain.order);
-      if (lock.locked) fail(ret, completedLockMessage(lock.reason));
+    const w = wholeCaseOf(db, caseId);
+    if (!w) fail(ret, "案件が見つかりません。");
+    const recs = [...w.inquiries, ...w.quotes, ...w.orders];
+    if (recs.some((r) => !canEditCaseStore(user, r.storeId))) fail(ret, "この案件を変更する権限がありません。");
+    for (const o of w.orders) {
+      const lock = completedCaseLock(db, user, o);
+      if (lock.locked) fail(ret, `${o.number}: ${completedLockMessage(lock.reason)}`);
     }
-    const blocker = caseRelinkBlocker(db, chain);
+    const blocker = wholeCaseRelinkBlocker(db, w);
     if (blocker) fail(ret, blocker);
     const to = db.customers.find((c) => c.id === customerId);
     if (!to) fail(ret, "お客様が見つかりません。");
     if (!canLinkToCustomer(db, user, to)) fail(ret, "このお客様は閲覧の範囲の外のため付け替えられません。店舗または本部に依頼してください。");
-    const fromId = chain.order?.customerId ?? chain.quote?.customerId ?? chain.inquiry?.customerId;
-    if (fromId === to.id) fail(ret, `すでに ${to.name} 様の案件です。`);
-    const from = fromId ? db.customers.find((c) => c.id === fromId) : undefined;
-    const r = moveCaseToCustomer(db, chain, to, user.id);
-    if (chain.order) chain.order.progressNotes.push({ id: newId("pn"), at: nowIso(), userId: user.id, kind: "change", body: `お客様を付け替え: ${from ? `${from.name} 様 (${from.code})` : "(未登録)"} → ${to.name} 様 (${to.code})` });
-    addChangeNotice(db, user.id, caseTarget(db, chain.head.id), "お客様の付け替え", [{ label: "お客様", before: from ? `${from.name} 様 (${from.code})` : "(未登録)", after: `${to.name} 様 (${to.code})` }]);
-    message = `案件 ${chain.head.number} を ${to.name} 様に付け替えました (記録 ${r.records} 件${r.events ? `・予定 ${r.events} 件` : ""})。問い合わせ・見積・受注・予定の内容はそのままです。${r.removed ? `仮の顧客 (${r.removed.code}) は記録がなくなったため削除しました。` : ""}`;
+    if (w.fromId === to.id) fail(ret, `すでに ${to.name} 様の案件です。`);
+    const from = w.fromId ? db.customers.find((c) => c.id === w.fromId) : undefined;
+    const r = moveWholeCaseToCustomer(db, w, to, user.id);
+    const fromText = from ? `${from.name} 様 (${from.code})` : "(未登録)";
+    for (const o of w.orders) o.progressNotes.push({ id: newId("pn"), at: nowIso(), userId: user.id, kind: "change", body: `お客様を付け替え: ${fromText} → ${to.name} 様 (${to.code})` });
+    addChangeNotice(db, user.id, caseTarget(db, w.caseId), "お客様の付け替え", [{ label: "お客様", before: fromText, after: `${to.name} 様 (${to.code})` }]);
+    const parts = [w.inquiries.length && `問い合わせ ${w.inquiries.length} 件`, w.quotes.length && `見積 ${w.quotes.length} 件`, w.orders.length && `受注 ${w.orders.length} 件`, r.events && `予定 ${r.events} 件`].filter(Boolean).join("・");
+    message = `案件 ${w.number} を ${to.name} 様に付け替えました (${parts})。問い合わせ・見積・受注・予定の内容はそのままです。${r.removed ? `仮の顧客 (${r.removed.code}) は記録がなくなったため削除しました。` : ""}`;
   });
   revalidatePath("/", "layout");
   redirect(withMsg(ret, message));
