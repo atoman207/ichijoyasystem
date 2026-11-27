@@ -1,0 +1,9 @@
+# 一畳屋: 試験期間のチャットを 12/1 に本番へ引き継ぐ (お客様のご指示 2026-11-27。scripts/ops/testweek-chat-carryover.mjs・deploy/README.md)。12/4 以降に消してよい
+# 入れ方 (ichijoya のユーザーで。いまの crontab を置き換える = 2026-11-27 の時点では空): crontab deploy/testweek-chat.cron / 確認: crontab -l / 消す: crontab -r
+SHELL=/bin/bash
+# 11/30〜12/1 0:04: テスト用のチャットの写しを残す (期間の終わりの控えを読めないときの予備)
+*/10 0-22 30 11 * [ "$(date +\%Y)" = 2026 ] && { cd /srv/ichijoya/current && [ -f scripts/ops/testweek-chat-carryover.mjs ] || cd /home/ichijoya/Documents/ichijoyasistem; } && /usr/bin/node scripts/ops/testweek-chat-carryover.mjs --stage >> /var/log/ichijoya/testweek-chat.log 2>&1
+* 23 30 11 * [ "$(date +\%Y)" = 2026 ] && { cd /srv/ichijoya/current && [ -f scripts/ops/testweek-chat-carryover.mjs ] || cd /home/ichijoya/Documents/ichijoyasistem; } && /usr/bin/node scripts/ops/testweek-chat-carryover.mjs --stage >> /var/log/ichijoya/testweek-chat.log 2>&1
+0-4 0 1 12 * [ "$(date +\%Y)" = 2026 ] && { cd /srv/ichijoya/current && [ -f scripts/ops/testweek-chat-carryover.mjs ] || cd /home/ichijoya/Documents/ichijoyasistem; } && /usr/bin/node scripts/ops/testweek-chat-carryover.mjs --stage >> /var/log/ichijoya/testweek-chat.log 2>&1
+# 12/1〜12/3: 10 分ごとに引き継ぐ (試験期間の終わりのあと 1 回だけ。済んだら何もしない)
+*/10 * 1-3 12 * [ "$(date +\%Y)" = 2026 ] && { cd /srv/ichijoya/current && [ -f scripts/ops/testweek-chat-carryover.mjs ] || cd /home/ichijoya/Documents/ichijoyasistem; } && /usr/bin/node scripts/ops/testweek-chat-carryover.mjs --auto --apply >> /var/log/ichijoya/testweek-chat.log 2>&1

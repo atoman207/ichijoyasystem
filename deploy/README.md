@@ -311,4 +311,13 @@ node scripts/ops/testweek-carryover.mjs apply --plan <…>/carryover-plan.json -
 
 12/1 0:00 の `end` のあとは、テスト用のデータベースは `testweek-final-<日付>.tar.gz` から読む (`--test` を省くと新しい控え)。2026-11-23 の時点で使われている `end` は、`schedule` を実行し直すまで控えを root だけが読める形で作る (`sudo bash deploy/testweek.sh schedule` で入れ直すか、`sudo chown ichijoya: /var/backups/ichijoya/testweek-final-*.tar.gz`)。
 
+### 試験期間のチャットを本番に引き継ぐ (`scripts/ops/testweek-chat-carryover.mjs`)
+
+チャット (チャンネル・DM・資料・写真) はデータベースではなく SQLite (`chat.sqlite`) とファイル (`uploads/chat/`) で、期間中はテスト用のサーバーのフォルダー (`/srv/ichijoya/testweek/data`) にある。お客様のご指示 (2026-11-27) で、期間中のチャットはすべて 12/1 に本番に引き継ぐ (上の まとまりごとの判断の対象外)。テストは `npm run test:chat` (carryover.test.mjs)。
+
+- 書き方: 本番の `/srv/ichijoya/data/chat.sqlite` に、本番にない行を 1 つの取引で足す (本番のサーバーは動いたままでよい)。rev は本番のいまの rev のあとに付け直す (開いている画面も読み直す)。日時のある行 (管理者のメンバーの変更・チャンネルの画像・既読・通知の設定) は新しいほう。期間の前に両方に入れたメンバーの変更で、期間中に自動に戻したものは本番でも消す。ファイルは上書きしない。済んだら本番の chat.sqlite の meta `testweek_carryover` に結果を残し、2 回目は何もしない
+- 元: テスト用のフォルダー (end が消す前) → 期間の終わりの控え `testweek-final-<日付>.tar.gz` (chat.sqlite と uploads/chat だけを取り出す) → 写し `/var/backups/ichijoya/testweek-chat/` (`--stage`)。2026-11-23 に入れた `end` は控えを root だけが読める形で作るため、写しを予備にした (それより後のメッセージは控えにだけある。`sudo bash deploy/testweek.sh schedule` で入れ直すと控えを ichijoya も読める)
+- 定期実行: ichijoya のユーザーの crontab (`deploy/testweek-chat.cron` を `crontab deploy/testweek-chat.cron` で入れる。確認は `crontab -l`。ログ `/var/log/ichijoya/testweek-chat.log`。本番に出す前でも、この作業用のフォルダーの道具で動く)。11/30 は 10 分ごと・23 時台と 12/1 0:00〜0:04 は 1 分ごとに `--stage`、12/1〜12/3 は 10 分ごとに `--auto --apply` (0:05 までと、テスト用のサーバー・nginx の切り替えが残っているあいだは待つ)。12/4 以降に crontab の行を消してよい
+- 手動: `node scripts/ops/testweek-chat-carryover.mjs` (予行: 本番の写しに書いて数を出すだけ) → `--apply`。`--from <フォルダー | tar.gz>`・`--to <データのフォルダー>` で元と先を指定
+
 練習用の架空のデータの環境 (`/srv/ichijoya/training`・ユーザーのサービス `ichijoya-training`・127.0.0.1:3200) も作ってあるが、試験期間の方式にしたため止めている (`systemctl --user start ichijoya-training` で起動。初期化は `bash /srv/ichijoya/training/reset.sh`)。
