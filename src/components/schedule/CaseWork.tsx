@@ -205,7 +205,7 @@ export function CaseWorkSection({ work, eventId, returnTo: listReturn, onReload 
               )}
               {docs.sales?.confirmed && docs.sales.canUse && (
                 <Link href={`/orders/${docs.sales.orderId}/sales?returnTo=${encodeURIComponent(returnTo)}`} className={buttonClass("ghost", "sm")} data-testid="case-sales-fix">
-                  修正 (内容・金額・担当・ポスティング)
+                  修正 (内容・金額・担当{docs.sales.posting ? "・ポスティング" : ""})
                 </Link>
               )}
             </div>

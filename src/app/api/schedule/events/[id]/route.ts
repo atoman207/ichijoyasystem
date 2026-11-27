@@ -355,9 +355,9 @@ function quickWork(db: Database, user: User, e: ScheduleEvent): QuickWork | unde
     const openOrder = ["confirmed", "scheduled", "in_progress"].includes(o.status);
     if (confirmedSales || openOrder) {
       const canUse = canConfirmSales(user, o.storeId);
-      docs.sales = { orderId: o.id, confirmed: confirmedSales, canUse, batch: usesBatchBilling(customer), total: o.total, reason: canUse ? undefined : "売上確定・請求書の発行は担当店舗の社員・本部・管理者が行えます。" };
+      docs.sales = { orderId: o.id, confirmed: confirmedSales, canUse, batch: usesBatchBilling(customer), posting: customer?.type !== "corporate", total: o.total, reason: canUse ? undefined : "売上確定・請求書の発行は担当店舗の社員・本部・管理者が行えます。" };
     } else if (o.status === "pending_approval" || o.status === "returned") {
-      docs.sales = { orderId: o.id, confirmed: false, canUse: false, batch: false, total: o.total, reason: "契約の承認のあとに売上確定できます。" };
+      docs.sales = { orderId: o.id, confirmed: false, canUse: false, batch: false, posting: customer?.type !== "corporate", total: o.total, reason: "契約の承認のあとに売上確定できます。" };
     }
   }
   if (docs.quote || docs.invoice || docs.sales || docs.delivery) out.docs = docs;

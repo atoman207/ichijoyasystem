@@ -6,7 +6,7 @@ import { getDb } from "@/lib/db/store";
 import { canConfirmSales, skipsApproval } from "@/lib/auth/permissions";
 import { orderAccessInfo, completedCaseLock, completedLockMessage } from "@/lib/case-access";
 import { liveInvoicesOfOrder, usesBatchBilling } from "@/lib/billing";
-import { salesReadiness } from "@/lib/sales-ready";
+import { salesReadinessOf } from "@/lib/sales-ready";
 import { salesConfirmed } from "@/lib/sales-lines";
 import { amendBlockedByInvoice } from "@/lib/invoice-sync";
 import { staffChoiceGroups } from "@/lib/staff-choices";
@@ -49,7 +49,9 @@ export default async function SalesClosePage({ params, searchParams }: { params:
   const canUse = canConfirmSales(user, o.storeId) && !lock.locked && (open || confirmed);
   const invoice = liveInvoicesOfOrder(db.invoices, o)[0];
   const batch = usesBatchBilling(customer);
-  const ready = salesReadiness(o);
+  // ポスティングは個人のお客様の案件だけ (お客様のご連絡 2026-11-27「ポスティングは個人のみです」。法人は ④ を出さない)
+  const ready = salesReadinessOf(db, o);
+  const withPosting = ready.postingNeeded;
   const workStaff = workStaffOf(db, o);
   const groups = staffChoiceGroups(db, o.storeId, WORK_ROLES.flatMap((r) => workStaff[r]));
   const ownAmend = skipsApproval(user, "quote_amend");
@@ -85,7 +87,7 @@ export default async function SalesClosePage({ params, searchParams }: { params:
             ) : null}
           </div>
           <p className="mt-2 text-[11px] text-ink-2">
-            直すときは下の内容を変えて「修正を保存」を押してください。施工内容・作業の担当・ポスティングはすぐに反映します。明細・金額は{ownAmend ? "店長・管理者のためすぐに反映し" : "店長の承認のあとに反映し"}、受注・請求書 (入金前)・経営の集計・作業日報・インセンティブにも反映します。
+            直すときは下の内容を変えて「修正を保存」を押してください。施工内容・作業の担当{withPosting ? "・ポスティング" : ""}はすぐに反映します。明細・金額は{ownAmend ? "店長・管理者のためすぐに反映し" : "店長の承認のあとに反映し"}、受注・請求書 (入金前)・経営の集計・作業日報・インセンティブにも反映します。
           </p>
         </Card>
       )}
@@ -139,19 +141,21 @@ export default async function SalesClosePage({ params, searchParams }: { params:
             <WorkStaffFields groups={groups} value={workStaff} require />
           </Card>
 
-          <Card>
-            <CardHeader title="④ ポスティング実績" description="誰が何枚配ったか (配っていなければ「配れてない」)。作業日報に出ます" />
-            <PostingFields groups={groups} value={o.posting} defaultDate={o.posting?.date ?? o.salesDate ?? toDateKey(new Date())} defaultUserIds={o.posting ? [] : deliveryStaffOf(workStaff).slice(0, 3)} />
-          </Card>
+          {withPosting && (
+            <Card>
+              <CardHeader title="④ ポスティング実績" description="誰が何枚配ったか (配っていなければ「配れてない」)。作業日報に出ます" />
+              <PostingFields groups={groups} value={o.posting} defaultDate={o.posting?.date ?? o.salesDate ?? toDateKey(new Date())} defaultUserIds={o.posting ? [] : deliveryStaffOf(workStaff).slice(0, 3)} />
+            </Card>
+          )}
 
           {!confirmed && open && (
             <Card>
-              <CardHeader title="⑤ 売上確定・請求書発行" description={batch ? "施工完了日を売上計上日として売上を確定します。このお客様はまとめ請求のため、請求書は締め日にまとめて発行します" : "施工完了日を売上計上日として売上を確定し、請求書を発行します"} />
+              <CardHeader title={`${withPosting ? "⑤" : "④"} 売上確定・請求書発行`} description={batch ? "施工完了日を売上計上日として売上を確定します。このお客様はまとめ請求のため、請求書は締め日にまとめて発行します" : "施工完了日を売上計上日として売上を確定し、請求書を発行します"} />
               <div className="flex flex-wrap items-end gap-3">
                 <Field label="施工完了日 (= 売上計上日)">
                   <Input type="date" name="completedAt" defaultValue={toDateKey(new Date())} />
                 </Field>
-                {!ready.ok && <p className="w-full text-[11px] text-warn-ink">③ 担当者と ④ ポスティングを入れてから確定してください (作業ごとに担当者か「なし」、ポスティングは枚数か「配れてない」)。</p>}
+                {!ready.ok && <p className="w-full text-[11px] text-warn-ink">{withPosting ? "③ 担当者と ④ ポスティングを入れてから確定してください (作業ごとに担当者か「なし」、ポスティングは枚数か「配れてない」)。" : "③ 担当者を入れてから確定してください (作業ごとに担当者か「なし」)。"}</p>}
               </div>
               {!batch && !invoice && (
                 <details className="mt-2 text-xs">
@@ -207,7 +211,7 @@ export default async function SalesClosePage({ params, searchParams }: { params:
               {!confirmed && ready.ok === false && (
                 <span className="inline-flex items-center gap-1 text-[11px] text-ink-3">
                   <TriangleAlert className="h-3.5 w-3.5" aria-hidden />
-                  担当者・ポスティングが未入力のときは確定できません
+                  {withPosting ? "担当者・ポスティングが未入力のときは確定できません" : "担当者が未入力のときは確定できません"}
                 </span>
               )}
             </div>

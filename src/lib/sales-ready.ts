@@ -1,11 +1,12 @@
-import type { Order, OrderPosting, OrderWorkStaff } from "@/lib/db/types";
+import type { Database, Order, OrderPosting, OrderWorkStaff } from "@/lib/db/types";
 import { WORK_ROLES, WORK_ROLE_LABEL, type WorkRole } from "@/lib/work-staff";
 
 /**
  * 売上登録 (施工完了・請求書の発行) の前に決めること (お客様のご要望 2026-11-27「■3 売上登録時の担当者・ポスティング枚数の登録」)
  * ------------------------------------------------------------
  * - 作業の担当 (現地見積・引取・納品・施工): 作業ごとに担当者 (複数可) か「なし」を決めて確定する (インセンティブの集計の元)
- * - ポスティング: 誰が何枚配ったか (複数人はそれぞれの枚数)、配っていなければ「配れてない」
+ * - ポスティング: 誰が何枚配ったか (複数人はそれぞれの枚数)、配っていなければ「配れてない」。
+ *   個人のお客様の案件だけ (お客様のご連絡 2026-11-27「ポスティングは個人のみです」。法人 = customer.type corporate は聞かない・求めない)
  * どちらかが未入力なら、施工完了・請求書の発行 (受注の画面・予定表の小さな画面・帳票をまとめて印刷) を断る。
  * 登録した担当者・枚数は作業日報 (src/lib/ops-reports/work-report.ts) に出す。
  * 画面・サーバー・テストから読むため、サーバー専用の import をしない
@@ -28,19 +29,34 @@ export function postingDecided(p: OrderPosting | undefined): boolean {
   return p.status === "none" || p.entries.some((e) => e.count > 0);
 }
 
+/** ポスティングを登録する案件か (個人のお客様だけ。お客様が見つからないときは個人として扱う) */
+export function postingNeeded(db: Pick<Database, "customers">, o: Pick<Order, "customerId">): boolean {
+  return db.customers.find((c) => c.id === o.customerId)?.type !== "corporate";
+}
+
 export interface SalesReadiness {
   ok: boolean;
   staff: boolean;
+  /** ポスティングが決まったか (法人の案件はいつも true) */
   posting: boolean;
+  /** ポスティングを登録する案件か (個人のお客様) */
+  postingNeeded: boolean;
   /** 断るときの文 */
   reason?: string;
 }
 
-export function salesReadiness(o: Pick<Order, "workStaff" | "posting">): SalesReadiness {
+/** needsPosting = postingNeeded(db, o) (個人のお客様の案件)。法人の案件はポスティングを求めない */
+export function salesReadiness(o: Pick<Order, "workStaff" | "posting">, needsPosting: boolean): SalesReadiness {
   const staff = staffDecided(o.workStaff);
-  const posting = postingDecided(o.posting);
+  const posting = !needsPosting || postingDecided(o.posting);
   const missing = [!staff ? "作業の担当 (現地見積・引取・納品・施工。いなければ「なし」)" : "", !posting ? "ポスティングの枚数 (配っていなければ「配れてない」)" : ""].filter(Boolean);
-  return { ok: staff && posting, staff, posting, reason: missing.length ? `${missing.join("と")}を登録してください (受注の画面の「作業の担当・ポスティング」)。売上登録・請求書の発行の前に必要です` : undefined };
+  const where = needsPosting ? "受注の画面の「作業の担当・ポスティング」" : "受注の画面の「作業の担当」";
+  return { ok: staff && posting, staff, posting, postingNeeded: needsPosting, reason: missing.length ? `${missing.join("と")}を登録してください (${where})。売上登録・請求書の発行の前に必要です` : undefined };
+}
+
+/** 受注のお客様の種類からポスティングの要否を決めて確かめる */
+export function salesReadinessOf(db: Pick<Database, "customers">, o: Pick<Order, "workStaff" | "posting" | "customerId">): SalesReadiness {
+  return salesReadiness(o, postingNeeded(db, o));
 }
 
 /** 作業日報・画面の表示 (「田中 50枚・鈴木 30枚」/「配れてない」) */

@@ -4,7 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/store";
 import { staffChoiceGroups, staffForStore } from "@/lib/staff-choices";
-import { postingLabel, salesReadiness } from "@/lib/sales-ready";
+import { postingLabel, salesReadinessOf } from "@/lib/sales-ready";
 import { PostingFields } from "@/components/features/PostingFields";
 import { MaterialOrdersCard } from "@/components/material-orders/MaterialOrdersCard";
 import { areaStoreOf } from "@/lib/store-area";
@@ -144,14 +144,17 @@ export default async function OrderDetailPage({ params, searchParams }: { params
   const wsIds = WORK_ROLES.flatMap((r) => workStaff[r]);
   // 施工店舗の社員 → 本部 → ほかの店舗 (お客様のご要望 2026-11-27「■2」)
   const staffGroups = staffChoiceGroups(db, o.storeId, wsIds);
-  // 売上登録 (施工完了・請求書の発行) の前に決めること: 作業の担当とポスティング (お客様のご要望 2026-11-27「■3」)
-  const ready = salesReadiness(o);
+  // 売上登録 (施工完了・請求書の発行) の前に決めること: 作業の担当とポスティング (お客様のご要望 2026-11-27「■3」)。
+  // ポスティングは個人のお客様の案件だけ (お客様のご連絡 2026-11-27「ポスティングは個人のみです」)
+  const ready = salesReadinessOf(db, o);
+  const withPosting = ready.postingNeeded;
+  const staffAndPosting = withPosting ? "作業の担当・ポスティング" : "作業の担当";
   const postingDefaultDate = o.posting?.date ?? o.salesDate ?? toDateKey(new Date());
   const postingName = (id: string) => db.users.find((u) => u.id === id)?.name ?? "-";
   const staffPostingFields = (require: boolean) => (
     <div className="space-y-3">
       <WorkStaffFields groups={staffGroups} value={workStaff} require={require} />
-      <PostingFields groups={staffGroups} value={o.posting} defaultDate={postingDefaultDate} defaultUserIds={o.posting ? [] : deliveryStaffOf(workStaff).slice(0, 3)} />
+      {withPosting && <PostingFields groups={staffGroups} value={o.posting} defaultDate={postingDefaultDate} defaultUserIds={o.posting ? [] : deliveryStaffOf(workStaff).slice(0, 3)} />}
     </div>
   );
   const AMOUNT_LABEL: [keyof NonNullable<typeof o.amounts>, string][] = [["tatami", "畳"], ["fusuma", "襖"], ["shoji", "障子"], ["amido", "網戸"], ["curtain", "カーテン"], ["cloth", "クロス・工事"], ["own", "自社商品"], ["misc", "諸経費"], ["discount", "値引"]];
@@ -163,8 +166,8 @@ export default async function OrderDetailPage({ params, searchParams }: { params
     <form action={createInvoiceFromOrder.bind(null, o.id)} className="flex flex-wrap items-end gap-2">
       {/* 売上登録 (請求書の発行) の前に担当者とポスティングを同じ画面で確定する (お客様のご要望 2026-11-27「■3」) */}
       <div className="w-full rounded-xl border border-accent/30 bg-accent-soft/20 p-3">
-        <div className="mb-1 text-sm font-semibold text-ink">作業の担当とポスティングを確かめてください</div>
-        <p className="mb-2 text-[11px] text-ink-3">未入力のままでは請求書を発行できません。作業ごとに担当者 (いなければ「なし」)、ポスティングの枚数 (配っていなければ「配れてない」)。作業日報にも出ます。</p>
+        <div className="mb-1 text-sm font-semibold text-ink">{withPosting ? "作業の担当とポスティングを確かめてください" : "作業の担当を確かめてください"}</div>
+        <p className="mb-2 text-[11px] text-ink-3">未入力のままでは請求書を発行できません。作業ごとに担当者 (いなければ「なし」){withPosting ? "、ポスティングの枚数 (配っていなければ「配れてない」)" : ""}。作業日報にも出ます。</p>
         {staffPostingFields(true)}
       </div>
       <Field label="支払期限 (日後)"><Input type="number" name="dueDays" defaultValue={customer?.type === "corporate" ? 30 : 14} className="w-28" /></Field>
@@ -371,24 +374,24 @@ export default async function OrderDetailPage({ params, searchParams }: { params
 
           <Card id="work-staff">
             <CardHeader
-              title="作業の担当・ポスティング (実績)"
-              description={`${workStaff.source === "saved" ? `${workStaff.confirmedAt ? `確定 (${fmtDateTime(workStaff.confirmedAt)}・${userName(workStaff.confirmedBy)})` : `保存済み (${fmtDateTime(workStaff.updatedAt ?? "")}・${userName(workStaff.updatedBy)})`}` : "予定表の予定の担当者から自動で出しています"}。作業の担当とポスティングを確定しないと、売上登録 (施工完了・請求書の発行) ができません。インセンティブ・経営の集計・作業日報に使います`}
+              title={`${staffAndPosting} (実績)`}
+              description={`${workStaff.source === "saved" ? `${workStaff.confirmedAt ? `確定 (${fmtDateTime(workStaff.confirmedAt)}・${userName(workStaff.confirmedBy)})` : `保存済み (${fmtDateTime(workStaff.updatedAt ?? "")}・${userName(workStaff.updatedBy)})`}` : "予定表の予定の担当者から自動で出しています"}。${withPosting ? "作業の担当とポスティング" : "作業の担当"}を確定しないと、売上登録 (施工完了・請求書の発行) ができません。インセンティブ・経営の集計・作業日報に使います`}
             />
             <Dl
               columns={2}
               items={[
                 ...WORK_ROLES.map((r) => [WORK_ROLE_LABEL[r], workStaff[r].map((id) => userName(id)).join("・") || ((workStaff.none ?? []).includes(r) ? "なし" : "-")] as [string, string]),
-                ["ポスティング", `${postingLabel(o.posting, postingName)}${o.posting?.area ? ` · ${o.posting.area}` : ""}${o.posting?.date ? ` · ${fmtDate(o.posting.date)}` : ""}`],
+                ...(withPosting ? [["ポスティング", `${postingLabel(o.posting, postingName)}${o.posting?.area ? ` · ${o.posting.area}` : ""}${o.posting?.date ? ` · ${fmtDate(o.posting.date)}` : ""}`] as [string, string]] : []),
               ]}
             />
             {!ready.ok && o.status !== "cancelled" && <div className="mt-2"><Note tone="warn">売上登録の前に、{[!ready.staff ? "作業の担当 (いなければ「なし」)" : "", !ready.posting ? "ポスティング (配っていなければ「配れてない」)" : ""].filter(Boolean).join("と")}を登録してください。</Note></div>}
             {!viewOnly && !lock.locked && o.status !== "cancelled" && (
               <details className="mt-3" open={!ready.ok}>
-                <summary className="cursor-pointer text-sm font-medium text-accent">{ready.ok ? "担当・ポスティングを変更する" : "担当・ポスティングを登録する"}</summary>
+                <summary className="cursor-pointer text-sm font-medium text-accent">{`${withPosting ? "担当・ポスティング" : "担当"}を${ready.ok ? "変更" : "登録"}する`}</summary>
                 <form action={saveWorkStaff.bind(null, o.id)} className="mt-2 space-y-3">
                   {sp.returnTo && <input type="hidden" name="returnTo" value={sp.returnTo} />}
                   {staffPostingFields(false)}
-                  <Button type="submit" size="sm">作業の担当・ポスティングを保存</Button>
+                  <Button type="submit" size="sm">{staffAndPosting}を保存</Button>
                 </form>
               </details>
             )}
@@ -649,7 +652,7 @@ export default async function OrderDetailPage({ params, searchParams }: { params
               <CardHeader title="施工完了 → 売上計上" description={`完了を登録すると、施工完了日を売上計上日として売上に計上します (経営ダッシュボード・会計データとも)。${batchBilling ? "このお客様はまとめ請求のため、請求書は締め日にまとめて発行します" : "続けて請求書を発行できます (請求書の発行日は別に持ちます)"}`} />
               {/* 売上確定 (施工完了) と請求書の発行は「売上確定・請求書発行」の画面で 1 回に (お客様のご要望 2026-11-27「■1」) */}
               <div className="flex flex-wrap items-center gap-3 rounded-xl border border-accent/30 bg-accent-soft/20 p-3">
-                <p className="min-w-0 flex-1 text-xs text-ink-2">施工内容・明細と金額・担当者・ポスティングを確かめて、売上確定{batchBilling ? "" : "と請求書の発行"}を 1 回で行います。{ready.ok ? "" : " 担当者・ポスティングは未入力です (その画面で入れられます)。"}</p>
+                <p className="min-w-0 flex-1 text-xs text-ink-2">施工内容・明細と金額・担当者{withPosting ? "・ポスティング" : ""}を確かめて、売上確定{batchBilling ? "" : "と請求書の発行"}を 1 回で行います。{ready.ok ? "" : ` 担当者${withPosting ? "・ポスティング" : ""}は未入力です (その画面で入れられます)。`}</p>
                 {canConfirmSales(user, o.storeId) ? (
                   <LinkButton href={`/orders/${o.id}/sales`} size="sm">{batchBilling || chain.invoice ? "売上確定" : "売上確定・請求書発行"} ({yen(o.total)})</LinkButton>
                 ) : (

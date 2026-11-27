@@ -135,7 +135,7 @@ export default async function SchedulePrintPage({ searchParams }: { searchParams
                           未発行 · {r.invoiceIssue?.reason}
                           {r.invoiceIssue?.needsSetup && r.order && (
                             <Link href={`/orders/${r.order.id}#work-staff`} className="ml-1 font-medium text-accent underline">
-                              作業の担当・ポスティングを登録
+                              受注の画面で登録
                             </Link>
                           )}
                         </p>

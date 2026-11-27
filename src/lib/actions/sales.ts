@@ -13,6 +13,7 @@ import { completedCaseLock, completedLockMessage } from "@/lib/case-access";
 import { buildOrderInvoice } from "@/lib/invoice-issue";
 import { documentSettings } from "@/lib/doc-settings";
 import { applyStaffAndPosting } from "@/lib/order-staff-save";
+import { postingNeeded } from "@/lib/sales-ready";
 import { amendMessage, amendOrderQuote, parseSalesItems, salesConfirmed } from "@/lib/sales-lines";
 import { notifyNewApprovals } from "@/lib/notify/approvals";
 import { choice, fail, requireActionUser, safeReturn, str, withMsg } from "./guards";
@@ -81,6 +82,8 @@ export async function saveSales(orderId: string, formData: FormData) {
 
     // 作業の担当・ポスティング (売上確定のときと、確定のあとの修正はそろっていなければ断る)
     applyStaffAndPosting(db, user, o, formData, back, { require: intent === "confirm" || wasConfirmed, confirm: true, note: "(売上確定・請求書発行の画面)" });
+    // ポスティングは個人のお客様の案件だけ (お客様のご連絡 2026-11-27)
+    const staffWord = postingNeeded(db, o) ? "担当者・ポスティング" : "担当者";
 
     if (intent === "invoice") {
       if (o.status !== "completed") fail(back, "売上確定済みで請求書のない案件の請求書を発行します。");
@@ -97,7 +100,7 @@ export async function saveSales(orderId: string, formData: FormData) {
 
     if (intent === "confirm") {
       if (pending) {
-        msg = `${done.join(" ")} 承認されたら、もう一度「売上確定・請求書発行」を押してください (担当者・ポスティング・施工内容は保存しました)。`;
+        msg = `${done.join(" ")} 承認されたら、もう一度「売上確定・請求書発行」を押してください (${staffWord}・施工内容は保存しました)。`;
         return;
       }
       const date = str(formData, "completedAt") || toDateKey(new Date());
@@ -129,7 +132,7 @@ export async function saveSales(orderId: string, formData: FormData) {
       if (done.length) msg = `${done.join(" ")} ${msg}`;
       return;
     }
-    msg = [...done.map((d) => (d === "施工内容" ? "施工内容を保存しました。" : d)), "作業の担当・ポスティングを保存しました。"].join(" ");
+    msg = [...done.map((d) => (d === "施工内容" ? "施工内容を保存しました。" : d)), `作業の${staffWord === "担当者" ? "担当" : "担当・ポスティング"}を保存しました。`].join(" ");
   });
   await notifyNewApprovals(approvalIds, user.id);
   revalidatePath(`/orders/${orderId}`);

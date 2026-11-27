@@ -1,5 +1,5 @@
 // 実行: node scripts/tests/finance/sales-ready.test.mjs (npm run test:finance に含む)
-// 売上登録 (施工完了・請求書の発行) の前の作業の担当・ポスティング (お客様のご要望 2026-11-27「■3」) と作業日報への反映、担当者の選択肢 (「■2」)
+// 売上登録 (施工完了・請求書の発行) の前の作業の担当・ポスティング (お客様のご要望 2026-11-27「■3」。ポスティングは個人のお客様だけ) と作業日報への反映、担当者の選択肢 (「■2」)
 import { imp, ok, eq, section, summary } from "../hr/harness.mjs";
 
 const store = await imp("lib/db/store.ts");
@@ -40,12 +40,24 @@ section("売上登録の条件 (作業の担当を確定 + ポスティング)")
   ok(SR.staffDecided({ ...ws, none: ["delivery", "install"] }), "作業ごとに担当者か「なし」");
   ok(SR.staffDecided({ survey: [], pickup: [], delivery: [a.id], install: [], confirmedAt: now }), "以前の確定 (「なし」の項目がない) は確定とみなす");
   ok(!SR.staffDecided({ survey: [a.id], pickup: [a.id], delivery: [a.id], install: [a.id], none: [] }), "確定していない保存は不可");
-  const o = { id: "o_x", status: "completed", invoiceId: undefined, workStaff: { ...ws, none: ["delivery", "install"] } };
-  const r1 = IR.canIssueFor({ invoices: [] }, o);
-  ok(!r1.ok && r1.needsSetup && /ポスティング/.test(r1.reason), "ポスティングが未登録なら請求書を発行しない");
-  const r2 = IR.canIssueFor({ invoices: [] }, { ...o, posting: { status: "none", entries: [], updatedAt: now, updatedBy: a.id } });
+  const people = { invoices: [], customers: [{ id: "c_ind", type: "individual" }, { id: "c_corp", type: "corporate" }] };
+  const o = { id: "o_x", status: "completed", invoiceId: undefined, customerId: "c_ind", workStaff: { ...ws, none: ["delivery", "install"] } };
+  const r1 = IR.canIssueFor(people, o);
+  ok(!r1.ok && r1.needsSetup && /ポスティング/.test(r1.reason), "ポスティングが未登録なら請求書を発行しない (個人のお客様)");
+  const r2 = IR.canIssueFor(people, { ...o, posting: { status: "none", entries: [], updatedAt: now, updatedBy: a.id } });
   ok(r2.ok && !r2.pre, "そろえば発行できる");
-  ok(!IR.canIssueFor({ invoices: [] }, { ...o, workStaff: undefined, posting: { status: "none", entries: [], updatedAt: now, updatedBy: a.id } }).ok, "作業の担当が未確定なら発行しない");
+  ok(!IR.canIssueFor(people, { ...o, workStaff: undefined, posting: { status: "none", entries: [], updatedAt: now, updatedBy: a.id } }).ok, "作業の担当が未確定なら発行しない");
+
+  // ポスティングは個人のお客様だけ (お客様のご連絡 2026-11-27「ポスティングは個人のみです」)
+  ok(SR.postingNeeded(people, { customerId: "c_ind" }) && !SR.postingNeeded(people, { customerId: "c_corp" }), "ポスティングを聞くのは個人のお客様の案件だけ");
+  ok(SR.postingNeeded(people, { customerId: "c_none" }), "お客様が見つからないときは個人として扱う");
+  const corp = { ...o, customerId: "c_corp" };
+  const r3 = IR.canIssueFor(people, corp);
+  ok(r3.ok, "法人の案件はポスティングなしで請求書を発行できる");
+  const rc = SR.salesReadinessOf(people, corp);
+  ok(rc.ok && rc.posting && !rc.postingNeeded, "法人の案件の売上登録の条件は作業の担当だけ");
+  const rc2 = SR.salesReadinessOf(people, { ...corp, workStaff: undefined });
+  ok(!rc2.ok && !/ポスティング/.test(rc2.reason ?? "") && /作業の担当/.test(rc2.reason ?? ""), "法人の案件で担当が未確定のとき、断りの文にポスティングを書かない");
 }
 
 section("作業日報に出す (確定した担当・ポスティングの枚数)");

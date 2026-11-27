@@ -3,7 +3,7 @@ import { addAudit, diffChanges, newId, nowIso } from "@/lib/db/store";
 import type { Database, Order, OrderPosting, OrderWorkStaff, User } from "@/lib/db/types";
 import { WORK_ROLES, WORK_ROLE_LABEL, deliveryStaffOf, workStaffFromForm, workStaffOf } from "@/lib/work-staff";
 import { addChangeNotice, caseTarget } from "@/lib/change-notices";
-import { postingFromForm, postingLabel, roleLabels, salesReadiness, undecidedRoles, workStaffNoneFromForm } from "@/lib/sales-ready";
+import { postingFromForm, postingLabel, postingNeeded, roleLabels, salesReadinessOf, undecidedRoles, workStaffNoneFromForm } from "@/lib/sales-ready";
 import { fail, str } from "@/lib/actions/guards";
 
 /*
@@ -72,7 +72,7 @@ export function applyPosting(db: Database, user: User, o: Order, next: OrderPost
 /**
  * フォームの作業の担当 (workStaff.<役割>・workStaff.<役割>.none) とポスティング (posting.*) を受注に入れる (mutate の中)。
  * require = 売上登録 (施工完了・請求書の発行): 作業ごとに担当者か「なし」・ポスティングの枚数か「配れてない」がそろわなければ断る
- * (お客様のご要望 2026-11-27「■3」。src/lib/sales-ready.ts)
+ * (お客様のご要望 2026-11-27「■3」。src/lib/sales-ready.ts)。ポスティングは個人のお客様の案件だけ (法人の案件は送られても保存しない)
  */
 export function applyStaffAndPosting(db: Database, user: User, o: Order, fd: FormData, back: string, opts: { require: boolean; confirm: boolean; note?: string }) {
   const active = new Set(db.users.filter((u) => u.active).map((u) => u.id));
@@ -83,11 +83,14 @@ export function applyStaffAndPosting(db: Database, user: User, o: Order, fd: For
     if (opts.require && gaps.length) fail(back, `${roleLabels(gaps)}の担当者を選ぶか「なし」を選んでください (売上登録の前に作業の担当を確定します)。`);
     applyWorkStaff(db, user, o, next, { confirm: opts.confirm && !gaps.length, note: opts.note });
   }
-  const pr = postingFromForm(fd, active, user.id, nowIso());
-  if (pr.error) fail(back, pr.error);
-  if (pr.posting) applyPosting(db, user, o, pr.posting, opts.note);
+  const needsPosting = postingNeeded(db, o);
+  if (needsPosting) {
+    const pr = postingFromForm(fd, active, user.id, nowIso());
+    if (pr.error) fail(back, pr.error);
+    if (pr.posting) applyPosting(db, user, o, pr.posting, opts.note);
+  }
   if (opts.require) {
-    const r = salesReadiness(o);
+    const r = salesReadinessOf(db, o);
     if (!r.ok) fail(back, r.reason ?? "作業の担当とポスティングを登録してください。");
   }
 }

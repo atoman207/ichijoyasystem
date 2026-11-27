@@ -23,7 +23,7 @@ import { usesBatchBilling } from "@/lib/billing";
 import type { OrderPosting } from "@/lib/db/types";
 import { sameWorkStaff, workStaffFromForm } from "@/lib/work-staff";
 import { safeReturn } from "./guards";
-import { postingFromForm, roleLabels, salesReadiness, undecidedRoles, workStaffNoneFromForm } from "@/lib/sales-ready";
+import { postingFromForm, postingNeeded, roleLabels, salesReadinessOf, undecidedRoles, workStaffNoneFromForm } from "@/lib/sales-ready";
 import { applyPosting, applyStaffAndPosting, applyWorkStaff } from "@/lib/order-staff-save";
 import { amendBlockedByInvoice } from "@/lib/invoice-sync";
 import { placeTextOrEmpty } from "@/lib/maps/address";
@@ -36,6 +36,7 @@ export async function saveWorkStaff(id: string, formData: FormData) {
   let confirm = false;
   let gapsText = "";
   let postingOk = false;
+  let withPosting = true;
   await mutate((db) => {
     const o = db.orders.find((x) => x.id === id);
     if (!o) fail("/orders", "受注が見つかりません。");
@@ -53,19 +54,22 @@ export async function saveWorkStaff(id: string, formData: FormData) {
     const strip = (p?: OrderPosting) => (p ? JSON.stringify({ ...p, updatedAt: "", updatedBy: "" }) : "");
     const prevPosting = strip(o.posting);
     if (!sameStaff) changed = applyWorkStaff(db, user, o, next, { confirm });
-    const pr = postingFromForm(formData, active, user.id, nowIso());
+    // ポスティングは個人のお客様の案件だけ (お客様のご連絡 2026-11-27)
+    const pr = postingNeeded(db, o) ? postingFromForm(formData, active, user.id, nowIso()) : {};
     if (pr.error) fail(ret, pr.error);
     if (pr.posting) applyPosting(db, user, o, pr.posting);
     const postingChanged = Boolean(pr.posting) && strip(pr.posting) !== prevPosting;
     if (sameStaff && !postingChanged) fail(ret, "変更はありませんでした。");
     gapsText = gaps.length ? roleLabels(gaps) : "";
-    postingOk = salesReadiness(o).posting;
+    const ready = salesReadinessOf(db, o);
+    postingOk = ready.posting;
+    withPosting = ready.postingNeeded;
   });
   revalidatePath(`/orders/${id}`);
   revalidatePath("/kpi");
   revalidatePath("/work-reports");
   const rest = [gapsText ? `${gapsText}の担当者 (いなければ「なし」)` : "", !postingOk ? "ポスティング" : ""].filter(Boolean);
-  redirect(withMsg(ret, `作業の担当・ポスティングを保存しました${changed ? ` (${changed} 件の作業の担当を変更)` : ""}。${confirm ? "作業の担当を確定しました (インセンティブ・経営の集計・作業日報に使います)。" : ""}${rest.length ? `売上登録 (施工完了・請求書の発行) の前に、${rest.join("と")}を登録してください。` : "売上登録・請求書の発行ができます。"}`));
+  redirect(withMsg(ret, `作業の担当${withPosting ? "・ポスティング" : ""}を保存しました${changed ? ` (${changed} 件の作業の担当を変更)` : ""}。${confirm ? "作業の担当を確定しました (インセンティブ・経営の集計・作業日報に使います)。" : ""}${rest.length ? `売上登録 (施工完了・請求書の発行) の前に、${rest.join("と")}を登録してください。` : "売上登録・請求書の発行ができます。"}`));
 }
 
 /** 施工予定 (施工期間・時間帯・施工担当・現場住所) を設定し、予定表の「施工」の予定と連動させる */

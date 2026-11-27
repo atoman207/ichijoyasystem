@@ -238,7 +238,8 @@ export interface QuickDocs {
    * 売上確定・請求書発行 (お客様のご要望 2026-11-27「■1」。/orders/<ID>/sales)。confirmed = 売上確定済み (ボタンは「請求書」と「修正」)、
    * canUse = 担当店舗の社員・本部・管理者 (permissions.ts の canConfirmSales)、batch = まとめ請求のお客様 (確定だけ)
    */
-  sales?: { orderId: string; confirmed: boolean; canUse: boolean; batch: boolean; total: number; reason?: string };
+  /** posting = ポスティングを登録する案件 (個人のお客様。お客様のご連絡 2026-11-27「ポスティングは個人のみです」) */
+  sales?: { orderId: string; confirmed: boolean; canUse: boolean; batch: boolean; posting: boolean; total: number; reason?: string };
   receipt?: {
     wanted: boolean;
     auto: boolean;

@@ -184,6 +184,21 @@ section("6. 承認待ちの金額の変更があるときの売上確定");
   ok(/承認されたら、もう一度/.test(r.msg ?? ""), "承認のあとに確定するよう知らせる");
 }
 
+section("8. ポスティングは個人のお客様だけ (お客様のご連絡 2026-11-27「ポスティングは個人のみです」)");
+{
+  await store.mutate((x) => {
+    x.customers.push({ id: "c_sc_e", code: "C-60100", name: "架空 工務店", kana: "", phone: "", postalCode: "", address: "熊本県テスト市テスト町5", storeId: S, type: "corporate", preferredChannel: "phone", firstContactChannel: "phone", tags: [], notes: "", createdAt: now, updatedAt: now });
+    x.quotes.push({ id: "q_sc_e", number: "Q-2026-SC-E", version: 1, customerId: "c_sc_e", storeId: S, title: "表替え e", category: "tatami", items: items(10000), subtotal: 60000, discount: 0, tax: 5454, total: 60000, taxIncluded: true, status: "accepted", createdBy: "u_sc_staff", createdAt: now, updatedAt: now, orderId: "o_sc_e" });
+    x.orders.push({ id: "o_sc_e", number: "O-2026-SC-E", quoteId: "q_sc_e", customerId: "c_sc_e", storeId: S, title: "表替え e", category: "tatami", contractDate: today, total: 60000, status: "scheduled", workerIds: [], siteAddress: "", progressNotes: [], createdBy: "u_sc_staff", createdAt: now, updatedAt: now });
+  });
+  const r = await act(u("u_sc_staff"), () => SA.saveSales("o_sc_e", form({ intent: "confirm", workDetails: "事務所 表替え", ...staffFields, ...posting })));
+  const o = ord("o_sc_e");
+  eq([o.status, Boolean(invOf(o)), o.posting], ["invoiced", true, undefined], `法人の案件はポスティングなしで売上確定・請求書の発行 (送られたポスティングは保存しない) ${r.err ?? ""}`);
+  ok(!/ポスティング/.test(r.msg ?? ""), `法人の案件の知らせにポスティングを書かない (${r.msg})`);
+  const r2 = await act(u("u_sc_staff"), () => SA.saveSales("o_sc_e", form({ intent: "save", workDetails: "事務所 表替え 6畳", ...staffFields })));
+  ok(!r2.err && /作業の担当を保存/.test(r2.msg ?? ""), `確定のあとの修正もポスティングなしで保存できる (${r2.err ?? r2.msg})`);
+}
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 fs.rmSync(work, { recursive: true, force: true });
 if (fails.length) {
